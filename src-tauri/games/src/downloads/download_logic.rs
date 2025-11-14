@@ -39,7 +39,8 @@ impl DropWriter<File> {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(&path)?;
+            .open(&path)
+            .inspect_err(|_v| warn!("failed to open {}", path.display()))?;
         Ok(Self {
             destination: BufWriter::with_capacity(1024 * 1024, destination),
             hasher: Context::new(),
@@ -122,7 +123,7 @@ impl<'a> DropDownloadPipeline<'a, Response, File> {
                     .source
                     .read(&mut copy_buffer[0..size])
                     .inspect_err(|_| {
-                        info!("got error from {}", drop.filename);
+                        warn!("got error from {}", drop.filename);
                     })?;
                 remaining -= size;
                 last_bump += size;
@@ -272,7 +273,12 @@ pub fn download_game_bucket(
     #[cfg(unix)]
     {
         for drop in bucket.drops.iter() {
-            let permissions = Permissions::from_mode(drop.permissions);
+            let permission = if drop.permissions == 0 {
+                0o744
+            } else {
+                drop.permissions
+            };
+            let permissions = Permissions::from_mode(permission);
             set_permissions(drop.path.clone(), permissions)
                 .map_err(|e| ApplicationDownloadError::IoError(Arc::new(e)))?;
         }
