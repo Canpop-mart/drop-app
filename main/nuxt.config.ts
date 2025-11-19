@@ -12,6 +12,7 @@ export default defineNuxtConfig({
   css: ["~/assets/main.scss"],
 
   ssr: false,
+  devtools: false,
 
   extends: [["../libs/drop-base"]],
 

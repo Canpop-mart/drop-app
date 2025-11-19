@@ -93,7 +93,7 @@ version = "0.1.5"
 features = ["curly"]
 
 [dependencies.tauri]
-version = "2.7.0"
+version = "2.9.3"
 features = ["protocol-asset", "tray-icon"]
 
 [dependencies.tokio]

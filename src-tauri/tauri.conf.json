@@ -4,9 +4,9 @@
   "version": "0.3.4",
   "identifier": "dev.drop.client",
   "build": {
-    "beforeDevCommand": "yarn --cwd main dev --port 1432",
+    "beforeDevCommand": "pnpm run -C main dev --port 1432",
     "devUrl": "http://localhost:1432/",
-    "beforeBuildCommand": "yarn build",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../.output"
   },
   "app": {

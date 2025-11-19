@@ -3,7 +3,7 @@
 ARCH=$(uname -m)
 
 # build tauri apps
-# NO_STRIP=true yarn tauri build -- --verbose
+# NO_STRIP=true pnpm tauri build -- --verbose
 
 # unpack appimage
 APPIMAGE=$(ls ./src-tauri/target/release/bundle/appimage/*.AppImage)
