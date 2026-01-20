@@ -5,8 +5,10 @@ use database::{
 };
 use log::{debug, error, warn};
 use remote::{
-    auth::generate_authorization_header, error::RemoteAccessError, requests::generate_url,
-    utils::DROP_CLIENT_SYNC,
+    auth::generate_authorization_header,
+    error::RemoteAccessError,
+    requests::generate_url,
+    utils::DROP_CLIENT_ASYNC
 };
 use serde::{Deserialize, Serialize};
 use std::fs::remove_dir_all;
@@ -18,9 +20,9 @@ use crate::state::{GameStatusManager, GameStatusWithTransient};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FetchGameStruct {
-    game: Game,
-    status: GameStatusWithTransient,
-    version: Option<GameVersion>,
+    pub game: Game,
+    pub status: GameStatusWithTransient,
+    pub version: Option<GameVersion>,
 }
 
 impl FetchGameStruct {
@@ -36,17 +38,19 @@ impl FetchGameStruct {
 #[derive(Serialize, Deserialize, Clone, Debug, Default, Encode, Decode)]
 #[serde(rename_all = "camelCase")]
 pub struct Game {
-    id: String,
-    m_name: String,
-    m_short_description: String,
-    m_description: String,
+    pub id: String,
+    #[serde(rename = "type")]
+    pub game_type: String,
+    pub m_name: String,
+    pub m_short_description: String,
+    pub m_description: String,
     // mDevelopers
     // mPublishers
-    m_icon_object_id: String,
-    m_banner_object_id: String,
-    m_cover_object_id: String,
-    m_image_library_object_ids: Vec<String>,
-    m_image_carousel_object_ids: Vec<String>,
+    pub m_icon_object_id: String,
+    pub m_banner_object_id: String,
+    pub m_cover_object_id: String,
+    pub m_image_library_object_ids: Vec<String>,
+    pub m_image_carousel_object_ids: Vec<String>,
 }
 impl Game {
     pub fn id(&self) -> &String {
@@ -87,7 +91,7 @@ pub fn set_partially_installed_db(
     db_lock.applications.game_statuses.insert(
         meta.id.clone(),
         GameDownloadStatus::PartiallyInstalled {
-            version_name: meta.version.as_ref().unwrap().clone(),
+            version_name: meta.version.clone(),
             install_dir,
         },
     );
@@ -193,38 +197,29 @@ pub fn get_current_meta(game_id: &String) -> Option<DownloadableMetadata> {
         .cloned()
 }
 
-pub fn on_game_complete(
+pub async fn on_game_complete(
     meta: &DownloadableMetadata,
     install_dir: String,
     app_handle: &AppHandle,
 ) -> Result<(), RemoteAccessError> {
     // Fetch game version information from remote
-    if meta.version.is_none() {
-        return Err(RemoteAccessError::GameNotFound(meta.id.clone()));
-    }
-
-    let client = DROP_CLIENT_SYNC.clone();
     let response = generate_url(
-        &["/api/v1/client/game/version"],
-        &[
-            ("id", &meta.id),
-            ("version", meta.version.as_ref().unwrap()),
-        ],
+        &["/api/v1/client/game", &meta.id, "version", &meta.version],
+        &[],
     )?;
-    let response = client
+    let response = DROP_CLIENT_ASYNC
         .get(response)
         .header("Authorization", generate_authorization_header())
-        .send()?;
+        .send()
+        .await?;
 
-    let game_version: GameVersion = response.json()?;
+    let game_version: GameVersion = response.json().await?;
 
     let mut handle = borrow_db_mut_checked();
     handle
         .applications
         .game_versions
-        .entry(meta.id.clone())
-        .or_default()
-        .insert(meta.version.clone().unwrap(), game_version.clone());
+        .insert(meta.version.clone(), game_version.clone());
     handle
         .applications
         .installed_game_version
@@ -232,14 +227,19 @@ pub fn on_game_complete(
 
     drop(handle);
 
-    let status = if game_version.setup_command.is_empty() {
+    let setup_configuration = game_version
+        .setups
+        .iter()
+        .find(|v| v.platform == meta.target_platform);
+
+    let status = if setup_configuration.is_none() {
         GameDownloadStatus::Installed {
-            version_name: meta.version.clone().unwrap(),
+            version_name: meta.version.clone(),
             install_dir,
         }
     } else {
         GameDownloadStatus::SetupRequired {
-            version_name: meta.version.clone().unwrap(),
+            version_name: meta.version.clone(),
             install_dir,
         }
     };
@@ -259,6 +259,8 @@ pub fn on_game_complete(
             version: Some(game_version),
         }
     );
+
+    app_emit!(app_handle, "update_library", ());
 
     Ok(())
 }

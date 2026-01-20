@@ -27,12 +27,12 @@
       </button>
     </div>
 
-    <TransitionGroup name="list" tag="ul" class="flex flex-col gap-y-1.5">
+    <TransitionGroup name="list" tag="ul" class="flex flex-col gap-y-1.5 h-full">
       <Disclosure
         as="div"
         v-for="(nav, navIndex) in filteredNavigation"
         :key="nav.id"
-        class="first:pt-0 last:pb-0"
+        :class="['first:pt-0 last:pb-0', nav.tools ? 'mt-auto' : '']"
         v-slot="{ open }"
         :default-open="nav.deft"
       >
@@ -43,9 +43,12 @@
             <span class="text-sm font-semibold font-display">{{
               nav.name
             }}</span>
-            <span class="ml-6 flex h-7 items-center">
-              <PlusSmallIcon v-if="!open" class="size-6" aria-hidden="true" />
-              <MinusSmallIcon v-else class="size-6" aria-hidden="true" />
+            <span class="ml-6 relative flex size-4">
+              <MinusIcon class="absolute inset-0 size-4" aria-hidden="true" />
+              <MinusIcon
+                :class="[                !open ? 'rotate-90' : 'rotate-0', 'transition-all absolute inset-0 size-4']"
+                aria-hidden="true"
+              />
             </span>
           </DisclosureButton>
         </dt>
@@ -58,8 +61,8 @@
               currentNavigation == item.id
                 ? 'bg-zinc-800 text-zinc-100 shadow-md shadow-zinc-950/20'
                 : item.isInstalled.value
-                ? 'text-zinc-300 hover:bg-zinc-800/90 hover:text-zinc-200'
-                : 'text-zinc-500 hover:bg-zinc-800/70 hover:text-zinc-300',
+                  ? 'text-zinc-300 hover:bg-zinc-800/90 hover:text-zinc-200'
+                  : 'text-zinc-500 hover:bg-zinc-800/70 hover:text-zinc-300',
             ]"
             :href="item.route"
           >
@@ -69,14 +72,12 @@
               >
                 <img
                   class="size-6 object-cover bg-zinc-900 rounded transition-all duration-300 shadow-sm"
-                  :src="icons[item.id]"
+                  :src="useObject(item.icon)"
                   alt=""
                 />
               </div>
               <div class="truncate inline-flex items-center gap-x-2">
-                <p
-                  class="text-sm whitespace-nowrap font-display font-semibold"
-                >
+                <p class="text-sm whitespace-nowrap font-display font-semibold">
                   {{ item.label }}
                 </p>
                 <p
@@ -125,8 +126,8 @@ import { Disclosure, DisclosureButton, DisclosurePanel } from "@headlessui/vue";
 import {
   ArrowPathIcon,
   MagnifyingGlassIcon,
-  MinusSmallIcon,
-  PlusSmallIcon,
+  MinusIcon,
+  PlusIcon,
 } from "@heroicons/vue/20/solid";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -143,7 +144,7 @@ const gameStatusTextStyle: { [key in GameStatusEnum]: string } = {
   [GameStatusEnum.Installed]: "text-green-500",
   [GameStatusEnum.Downloading]: "text-zinc-400",
   [GameStatusEnum.Validating]: "text-blue-300",
-  [GameStatusEnum.Running]: "text-green-500",
+  [GameStatusEnum.Running]: "text-blue-500",
   [GameStatusEnum.Remote]: "text-zinc-700",
   [GameStatusEnum.Queued]: "text-zinc-400",
   [GameStatusEnum.Updating]: "text-zinc-400",
@@ -172,49 +173,76 @@ const loading = ref(false);
 const games: {
   [key: string]: { game: Game; status: Ref<GameStatus, GameStatus> };
 } = {};
-const icons: { [key: string]: string } = {};
 
 const collections: Ref<Collection[]> = ref([]);
 
 async function calculateGames(clearAll = false, forceRefresh = false) {
+  try {
+    await calculateGamesLogic(clearAll, forceRefresh);
+  } catch (e) {
+    createModal(
+      ModalType.Notification,
+      {
+        title: "Failed to fetch library",
+        description: `Drop encountered an error while fetching your library: ${e}`,
+      },
+      (_, c) => c(),
+    );
+  }
+  loading.value = false;
+}
+
+type FetchLibraryResponse = {
+  library: Game[];
+  collections: Collection[];
+  other: Game[];
+};
+
+async function calculateGamesLogic(clearAll = false, forceRefresh = false) {
   if (clearAll) {
     collections.value = [];
     loading.value = true;
   }
   // If we update immediately, the navigation gets re-rendered before we
   // add all the necessary state, and it freaks tf out
-  const newGames = await invoke<Game[]>("fetch_library", {
-    hardRefresh: forceRefresh,
-  });
-  const otherCollections = await invoke<Collection[]>("fetch_collections", {
+  const library = await invoke<FetchLibraryResponse>("fetch_library", {
     hardRefresh: forceRefresh,
   });
   const allGames = [
-    ...newGames,
-    ...otherCollections
+    ...library.library,
+    ...library.collections
       .map((e) => e.entries)
       .flat()
       .map((e) => e.game),
+    ...library.other,
   ].filter((v, i, a) => a.indexOf(v) === i);
 
   for (const game of allGames) {
     if (games[game.id]) continue;
     games[game.id] = await useGame(game.id);
   }
-  for (const game of allGames) {
-    if (icons[game.id]) continue;
-    icons[game.id] = await useObject(game.mIconObjectId);
-  }
 
   const libraryCollection = {
     id: "library",
     name: "Library",
     isDefault: true,
-    entries: newGames.map((e) => ({ gameId: e.id, game: e })),
+    entries: library.library.map((e) => ({ gameId: e.id, game: e })),
+  } satisfies Collection;
+
+  const otherCollection = {
+    id: "other",
+    name: "Tools & Launchers",
+    isDefault: false,
+    isTools: true,
+    entries: library.other.map((v) => ({ gameId: v.id, game: v })),
   } satisfies Collection;
 
   loading.value = false;
-  collections.value = [libraryCollection, ...otherCollections];
+  collections.value = [
+    libraryCollection,
+    ...library.collections,
+    ...(library.other.length > 0 ? [otherCollection] : []),
+  ];
 }
 
 // Wait up to 300 ms for the library to load, otherwise
@@ -235,15 +263,17 @@ const navigation = computed(() =>
       const status = games[game.id].status;
 
       const isInstalled = computed(
-        () => status.value.type != GameStatusEnum.Remote
+        () => status.value.type != GameStatusEnum.Remote,
       );
 
       const item = {
         label: game.mName,
         route: `/library/${game.id}`,
         prefix: `/library/${game.id}`,
+        icon: game.mIconObjectId,
         isInstalled,
         id: game.id,
+        type: game.type,
       };
       return item;
     });
@@ -252,9 +282,10 @@ const navigation = computed(() =>
       id: collection.id,
       name: collection.name,
       deft: collection.isDefault,
+      tools: collection.isTools ?? false,
       items,
     };
-  })
+  }),
 );
 
 const route = useRoute();
@@ -277,7 +308,7 @@ const filteredNavigation = computed(() => {
 listen("update_library", async (event) => {
   console.log("Updating library");
   let oldNavigation = currentNavigation.value;
-  await calculateGames();
+  await calculateGames(false, true);
   if (oldNavigation !== currentNavigation.value) {
     router.push("/library");
   }

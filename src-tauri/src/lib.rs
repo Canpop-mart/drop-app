@@ -8,26 +8,24 @@
 #![deny(clippy::all)]
 
 use std::{
-    collections::HashMap, env, fs::File, io::Write, panic::PanicHookInfo, path::Path, str::FromStr,
+    env, fs::File, io::Write, panic::PanicHookInfo, path::Path, str::FromStr,
     sync::nonpoison::Mutex, time::SystemTime,
 };
 
-use ::client::{app_status::AppStatus, autostart::sync_autostart_on_startup, user::User};
+use ::client::{app_state::AppState, app_status::AppStatus, autostart::sync_autostart_on_startup};
 use ::download_manager::DownloadManagerWrapper;
-use ::games::{library::Game, scan::scan_install_dirs};
+use ::games::scan::scan_install_dirs;
 use ::process::ProcessManagerWrapper;
 use ::remote::{
     auth::{self, HandshakeRequestBody, HandshakeResponse, generate_authorization_header},
     cache::clear_cached_object,
     error::RemoteAccessError,
     fetch_object::fetch_object_wrapper,
-    offline,
-    server_proto::{handle_server_proto_offline_wrapper, handle_server_proto_wrapper},
-    utils::DROP_CLIENT_ASYNC,
+    server_proto::handle_server_proto_wrapper,
+    utils::{DROP_APP_HANDLE, DROP_CLIENT_ASYNC},
 };
 use database::{
     DB, GameDownloadStatus, borrow_db_checked, borrow_db_mut_checked, db::DATA_ROOT_DIR,
-    interface::DatabaseImpls,
 };
 use log::{LevelFilter, debug, info, warn};
 use log4rs::{
@@ -36,9 +34,9 @@ use log4rs::{
     config::{Appender, Root},
     encode::pattern::PatternEncoder,
 };
-use serde::Serialize;
 use tauri::{
-    AppHandle, Manager, RunEvent, WindowEvent,
+    AppHandle, LogicalPosition, LogicalSize, Manager, RunEvent, WebviewBuilder, WebviewUrl,
+    WindowBuilder, WindowEvent,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
 };
@@ -46,8 +44,6 @@ use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 use url::Url;
 use utils::app_emit;
-
-use crate::client::cleanup_and_exit;
 
 mod client;
 mod collections;
@@ -59,21 +55,12 @@ mod remote;
 mod settings;
 
 use client::*;
-use collections::*;
 use download_manager::*;
 use downloads::*;
 use games::*;
 use process::*;
 use remote::*;
 use settings::*;
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppState {
-    status: AppStatus,
-    user: Option<User>,
-    games: HashMap<String, Game>,
-}
 
 async fn setup(handle: AppHandle) -> AppState {
     let logfile = FileAppender::builder()
@@ -106,8 +93,6 @@ async fn setup(handle: AppHandle) -> AppState {
 
     log4rs::init_config(config).expect("Failed to initialise log4rs");
 
-    let games = HashMap::new();
-
     ProcessManagerWrapper::init(handle.clone());
     DownloadManagerWrapper::init(handle.clone());
 
@@ -120,7 +105,6 @@ async fn setup(handle: AppHandle) -> AppState {
         return AppState {
             status: AppStatus::NotConfigured,
             user: None,
-            games,
         };
     }
 
@@ -182,7 +166,6 @@ async fn setup(handle: AppHandle) -> AppState {
     AppState {
         status: app_status,
         user,
-        games,
     }
 }
 
@@ -204,6 +187,8 @@ pub fn custom_panic_handler(e: &PanicHookInfo) -> Option<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // let global_span = span!(Level::TRACE, "global_span");
+    // let _enter = global_span.enter();
     std::panic::set_hook(Box::new(|e| {
         let _ = custom_panic_handler(e);
         println!("{e}");
@@ -243,6 +228,7 @@ pub fn run() {
             use_remote,
             gen_drop_url,
             fetch_drop_object,
+            check_online,
             // Library
             fetch_library,
             fetch_game,
@@ -252,13 +238,6 @@ pub fn run() {
             fetch_game_status,
             fetch_game_version_options,
             update_game_configuration,
-            // Collections
-            fetch_collections,
-            fetch_collection,
-            create_collection,
-            add_game_to_collection,
-            delete_collection,
-            delete_game_in_collection,
             // Downloads
             download_game,
             resume_download,
@@ -272,7 +251,8 @@ pub fn run() {
             kill_game,
             toggle_autostart,
             get_autostart_enabled,
-            open_process_logs
+            open_process_logs,
+            get_launch_options
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -284,9 +264,15 @@ pub fn run() {
             let handle = app.handle().clone();
 
             tauri::async_runtime::block_on(async move {
-                let state = setup(handle).await;
+                let state = setup(handle.clone()).await;
                 info!("initialized drop client");
                 app.manage(Mutex::new(state));
+
+                let global_app_handle = handle;
+                {
+                    let mut app_handle_lock = DROP_APP_HANDLE.lock().await;
+                    app_handle_lock.replace(global_app_handle);
+                };
 
                 {
                     use tauri_plugin_deep_link::DeepLinkExt;
@@ -296,19 +282,26 @@ pub fn run() {
 
                 let handle = app.handle().clone();
 
-                let _main_window = tauri::WebviewWindowBuilder::new(
-                    &handle,
-                    "main", // BTW this is not the name of the window, just the label. Keep this 'main', there are permissions & configs that depend on it
-                    tauri::WebviewUrl::App("main".into()),
-                )
-                .title("Drop Desktop App")
-                .min_inner_size(1000.0, 500.0)
-                .inner_size(1536.0, 864.0)
-                .decorations(false)
-                .shadow(false)
-                .data_directory(DATA_ROOT_DIR.join(".webview"))
-                .build()
-                .expect("Failed to build main window");
+                let width = 1536.0;
+                let height = 864.0;
+
+                let main_window = WindowBuilder::new(&handle, "main")
+                    .title("Drop Desktop App")
+                    .min_inner_size(1000.0, 500.0)
+                    .inner_size(width, height)
+                    .decorations(false)
+                    .shadow(false)
+                    .build()
+                    .expect("failed to build main window");
+
+                main_window
+                    .add_child(
+                        WebviewBuilder::new("frontned", WebviewUrl::App("main".into()))
+                            .auto_resize(),
+                        LogicalPosition::new(0., 0.),
+                        LogicalSize::new(width, height),
+                    )
+                    .expect("failed to create frontend webview");
 
                 app.deep_link().on_open_url(move |event| {
                     debug!("handling drop:// url");
@@ -368,7 +361,7 @@ pub fn run() {
                                     .expect("Failed to show window");
                             }
                             "quit" => {
-                                cleanup_and_exit(app);
+                                app.exit(0);
                             }
 
                             _ => {
@@ -408,20 +401,9 @@ pub fn run() {
                 fetch_object_wrapper(request, responder).await;
             });
         })
-        .register_asynchronous_uri_scheme_protocol("server", |ctx, request, responder| {
-            tauri::async_runtime::block_on(async move {
-                let state = ctx
-                    .app_handle()
-                    .state::<tauri::State<'_, Mutex<AppState>>>();
-
-                offline!(
-                    state,
-                    handle_server_proto_wrapper,
-                    handle_server_proto_offline_wrapper,
-                    request,
-                    responder
-                )
-                .await;
+        .register_asynchronous_uri_scheme_protocol("server", |_ctx, request, responder| {
+            tauri::async_runtime::spawn(async move {
+                handle_server_proto_wrapper(request, responder).await;
             });
         })
         .on_window_event(|window, event| {

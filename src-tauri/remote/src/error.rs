@@ -21,7 +21,8 @@ pub struct DropServerError {
 
 #[derive(Debug, SerializeDisplay)]
 pub enum RemoteAccessError {
-    FetchError(Arc<reqwest::Error>),
+    FetchErrorLegacy(Arc<reqwest::Error>),
+    FetchError(Arc<reqwest_middleware::Error>),
     FetchErrorWS(Arc<reqwest_websocket::Error>),
     ParsingError(ParseError),
     InvalidEndpoint,
@@ -33,6 +34,7 @@ pub enum RemoteAccessError {
     OutOfSync,
     Cache(std::io::Error),
     CorruptedState,
+    NoDepots,
 }
 
 impl Display for RemoteAccessError {
@@ -56,6 +58,15 @@ impl Display for RemoteAccessError {
                         .unwrap_or("Unknown error".to_string())
                 )
             }
+            RemoteAccessError::FetchErrorLegacy(error) => write!(
+                f,
+                "{}: {}",
+                error,
+                error
+                    .source()
+                    .map(|v| v.to_string())
+                    .unwrap_or("Unknown error".to_string())
+            ),
             RemoteAccessError::FetchErrorWS(error) => write!(
                 f,
                 "{}: {}",
@@ -93,13 +104,19 @@ impl Display for RemoteAccessError {
                 f,
                 "Drop encountered a corrupted internal state. Please report this to the developers, with details of reproduction."
             ),
-        }
+            RemoteAccessError::NoDepots => write!(f, "There are no download depots configured on the server. Contact your server admin."),
+                    }
     }
 }
 
 impl From<reqwest::Error> for RemoteAccessError {
     fn from(err: reqwest::Error) -> Self {
-        RemoteAccessError::FetchError(Arc::new(err))
+        RemoteAccessError::FetchErrorLegacy(Arc::new(err))
+    }
+}
+impl From<reqwest_middleware::Error> for RemoteAccessError {
+    fn from(value: reqwest_middleware::Error) -> Self {
+        RemoteAccessError::FetchError(Arc::new(value))
     }
 }
 impl From<reqwest_websocket::Error> for RemoteAccessError {

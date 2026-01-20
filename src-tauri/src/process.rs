@@ -1,41 +1,53 @@
-use std::sync::nonpoison::Mutex;
+use std::sync::Arc;
 
-use process::{PROCESS_MANAGER, error::ProcessError};
+use process::{
+    PROCESS_MANAGER,
+    error::ProcessError,
+    process_manager::{LaunchOption, ProcessManager},
+};
+use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::AppState;
+#[tauri::command]
+pub fn get_launch_options(id: String) -> Result<Vec<LaunchOption>, ProcessError> {
+    let launch_options = ProcessManager::get_launch_options(id)?;
+
+    Ok(launch_options)
+}
+
+#[derive(Serialize)]
+#[serde(tag = "result", content = "data")]
+pub enum LaunchResult {
+    Success,
+    InstallRequired(String, String),
+}
 
 #[tauri::command]
-pub fn launch_game(
-    id: String,
-    state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<(), ProcessError> {
-    let state_lock = state.lock();
-    let mut process_manager_lock = PROCESS_MANAGER.lock();
-    //let meta = DownloadableMetadata {
-    //    id,
-    //    version: Some(version),
-    //    download_type: DownloadType::Game,
-    //};
+pub fn launch_game(id: String, index: usize) -> Result<LaunchResult, ProcessError> {
+    let result = {
+        let mut process_manager_lock = PROCESS_MANAGER.lock();
 
-    match process_manager_lock.launch_process(id) {
-        Ok(()) => {}
-        Err(e) => return Err(e),
+        process_manager_lock.launch_process(id, index)
+    };
+
+    if let Err(err) = &result
+        && let ProcessError::RequiredDependency(game_id, version_id) = err
+    {
+        return Ok(LaunchResult::InstallRequired(
+            game_id.to_string(),
+            version_id.to_string(),
+        ));
     }
 
-    drop(process_manager_lock);
-    drop(state_lock);
+    result?;
 
-    Ok(())
+    Ok(LaunchResult::Success)
 }
 
 #[tauri::command]
 pub fn kill_game(game_id: String) -> Result<(), ProcessError> {
-    PROCESS_MANAGER
-        .lock()
-        .kill_game(game_id)
-        .map_err(ProcessError::IOError)
+    Ok(PROCESS_MANAGER.lock().kill_game(game_id)?)
 }
 
 #[tauri::command]
@@ -46,5 +58,5 @@ pub fn open_process_logs(game_id: String, app_handle: AppHandle) -> Result<(), P
     app_handle
         .opener()
         .open_path(dir.display().to_string(), None::<&str>)
-        .map_err(ProcessError::OpenerError)
+        .map_err(|v| ProcessError::OpenerError(Arc::new(v)))
 }

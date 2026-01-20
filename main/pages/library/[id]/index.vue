@@ -170,8 +170,8 @@
         </div>
       </div>
 
-      <form class="space-y-6">
-        <div v-if="versionOptions && versionOptions.length > 0">
+      <div class="space-y-6">
+        <div v-if="versionOptions && versionOptions.length > 0 && currentVersionOption">
           <Listbox as="div" v-model="installVersionIndex">
             <ListboxLabel class="block text-sm/6 font-medium text-zinc-100"
               >Version</ListboxLabel
@@ -181,9 +181,16 @@
                 class="relative w-full cursor-default rounded-md bg-zinc-800 py-1.5 pl-3 pr-10 text-left text-zinc-100 shadow-sm ring-1 ring-inset ring-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-600 sm:text-sm/6"
               >
                 <span class="block truncate"
-                  >{{ versionOptions[installVersionIndex].versionName }}
+                  >{{
+                    currentVersionOption.displayName ||
+                    currentVersionOption.versionPath
+                  }}
                   on
-                  {{ versionOptions[installVersionIndex].platform }}</span
+                  {{ currentVersionOption.platform }} ({{
+                    formatKilobytes(
+                      currentVersionOption.size / 1024
+                    )
+                  }}B)</span
                 >
                 <span
                   class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2"
@@ -206,7 +213,7 @@
                   <ListboxOption
                     as="template"
                     v-for="(version, versionIdx) in versionOptions"
-                    :key="version.versionName"
+                    :key="version.versionId"
                     :value="versionIdx"
                     v-slot="{ active, selected }"
                   >
@@ -223,8 +230,12 @@
                             : 'font-normal',
                           'block truncate',
                         ]"
-                        >{{ version.versionName }} on
-                        {{ version.platform }}</span
+                        >{{ version.displayName || version.versionPath }} on
+                        {{ version.platform }} ({{
+                          formatKilobytes(
+                            versionOptions[installVersionIndex].size / 1024
+                          )
+                        }}B)</span
                       >
 
                       <span
@@ -281,82 +292,86 @@
           </div>
         </div>
         <div v-if="installDirs">
-          <Listbox as="div" v-model="installDir">
-            <ListboxLabel class="block text-sm/6 font-medium text-zinc-100"
-              >Install to</ListboxLabel
-            >
-            <div class="relative mt-2">
-              <ListboxButton
-                class="relative w-full cursor-default rounded-md bg-zinc-800 py-1.5 pl-3 pr-10 text-left text-zinc-100 shadow-sm ring-1 ring-inset ring-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-600 sm:text-sm/6"
-              >
-                <span class="block truncate">{{
-                  installDirs[installDir]
-                }}</span>
-                <span
-                  class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2"
-                >
-                  <ChevronUpDownIcon
-                    class="h-5 w-5 text-gray-400"
-                    aria-hidden="true"
-                  />
-                </span>
-              </ListboxButton>
-
-              <transition
-                leave-active-class="transition ease-in duration-100"
-                leave-from-class="opacity-100"
-                leave-to-class="opacity-0"
-              >
-                <ListboxOptions
-                  class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-zinc-900 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"
-                >
-                  <ListboxOption
-                    as="template"
-                    v-for="(dir, dirIdx) in installDirs"
-                    :key="dir"
-                    :value="dirIdx"
-                    v-slot="{ active, selected }"
-                  >
-                    <li
-                      :class="[
-                        active ? 'bg-blue-600 text-white' : 'text-zinc-300',
-                        'relative cursor-default select-none py-2 pl-3 pr-9',
-                      ]"
-                    >
-                      <span
-                        :class="[
-                          selected
-                            ? 'font-semibold text-zinc-100'
-                            : 'font-normal',
-                          'block truncate',
-                        ]"
-                        >{{ dir }}</span
-                      >
-
-                      <span
-                        v-if="selected"
-                        :class="[
-                          active ? 'text-white' : 'text-blue-600',
-                          'absolute inset-y-0 right-0 flex items-center pr-4',
-                        ]"
-                      >
-                        <CheckIcon class="h-5 w-5" aria-hidden="true" />
-                      </span>
-                    </li>
-                  </ListboxOption>
-                </ListboxOptions>
-              </transition>
-            </div>
-            <div class="text-zinc-400 text-sm mt-2">
-              Add more install directories in
-              <PageWidget to="/settings/downloads">
-                <WrenchIcon class="size-3" />
-                Settings
-              </PageWidget>
-            </div>
-          </Listbox>
+          <InstallDirectorySelector
+            :install-dirs="installDirs"
+            v-model="installDir"
+          />
         </div>
-      </form>
+        <div
+          v-if="
+            currentVersionOption?.requiredContent &&
+            currentVersionOption.requiredContent.length > 0
+          "
+        >
+          <div class="border-b border-white/10 py-2">
+            <h3 class="text-sm font-semibold text-white">
+              Install additional dependencies?
+            </h3>
+            <p class="mt-1 text-xs text-gray-400">
+              This game requires additional content to run. Click the components
+              to automatically queue for download.
+            </p>
+          </div>
+          <ul role="list" class="mt-2 divide-y divide-white/5">
+            <li
+              v-for="content in currentVersionOption
+                .requiredContent"
+              :key="content.versionId"
+              :class="[
+                !installDepsDisabled[content.versionId]
+                  ? 'bg-zinc-950 ring-2 ring-zinc-800'
+                  : '',
+                'rounded-lg relative flex justify-between px-2 py-3',
+              ]"
+            >
+              <div class="flex min-w-0 gap-x-2">
+                <img
+                  class="size-12 flex-none"
+                  :src="useObject(content.iconObjectId)"
+                  alt=""
+                />
+                <div class="min-w-0 flex-auto">
+                  <p class="text-sm/6 font-semibold text-white">
+                    <button
+                      @click="
+                        () =>
+                          (installDepsDisabled[content.versionId] =
+                            !installDepsDisabled[content.versionId])
+                      "
+                    >
+                      <span class="absolute inset-x-0 -top-px bottom-0"></span>
+                      {{ content.name }}
+                    </button>
+                  </p>
+                  <p class="mt-1 flex text-xs/5 text-gray-400">
+                    {{ content.shortDescription }}
+                  </p>
+                </div>
+              </div>
+              <div class="flex shrink-0 items-center gap-x-2">
+                <div class="hidden sm:flex sm:flex-col sm:items-end">
+                  <p
+                    class="inline-flex items-center gap-x-1 text-xs/5 text-gray-400"
+                  >
+                    {{ formatKilobytes(content.size / 1024) }}B
+                    <ServerIcon class="size-3" />
+                  </p>
+                </div>
+                <CheckIcon
+                  v-if="!installDepsDisabled[content.versionId]"
+                  class="size-5 flex-none text-green-500"
+                  aria-hidden="true"
+                />
+                <MinusIcon
+                  v-else
+                  class="size-5 flex-none text-gray-500"
+                  aria-hidden="true"
+                />
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
 
       <div v-if="installError" class="mt-1 rounded-md bg-red-600/10 p-4">
         <div class="flex">
@@ -385,6 +400,48 @@
         type="button"
         class="mt-3 inline-flex w-full justify-center rounded-md bg-zinc-800 px-3 py-2 text-sm font-semibold text-zinc-100 shadow-sm ring-1 ring-inset ring-zinc-700 hover:bg-zinc-900 sm:mt-0 sm:w-auto"
         @click="installFlowOpen = false"
+        ref="cancelButtonRef"
+      >
+        Cancel
+      </button>
+    </template>
+  </ModalTemplate>
+
+  <ModalTemplate :model-value="launchOptionsOpen">
+    <template #default>
+      <div class="sm:flex sm:items-start">
+        <div class="mt-3 text-center sm:mt-0 sm:text-left">
+          <h3 class="text-base font-semibold text-zinc-100">
+            Launch {{ game.mName }}
+          </h3>
+          <div class="mt-2">
+            <p class="text-sm text-zinc-400">
+              The instance admin has configured multiple ways to start this
+              game. Select an option to start.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <ol class="space-y-2">
+        <li v-for="(launchData, launchIdx) in launchOptions!">
+          <button
+            class="transition w-full rounded-sm bg-zinc-800 inline-flex items-center text-sm py-2 px-3 gap-x-2 text-zinc-100 hover:text-zinc-300 hover:bg-zinc-700"
+            @click="() => launchIndex(launchIdx)"
+          >
+            <PlayIcon class="size-4" />
+            <span>
+              {{ launchData.name }}
+            </span>
+          </button>
+        </li>
+      </ol>
+    </template>
+    <template #buttons>
+      <button
+        type="button"
+        class="mt-3 inline-flex w-full justify-center rounded-md bg-zinc-800 px-3 py-2 text-sm font-semibold text-zinc-100 shadow-sm ring-1 ring-inset ring-zinc-700 hover:bg-zinc-900 sm:mt-0 sm:w-auto"
+        @click="launchOptions = undefined"
         ref="cancelButtonRef"
       >
         Cancel
@@ -470,6 +527,11 @@
       </div>
     </div>
   </Transition>
+
+  <DependencyRequiredModal
+    v-if="dependencyRequiredModal"
+    v-model="dependencyRequiredModal"
+  />
 </template>
 
 <script setup lang="ts">
@@ -489,9 +551,10 @@ import {
   XMarkIcon,
   ArrowsPointingOutIcon,
   PhotoIcon,
+  PlayIcon,
 } from "@heroicons/vue/20/solid";
 import { BuildingStorefrontIcon } from "@heroicons/vue/24/outline";
-import { XCircleIcon } from "@heroicons/vue/24/solid";
+import { MinusIcon, ServerIcon, XCircleIcon } from "@heroicons/vue/24/solid";
 import { invoke } from "@tauri-apps/api/core";
 import { micromark } from "micromark";
 import { GameStatusEnum } from "~/types";
@@ -520,9 +583,7 @@ const mediaUrls = await Promise.all(
 const htmlDescription = micromark(game.value.mDescription);
 
 const installFlowOpen = ref(false);
-const versionOptions = ref<
-  undefined | Array<{ versionName: string; platform: string }>
->();
+const versionOptions = ref<undefined | Array<VersionOption>>();
 const installDirs = ref<undefined | Array<string>>();
 const currentImageIndex = ref(0);
 
@@ -548,15 +609,31 @@ const installLoading = ref(false);
 const installError = ref<string | undefined>();
 const installVersionIndex = ref(0);
 const installDir = ref(0);
+const installDepsDisabled = ref<{ [key: string]: boolean }>({});
+
+const currentVersionOption = computed(() => versionOptions.value?.[installVersionIndex.value]);
 async function install() {
   try {
     if (!versionOptions.value) throw new Error("Versions have not been loaded");
     installLoading.value = true;
-    await invoke("download_game", {
-      gameId: game.value.id,
-      gameVersion: versionOptions.value[installVersionIndex.value].versionName,
-      installDir: installDir.value,
-    });
+    const versionOption = versionOptions.value[installVersionIndex.value];
+
+    const games = [
+      { gameId: game.value.id, versionId: versionOption.versionId },
+      ...versionOption.requiredContent
+        .filter((v) => !installDepsDisabled.value[v.versionId])
+        .map((v) => ({ gameId: v.gameId, versionId: v.versionId })),
+    ];
+
+    for (const game of games) {
+      await invoke("download_game", {
+        gameId: game.gameId,
+        versionId: game.versionId,
+        installDir: installDir.value,
+        targetPlatform: versionOption.platform,
+      });
+    }
+
     installFlowOpen.value = false;
   } catch (error) {
     installError.value = (error as string).toString();
@@ -573,9 +650,24 @@ async function resumeDownload() {
   }
 }
 
+const launchOptions = ref<Array<{ name: string }> | undefined>(undefined);
+const launchOptionsOpen = computed(() => launchOptions.value !== undefined);
+
 async function launch() {
+  if (status.value.type == GameStatusEnum.SetupRequired) {
+    await launchIndex(0);
+    return;
+  }
   try {
-    await invoke("launch_game", { id: game.value.id });
+    const fetchedLaunchOptions = await invoke<Array<{ name: string }>>(
+      "get_launch_options",
+      { id: game.value.id }
+    );
+    if (fetchedLaunchOptions.length == 1) {
+      await launchIndex(0);
+      return;
+    }
+    launchOptions.value = fetchedLaunchOptions;
   } catch (e) {
     createModal(
       ModalType.Notification,
@@ -587,6 +679,36 @@ async function launch() {
       (e, c) => c()
     );
     console.error(e);
+  }
+}
+
+const dependencyRequiredModal = ref<
+  { gameId: string; versionId: string } | undefined
+>(undefined);
+
+async function launchIndex(index: number) {
+  launchOptions.value = undefined;
+  try {
+    const result = await invoke<LaunchResult>("launch_game", {
+      id: game.value.id,
+      index,
+    });
+    if (result.result == "InstallRequired") {
+      dependencyRequiredModal.value = {
+        gameId: result.data[0],
+        versionId: result.data[1],
+      };
+    }
+  } catch (e) {
+    createModal(
+      ModalType.Notification,
+      {
+        title: `Couldn't run "${game.value.mName}"`,
+        description: `Drop failed to launch "${game.value.mName}": ${e}`,
+        buttonText: "Close",
+      },
+      (e, c) => c()
+    );
   }
 }
 

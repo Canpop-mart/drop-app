@@ -3,6 +3,7 @@ use std::sync::nonpoison::Mutex;
 use database::{borrow_db_checked, borrow_db_mut_checked};
 use download_manager::DOWNLOAD_MANAGER;
 use log::{debug, error};
+use remote::requests::{generate_url, make_authenticated_get};
 use tauri::AppHandle;
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
@@ -18,18 +19,15 @@ pub fn fetch_state(state: tauri::State<'_, Mutex<AppState>>) -> Result<String, S
 }
 
 #[tauri::command]
-pub fn quit(app: tauri::AppHandle) {
-    cleanup_and_exit(&app);
+pub async fn quit(app: tauri::AppHandle) {
+    cleanup_and_exit(&app).await;
 }
 
-pub fn cleanup_and_exit(app: &AppHandle) {
+pub async fn cleanup_and_exit(app: &AppHandle) {
     debug!("cleaning up and exiting application");
-    match DOWNLOAD_MANAGER.ensure_terminated() {
-        Ok(res) => match res {
-            Ok(()) => debug!("download manager terminated correctly"),
-            Err(()) => error!("download manager failed to terminate correctly"),
-        },
-        Err(e) => panic!("{e:?}"),
+    match DOWNLOAD_MANAGER.ensure_terminated().await {
+        Ok(()) => debug!("download manager terminated correctly"),
+        Err(_) => error!("download manager failed to terminate correctly"),
     }
 
     app.exit(0);
@@ -76,7 +74,12 @@ pub fn get_autostart_enabled(app: AppHandle) -> Result<bool, tauri_plugin_autost
 
 #[tauri::command]
 pub fn open_fs(path: String, app_handle: AppHandle) -> Result<(), tauri_plugin_opener::Error> {
-    app_handle
-        .opener()
-        .open_path(path, None::<&str>)
+    app_handle.opener().open_path(path, None::<&str>)
+}
+
+
+#[tauri::command]
+pub async fn check_online() -> Result<bool, ()> {
+    let online = make_authenticated_get(generate_url(&["/api/v1/"], &[]).unwrap()).await.is_ok();
+    Ok(online)
 }

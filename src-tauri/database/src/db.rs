@@ -3,10 +3,10 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use rustbreak::{DeSerError, DeSerializer};
-use serde::{Serialize, de::DeserializeOwned};
+use keyring::Entry;
+use log::info;
 
-use crate::interface::{DatabaseImpls, DatabaseInterface};
+use crate::interface::{DatabaseInterface};
 
 pub static DB: LazyLock<DatabaseInterface> = LazyLock::new(DatabaseInterface::set_up_database);
 
@@ -23,23 +23,15 @@ pub static DATA_ROOT_DIR: LazyLock<Arc<PathBuf>> = LazyLock::new(|| {
     )
 });
 
-// Custom JSON serializer to support everything we need
-#[derive(Debug, Default, Clone)]
-pub struct DropDatabaseSerializer;
-
-impl<T: native_model::Model + Serialize + DeserializeOwned> DeSerializer<T>
-    for DropDatabaseSerializer
-{
-    fn serialize(&self, val: &T) -> rustbreak::error::DeSerResult<Vec<u8>> {
-        native_model::encode(val).map_err(|e| DeSerError::Internal(e.to_string()))
-    }
-
-    fn deserialize<R: std::io::Read>(&self, mut s: R) -> rustbreak::error::DeSerResult<T> {
-        let mut buf = Vec::new();
-        s.read_to_end(&mut buf)
-            .map_err(|e| rustbreak::error::DeSerError::Other(e.into()))?;
-        let (val, _version) =
-            native_model::decode(buf).map_err(|e| DeSerError::Internal(e.to_string()))?;
-        Ok(val)
-    }
-}
+pub(crate) static KEY_IV: LazyLock<([u8; 16], [u8; 16])> = LazyLock::new(|| {
+    let entry = Entry::new("drop", "database_key").expect("failed to open keyring");
+    let mut key = entry.get_secret().unwrap_or_else(|_| {
+        let mut buffer = [0u8; 32];
+        rand::fill(&mut buffer);
+        entry.set_secret(&buffer).expect("failed to save key");
+        info!("created new database key");
+        buffer.to_vec()
+    });
+    let new = key.split_off(16);
+    (new.try_into().expect("failed to extract key"), key.try_into().expect("failed to extract iv"))
+});

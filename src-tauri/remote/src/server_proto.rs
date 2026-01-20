@@ -1,12 +1,11 @@
-use std::str::FromStr;
-
 use database::borrow_db_checked;
-use http::{Request, Response, StatusCode, Uri, uri::PathAndQuery};
+use http::{
+    HeaderMap, HeaderValue, Request, Response, StatusCode, Uri, header::USER_AGENT,
+};
 use log::{error, warn};
 use tauri::UriSchemeResponder;
-use utils::webbrowser_open::webbrowser_open;
 
-use crate::utils::DROP_CLIENT_SYNC;
+use crate::utils::DROP_CLIENT_ASYNC;
 
 pub async fn handle_server_proto_offline_wrapper(
     request: Request<Vec<u8>>,
@@ -36,6 +35,7 @@ pub async fn handle_server_proto_wrapper(request: Request<Vec<u8>>, responder: U
                 Response::builder()
                     .status(e)
                     .body(Vec::new())
+                    .inspect_err(|v| warn!("{:?}", v))
                     .expect("Failed to build error response"),
             );
         }
@@ -43,48 +43,49 @@ pub async fn handle_server_proto_wrapper(request: Request<Vec<u8>>, responder: U
 }
 
 async fn handle_server_proto(request: Request<Vec<u8>>) -> Result<Response<Vec<u8>>, StatusCode> {
-    let db_handle = borrow_db_checked();
-    let auth = match db_handle.auth.as_ref() {
-        Some(auth) => auth,
-        None => {
-            error!("Could not find auth in database");
-            return Err(StatusCode::UNAUTHORIZED);
-        }
+    let (remote_uri, web_token) = {
+        let db_handle = borrow_db_checked();
+        let auth = match db_handle.auth.as_ref() {
+            Some(auth) => auth,
+            None => {
+                error!("Could not find auth in database");
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        };
+        let web_token = match &auth.web_token {
+            Some(token) => token.clone(),
+            None => return Err(StatusCode::UNAUTHORIZED),
+        };
+        let remote_uri = db_handle
+            .base_url
+            .parse::<Uri>()
+            .inspect_err(|v| warn!("{:?}", v))
+            .expect("Failed to parse base url");
+        (remote_uri, web_token)
     };
-    let web_token = match &auth.web_token {
-        Some(token) => token,
-        None => return Err(StatusCode::UNAUTHORIZED),
-    };
-    let remote_uri = db_handle
-        .base_url
-        .parse::<Uri>()
-        .expect("Failed to parse base url");
-
-    let path = request.uri().path();
 
     let mut new_uri = request.uri().clone().into_parts();
-    new_uri.path_and_query = Some(
-        PathAndQuery::from_str(&format!("{path}?noWrapper=true"))
-            .expect("Failed to parse request path in proto"),
-    );
     new_uri.authority = remote_uri.authority().cloned();
     new_uri.scheme = remote_uri.scheme().cloned();
     let err_msg = &format!("Failed to build new uri from parts {new_uri:?}");
-    let new_uri = Uri::from_parts(new_uri).expect(err_msg);
+    let new_uri = Uri::from_parts(new_uri)
+        .inspect_err(|v| warn!("{:?}", v))
+        .expect(err_msg);
 
-    let whitelist_prefix = ["/store", "/api", "/_", "/fonts"];
+    let mut headers = HeaderMap::new();
+    request.headers().clone_into(&mut headers);
+    headers.remove(USER_AGENT);
+    headers.append(USER_AGENT, HeaderValue::from_static("Drop Desktop Client"));
+    headers.append(
+        "Authorization",
+        HeaderValue::from_str(&format!("Bearer {web_token}")).unwrap(),
+    );
 
-    if whitelist_prefix.iter().all(|f| !path.starts_with(f)) {
-        webbrowser_open(new_uri.to_string());
-        return Ok(Response::new(Vec::new()));
-    }
-
-    let client = DROP_CLIENT_SYNC.clone();
-    let response = match client
+    let response = match DROP_CLIENT_ASYNC
         .request(request.method().clone(), new_uri.to_string())
-        .header("Authorization", format!("Bearer {web_token}"))
-        .headers(request.headers().clone())
+        .headers(headers)
         .send()
+        .await
     {
         Ok(response) => response,
         Err(e) => {
@@ -94,15 +95,26 @@ async fn handle_server_proto(request: Request<Vec<u8>>) -> Result<Response<Vec<u
     };
 
     let response_status = response.status();
-    let response_body = match response.bytes() {
+    let mut client_http_response = Response::builder()
+        .status(response_status)
+        .header("Access-Control-Allow-Origin", "*");
+
+    {
+        let client_response_headers = client_http_response.headers_mut().unwrap();
+        for (header, header_value) in response.headers() {
+            client_response_headers.insert(header, header_value.clone());
+        }
+    };
+
+    let response_body = match response.bytes().await {
         Ok(bytes) => bytes,
         Err(e) => return Err(e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)),
     };
 
-    let http_response = Response::builder()
-        .status(response_status)
+    let client_http_response = client_http_response
         .body(response_body.to_vec())
+        .inspect_err(|v| warn!("{:?}", v))
         .expect("Failed to build server proto response");
 
-    Ok(http_response)
+    Ok(client_http_response)
 }

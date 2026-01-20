@@ -1,15 +1,29 @@
-use games::collections::collection::{Collection, Collections};
+use std::sync::nonpoison::Mutex;
+
+use client::app_state::AppState;
+use database::{GameDownloadStatus, borrow_db_checked};
+use games::collections::collection::Collections;
 use remote::{
-    auth::generate_authorization_header,
     cache::{cache_object, get_cached_object},
     error::RemoteAccessError,
+    offline,
     requests::{generate_url, make_authenticated_get},
-    utils::DROP_CLIENT_ASYNC,
 };
-use serde_json::json;
 
-#[tauri::command]
 pub async fn fetch_collections(
+    state: tauri::State<'_, Mutex<AppState>>,
+    hard_refresh: Option<bool>,
+) -> Result<Collections, RemoteAccessError> {
+    offline!(
+        state,
+        fetch_collections_online,
+        fetch_collections_offline,
+        hard_refresh
+    )
+    .await
+}
+
+pub async fn fetch_collections_online(
     hard_refresh: Option<bool>,
 ) -> Result<Collections, RemoteAccessError> {
     let do_hard_refresh = hard_refresh.unwrap_or(false);
@@ -28,79 +42,25 @@ pub async fn fetch_collections(
     Ok(collections)
 }
 
-#[tauri::command]
-pub async fn fetch_collection(collection_id: String) -> Result<Collection, RemoteAccessError> {
-    let response = make_authenticated_get(generate_url(
-        &["/api/v1/client/collection/", &collection_id],
-        &[],
-    )?)
-    .await?;
+pub async fn fetch_collections_offline(
+    _hard_refresh: Option<bool>,
+) -> Result<Collections, RemoteAccessError> {
+    let mut cached = get_cached_object::<Collections>("collections")?;
 
-    Ok(response.json().await?)
-}
+    let db_handle = borrow_db_checked();
 
-#[tauri::command]
-pub async fn create_collection(name: String) -> Result<Collection, RemoteAccessError> {
-    let client = DROP_CLIENT_ASYNC.clone();
-    let url = generate_url(&["/api/v1/client/collection"], &[])?;
+    for collection in cached.iter_mut() {
+        collection.entries.retain(|v| {
+            matches!(
+                &db_handle
+                    .applications
+                    .game_statuses
+                    .get(&v.game_id)
+                    .unwrap_or(&GameDownloadStatus::Remote {}),
+                GameDownloadStatus::Installed { .. } | GameDownloadStatus::SetupRequired { .. }
+            )
+        });
+    }
 
-    let response = client
-        .post(url)
-        .header("Authorization", generate_authorization_header())
-        .json(&json!({"name": name}))
-        .send()
-        .await?;
-
-    Ok(response.json().await?)
-}
-
-#[tauri::command]
-pub async fn add_game_to_collection(
-    collection_id: String,
-    game_id: String,
-) -> Result<(), RemoteAccessError> {
-    let client = DROP_CLIENT_ASYNC.clone();
-
-    let url = generate_url(&["/api/v1/client/collection", &collection_id, "entry"], &[])?;
-
-    client
-        .post(url)
-        .header("Authorization", generate_authorization_header())
-        .json(&json!({"id": game_id}))
-        .send()
-        .await?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn delete_collection(collection_id: String) -> Result<bool, RemoteAccessError> {
-    let client = DROP_CLIENT_ASYNC.clone();
-
-    let url = generate_url(&["/api/v1/client/collection", &collection_id], &[])?;
-
-    let response = client
-        .delete(url)
-        .header("Authorization", generate_authorization_header())
-        .send()
-        .await?;
-
-    Ok(response.json().await?)
-}
-#[tauri::command]
-pub async fn delete_game_in_collection(
-    collection_id: String,
-    game_id: String,
-) -> Result<(), RemoteAccessError> {
-    let client = DROP_CLIENT_ASYNC.clone();
-
-    let url = generate_url(&["/api/v1/client/collection", &collection_id, "entry"], &[])?;
-
-    client
-        .delete(url)
-        .header("Authorization", generate_authorization_header())
-        .json(&json!({"id": game_id}))
-        .send()
-        .await?;
-
-    Ok(())
+    Ok(cached)
 }

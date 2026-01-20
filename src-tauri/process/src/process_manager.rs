@@ -4,27 +4,28 @@ use std::{
     io,
     path::PathBuf,
     process::{Command, ExitStatus},
-    str::FromStr,
     sync::Arc,
     thread::spawn,
     time::{Duration, SystemTime},
 };
 
 use database::{
-    ApplicationTransientStatus, Database, DownloadType, DownloadableMetadata, GameDownloadStatus,
-    GameVersion, borrow_db_checked, borrow_db_mut_checked, db::DATA_ROOT_DIR, platform::Platform,
+    ApplicationTransientStatus, Database, DownloadableMetadata, GameDownloadStatus, GameVersion,
+    borrow_db_checked, borrow_db_mut_checked, db::DATA_ROOT_DIR, platform::Platform,
 };
 use dynfmt::Format;
 use dynfmt::SimpleCurlyFormat;
 use games::{library::push_game_update, state::GameStatusManager};
 use log::{debug, info, warn};
+use serde::Serialize;
 use shared_child::SharedChild;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter as _};
 
 use crate::{
     PROCESS_MANAGER,
     error::ProcessError,
     format::DropFormatArgs,
+    parser::{LaunchParameters, ParsedCommand},
     process_handlers::{AsahiMuvmLauncher, NativeGameLauncher, UMULauncher},
 };
 
@@ -43,6 +44,11 @@ pub struct ProcessManager<'a> {
         &'a (dyn ProcessHandler + Sync + Send + 'static),
     )>,
     app_handle: AppHandle,
+}
+
+#[derive(Serialize)]
+pub struct LaunchOption {
+    name: String,
 }
 
 impl ProcessManager<'_> {
@@ -69,7 +75,7 @@ impl ProcessManager<'_> {
                 ),
                 (
                     (Platform::Linux, Platform::Linux),
-                    &NativeGameLauncher {} as &(dyn ProcessHandler + Sync + Send + 'static),
+                    &UMULauncher {} as &(dyn ProcessHandler + Sync + Send + 'static),
                 ),
                 (
                     (Platform::macOS, Platform::macOS),
@@ -93,7 +99,8 @@ impl ProcessManager<'_> {
             Some(process) => {
                 process.manually_killed = true;
                 process.handle.kill()?;
-                process.handle.wait()?;
+                let exit_status = process.handle.wait()?;
+                info!("exit status: {:?}", exit_status);
                 Ok(())
             }
             None => Err(io::Error::new(
@@ -163,13 +170,12 @@ impl ProcessManager<'_> {
             && (elapsed.as_secs() <= 2 || result.map_or(true, |r| !r.success()))
         {
             warn!("drop detected that the game {game_id} may have failed to launch properly");
-            return Err(ProcessError::FailedLaunch(game_id));
-            // let _ = self.app_handle.emit("launch_external_error", &game_id);
+            let _ = self.app_handle.emit("launch_external_error", &game_id);
         }
 
-        let version_data = match db_handle.applications.game_versions.get(&game_id) {
+        let version_data = match db_handle.applications.game_versions.get(&meta.version) {
             // This unwrap here should be resolved by just making the hashmap accept an option rather than just a String
-            Some(res) => res.get(&meta.version.unwrap()).expect("Failed to get game version from installed game versions. Is the database corrupted?"),
+            Some(res) => res,
             None => todo!(),
         };
 
@@ -208,29 +214,51 @@ impl ProcessManager<'_> {
         process_handler.is_ok()
     }
 
-    /// Must be called through spawn as it is currently blocking
-    pub fn launch_process(&mut self, game_id: String) -> Result<(), ProcessError> {
+    pub fn get_launch_options(game_id: String) -> Result<Vec<LaunchOption>, ProcessError> {
+        let db_lock = borrow_db_checked();
+
+        let meta = db_lock
+            .applications
+            .installed_game_version
+            .get(&game_id)
+            .cloned()
+            .ok_or(ProcessError::NotInstalled)?;
+
+        let game_version = db_lock
+            .applications
+            .game_versions
+            .get(&meta.version)
+            .ok_or(ProcessError::InvalidVersion)?;
+
+        let launch_options = game_version
+            .launches
+            .iter()
+            .filter(|v| v.platform == meta.target_platform)
+            .map(|v| LaunchOption {
+                name: v.name.clone(),
+            })
+            .collect::<Vec<LaunchOption>>();
+
+        Ok(launch_options)
+    }
+
+    pub fn launch_process(
+        &mut self,
+        game_id: String,
+        launch_process_index: usize,
+    ) -> Result<(), ProcessError> {
         if self.processes.contains_key(&game_id) {
             return Err(ProcessError::AlreadyRunning);
         }
 
-        let version = match borrow_db_checked()
+        let mut db_lock = borrow_db_mut_checked();
+
+        let meta = db_lock
             .applications
-            .game_statuses
+            .installed_game_version
             .get(&game_id)
             .cloned()
-        {
-            Some(GameDownloadStatus::Installed { version_name, .. }) => version_name,
-            Some(GameDownloadStatus::SetupRequired { version_name, .. }) => version_name,
-            _ => return Err(ProcessError::NotInstalled),
-        };
-        let meta = DownloadableMetadata {
-            id: game_id.clone(),
-            version: Some(version.clone()),
-            download_type: DownloadType::Game,
-        };
-
-        let mut db_lock = borrow_db_mut_checked();
+            .ok_or(ProcessError::NotInstalled)?;
 
         let game_status = db_lock
             .applications
@@ -259,14 +287,12 @@ impl ProcessManager<'_> {
         let game_version = db_lock
             .applications
             .game_versions
-            .get(&game_id)
-            .ok_or(ProcessError::InvalidID)?
             .get(version_name)
             .ok_or(ProcessError::InvalidVersion)?;
 
         // TODO: refactor this path with open_process_logs
         let game_log_folder = &self.get_log_dir(game_id);
-        create_dir_all(game_log_folder).map_err(ProcessError::IOError)?;
+        create_dir_all(game_log_folder)?;
 
         let current_time = chrono::offset::Local::now();
         let log_file = OpenOptions::new()
@@ -274,8 +300,11 @@ impl ProcessManager<'_> {
             .truncate(true)
             .read(true)
             .create(true)
-            .open(game_log_folder.join(format!("{}-{}.log", &version, current_time.timestamp())))
-            .map_err(ProcessError::IOError)?;
+            .open(game_log_folder.join(format!(
+                "{}-{}.log",
+                &meta.version,
+                current_time.timestamp()
+            )))?;
 
         let error_file = OpenOptions::new()
             .write(true)
@@ -284,54 +313,140 @@ impl ProcessManager<'_> {
             .create(true)
             .open(game_log_folder.join(format!(
                 "{}-{}-error.log",
-                &version,
+                &meta.version,
                 current_time.timestamp()
-            )))
-            .map_err(ProcessError::IOError)?;
+            )))?;
 
-        let target_platform = game_version.platform;
+        let target_platform = meta.target_platform;
 
         let process_handler = self.fetch_process_handler(&db_lock, &target_platform)?;
 
-        let (launch, args) = match game_status {
+        let (target_command, executor) = match game_status {
             GameDownloadStatus::Installed {
                 version_name: _,
                 install_dir: _,
-            } => (&game_version.launch_command, &game_version.launch_args),
+            } => {
+                let (_, launch_config) = game_version
+                    .launches
+                    .iter()
+                    .filter(|v| v.platform == target_platform)
+                    .enumerate()
+                    .find(|(i, _)| *i == launch_process_index)
+                    .ok_or(ProcessError::NotInstalled)?;
+                (
+                    launch_config.command.clone(),
+                    launch_config.executor.as_ref(),
+                )
+            }
             GameDownloadStatus::SetupRequired {
                 version_name: _,
                 install_dir: _,
-            } => (&game_version.setup_command, &game_version.setup_args),
-            GameDownloadStatus::PartiallyInstalled {
-                version_name: _,
-                install_dir: _,
-            } => unreachable!("Game registered as 'Partially Installed'"),
-            GameDownloadStatus::Remote {} => unreachable!("Game registered as 'Remote'"),
+            } => {
+                let setup_config = game_version
+                    .setups
+                    .iter()
+                    .find(|v| v.platform == target_platform)
+                    .ok_or(ProcessError::NotInstalled)?;
+
+                (setup_config.command.clone(), None)
+            }
+            _ => unreachable!("Game registered as 'Partially Installed'"),
         };
 
-        #[allow(clippy::unwrap_used)]
-        let launch = PathBuf::from_str(install_dir).unwrap().join(launch);
-        let launch = launch.display().to_string();
+        let target_command = ParsedCommand::parse(target_command)?;
 
-        let launch_string = process_handler.create_launch_process(
-            &meta,
-            launch.to_string(),
-            args.clone(),
-            game_version,
-            install_dir,
-        )?;
+        let launch_parameters = if let Some(executor) = executor {
+            let err = ProcessError::RequiredDependency(
+                executor.game_id.clone(),
+                executor.version_id.clone(),
+            );
 
-        let format_args = DropFormatArgs::new(
-            launch_string,
-            install_dir,
-            &game_version.launch_command,
-            launch.to_string(),
-        );
+            let executor_metadata = db_lock
+                .applications
+                .installed_game_version
+                .get(&executor.game_id)
+                .ok_or(err.clone())?;
 
-        let launch_string = SimpleCurlyFormat
-            .format(&game_version.launch_command_template, format_args)
-            .map_err(|e| ProcessError::FormatError(e.to_string()))?
-            .to_string();
+            let executor_game_status = db_lock
+                .applications
+                .game_statuses
+                .get(&executor.game_id)
+                .ok_or(err.clone())?;
+
+            let executor_install_dir = match executor_game_status {
+                GameDownloadStatus::Installed {
+                    version_name: _,
+                    install_dir,
+                } => Ok(install_dir),
+                GameDownloadStatus::SetupRequired {
+                    version_name: _,
+                    install_dir: _,
+                } => todo!(),
+                _ => Err(err.clone()),
+            }?;
+
+            let executor_game_version = db_lock
+                .applications
+                .game_versions
+                .get(&executor.version_id)
+                .ok_or(err.clone())?;
+
+            let executor_launch_config = executor_game_version
+                .launches
+                .iter()
+                .find(|v| v.launch_id == executor.launch_id)
+                .ok_or(err)?;
+
+            println!("{}", executor_launch_config.command);
+            let mut exe_command = ParsedCommand::parse(executor_launch_config.command.clone())?;
+            println!("{:?}", exe_command);
+            exe_command.env.extend(target_command.env);
+            exe_command.make_absolute(executor_install_dir.into());
+
+            exe_command.args.iter_mut().for_each(|v| {
+                *v = v.replace("{executor}", &target_command.command);
+            });
+
+            let executor_launch_string = process_handler.create_launch_process(
+                executor_metadata,
+                exe_command.reconstruct(),
+                executor_game_version,
+                install_dir,
+            )?;
+
+            LaunchParameters(executor_launch_string, install_dir.into())
+        } else {
+            let target_launch_string = process_handler.create_launch_process(
+                &meta,
+                target_command.reconstruct(),
+                game_version,
+                install_dir,
+            )?;
+
+            let mut parsed_launch = ParsedCommand::parse(target_launch_string.clone())?;
+            let executable_name = parsed_launch.command.clone();
+            parsed_launch.make_absolute(install_dir.into());
+
+            let format_args = DropFormatArgs::new(
+                target_launch_string,
+                install_dir,
+                &executable_name,
+                parsed_launch.command,
+                None,
+            );
+
+            let target_launch_string = SimpleCurlyFormat
+                .format(&game_version.launch_template, &format_args)
+                .map_err(|e| ProcessError::FormatError(e.to_string()))?
+                .to_string();
+
+            let target_launch_string = SimpleCurlyFormat
+                .format(&target_launch_string, format_args)
+                .map_err(|e| ProcessError::FormatError(e.to_string()))?
+                .to_string();
+
+            LaunchParameters(target_launch_string, install_dir.into())
+        };
 
         #[cfg(target_os = "windows")]
         use std::os::windows::process::CommandExt;
@@ -340,25 +455,27 @@ impl ProcessManager<'_> {
         #[cfg(target_os = "windows")]
         command.raw_arg(format!("/C \"{}\"", &launch_string));
 
-        info!("launching (in {install_dir}): {launch_string}",);
+        info!(
+            "launching (in {}): {}",
+            launch_parameters.1.to_string_lossy(),
+            launch_parameters.0
+        );
 
         #[cfg(unix)]
         let mut command: Command = Command::new("sh");
         #[cfg(unix)]
-        command.args(vec!["-c", &launch_string]);
-
-        debug!("final launch string:\n\n{launch_string}\n");
+        command.args(vec!["-c", &launch_parameters.0]);
 
         command
             .stderr(error_file)
             .stdout(log_file)
             .env_remove("RUST_LOG")
-            .current_dir(install_dir);
+            .current_dir(launch_parameters.1);
 
-        let child = command.spawn().map_err(ProcessError::IOError)?;
+        let child = command.spawn()?;
 
         let launch_process_handle =
-            Arc::new(SharedChild::new(child).map_err(ProcessError::IOError)?);
+            Arc::new(SharedChild::new(child)?);
 
         db_lock
             .applications
@@ -399,7 +516,6 @@ pub trait ProcessHandler: Send + 'static {
         &self,
         meta: &DownloadableMetadata,
         launch_command: String,
-        args: Vec<String>,
         game_version: &GameVersion,
         current_dir: &str,
     ) -> Result<String, ProcessError>;
