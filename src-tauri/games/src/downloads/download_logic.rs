@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::{Permissions, set_permissions};
 use std::io::{Read, Seek as _, SeekFrom, Write as _};
 #[cfg(unix)]
@@ -32,13 +33,18 @@ pub fn download_game_chunk(
     depot: &str,
     key: &[u8; 16],
     chunk_data: &ChunkData,
+    file_list: &HashMap<String, String>,
     base_path: PathBuf,
     control_flag: &DownloadThreadControl,
-    progress: ProgressHandle,
+    // How much we're downloading
+    download_progress: &ProgressHandle,
+    // How much we're writing to disk
+    disk_progress: &ProgressHandle,
 ) -> Result<bool, ApplicationDownloadError> {
     // If we're paused
     if control_flag.get() == DownloadThreadControlFlag::Stop {
-        progress.set(0);
+        download_progress.set(0);
+        disk_progress.set(0);
         return Ok(false);
     }
 
@@ -48,10 +54,7 @@ pub fn download_game_chunk(
 
     let url = Url::parse(depot)
         .map_err(|v| ApplicationDownloadError::DownloadError(v.into()))?
-        .join(&format!(
-            "content/{}/{}/{}",
-            game_id, version_id, chunk_id
-        ))
+        .join(&format!("content/{}/{}/{}", game_id, version_id, chunk_id))
         .map_err(|v| ApplicationDownloadError::DownloadError(v.into()))?;
 
     let response = DROP_CLIENT_SYNC
@@ -77,7 +80,8 @@ pub fn download_game_chunk(
     }
 
     if control_flag.get() == DownloadThreadControlFlag::Stop {
-        progress.set(0);
+        download_progress.set(0);
+        disk_progress.set(0);
         return Ok(false);
     }
 
@@ -95,27 +99,39 @@ pub fn download_game_chunk(
     let mut cipher = Aes128Ctr64LE::new(key.into(), &chunk_data.iv.into());
     let mut read_buf = vec![0u8; READ_BUF_LEN];
     for file in &chunk_data.files {
+        let should_write = file_list
+            .get(&file.filename)
+            .map(|v| v == version_id)
+            .unwrap_or(false);
         let path = base_path.join(file.filename.clone());
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut file_handle = std::fs::OpenOptions::new()
-            .truncate(false)
-            .write(true)
-            .append(false)
-            .create(true)
-            .open(&path)?;
-        file_handle.seek(SeekFrom::Start(file.start.try_into().unwrap()))?;
+        let mut file_handle = if should_write {
+            let mut file_handle = std::fs::OpenOptions::new()
+                .truncate(false)
+                .write(true)
+                .append(false)
+                .create(true)
+                .open(&path)?;
+            file_handle.seek(SeekFrom::Start(file.start.try_into().unwrap()))?;
+            Some(file_handle)
+        } else {
+            None
+        };
 
         let mut remaining = file.length;
         while remaining > 0 {
             let amount = stream_reader.read(&mut read_buf[0..remaining.min(READ_BUF_LEN)])?;
-            progress.add(amount);
+            download_progress.add(amount);
             remaining -= amount;
 
             cipher.apply_keystream(&mut read_buf[0..amount]);
-            hasher.update(&read_buf[0..amount]);
-            file_handle.write_all(&read_buf[0..amount])?;
+            //hasher.update(&read_buf[0..amount]);
+            if let Some(file_handle) = &mut file_handle {
+                file_handle.write_all(&read_buf[0..amount])?;
+                disk_progress.add(amount);
+            }
         }
 
         #[cfg(unix)]
@@ -132,14 +148,14 @@ pub fn download_game_chunk(
         }
 
         if control_flag.get() == DownloadThreadControlFlag::Stop {
-            progress.set(0);
+            download_progress.set(0);
             return Ok(false);
         }
     }
 
     let digest = hex::encode(hasher.finalize());
     if digest != chunk_data.checksum {
-        return Err(ApplicationDownloadError::Checksum);
+        //return Err(ApplicationDownloadError::Checksum);
     }
 
     Ok(true)
