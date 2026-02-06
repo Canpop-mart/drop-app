@@ -48,6 +48,7 @@ pub struct FetchLibraryResponse {
     library: Vec<Game>,
     collections: Vec<Collection>,
     other: Vec<Game>,
+    missing: Vec<Game>,
 }
 
 pub async fn fetch_library_logic(
@@ -60,11 +61,11 @@ pub async fn fetch_library_logic(
         return Ok(library);
     }
 
-    let client = DROP_CLIENT_ASYNC.clone();
     let response = generate_url(&["/api/v1/client/user/library"], &[])?;
-    let response = client
+    let auth_header = generate_authorization_header();
+    let response = DROP_CLIENT_ASYNC
         .get(response)
-        .header("Authorization", generate_authorization_header())
+        .header("Authorization", auth_header)
         .send()
         .await?;
 
@@ -111,6 +112,7 @@ pub async fn fetch_library_logic(
 
     // Add games that are installed but no longer in library
     let mut other = Vec::new();
+    let mut missing = Vec::new();
     for meta in installed_metas {
         if all_games.iter().any(|e| *e.id() == meta.id) {
             continue;
@@ -132,13 +134,18 @@ pub async fn fetch_library_logic(
                 continue;
             }
         };
-        other.push(game);
+        if game.game_type == "Game" {
+            missing.push(game);
+        } else {
+            other.push(game);
+        }
     }
 
     let response = FetchLibraryResponse {
         library,
         collections,
         other,
+        missing,
     };
 
     cache_object("library", &response)?;
@@ -167,6 +174,7 @@ pub async fn fetch_library_logic_offline(
 
     response.library.retain(retain_filter);
     response.other.retain(retain_filter);
+    response.missing.retain(retain_filter);
     response.collections.iter_mut().for_each(|k| {
         k.entries.retain(|object| {
             matches!(
@@ -253,6 +261,7 @@ pub async fn fetch_game_logic(
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VersionDownloadOptionRequiredContent {
+    game_id: String,
     version_id: String,
     name: String,
     icon_object_id: String,
@@ -263,6 +272,7 @@ struct VersionDownloadOptionRequiredContent {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionDownloadOption {
+    game_id: String,
     version_id: String,
     display_name: Option<String>,
     version_path: String,
@@ -397,7 +407,8 @@ pub fn update_game_configuration(
         .clone();
 
     // Add more options in here
-    existing_configuration.launch_template = options.launch_string().clone();
+    existing_configuration.user_configuration.launch_template = options.launch_string;
+    existing_configuration.user_configuration.override_proton_path = options.override_proton_path;
 
     // Add no more options past here
 

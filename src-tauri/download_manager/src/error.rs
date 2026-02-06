@@ -80,3 +80,9 @@ impl From<io::Error> for ApplicationDownloadError {
         ApplicationDownloadError::IoError(Arc::new(value))
     }
 }
+
+impl From<RemoteAccessError> for ApplicationDownloadError {
+    fn from(value: RemoteAccessError) -> Self {
+        ApplicationDownloadError::Communication(value)
+    }
+}

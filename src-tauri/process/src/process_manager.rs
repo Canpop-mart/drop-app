@@ -321,7 +321,7 @@ impl ProcessManager<'_> {
 
         let process_handler = self.fetch_process_handler(&db_lock, &target_platform)?;
 
-        let (target_command, executor) = match game_status {
+        let (target_command, emulator) = match game_status {
             GameDownloadStatus::Installed {
                 version_name: _,
                 install_dir: _,
@@ -335,7 +335,7 @@ impl ProcessManager<'_> {
                     .ok_or(ProcessError::NotInstalled)?;
                 (
                     launch_config.command.clone(),
-                    launch_config.executor.as_ref(),
+                    launch_config.emulator.as_ref(),
                 )
             }
             GameDownloadStatus::SetupRequired {
@@ -353,27 +353,27 @@ impl ProcessManager<'_> {
             _ => unreachable!("Game registered as 'Partially Installed'"),
         };
 
-        let target_command = ParsedCommand::parse(target_command)?;
+        let mut target_command = ParsedCommand::parse(target_command)?;
 
-        let launch_parameters = if let Some(executor) = executor {
+        let target_launch_string = if let Some(emulator) = emulator {
             let err = ProcessError::RequiredDependency(
-                executor.game_id.clone(),
-                executor.version_id.clone(),
+                emulator.game_id.clone(),
+                emulator.version_id.clone(),
             );
 
-            let executor_metadata = db_lock
+            let emulator_metadata = db_lock
                 .applications
                 .installed_game_version
-                .get(&executor.game_id)
+                .get(&emulator.game_id)
                 .ok_or(err.clone())?;
 
-            let executor_game_status = db_lock
+            let emulator_game_status = db_lock
                 .applications
                 .game_statuses
-                .get(&executor.game_id)
+                .get(&emulator.game_id)
                 .ok_or(err.clone())?;
 
-            let executor_install_dir = match executor_game_status {
+            let emulator_install_dir = match emulator_game_status {
                 GameDownloadStatus::Installed {
                     version_name: _,
                     install_dir,
@@ -385,86 +385,101 @@ impl ProcessManager<'_> {
                 _ => Err(err.clone()),
             }?;
 
-            let executor_game_version = db_lock
+            let emulator_game_version = db_lock
                 .applications
                 .game_versions
-                .get(&executor.version_id)
+                .get(&emulator.version_id)
                 .ok_or(err.clone())?;
 
-            let executor_launch_config = executor_game_version
+            let emulator_launch_config = emulator_game_version
                 .launches
                 .iter()
-                .find(|v| v.launch_id == executor.launch_id)
+                .find(|v| v.launch_id == emulator.launch_id)
                 .ok_or(err)?;
 
-            println!("{}", executor_launch_config.command);
-            let mut exe_command = ParsedCommand::parse(executor_launch_config.command.clone())?;
-            println!("{:?}", exe_command);
-            exe_command.env.extend(target_command.env);
-            exe_command.make_absolute(executor_install_dir.into());
+            let mut exe_command = ParsedCommand::parse(emulator_launch_config.command.clone())?;
+            exe_command.env.extend(target_command.env.clone());
+            exe_command.make_absolute(emulator_install_dir.into());
+
+            target_command.make_absolute(PathBuf::from(install_dir.clone()));
 
             exe_command.args.iter_mut().for_each(|v| {
-                *v = v.replace("{executor}", &target_command.command);
+                *v = v.replace("{rom}", &target_command.command);
             });
 
-            let executor_launch_string = process_handler.create_launch_process(
-                executor_metadata,
-                exe_command.reconstruct(),
-                executor_game_version,
-                install_dir,
-            )?;
+            
 
-            LaunchParameters(executor_launch_string, install_dir.into())
+            process_handler.create_launch_process(
+                emulator_metadata,
+                exe_command.reconstruct(),
+                emulator_game_version,
+                install_dir,
+                &db_lock,
+            )?
         } else {
-            let target_launch_string = process_handler.create_launch_process(
+            
+
+            process_handler.create_launch_process(
                 &meta,
                 target_command.reconstruct(),
                 game_version,
                 install_dir,
-            )?;
-
-            let mut parsed_launch = ParsedCommand::parse(target_launch_string.clone())?;
-            let executable_name = parsed_launch.command.clone();
-            parsed_launch.make_absolute(install_dir.into());
-
-            let format_args = DropFormatArgs::new(
-                target_launch_string,
-                install_dir,
-                &executable_name,
-                parsed_launch.command,
-                None,
-            );
-
-            let target_launch_string = SimpleCurlyFormat
-                .format(&game_version.launch_template, &format_args)
-                .map_err(|e| ProcessError::FormatError(e.to_string()))?
-                .to_string();
-
-            let target_launch_string = SimpleCurlyFormat
-                .format(&target_launch_string, format_args)
-                .map_err(|e| ProcessError::FormatError(e.to_string()))?
-                .to_string();
-
-            LaunchParameters(target_launch_string, install_dir.into())
+                &db_lock,
+            )?
         };
 
-        #[cfg(target_os = "windows")]
-        use std::os::windows::process::CommandExt;
-        #[cfg(target_os = "windows")]
-        let mut command = Command::new("cmd");
-        #[cfg(target_os = "windows")]
-        command.raw_arg(format!("/C \"{}\"", &launch_parameters.0));
+        let mut parsed_launch = ParsedCommand::parse(target_launch_string.clone())?;
+        let executable_name = parsed_launch.command.clone();
+        parsed_launch.make_absolute(install_dir.into());
+
+        let format_args = DropFormatArgs::new(
+            target_launch_string,
+            install_dir,
+            &executable_name,
+            parsed_launch.command,
+            None,
+        );
+
+        let target_launch_string = SimpleCurlyFormat
+            .format(
+                &game_version.user_configuration.launch_template,
+                &format_args,
+            )
+            .map_err(|e| ProcessError::FormatError(e.to_string()))?
+            .to_string();
+
+        let target_launch_string = SimpleCurlyFormat
+            .format(&target_launch_string, format_args)
+            .map_err(|e| ProcessError::FormatError(e.to_string()))?
+            .to_string();
+
+        let launch_parameters = LaunchParameters(
+            ParsedCommand::parse(target_launch_string)?,
+            install_dir.into(),
+        );
 
         info!(
-            "launching (in {}): {}",
+            "launching (in {}): {:?}",
             launch_parameters.1.to_string_lossy(),
             launch_parameters.0
         );
 
-        #[cfg(unix)]
-        let mut command: Command = Command::new("sh");
-        #[cfg(unix)]
-        command.args(vec!["-c", &launch_parameters.0]);
+        let mut command = {
+            let mut command = Command::new(launch_parameters.0.command);
+            command.args(launch_parameters.0.args);
+            for parts in launch_parameters
+                .0
+                .env
+                .into_iter()
+                .map(|e| e.split("=").map(|v| v.to_string()).collect::<Vec<String>>())
+            {
+                if let Some(key) = parts.first()
+                    && let Some(value) = parts.get(1) {
+                        command.env(key, value);
+                    }
+            }
+            command
+        };
 
         command
             .stderr(error_file)
@@ -474,8 +489,7 @@ impl ProcessManager<'_> {
 
         let child = command.spawn()?;
 
-        let launch_process_handle =
-            Arc::new(SharedChild::new(child)?);
+        let launch_process_handle = Arc::new(SharedChild::new(child)?);
 
         db_lock
             .applications
@@ -518,6 +532,7 @@ pub trait ProcessHandler: Send + 'static {
         launch_command: String,
         game_version: &GameVersion,
         current_dir: &str,
+        database: &Database,
     ) -> Result<String, ProcessError>;
 
     fn valid_for_platform(&self, db: &Database, target: &Platform) -> bool;

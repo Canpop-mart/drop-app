@@ -10,7 +10,7 @@ const gameStatusRegistry: { [key: string]: Ref<GameStatus> } = {};
 type OptionGameStatus = { [key in GameStatusEnum]: { version_name?: string } };
 export type SerializedGameStatus = [
   { type: GameStatusEnum },
-  OptionGameStatus | null
+  OptionGameStatus | null,
 ];
 
 export const parseStatus = (status: SerializedGameStatus): GameStatus => {
@@ -70,6 +70,7 @@ export const useGame = async (gameId: string) => {
 
 export type FrontendGameConfiguration = {
   launchString: string;
+  overrideProtonPath?: string;
 };
 
 export type LaunchResult =
@@ -81,13 +82,24 @@ export type VersionOption = {
   displayName?: string;
   versionPath: string;
   platform: string;
-  size: number;
+  size: {
+    installSize: number;
+    downloadSize: number;
+  };
   requiredContent: Array<{
     gameId: string;
     versionId: string;
     name: string;
     iconObjectId: string;
     shortDescription: string;
-    size: number;
+    size: {
+      installSize: number;
+      downloadSize: number;
+    };
   }>;
+};
+
+export type ProtonPath = {
+  path: string;
+  name: string;
 };

@@ -36,7 +36,7 @@ pub mod data {
 
     #[derive(Serialize, Deserialize)]
     enum DatabaseVersionEnum {
-        V1 { database: v1::Database },
+        V0_4_0 { database: v1::Database },
     }
 
     pub struct DatabaseVersionSerializable(pub(crate) Database);
@@ -47,7 +47,7 @@ pub mod data {
             S: serde::Serializer,
         {
             // Always serialize to latest version
-            DatabaseVersionEnum::V1 {
+            DatabaseVersionEnum::V0_4_0 {
                 database: self.0.clone(),
             }
             .serialize(serializer)
@@ -60,7 +60,7 @@ pub mod data {
             D: serde::Deserializer<'de>,
         {
             Ok(match DatabaseVersionEnum::deserialize(deserializer)? {
-                DatabaseVersionEnum::V1 { database } => DatabaseVersionSerializable(database),
+                DatabaseVersionEnum::V0_4_0 { database } => DatabaseVersionSerializable(database),
             })
         }
     }
@@ -73,8 +73,18 @@ pub mod data {
 
         use super::{Deserialize, Serialize};
 
-        fn default_template() -> String {
-            "{}".to_owned()
+        fn default_template() -> UserConfiguration {
+            UserConfiguration {
+                launch_template: "{}".to_owned(),
+                override_proton_path: None,
+            }
+        }
+
+        #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+        #[serde(rename_all = "camelCase")]
+        pub struct UserConfiguration {
+            pub launch_template: String,
+            pub override_proton_path: Option<String>,
         }
 
         #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -92,7 +102,7 @@ pub mod data {
             pub delta: bool,
 
             #[serde(default = "default_template")]
-            pub launch_template: String,
+            pub user_configuration: UserConfiguration,
 
             pub launches: Vec<LaunchConfiguration>,
             pub setups: Vec<SetupConfiguration>,
@@ -108,7 +118,7 @@ pub mod data {
             pub platform: Platform,
             pub umu_id_override: Option<String>,
 
-            pub executor: Option<LaunchConfigurationExecutor>,
+            pub emulator: Option<LaunchConfigurationEmulator>,
         }
 
         #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -116,7 +126,7 @@ pub mod data {
         /**
          * This is intended to be used to look up the actual launch configuration that we store elsewhere
          */
-        pub struct LaunchConfigurationExecutor {
+        pub struct LaunchConfigurationEmulator {
             pub launch_id: String,
             pub game_id: String,
             pub version_id: String,
@@ -227,6 +237,9 @@ pub mod data {
             pub game_versions: HashMap<String, GameVersion>,
             pub installed_game_version: HashMap<String, DownloadableMetadata>,
 
+            pub additional_proton_paths: Vec<String>,
+            pub default_proton_path: Option<String>,
+
             #[serde(skip)]
             pub transient_statuses: HashMap<DownloadableMetadata, ApplicationTransientStatus>,
         }
@@ -258,6 +271,8 @@ pub mod data {
                     game_versions: HashMap::new(),
                     installed_game_version: HashMap::new(),
                     transient_statuses: HashMap::new(),
+                    additional_proton_paths: Vec::new(),
+                    default_proton_path: None,
                 },
                 prev_database,
                 base_url: String::new(),
