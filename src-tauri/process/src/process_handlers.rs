@@ -65,10 +65,13 @@ impl ProcessHandler for UMULauncher {
                 .or(database.applications.default_proton_path.as_ref())
                 .ok_or(ProcessError::NoCompat)?;
 
+            #[cfg(target_os = "linux")]
             let proton_valid = crate::compat::read_proton_path(PathBuf::from(proton_path))
                 .ok()
                 .flatten()
                 .is_some();
+            #[cfg(not(target_os = "linux"))]
+            let proton_valid = false;
             if !proton_valid {
                 return Err(ProcessError::NoCompat);
             }
