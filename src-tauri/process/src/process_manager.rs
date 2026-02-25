@@ -11,7 +11,8 @@ use std::{
 
 use database::{
     ApplicationTransientStatus, Database, DownloadableMetadata, GameDownloadStatus, GameVersion,
-    borrow_db_checked, borrow_db_mut_checked, db::DATA_ROOT_DIR, platform::Platform,
+    borrow_db_checked, borrow_db_mut_checked, db::DATA_ROOT_DIR, models::data::InstalledGameType,
+    platform::Platform,
 };
 use dynfmt::Format;
 use dynfmt::SimpleCurlyFormat;
@@ -26,7 +27,9 @@ use crate::{
     error::ProcessError,
     format::DropFormatArgs,
     parser::{LaunchParameters, ParsedCommand},
-    process_handlers::{AsahiMuvmLauncher, NativeGameLauncher, UMULauncher},
+    process_handlers::{
+        AsahiMuvmLauncher, NativeGameLauncher, UMUCompatLauncher, UMUNativeLauncher,
+    },
 };
 
 pub struct RunningProcess {
@@ -75,7 +78,7 @@ impl ProcessManager<'_> {
                 ),
                 (
                     (Platform::Linux, Platform::Linux),
-                    &UMULauncher {} as &(dyn ProcessHandler + Sync + Send + 'static),
+                    &UMUNativeLauncher {} as &(dyn ProcessHandler + Sync + Send + 'static),
                 ),
                 (
                     (Platform::macOS, Platform::macOS),
@@ -87,7 +90,7 @@ impl ProcessManager<'_> {
                 ),
                 (
                     (Platform::Linux, Platform::Windows),
-                    &UMULauncher {} as &(dyn ProcessHandler + Sync + Send + 'static),
+                    &UMUCompatLauncher {} as &(dyn ProcessHandler + Sync + Send + 'static),
                 ),
             ],
             app_handle,
@@ -145,21 +148,15 @@ impl ProcessManager<'_> {
             .unwrap_or_else(|| panic!("Could not get installed version of {}", &game_id));
         db_handle.applications.transient_statuses.remove(&meta);
 
-        let current_state = db_handle.applications.game_statuses.get(&game_id).cloned();
-        if let Some(GameDownloadStatus::SetupRequired {
-            version_name,
-            install_dir,
+        let current_state = db_handle.applications.game_statuses.get_mut(&game_id);
+        if let Some(GameDownloadStatus::Installed {
+            install_type,
+            ..
         }) = current_state
             && let Ok(exit_code) = result
             && exit_code.success()
         {
-            db_handle.applications.game_statuses.insert(
-                game_id.clone(),
-                GameDownloadStatus::Installed {
-                    version_name: version_name.to_string(),
-                    install_dir: install_dir.to_string(),
-                },
-            );
+            *install_type = InstalledGameType::Installed;
         }
 
         let elapsed = process.start.elapsed().unwrap_or(Duration::ZERO);
@@ -268,12 +265,10 @@ impl ProcessManager<'_> {
 
         let (version_name, install_dir) = match game_status {
             GameDownloadStatus::Installed {
-                version_name,
+                version_id: version_name,
                 install_dir,
-            } => (version_name, install_dir),
-            GameDownloadStatus::SetupRequired {
-                version_name,
-                install_dir,
+                install_type: InstalledGameType::Installed | InstalledGameType::SetupRequired,
+                ..
             } => (version_name, install_dir),
             _ => return Err(ProcessError::NotInstalled),
         };
@@ -323,8 +318,8 @@ impl ProcessManager<'_> {
 
         let (target_command, emulator) = match game_status {
             GameDownloadStatus::Installed {
-                version_name: _,
-                install_dir: _,
+                install_type: InstalledGameType::Installed,
+                ..
             } => {
                 let (_, launch_config) = game_version
                     .launches
@@ -338,9 +333,9 @@ impl ProcessManager<'_> {
                     launch_config.emulator.as_ref(),
                 )
             }
-            GameDownloadStatus::SetupRequired {
-                version_name: _,
-                install_dir: _,
+            GameDownloadStatus::Installed {
+                install_type: InstalledGameType::SetupRequired,
+                ..
             } => {
                 let setup_config = game_version
                     .setups
@@ -375,12 +370,12 @@ impl ProcessManager<'_> {
 
             let emulator_install_dir = match emulator_game_status {
                 GameDownloadStatus::Installed {
-                    version_name: _,
-                    install_dir,
+                    install_type: InstalledGameType::Installed,
+                    ..
                 } => Ok(install_dir),
-                GameDownloadStatus::SetupRequired {
-                    version_name: _,
-                    install_dir: _,
+                GameDownloadStatus::Installed {
+                    install_type: InstalledGameType::SetupRequired,
+                    ..
                 } => todo!(),
                 _ => Err(err.clone()),
             }?;
@@ -407,8 +402,6 @@ impl ProcessManager<'_> {
                 *v = v.replace("{rom}", &target_command.command);
             });
 
-            
-
             process_handler.create_launch_process(
                 emulator_metadata,
                 exe_command.reconstruct(),
@@ -417,8 +410,6 @@ impl ProcessManager<'_> {
                 &db_lock,
             )?
         } else {
-            
-
             process_handler.create_launch_process(
                 &meta,
                 target_command.reconstruct(),
@@ -474,9 +465,10 @@ impl ProcessManager<'_> {
                 .map(|e| e.split("=").map(|v| v.to_string()).collect::<Vec<String>>())
             {
                 if let Some(key) = parts.first()
-                    && let Some(value) = parts.get(1) {
-                        command.env(key, value);
-                    }
+                    && let Some(value) = parts.get(1)
+                {
+                    command.env(key, value);
+                }
             }
             command
         };

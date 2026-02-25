@@ -5,9 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use database::platform::Platform;
+use database::{models::data::UserConfiguration, platform::Platform};
 use log::error;
-use native_model::{Decode, Encode};
 use utils::lock;
 
 pub type DropData = v1::DropData;
@@ -17,38 +16,73 @@ pub static DROPDATA_PATH: &str = ".dropdata";
 pub mod v1 {
     use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
-    use database::platform::Platform;
-    use native_model::native_model;
+    use database::{models::data::UserConfiguration, platform::Platform};
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize, Debug)]
-    #[native_model(id = 9, version = 1, with = native_model::rmp_serde_1_3::RmpSerde)]
     pub struct DropData {
         pub game_id: String,
         pub game_version: String,
         pub target_platform: Platform,
+        #[serde(default)]
+        pub configuration: UserConfiguration,
         pub contexts: Mutex<HashMap<String, bool>>,
         pub base_path: PathBuf,
+        pub previously_installed_version: Option<String>,
     }
 
     impl DropData {
-        pub fn new(game_id: String, game_version: String, target_platform: Platform, base_path: PathBuf) -> Self {
+        pub fn new(
+            game_id: String,
+            game_version: String,
+            target_platform: Platform,
+            base_path: PathBuf,
+            configuration: UserConfiguration,
+            previously_installed_version: Option<String>,
+        ) -> Self {
             Self {
                 base_path,
                 game_id,
                 game_version,
                 target_platform,
                 contexts: Mutex::new(HashMap::new()),
+                configuration,
+                previously_installed_version,
             }
         }
     }
 }
 
 impl DropData {
-    pub fn generate(game_id: String, game_version: String, target_platform: Platform, base_path: PathBuf) -> Self {
+    pub fn generate(
+        game_id: String,
+        game_version: String,
+        target_platform: Platform,
+        base_path: PathBuf,
+        configuration: UserConfiguration,
+    ) -> Self {
         match DropData::read(&base_path) {
-            Ok(v) => v,
-            Err(_) => DropData::new(game_id, game_version, target_platform, base_path),
+            Ok(v) => {
+                if v.game_id != game_id || v.game_version != game_version {
+                    return DropData::new(
+                        game_id,
+                        game_version,
+                        target_platform,
+                        base_path,
+                        configuration,
+                        Some(v.game_version),
+                    );
+                }
+                v
+            }
+            Err(_) => DropData::new(
+                game_id,
+                game_version,
+                target_platform,
+                base_path,
+                configuration,
+                None,
+            ),
         }
     }
     pub fn read(base_path: &Path) -> Result<Self, io::Error> {
@@ -57,7 +91,7 @@ impl DropData {
         let mut s = Vec::new();
         file.read_to_end(&mut s)?;
 
-        native_model::rmp_serde_1_3::RmpSerde::decode(s).map_err(|e| {
+        pot::from_slice(&s).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Failed to decode drop data: {e}"),
@@ -65,7 +99,7 @@ impl DropData {
         })
     }
     pub fn write(&self) {
-        let manifest_raw = match native_model::rmp_serde_1_3::RmpSerde::encode(&self) {
+        let manifest_raw = match pot::to_vec(&self) {
             Ok(data) => data,
             Err(_) => return,
         };

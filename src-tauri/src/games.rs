@@ -3,12 +3,12 @@ use std::sync::nonpoison::Mutex;
 use bitcode::{Decode, Encode};
 use database::{
     DownloadableMetadata, GameDownloadStatus, borrow_db_checked, borrow_db_mut_checked,
-    platform::Platform,
+    models::data::{InstalledGameType, UserConfiguration}, platform::Platform,
 };
 use games::{
     collections::collection::Collection,
     downloads::error::LibraryError,
-    library::{FetchGameStruct, FrontendGameOptions, Game, get_current_meta, uninstall_game_logic},
+    library::{FetchGameStruct, Game, get_current_meta, uninstall_game_logic},
     state::{GameStatusManager, GameStatusWithTransient},
 };
 use log::warn;
@@ -168,25 +168,20 @@ pub async fn fetch_library_logic_offline(
                 .game_statuses
                 .get(game.id())
                 .unwrap_or(&GameDownloadStatus::Remote {}),
-            GameDownloadStatus::Installed { .. } | GameDownloadStatus::SetupRequired { .. }
+            GameDownloadStatus::Installed {
+                install_type: InstalledGameType::Installed | InstalledGameType::SetupRequired,
+                ..
+            }
         )
     };
 
     response.library.retain(retain_filter);
     response.other.retain(retain_filter);
     response.missing.retain(retain_filter);
-    response.collections.iter_mut().for_each(|k| {
-        k.entries.retain(|object| {
-            matches!(
-                &db_handle
-                    .applications
-                    .game_statuses
-                    .get(object.game.id())
-                    .unwrap_or(&GameDownloadStatus::Remote {}),
-                GameDownloadStatus::Installed { .. } | GameDownloadStatus::SetupRequired { .. }
-            )
-        })
-    });
+    response
+        .collections
+        .iter_mut()
+        .for_each(|k| k.entries.retain(|object| retain_filter(&object.game)));
 
     Ok(response)
 }
@@ -272,11 +267,11 @@ struct VersionDownloadOptionRequiredContent {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionDownloadOption {
-    game_id: String,
-    version_id: String,
+    pub game_id: String,
+    pub version_id: String,
     display_name: Option<String>,
     version_path: String,
-    platform: Platform,
+    pub platform: Platform,
     size: GameSize,
     required_content: Vec<VersionDownloadOptionRequiredContent>,
 }
@@ -293,7 +288,16 @@ pub async fn fetch_game_version_options_logic(
 ) -> Result<Vec<VersionDownloadOption>, RemoteAccessError> {
     let client = DROP_CLIENT_ASYNC.clone();
 
-    let response = generate_url(&["/api/v1/client/game", &game_id, "versions"], &[])?;
+    let previous_id = borrow_db_checked()
+        .applications
+        .installed_game_version
+        .get(&game_id)
+        .map(|v| v.version.clone());
+
+    let response = generate_url(
+        &["/api/v1/client/game", &game_id, "versions"],
+        &[("previous", &previous_id.unwrap_or(String::new()))],
+    )?;
     let response = client
         .get(response)
         .header("Authorization", generate_authorization_header())
@@ -310,7 +314,7 @@ pub async fn fetch_game_version_options_logic(
 
     let state_lock = state.lock();
     let process_manager_lock = PROCESS_MANAGER.lock();
-    let data = data
+    let data: Vec<VersionDownloadOption> = data
         .into_iter()
         .filter(|v| process_manager_lock.valid_platform(&v.platform))
         .collect();
@@ -387,7 +391,7 @@ pub async fn fetch_game_version_options(
 #[tauri::command]
 pub fn update_game_configuration(
     game_id: String,
-    options: FrontendGameOptions,
+    options: UserConfiguration,
 ) -> Result<(), LibraryError> {
     let mut handle = borrow_db_mut_checked();
     let installed_version = handle
@@ -406,11 +410,7 @@ pub fn update_game_configuration(
         .unwrap()
         .clone();
 
-    // Add more options in here
-    existing_configuration.user_configuration.launch_template = options.launch_string;
-    existing_configuration.user_configuration.override_proton_path = options.override_proton_path;
-
-    // Add no more options past here
+    existing_configuration.user_configuration = options;
 
     handle
         .applications

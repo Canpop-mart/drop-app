@@ -12,6 +12,7 @@ pub mod data {
     pub type DatabaseAuth = v1::DatabaseAuth;
 
     pub type GameDownloadStatus = v1::GameDownloadStatus;
+    pub type InstalledGameType = v1::InstalledGameType;
     pub type ApplicationTransientStatus = v1::ApplicationTransientStatus;
     /**
      * Need to be universally accessible by the ID, and the version is just a couple sprinkles on top
@@ -19,6 +20,7 @@ pub mod data {
     pub type DownloadableMetadata = v1::DownloadableMetadata;
     pub type DownloadType = v1::DownloadType;
     pub type DatabaseApplications = v1::DatabaseApplications;
+    pub type UserConfiguration = v1::UserConfiguration;
 
     use std::collections::HashMap;
 
@@ -77,6 +79,7 @@ pub mod data {
             UserConfiguration {
                 launch_template: "{}".to_owned(),
                 override_proton_path: None,
+                enable_updates: false,
             }
         }
 
@@ -85,6 +88,13 @@ pub mod data {
         pub struct UserConfiguration {
             pub launch_template: String,
             pub override_proton_path: Option<String>,
+            pub enable_updates: bool,
+        }
+
+        impl Default for UserConfiguration {
+            fn default() -> Self {
+                default_template()
+            }
         }
 
         #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -158,23 +168,29 @@ pub mod data {
 
         #[derive(Serialize, Clone, Deserialize, Debug)]
         #[serde(tag = "type")]
+        pub enum InstalledGameType {
+            SetupRequired,
+            Installed,
+            PartiallyInstalled {
+                #[serde(skip)]
+                configuration: UserConfiguration,
+            },
+        }
+
+        #[derive(Serialize, Clone, Deserialize, Debug)]
+        #[serde(tag = "type")]
         pub enum GameDownloadStatus {
             Remote {},
-            SetupRequired {
-                version_name: String,
-                install_dir: String,
-            },
             Installed {
-                version_name: String,
+                install_type: InstalledGameType,
+                version_id: String,
                 install_dir: String,
-            },
-            PartiallyInstalled {
-                version_name: String,
-                install_dir: String,
+                update_available: bool,
             },
         }
         // Stuff that shouldn't be synced to disk
         #[derive(Clone, Serialize, Deserialize, Debug)]
+        #[serde(tag = "type")]
         pub enum ApplicationTransientStatus {
             Queued { version_id: String },
             Downloading { version_id: String },

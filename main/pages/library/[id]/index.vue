@@ -16,14 +16,45 @@
     </div>
 
     <div class="relative z-10">
-      <div class="px-8 pb-4">
+      <div class="px-8">
         <h1
-          class="text-5xl text-zinc-100 font-bold font-display drop-shadow-lg mb-8"
+          class="text-5xl text-zinc-100 font-bold font-display drop-shadow-lg"
         >
           {{ game.mName }}
         </h1>
+        <div class="relative" v-if="status.type === 'Installed' && status.install_type.type != InstalledType.PartiallyInstalled">
+          <div
+            v-if="!version?.userConfiguration?.enableUpdates"
+            class="absolute mt-1 inline-flex items-center gap-x-1 text-xs text-zinc-400"
+          >
+            Version pinned
+            <svg
+              class="size-3 text-blue-600"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M19.1835 7.80516L16.2188 4.83755C14.1921 2.8089 13.1788 1.79457 12.0904 2.03468C11.0021 2.2748 10.5086 3.62155 9.5217 6.31506L8.85373 8.1381C8.59063 8.85617 8.45908 9.2152 8.22239 9.49292C8.11619 9.61754 7.99536 9.72887 7.86251 9.82451C7.56644 10.0377 7.19811 10.1392 6.46145 10.3423C4.80107 10.8 3.97088 11.0289 3.65804 11.5721C3.5228 11.8069 3.45242 12.0735 3.45413 12.3446C3.45809 12.9715 4.06698 13.581 5.28476 14.8L6.69935 16.2163L2.22345 20.6964C1.92552 20.9946 1.92552 21.4782 2.22345 21.7764C2.52138 22.0746 3.00443 22.0746 3.30236 21.7764L7.77841 17.2961L9.24441 18.7635C10.4699 19.9902 11.0827 20.6036 11.7134 20.6045C11.9792 20.6049 12.2404 20.5358 12.4713 20.4041C13.0192 20.0914 13.2493 19.2551 13.7095 17.5825C13.9119 16.8472 14.013 16.4795 14.2254 16.1835C14.3184 16.054 14.4262 15.9358 14.5468 15.8314C14.8221 15.593 15.1788 15.459 15.8922 15.191L17.7362 14.4981C20.4 13.4973 21.7319 12.9969 21.9667 11.9115C22.2014 10.826 21.1954 9.81905 19.1835 7.80516Z"
+                fill="currentColor"
+              />
+            </svg>
+          </div>
+          <div
+            v-else-if="!status.update_available"
+            class="absolute mt-1 inline-flex items-center gap-x-1 text-xs text-zinc-400"
+          >
+            Up to date <CheckCircleIcon class="size-3 text-green-600" />
+          </div>
+          <div
+            v-else-if="status.update_available"
+            class="absolute mt-1 inline-flex items-center gap-x-1 text-xs text-zinc-400"
+          >
+            Update available <ArrowDownTrayIcon class="size-3 text-blue-600" />
+          </div>
+        </div>
 
-        <div class="flex flex-row gap-x-4 items-stretch mb-8">
+        <div class="mt-8 flex flex-row gap-x-4 items-stretch">
           <!-- Do not add scale animations to this: https://stackoverflow.com/a/35683068 -->
           <GameStatusButton
             @install="() => installFlow()"
@@ -35,6 +66,13 @@
             @resume="() => resumeDownload()"
             :status="status"
           />
+          <button
+            v-if="status.type === 'Installed' && status.update_available"
+            class="transition-transform duration-300 hover:scale-105 active:scale-95 inline-flex gap-x-2 items-center rounded-md bg-blue-600 px-6 font-semibold text-white shadow-xl backdrop-blur-sm hover:bg-blue-700 uppercase font-display"
+            @click="() => installFlow()"
+          >
+            Update <ArrowDownTrayIcon class="size-5" />
+          </button>
           <NuxtLink
             class="transition-transform duration-300 hover:scale-105 active:scale-95 inline-flex items-center rounded-md bg-zinc-800/50 px-6 font-semibold text-white shadow-xl backdrop-blur-sm hover:bg-zinc-800/80 uppercase font-display"
             :to="{
@@ -51,7 +89,7 @@
       </div>
 
       <!-- Main content -->
-      <div class="w-full bg-zinc-900 px-8 py-6">
+      <div class="mt-8 w-full bg-zinc-900 px-8">
         <div class="grid grid-cols-[2fr,1fr] gap-8">
           <div class="space-y-6">
             <div class="bg-zinc-800/50 rounded-xl p-6 backdrop-blur-sm">
@@ -68,19 +106,22 @@
                 Game Images
               </h2>
               <div class="relative">
-                <div v-if="mediaUrls.length > 0">
+                <div v-if="game.mImageCarouselObjectIds.length > 0">
                   <div
                     class="relative aspect-video rounded-lg overflow-hidden cursor-pointer group"
                   >
                     <div
                       class="absolute inset-0"
-                      @click="fullscreenImage = mediaUrls[currentImageIndex]"
+                      @click="
+                        fullscreenImage =
+                          game.mImageCarouselObjectIds[currentImageIndex]
+                      "
                     >
                       <TransitionGroup name="slide" tag="div" class="h-full">
                         <img
-                          v-for="(url, index) in mediaUrls"
+                          v-for="(url, index) in game.mImageCarouselObjectIds"
                           :key="index"
-                          :src="url"
+                          :src="useObject(url)"
                           class="absolute inset-0 w-full h-full object-cover"
                           v-show="index === currentImageIndex"
                         />
@@ -92,7 +133,7 @@
                     >
                       <div class="pointer-events-auto">
                         <button
-                          v-if="mediaUrls.length > 1"
+                          v-if="game.mImageCarouselObjectIds.length > 1"
                           @click.stop="previousImage()"
                           class="p-2 rounded-full bg-zinc-900/50 text-zinc-100 hover:bg-zinc-900/80 transition-all duration-300 hover:scale-110"
                         >
@@ -101,7 +142,7 @@
                       </div>
                       <div class="pointer-events-auto">
                         <button
-                          v-if="mediaUrls.length > 1"
+                          v-if="game.mImageCarouselObjectIds.length > 1"
                           @click.stop="nextImage()"
                           class="p-2 rounded-full bg-zinc-900/50 text-zinc-100 hover:bg-zinc-900/80 transition-all duration-300 hover:scale-110"
                         >
@@ -125,7 +166,7 @@
                     class="absolute -bottom-2 left-1/2 -translate-x-1/2 flex gap-x-2"
                   >
                     <button
-                      v-for="(_, index) in mediaUrls"
+                      v-for="(_, index) in game.mImageCarouselObjectIds"
                       :key="index"
                       @click.stop="currentImageIndex = index"
                       class="w-1.5 h-1.5 rounded-full transition-all"
@@ -174,11 +215,7 @@
       </div>
 
       <div class="space-y-6">
-        <div
-          v-if="
-            versionOptions && versionOptions.length > 0 && currentVersionOption
-          "
-        >
+        <div v-if="versionOptions && versionOptions.length > 0">
           <Listbox as="div" v-model="installVersionIndex">
             <ListboxLabel class="block text-sm/6 font-medium text-zinc-100"
               >Version</ListboxLabel
@@ -187,18 +224,9 @@
               <ListboxButton
                 class="relative w-full cursor-default rounded-md bg-zinc-800 py-1.5 pl-3 pr-10 text-left text-zinc-100 shadow-sm ring-1 ring-inset ring-zinc-700 focus:outline-none focus:ring-2 focus:ring-blue-600 sm:text-sm/6"
               >
-                <span class="block truncate"
-                  >{{
-                    currentVersionOption.displayName ||
-                    currentVersionOption.versionPath
-                  }}
-                  on
-                  {{ currentVersionOption.platform }} ({{
-                    formatKilobytes(
-                      currentVersionOption.size.installSize / 1024,
-                    )
-                  }}B)</span
-                >
+                <span class="block truncate">{{
+                  formatVersionOptionText(installVersionIndex)
+                }}</span>
                 <span
                   class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2"
                 >
@@ -209,6 +237,48 @@
                 </span>
               </ListboxButton>
 
+              <div
+                v-if="installVersionIndex == -1"
+                class="mt-3 rounded-md bg-blue-500/10 p-2 outline outline-blue-500/20"
+              >
+                <div class="flex">
+                  <div class="shrink-0">
+                    <InformationCircleIcon
+                      class="size-4 text-blue-400"
+                      aria-hidden="true"
+                    />
+                  </div>
+                  <div class="ml-2 flex-1 md:flex md:justify-between">
+                    <p class="text-xs text-blue-300">
+                      "Latest" will notify you when there is a new version
+                      available. Choose another version to pin this game's
+                      version.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div
+                v-else
+                class="mt-3 rounded-md bg-blue-500/10 p-2 outline outline-blue-500/20"
+              >
+                <div class="flex">
+                  <div class="shrink-0">
+                    <InformationCircleIcon
+                      class="size-4 text-blue-400"
+                      aria-hidden="true"
+                    />
+                  </div>
+                  <div class="ml-2 flex-1 md:flex md:justify-between">
+                    <p class="text-xs text-blue-300">
+                      This game will be pinned to "{{
+                        currentVersionOption?.displayName ||
+                        currentVersionOption?.versionPath
+                      }}"
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               <transition
                 leave-active-class="transition ease-in duration-100"
                 leave-from-class="opacity-100"
@@ -217,6 +287,39 @@
                 <ListboxOptions
                   class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-zinc-900 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"
                 >
+                  <ListboxOption
+                    as="template"
+                    :value="-1"
+                    v-slot="{ active, selected }"
+                  >
+                    <li
+                      :class="[
+                        active ? 'bg-blue-600 text-white' : 'text-zinc-300',
+                        'relative cursor-default select-none py-2 pl-3 pr-9',
+                      ]"
+                    >
+                      <span
+                        :class="[
+                          selected
+                            ? 'font-semibold text-zinc-100'
+                            : 'font-normal',
+                          'block truncate',
+                        ]"
+                        >{{ formatVersionOptionText(-1) }}</span
+                      >
+
+                      <span
+                        v-if="selected"
+                        :class="[
+                          active ? 'text-white' : 'text-blue-600',
+                          'absolute inset-y-0 right-0 flex items-center pr-4',
+                        ]"
+                      >
+                        <CheckIcon class="h-5 w-5" aria-hidden="true" />
+                      </span>
+                    </li>
+                  </ListboxOption>
+
                   <ListboxOption
                     as="template"
                     v-for="(version, versionIdx) in versionOptions"
@@ -237,13 +340,7 @@
                             : 'font-normal',
                           'block truncate',
                         ]"
-                        >{{ version.displayName || version.versionPath }} on
-                        {{ version.platform }} ({{
-                          formatKilobytes(
-                            versionOptions[installVersionIndex].size
-                              .installSize / 1024,
-                          )
-                        }}B)</span
+                        >{{ formatVersionOptionText(versionIdx) }}</span
                       >
 
                       <span
@@ -464,7 +561,11 @@
   Don't.  
   -->
   <GameOptionsModal
-    v-if="status.type === GameStatusEnum.Installed"
+    v-if="
+      status.type === 'Installed' &&
+      (status.install_type.type == InstalledType.Installed ||
+        status.install_type.type == InstalledType.SetupRequired)
+    "
     v-model="configureModalOpen"
     :game-id="game.id"
   />
@@ -494,14 +595,14 @@
         </button>
 
         <button
-          v-if="mediaUrls.length > 1"
+          v-if="game.mImageCarouselObjectIds.length > 1"
           @click.stop="previousImage()"
           class="absolute left-4 p-3 rounded-full bg-zinc-900/50 text-zinc-100 hover:bg-zinc-900 transition-colors"
         >
           <ChevronLeftIcon class="size-6" />
         </button>
         <button
-          v-if="mediaUrls.length > 1"
+          v-if="game.mImageCarouselObjectIds.length > 1"
           @click.stop="nextImage()"
           class="absolute right-4 p-3 rounded-full bg-zinc-900/50 text-zinc-100 hover:bg-zinc-900 transition-colors"
         >
@@ -515,10 +616,10 @@
           @click.stop
         >
           <img
-            v-for="(url, index) in mediaUrls"
+            v-for="(url, index) in game.mImageCarouselObjectIds"
             v-show="currentImageIndex === index"
             :key="index"
-            :src="url"
+            :src="useObject(url)"
             class="max-h-[90vh] max-w-[90vw] object-contain"
             :alt="`${game.mName} screenshot ${index + 1}`"
           />
@@ -528,7 +629,8 @@
           class="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-zinc-900/50 backdrop-blur-sm"
         >
           <p class="text-zinc-100 text-sm font-medium">
-            {{ currentImageIndex + 1 }} / {{ mediaUrls.length }}
+            {{ currentImageIndex + 1 }} /
+            {{ game.mImageCarouselObjectIds.length }}
           </p>
         </div>
       </div>
@@ -559,31 +661,30 @@ import {
   ArrowsPointingOutIcon,
   PhotoIcon,
   PlayIcon,
+  InformationCircleIcon,
 } from "@heroicons/vue/20/solid";
 import { BuildingStorefrontIcon } from "@heroicons/vue/24/outline";
-import { MinusIcon, ServerIcon, XCircleIcon } from "@heroicons/vue/24/solid";
+import {
+  ArrowDownTrayIcon,
+  CheckCircleIcon,
+  MapPinIcon,
+  MinusIcon,
+  ServerIcon,
+  XCircleIcon,
+} from "@heroicons/vue/24/solid";
 import { invoke } from "@tauri-apps/api/core";
 import { micromark } from "micromark";
-import { GameStatusEnum } from "~/types";
+import { InstalledType } from "~/types";
 
 const route = useRoute();
 const router = useRouter();
 const id = route.params.id.toString();
 
-const { game: rawGame, status } = await useGame(id);
-const game = ref(rawGame);
+const { game, status, version } = await useGame(id);
 
-const bannerUrl = await useObject(game.value.mBannerObjectId);
+const bannerUrl = await useObject(game.mBannerObjectId);
 
-// Get all available images
-const mediaUrls = await Promise.all(
-  game.value.mImageCarouselObjectIds.map(async (v) => {
-    const src = await useObject(v);
-    return src;
-  }),
-);
-
-const htmlDescription = micromark(game.value.mDescription);
+const htmlDescription = micromark(game.mDescription);
 
 const installFlowOpen = ref(false);
 const versionOptions = ref<undefined | Array<VersionOption>>();
@@ -596,10 +697,11 @@ async function installFlow() {
   installFlowOpen.value = true;
   versionOptions.value = undefined;
   installDirs.value = undefined;
+  installError.value = undefined;
 
   try {
     versionOptions.value = await invoke("fetch_game_version_options", {
-      gameId: game.value.id,
+      gameId: game.id,
     });
     installDirs.value = await invoke("fetch_download_dir_stats");
   } catch (error) {
@@ -610,21 +712,20 @@ async function installFlow() {
 
 const installLoading = ref(false);
 const installError = ref<string | undefined>();
-const installVersionIndex = ref(0);
+const installVersionIndex = ref(-1);
 const installDir = ref(0);
 const installDepsDisabled = ref<{ [key: string]: boolean }>({});
 
-const currentVersionOption = computed(
-  () => versionOptions.value?.[installVersionIndex.value],
-);
 async function install() {
   try {
     if (!versionOptions.value) throw new Error("Versions have not been loaded");
     installLoading.value = true;
-    const versionOption = versionOptions.value[installVersionIndex.value];
+    const versionOption =
+      versionOptions.value[Math.max(installVersionIndex.value, 0)];
+    const isLatest = installVersionIndex.value == -1;
 
     const games = [
-      { gameId: game.value.id, versionId: versionOption.versionId },
+      { gameId: game.id, versionId: versionOption.versionId },
       ...versionOption.requiredContent
         .filter((v) => !installDepsDisabled.value[v.versionId])
         .map((v) => ({ gameId: v.gameId, versionId: v.versionId })),
@@ -636,6 +737,7 @@ async function install() {
         versionId: game.versionId,
         installDir: installDir.value,
         targetPlatform: versionOption.platform,
+        enableUpdates: isLatest,
       });
     }
 
@@ -647,9 +749,23 @@ async function install() {
   installLoading.value = false;
 }
 
+const currentVersionOption = computed(
+  () => versionOptions.value?.[Math.max(installVersionIndex.value, 0)],
+);
+
+function formatVersionOptionText(index: number) {
+  if (!versionOptions.value) return undefined;
+  const versionOption = versionOptions.value[Math.max(index, 0)];
+  const template = `${versionOption.displayName || versionOption.versionPath} on ${versionOption.platform}, ${formatKilobytes(versionOption.size.installSize / 1024)}B`;
+  if (index == -1) {
+    return `Latest (${template})`;
+  }
+  return template;
+}
+
 async function resumeDownload() {
   try {
-    await invoke("resume_download", { gameId: game.value.id });
+    await invoke("resume_download", { gameId: game.id });
   } catch (e) {
     console.error(e);
   }
@@ -659,14 +775,17 @@ const launchOptions = ref<Array<{ name: string }> | undefined>(undefined);
 const launchOptionsOpen = computed(() => launchOptions.value !== undefined);
 
 async function launch() {
-  if (status.value.type == GameStatusEnum.SetupRequired) {
+  if (
+    status.value.type == "Installed" &&
+    status.value.install_type.type == InstalledType.SetupRequired
+  ) {
     await launchIndex(0);
     return;
   }
   try {
     const fetchedLaunchOptions = await invoke<Array<{ name: string }>>(
       "get_launch_options",
-      { id: game.value.id },
+      { id: game.id },
     );
     if (fetchedLaunchOptions.length == 1) {
       await launchIndex(0);
@@ -677,8 +796,8 @@ async function launch() {
     createModal(
       ModalType.Notification,
       {
-        title: `Couldn't run "${game.value.mName}"`,
-        description: `Drop failed to launch "${game.value.mName}": ${e}`,
+        title: `Couldn't run "${game.mName}"`,
+        description: `Drop failed to launch "${game.mName}": ${e}`,
         buttonText: "Close",
       },
       (e, c) => c(),
@@ -695,7 +814,7 @@ async function launchIndex(index: number) {
   launchOptions.value = undefined;
   try {
     const result = await invoke<LaunchResult>("launch_game", {
-      id: game.value.id,
+      id: game.id,
       index,
     });
     if (result.result == "InstallRequired") {
@@ -708,8 +827,8 @@ async function launchIndex(index: number) {
     createModal(
       ModalType.Notification,
       {
-        title: `Couldn't run "${game.value.mName}"`,
-        description: `Drop failed to launch "${game.value.mName}": ${e}`,
+        title: `Couldn't run "${game.mName}"`,
+        description: `Drop failed to launch "${game.mName}": ${e}`,
         buttonText: "Close",
       },
       (e, c) => c(),
@@ -722,18 +841,18 @@ async function queue() {
 }
 
 async function uninstall() {
-  await invoke("uninstall_game", { gameId: game.value.id });
+  await invoke("uninstall_game", { gameId: game.id });
 }
 
 async function kill() {
   try {
-    await invoke("kill_game", { gameId: game.value.id });
+    await invoke("kill_game", { gameId: game.id });
   } catch (e) {
     createModal(
       ModalType.Notification,
       {
-        title: `Couldn't stop "${game.value.mName}"`,
-        description: `Drop failed to stop "${game.value.mName}": ${e}`,
+        title: `Couldn't stop "${game.mName}"`,
+        description: `Drop failed to stop "${game.mName}": ${e}`,
         buttonText: "Close",
       },
       (e, c) => c(),
@@ -743,12 +862,14 @@ async function kill() {
 }
 
 function nextImage() {
-  currentImageIndex.value = (currentImageIndex.value + 1) % mediaUrls.length;
+  currentImageIndex.value =
+    (currentImageIndex.value + 1) % game.mImageCarouselObjectIds.length;
 }
 
 function previousImage() {
   currentImageIndex.value =
-    (currentImageIndex.value - 1 + mediaUrls.length) % mediaUrls.length;
+    (currentImageIndex.value - 1 + game.mImageCarouselObjectIds.length) %
+    game.mImageCarouselObjectIds.length;
 }
 
 const fullscreenImage = ref<string | null>(null);

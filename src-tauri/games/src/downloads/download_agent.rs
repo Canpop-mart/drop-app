@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use database::models::data::UserConfiguration;
 use database::{
     ApplicationTransientStatus, DownloadableMetadata, borrow_db_checked, borrow_db_mut_checked,
 };
@@ -22,6 +23,8 @@ use remote::utils::DROP_CLIENT_ASYNC;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::fs::{create_dir_all, remove_file};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -49,6 +52,7 @@ pub struct DownloadInformation {
 
 pub struct GameDownloadAgent {
     pub metadata: DownloadableMetadata,
+    pub configuration: UserConfiguration,
     pub control_flag: DownloadThreadControl,
     pub dl_info: Mutex<Option<DownloadInformation>>,
     pub download_progress: Arc<ProgressObject>,
@@ -66,41 +70,33 @@ impl Debug for GameDownloadAgent {
 }
 
 impl GameDownloadAgent {
-    pub async fn new_from_index(
-        metadata: DownloadableMetadata,
-        target_download_dir: usize,
-        sender: Sender<DownloadManagerSignal>,
-        depot_manager: Arc<DepotManager>,
-    ) -> Result<Self, ApplicationDownloadError> {
-        let base_dir = {
-            let db_lock = borrow_db_checked();
-
-            db_lock.applications.install_dirs[target_download_dir].clone()
-        };
-
-        Self::new(metadata, base_dir, sender, depot_manager).await
-    }
     pub async fn new(
         metadata: DownloadableMetadata,
         base_dir: PathBuf,
         sender: Sender<DownloadManagerSignal>,
         depot_manager: Arc<DepotManager>,
+        configuration: UserConfiguration,
     ) -> Result<Self, ApplicationDownloadError> {
         // Don't run by default
         let control_flag = DownloadThreadControl::new(DownloadThreadControlFlag::Stop);
 
-        let game_name = get_cached_object::<Game>(&format!("game/{}", metadata.id)).map(|v| v.library_path).unwrap_or(metadata.id.clone());
+        let game_name = get_cached_object::<Game>(&format!("game/{}", metadata.id))
+            .map(|v| v.library_path)
+            .unwrap_or(metadata.id.clone());
 
         let base_dir_path = Path::new(&base_dir);
         info!("base dir {}", base_dir_path.display());
         let data_base_dir_path = base_dir_path.join(game_name);
         info!("data dir path {}", data_base_dir_path.display());
 
+        create_dir_all(data_base_dir_path.clone())?;
+
         let stored_manifest = DropData::generate(
             metadata.id.clone(),
             metadata.version.clone(),
             metadata.target_platform,
             data_base_dir_path.clone(),
+            configuration.clone(),
         );
 
         let result = Self {
@@ -123,6 +119,7 @@ impl GameDownloadAgent {
             dropdata: stored_manifest,
             status: Mutex::new(DownloadStatus::Queued),
             depot_manager,
+            configuration,
         };
 
         result.ensure_manifest_exists().await?;
@@ -139,6 +136,21 @@ impl GameDownloadAgent {
         }
 
         Ok(result)
+    }
+
+    fn scan_filetree(&self, path: &Path) -> Result<Vec<PathBuf>, io::Error> {
+        if !path.is_dir() {
+            return Ok(vec![path.into()]);
+        };
+
+        let subdirs = path.read_dir()?;
+        let mut results = Vec::new();
+        for subdir in subdirs {
+            let subdir = subdir?;
+            let subfiles = self.scan_filetree(&subdir.path())?;
+            results.extend(subfiles);
+        }
+        Ok(results)
     }
 
     // Blocking
@@ -199,6 +211,13 @@ impl GameDownloadAgent {
             &[
                 ("id", &self.metadata.id),
                 ("version", &self.metadata.version),
+                (
+                    "previous",
+                    self.dropdata
+                        .previously_installed_version
+                        .as_ref()
+                        .map_or("", |v| v),
+                ),
             ],
         )
         .map_err(ApplicationDownloadError::Communication)?;
@@ -277,13 +296,25 @@ impl GameDownloadAgent {
             let completed_chunks = lock!(self.dropdata.contexts);
             completed_chunks.clone()
         };
+        info!("started with {} existing chunks", completed_chunks.len());
         let chunk_len = manifests_chunks.iter().map(|v| v.1.len()).sum::<usize>();
         let mut max_download_threads = borrow_db_checked().settings.max_download_threads;
-        if max_download_threads <= 0  {
+        if max_download_threads == 0 {
             max_download_threads = 1;
         }
 
         let file_list = &file_list;
+        let base_path = &self.dropdata.base_path;
+        let current_file_tree = self.scan_filetree(base_path)?;
+
+        for file in current_file_tree {
+            let filename = file.strip_prefix(base_path)?.to_string_lossy().to_string();
+            let needed = file_list.contains_key(&filename) || filename == ".dropdata";
+            if !needed {
+                debug!("deleted {}", file.display());
+                remove_file(file)?;
+            }
+        }
 
         let local_completed_chunks = completed_chunks.clone();
 
@@ -299,7 +330,7 @@ impl GameDownloadAgent {
                     }
                     Ok(())
                 }
-                Err(err) => return Err(err),
+                Err(err) => Err(err),
             };
 
         let mut index = 0;
@@ -310,10 +341,8 @@ impl GameDownloadAgent {
                     self.download_progress.get(index),
                     self.download_progress.clone(),
                 );
-                let disk_progress_handle = ProgressHandle::new(
-                    self.disk_progress.get(index),
-                    self.disk_progress.clone(),
-                );
+                let disk_progress_handle =
+                    ProgressHandle::new(self.disk_progress.get(index), self.disk_progress.clone());
                 index += 1;
 
                 let chunk_length = chunk_data.files.iter().map(|v| v.length).sum();
@@ -344,7 +373,6 @@ impl GameDownloadAgent {
                 }
                 chunk_completions.push(async move {
                     for i in 0..RETRY_COUNT {
-                        let base_path = self.dropdata.base_path.clone();
                         match download_game_chunk(
                             &self.metadata.id,
                             &local_version_id,
@@ -503,6 +531,7 @@ impl GameDownloadAgent {
             &self.metadata(),
             self.dropdata.base_path.display().to_string(),
             Some(app_handle),
+            self.configuration.clone(),
         );
 
         self.dropdata.write();
@@ -573,6 +602,7 @@ impl Downloadable for GameDownloadAgent {
     async fn on_complete(&self, app_handle: &tauri::AppHandle) {
         match on_game_complete(
             &self.metadata(),
+            self.configuration.clone(),
             self.dropdata.base_path.to_string_lossy().to_string(),
             app_handle,
         )
