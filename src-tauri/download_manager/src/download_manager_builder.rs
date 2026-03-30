@@ -1,4 +1,3 @@
-use core::panic;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -125,11 +124,12 @@ impl DownloadManagerBuilder {
     async fn remove_and_cleanup_front_download(
         &mut self,
         meta: &DownloadableMetadata,
-    ) -> DownloadAgent {
+    ) {
         self.download_queue.pop_front();
-        let download_agent = self.download_agent_registry.remove(meta).unwrap();
+        if self.download_agent_registry.remove(meta).is_none() {
+            warn!("Attempted to remove download agent for {:?} but it was not in the registry", meta);
+        }
         self.cleanup_current_download().await;
-        download_agent
     }
 
     // CAREFUL WITH THIS FUNCTION
@@ -162,7 +162,8 @@ impl DownloadManagerBuilder {
                 if let Ok(result) = result {
                     return result;
                 };
-                panic!("failed to cleanup download: timeout after 4 seconds");
+                error!("failed to cleanup download: timeout after 4 seconds");
+                return false;
             };
         }
 
@@ -244,11 +245,13 @@ impl DownloadManagerBuilder {
             return;
         };
 
-        let download_agent = self
-            .download_agent_registry
-            .get(&agent_data)
-            .unwrap()
-            .clone();
+        let download_agent = match self.download_agent_registry.get(&agent_data) {
+            Some(agent) => agent.clone(),
+            None => {
+                warn!("Download agent for {:?} not found in registry", &agent_data);
+                return;
+            }
+        };
 
         let status = download_agent.status();
 
@@ -326,8 +329,11 @@ impl DownloadManagerBuilder {
         }));
 
         self.set_status(DownloadManagerStatus::Downloading);
-        let active_control_flag = self.active_control_flag.clone().unwrap();
-        active_control_flag.set(DownloadThreadControlFlag::Go);
+        if let Some(active_control_flag) = self.active_control_flag.clone() {
+            active_control_flag.set(DownloadThreadControlFlag::Go);
+        } else {
+            warn!("active_control_flag was None after starting download");
+        }
     }
     fn manage_stop_signal(&mut self) {
         if let Some(active_control_flag) = self.active_control_flag.clone() {
@@ -399,9 +405,9 @@ impl DownloadManagerBuilder {
         let queue = &self.download_queue.read();
         let queue_objs = queue
             .iter()
-            .map(|key| {
-                let val = self.download_agent_registry.get(key).unwrap();
-                QueueUpdateEventQueueData {
+            .filter_map(|key| {
+                let val = self.download_agent_registry.get(key)?;
+                Some(QueueUpdateEventQueueData {
                     meta: DownloadableMetadata::clone(key),
                     status: val.status(),
                     dl_progress: val.dl_progress().get_progress(),
@@ -410,7 +416,7 @@ impl DownloadManagerBuilder {
                     disk_progress: val.disk_progress().get_progress(),
                     disk_current: val.disk_progress().sum(),
                     disk_max: val.disk_progress().get_max(),
-                }
+                })
             })
             .collect();
 

@@ -91,13 +91,51 @@
       <!-- Main content -->
       <div class="mt-8 w-full bg-zinc-900 px-8">
         <div class="grid grid-cols-[2fr,1fr] gap-8">
-          <div class="space-y-6">
-            <div class="bg-zinc-800/50 rounded-xl p-6 backdrop-blur-sm">
-              <div
-                v-html="htmlDescription"
-                class="prose prose-invert prose-blue overflow-y-auto custom-scrollbar max-w-none"
-              ></div>
+          <div class="space-y-4">
+            <!-- Collapsible Description -->
+            <div class="bg-zinc-800/50 rounded-xl backdrop-blur-sm overflow-hidden">
+              <button
+                @click="descriptionOpen = !descriptionOpen"
+                class="w-full flex items-center justify-between p-6 text-left hover:bg-zinc-700/30 transition-colors"
+              >
+                <h2 class="text-xl font-display font-semibold text-zinc-100">
+                  About
+                </h2>
+                <ChevronDownIcon
+                  class="size-5 text-zinc-400 transition-transform duration-200"
+                  :class="{ 'rotate-180': descriptionOpen }"
+                />
+              </button>
+              <Transition
+                enter-active-class="transition-all duration-300 ease-out"
+                enter-from-class="max-h-0 opacity-0"
+                enter-to-class="max-h-[2000px] opacity-100"
+                leave-active-class="transition-all duration-200 ease-in"
+                leave-from-class="max-h-[2000px] opacity-100"
+                leave-to-class="max-h-0 opacity-0"
+              >
+                <div v-show="descriptionOpen" class="overflow-hidden">
+                  <div class="px-6 pb-6">
+                    <div
+                      v-html="htmlDescription"
+                      class="prose prose-invert prose-blue overflow-y-auto custom-scrollbar max-w-none"
+                    ></div>
+                  </div>
+                </div>
+              </Transition>
             </div>
+
+            <!-- Server-rendered content (achievements, future sections) -->
+            <!-- Loaded via iframe so server-side changes don't require client rebuild -->
+            <iframe
+              v-if="showServerContent"
+              ref="serverContentFrame"
+              :src="gameContentUrl"
+              scrolling="no"
+              class="w-full border-0 rounded-xl overflow-hidden bg-zinc-800/50"
+              :style="{ height: serverContentHeight + 'px' }"
+              @error="showServerContent = false"
+            />
           </div>
 
           <div class="space-y-6">
@@ -120,7 +158,7 @@
                       <TransitionGroup name="slide" tag="div" class="h-full">
                         <img
                           v-for="(url, index) in game.mImageCarouselObjectIds"
-                          :key="index"
+                          :key="url"
                           :src="useObject(url)"
                           class="absolute inset-0 w-full h-full object-cover"
                           v-show="index === currentImageIndex"
@@ -653,6 +691,7 @@ import {
 } from "@headlessui/vue";
 import {
   CheckIcon,
+  ChevronDownIcon,
   ChevronUpDownIcon,
   WrenchIcon,
   ChevronLeftIcon,
@@ -672,9 +711,10 @@ import {
   ServerIcon,
   XCircleIcon,
 } from "@heroicons/vue/24/solid";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { micromark } from "micromark";
 import { InstalledType } from "~/types";
+import { rewriteDescriptionImages } from "~/composables/use-server-fetch";
 
 const route = useRoute();
 const router = useRouter();
@@ -684,7 +724,33 @@ const { game, status, version } = await useGame(id);
 
 const bannerUrl = await useObject(game.mBannerObjectId);
 
-const htmlDescription = micromark(game.mDescription);
+const rawHtml = micromark(game.mDescription);
+const htmlDescription = rewriteDescriptionImages(rawHtml);
+
+const descriptionOpen = ref(true);
+
+// Server-rendered content iframe (achievements + future sections)
+const gameContentUrl = convertFileSrc("dummyvalue", "server").replace(
+  "dummyvalue",
+  `client/game/${game.id}`,
+);
+const showServerContent = ref(true);
+const serverContentHeight = ref(10); // Start small, auto-resize via postMessage
+const serverContentFrame = ref<HTMLIFrameElement | null>(null);
+
+onMounted(() => {
+  window.addEventListener("message", (event) => {
+    if (event.data?.type === "drop-resize") {
+      const height = event.data.height;
+      if (height < 10) {
+        // No content (no achievements) — hide the iframe
+        showServerContent.value = false;
+      } else {
+        serverContentHeight.value = height;
+      }
+    }
+  });
+});
 
 const installFlowOpen = ref(false);
 const versionOptions = ref<undefined | Array<VersionOption>>();

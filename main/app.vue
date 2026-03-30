@@ -7,10 +7,9 @@
 </template>
 
 <script setup lang="ts">
-import "~/composables/downloads.js";
-
 import { invoke } from "@tauri-apps/api/core";
 import { useAppState } from "./composables/app-state.js";
+import { useDownloadListeners } from "./composables/downloads.js";
 import {
   initialNavigation,
   setupHooks,
@@ -21,6 +20,8 @@ import type { AppState } from "./types.js";
 const router = useRouter();
 
 const state = useAppState();
+
+useDownloadListeners();
 
 async function fetchState() {
   try {
@@ -38,8 +39,11 @@ async function fetchState() {
 }
 await fetchState();
 
-listen("update_state", (event) => {
+const unlistenState = listen("update_state", (event) => {
   state.value = event.payload as AppState;
+});
+onUnmounted(async () => {
+  (await unlistenState)();
 });
 
 setupHooks();

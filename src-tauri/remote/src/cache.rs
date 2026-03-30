@@ -27,10 +27,10 @@ macro_rules! offline {
 }
 
 fn get_sys_time_in_secs() -> u64 {
-    match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(n) => n.as_secs(),
-        Err(_) => panic!("SystemTime before UNIX EPOCH!"),
-    }
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn get_cache_path(base: &Path, key: &str) -> PathBuf {

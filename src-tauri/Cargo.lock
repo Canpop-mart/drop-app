@@ -4732,12 +4732,15 @@ dependencies = [
  "keyvalues-parser",
  "log",
  "page_size",
+ "remote",
  "serde",
+ "serde_json",
  "serde_with",
  "shared_child",
  "shell-words",
  "tauri",
  "tauri-plugin-opener",
+ "tokio",
  "utils",
 ]
 
@@ -5103,6 +5106,7 @@ dependencies = [
  "serde",
  "serde_with",
  "tauri",
+ "tokio",
  "url",
  "utils",
 ]

@@ -1,68 +1,75 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { data } from "autoprefixer";
 import { AppStatus, type AppState } from "~/types";
 
 export function setupHooks() {
   const router = useRouter();
   const state = useAppState();
 
-  listen("auth/processing", (event) => {
-    router.push("/auth/processing");
-  });
+  const unlistenFns: Array<Promise<() => void>> = [];
 
-  listen("auth/failed", (event) => {
-    router.push(
-      `/auth/failed?error=${encodeURIComponent(event.payload as string)}`
-    );
-  });
+  unlistenFns.push(
+    listen("auth/processing", (event) => {
+      router.push("/auth/processing");
+    })
+  );
 
-  listen("auth/finished", async (event) => {
-    router.push("/library");
-    state.value = JSON.parse(await invoke("fetch_state"));
-  });
+  unlistenFns.push(
+    listen("auth/failed", (event) => {
+      router.push(
+        `/auth/failed?error=${encodeURIComponent(event.payload as string)}`
+      );
+    })
+  );
 
-  listen("download_error", (event) => {
-    createModal(
-      ModalType.Notification,
-      {
-        title: "Drop encountered an error while downloading",
-        description: `Drop encountered an error while downloading your game: "${(
-          event.payload as unknown as string
-        ).toString()}"`,
-        buttonText: "Close",
-      },
-      (e, c) => c()
-    );
-  });
+  unlistenFns.push(
+    listen("auth/finished", async (event) => {
+      router.push("/library");
+      state.value = JSON.parse(await invoke("fetch_state"));
+    })
+  );
+
+  unlistenFns.push(
+    listen("download_error", (event) => {
+      createModal(
+        ModalType.Notification,
+        {
+          title: "Drop encountered an error while downloading",
+          description: `Drop encountered an error while downloading your game: "${(
+            event.payload as unknown as string
+          ).toString()}"`,
+          buttonText: "Close",
+        },
+        (e, c) => c()
+      );
+    })
+  );
 
   // This is for errors that (we think) aren't our fault
-  listen("launch_external_error", (event) => {
-    createModal(
-      ModalType.Confirmation,
-      {
-        title: "Did something go wrong?",
-        description:
-          "Drop detected that something might've gone wrong with launching your game. Do you want to open the log directory?",
-        buttonText: "Open",
-      },
-      async (e, c) => {
-        if (e == "confirm") {
-          await invoke("open_process_logs", { gameId: event.payload });
+  unlistenFns.push(
+    listen("launch_external_error", (event) => {
+      createModal(
+        ModalType.Confirmation,
+        {
+          title: "Did something go wrong?",
+          description:
+            "Drop detected that something might've gone wrong with launching your game. Do you want to open the log directory?",
+          buttonText: "Open",
+        },
+        async (e, c) => {
+          if (e == "confirm") {
+            await invoke("open_process_logs", { gameId: event.payload });
+          }
+          c();
         }
-        c();
-      }
-    );
+      );
+    })
+  );
+
+  onUnmounted(async () => {
+    const resolvedFns = await Promise.all(unlistenFns);
+    resolvedFns.forEach((fn) => fn());
   });
-
-  /*
-
-  document.addEventListener("contextmenu", (event) => {
-    event.target?.dispatchEvent(new Event("contextmenu"));
-    event.preventDefault();
-  });
-
-  */
 }
 
 export function initialNavigation(state: ReturnType<typeof useAppState>) {

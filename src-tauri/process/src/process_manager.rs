@@ -9,6 +9,8 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use tokio::sync::Notify;
+
 use database::{
     ApplicationTransientStatus, Database, DownloadableMetadata, GameDownloadStatus, GameVersion,
     borrow_db_checked, borrow_db_mut_checked, db::DATA_ROOT_DIR, models::data::InstalledGameType,
@@ -28,7 +30,8 @@ use crate::{
     format::DropFormatArgs,
     parser::{LaunchParameters, ParsedCommand},
     process_handlers::{
-        AsahiMuvmLauncher, MacLauncher, UMUCompatLauncher, UMUNativeLauncher, WindowsLauncher,
+        AsahiMuvmLauncher, MacLauncher, NativeLauncher, UMUCompatLauncher, UMUNativeLauncher,
+        WindowsLauncher,
     },
 };
 
@@ -36,6 +39,8 @@ pub struct RunningProcess {
     handle: Arc<SharedChild>,
     start: SystemTime,
     manually_killed: bool,
+    playtime_session_id: Option<String>,
+    achievement_poll_cancel: Option<Arc<Notify>>,
 }
 
 pub struct ProcessManager<'a> {
@@ -75,6 +80,10 @@ impl ProcessManager<'_> {
                 (
                     (Platform::Windows, Platform::Windows),
                     &WindowsLauncher {} as &(dyn ProcessHandler + Sync + Send + 'static),
+                ),
+                (
+                    (Platform::Linux, Platform::Linux),
+                    &NativeLauncher {} as &(dyn ProcessHandler + Sync + Send + 'static),
                 ),
                 (
                     (Platform::Linux, Platform::Linux),
@@ -139,13 +148,34 @@ impl ProcessManager<'_> {
             }
         };
 
+        // Stop achievement polling
+        if let Some(cancel) = &process.achievement_poll_cancel {
+            cancel.notify_one();
+        }
+
+        // Report playtime stop to server (fire-and-forget, triggers achievement sync)
+        if let Some(session_id) = &process.playtime_session_id {
+            let session_id = session_id.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = remote::playtime::stop_playtime(&session_id).await {
+                    warn!("Failed to report playtime stop: {e}");
+                }
+            });
+        }
+
         let mut db_handle = borrow_db_mut_checked();
-        let meta = db_handle
+        let meta = match db_handle
             .applications
             .installed_game_version
             .get(&game_id)
             .cloned()
-            .unwrap_or_else(|| panic!("Could not get installed version of {}", &game_id));
+        {
+            Some(meta) => meta,
+            None => {
+                warn!("Could not get installed version of {}, skipping cleanup", &game_id);
+                return Ok(());
+            }
+        };
         db_handle.applications.transient_statuses.remove(&meta);
 
         let current_state = db_handle.applications.game_statuses.get_mut(&game_id);
@@ -310,9 +340,8 @@ impl ProcessManager<'_> {
 
         let target_platform = meta.target_platform;
 
-        let process_handler = self.fetch_process_handler(&db_lock, &target_platform)?;
-
         let (target_command, emulator) = match game_status {
+
             GameDownloadStatus::Installed {
                 install_type: InstalledGameType::Installed,
                 ..
@@ -345,6 +374,14 @@ impl ProcessManager<'_> {
         };
 
         let mut target_command = ParsedCommand::parse(target_command)?;
+
+        // Select handler based on emulator's platform if present, otherwise game's platform.
+        // This ensures Linux AppImages run via NativeLauncher even when the game target is Windows.
+        let handler_target_platform = emulator
+            .and_then(|e| db_lock.applications.installed_game_version.get(&e.game_id))
+            .map(|m| m.target_platform)
+            .unwrap_or(target_platform);
+        let process_handler = self.fetch_process_handler(&db_lock, &handler_target_platform)?;
 
         let target_launch_string = if let Some(emulator) = emulator {
             let err = ProcessError::RequiredDependency(
@@ -390,14 +427,18 @@ impl ProcessManager<'_> {
                 .ok_or(err)?;
 
             let mut exe_command = ParsedCommand::parse(emulator_launch_config.command.clone())?;
-            exe_command.env.extend(target_command.env.clone());
+            // Move env vars instead of cloning, since target_command.env is not needed after this
+            exe_command.env.extend(std::mem::take(&mut target_command.env));
             exe_command.make_absolute(emulator_install_dir.into());
 
             target_command.make_absolute(PathBuf::from(install_dir.clone()));
 
-            exe_command.args.iter_mut().for_each(|v| {
-                *v = v.replace("{rom}", &target_command.command);
-            });
+            // Only allocate a new string when the placeholder is actually present
+            for arg in &mut exe_command.args {
+                if arg.contains("{rom}") {
+                    *arg = arg.replace("{rom}", &target_command.command);
+                }
+            }
 
             process_handler.create_launch_process(
                 emulator_metadata,
@@ -482,6 +523,24 @@ impl ProcessManager<'_> {
 
         let launch_process_handle = Arc::new(SharedChild::new(child)?);
 
+        // Start playtime session (fire-and-forget — don't block game launch)
+        let playtime_game_id = meta.id.clone();
+        let playtime_session_id: Option<String> = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            tauri::async_runtime::spawn(async move {
+                let result = remote::playtime::start_playtime(&playtime_game_id).await;
+                let _ = tx.send(result.ok());
+            });
+            // Wait briefly for the response, but don't block forever
+            rx.recv_timeout(Duration::from_secs(5)).ok().flatten()
+        };
+
+        if let Some(ref sid) = playtime_session_id {
+            info!("Playtime session started: {}", sid);
+        } else {
+            warn!("Could not start playtime session for {}", &meta.id);
+        }
+
         db_lock
             .applications
             .transient_statuses
@@ -497,12 +556,32 @@ impl ProcessManager<'_> {
         let wait_thread_handle = launch_process_handle.clone();
         let wait_thread_game_id = meta.clone();
 
+        // Start achievement polling for this game
+        let achievement_cancel = Arc::new(Notify::new());
+        {
+            let cancel = achievement_cancel.clone();
+            let poll_game_id = meta.id.clone();
+            let poll_app_handle = self.app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                remote::achievements::poll_achievements(
+                    poll_game_id,
+                    cancel,
+                    move |achievement| {
+                        info!("Achievement unlocked: {} - {}", achievement.title, achievement.description);
+                        // TODO: Show in-game toast overlay when implemented
+                    },
+                ).await;
+            });
+        }
+
         self.processes.insert(
             meta.id,
             RunningProcess {
                 handle: wait_thread_handle,
                 start: SystemTime::now(),
                 manually_killed: false,
+                playtime_session_id,
+                achievement_poll_cancel: Some(achievement_cancel),
             },
         );
         spawn(move || {

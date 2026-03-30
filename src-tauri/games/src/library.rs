@@ -129,61 +129,53 @@ pub fn uninstall_game_logic(meta: DownloadableMetadata, app_handle: &AppHandle) 
         GameStatusManager::fetch_state(&meta.id, &db_handle),
     );
 
-    let previous_state = db_handle.applications.game_statuses.get(&meta.id).cloned();
-
-    let previous_state = if let Some(state) = previous_state {
-        state
-    } else {
-        warn!("uninstall job doesn't have previous state, failing silently");
-        return;
+    // Extract install_dir by reference to avoid cloning the entire GameDownloadStatus
+    let install_dir = match db_handle.applications.game_statuses.get(&meta.id) {
+        Some(GameDownloadStatus::Installed { install_dir, .. }) => install_dir.clone(),
+        Some(_) => {
+            warn!("invalid previous state for uninstall, failing silently.");
+            return;
+        }
+        None => {
+            warn!("uninstall job doesn't have previous state, failing silently");
+            return;
+        }
     };
 
-    if let Some((_, install_dir)) = match previous_state {
-        GameDownloadStatus::Installed {
-            install_type: _,
-            version_id: version_name,
-            install_dir,
-            update_available: _,
-        } => Some((version_name, install_dir)),
-        _ => None,
-    } {
+    db_handle
+        .applications
+        .transient_statuses
+        .insert(meta.clone(), ApplicationTransientStatus::Uninstalling {});
+
+    drop(db_handle);
+
+    let app_handle = app_handle.clone();
+    spawn(move || {
+        if let Err(e) = remove_dir_all(install_dir) {
+            error!("{e}");
+        }
+        let mut db_handle = borrow_db_mut_checked();
+        db_handle.applications.transient_statuses.remove(&meta);
         db_handle
             .applications
-            .transient_statuses
-            .insert(meta.clone(), ApplicationTransientStatus::Uninstalling {});
+            .installed_game_version
+            .remove(&meta.id);
+        db_handle
+            .applications
+            .game_statuses
+            .insert(meta.id.clone(), GameDownloadStatus::Remote {});
+        let _ = db_handle.applications.transient_statuses.remove(&meta);
 
-        drop(db_handle);
+        push_game_update(
+            &app_handle,
+            &meta.id,
+            None,
+            GameStatusManager::fetch_state(&meta.id, &db_handle),
+        );
 
-        let app_handle = app_handle.clone();
-        spawn(move || {
-            if let Err(e) = remove_dir_all(install_dir) {
-                error!("{e}");
-            }
-            let mut db_handle = borrow_db_mut_checked();
-            db_handle.applications.transient_statuses.remove(&meta);
-            db_handle
-                .applications
-                .installed_game_version
-                .remove(&meta.id);
-            db_handle
-                .applications
-                .game_statuses
-                .insert(meta.id.clone(), GameDownloadStatus::Remote {});
-            let _ = db_handle.applications.transient_statuses.remove(&meta);
-
-            push_game_update(
-                &app_handle,
-                &meta.id,
-                None,
-                GameStatusManager::fetch_state(&meta.id, &db_handle),
-            );
-
-            debug!("uninstalled game id {}", &meta.id);
-            app_emit!(&app_handle, "update_library", ());
-        });
-    } else {
-        warn!("invalid previous state for uninstall, failing silently.");
-    }
+        debug!("uninstalled game id {}", &meta.id);
+        app_emit!(&app_handle, "update_library", ());
+    });
 }
 
 pub fn get_current_meta(game_id: &String) -> Option<DownloadableMetadata> {
@@ -280,7 +272,8 @@ pub fn push_game_update(
     }) = &status.0
         && version.is_none()
     {
-        panic!("pushed game for installed game that doesn't have version information");
+        warn!("push_game_update called for installed game {} without version information, skipping", game_id);
+        return;
     }
 
     app_emit!(

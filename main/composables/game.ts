@@ -26,34 +26,43 @@ export const parseStatus = (status: RawGameStatus): GameStatus => {
 
 export const useGame = async (gameId: string) => {
   if (!gameRegistry[gameId]) {
-    const data: {
-      game: Game;
-      status: RawGameStatus;
-      version?: GameVersion;
-    } = await invoke("fetch_game", {
-      gameId,
-    });
-    gameRegistry[gameId] = { game: data.game, version: ref(data.version) };
-    if (!gameStatusRegistry[gameId]) {
-      gameStatusRegistry[gameId] = ref(parseStatus(data.status));
+    try {
+      const data: {
+        game: Game;
+        status: RawGameStatus;
+        version?: GameVersion;
+      } = await invoke("fetch_game", {
+        gameId,
+      });
+      gameRegistry[gameId] = { game: data.game, version: ref(data.version) };
+      if (!gameStatusRegistry[gameId]) {
+        gameStatusRegistry[gameId] = ref(parseStatus(data.status));
 
-      listen(`update_game/${gameId}`, (event) => {
-        const payload: {
-          status: RawGameStatus;
-          version?: GameVersion;
-        } = event.payload as any;
-        gameStatusRegistry[gameId].value = parseStatus(payload.status);
+        listen(`update_game/${gameId}`, (event) => {
+          const payload: {
+            status: RawGameStatus;
+            version?: GameVersion;
+          } = event.payload as any;
+          gameStatusRegistry[gameId].value = parseStatus(payload.status);
 
-        /**
-         * I am not super happy about this.
-         *
-         * This will mean that we will still have a version assigned if we have a game installed then uninstall it.
-         * It is necessary because a flag to check if we should overwrite seems excessive, and this function gets called
-         * on transient state updates.
-         */
-        if (payload.version) {
-          gameRegistry[gameId].version.value = payload.version;
-        }
+          /**
+           * I am not super happy about this.
+           *
+           * This will mean that we will still have a version assigned if we have a game installed then uninstall it.
+           * It is necessary because a flag to check if we should overwrite seems excessive, and this function gets called
+           * on transient state updates.
+           */
+          if (payload.version) {
+            gameRegistry[gameId].version.value = payload.version;
+          }
+        });
+      }
+    } catch (e) {
+      console.error(`Failed to fetch game data for "${gameId}":`, e);
+      throw createError({
+        statusCode: 500,
+        statusMessage: `Failed to load game data. Please try again later.`,
+        fatal: false,
       });
     }
   }

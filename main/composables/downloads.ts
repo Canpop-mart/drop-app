@@ -26,15 +26,27 @@ export const useQueueState = () =>
 export const useStatsState = () =>
   useState<StatsState>("stats", () => ({ speed: 0, time: 0 }));
 
-listen("update_queue", (event) => {
-  const queue = useQueueState();
-  queue.value = event.payload as QueueState;
-});
+export function useDownloadListeners() {
+  let unlistenQueue: (() => void) | undefined;
+  let unlistenStats: (() => void) | undefined;
 
-listen("update_stats", (event) => {
-  const stats = useStatsState();
-  stats.value = event.payload as StatsState;
-});
+  onMounted(async () => {
+    unlistenQueue = await listen("update_queue", (event) => {
+      const queue = useQueueState();
+      queue.value = event.payload as QueueState;
+    });
+
+    unlistenStats = await listen("update_stats", (event) => {
+      const stats = useStatsState();
+      stats.value = event.payload as StatsState;
+    });
+  });
+
+  onUnmounted(() => {
+    unlistenQueue?.();
+    unlistenStats?.();
+  });
+}
 
 export const useDownloadHistory = () =>
   useState<Array<number>>("history", () => []);

@@ -72,16 +72,19 @@ impl DatabaseInterface {
         });
 
         let exists = fs::exists(db_path.clone()).unwrap_or_else(|e| {
-            panic!(
-                "Failed to find if {} exists with error {}",
-                db_path.display(),
-                e
-            )
+            warn!("Failed to check if {} exists: {}, assuming it does not", db_path.display(), e);
+            false
         });
 
         if exists {
             match DatabaseInterface::open_at_path(&db_path) {
-                Ok(db) => db.unwrap(),
+                Ok(Some(db)) => db,
+                Ok(None) => {
+                    warn!("Database file disappeared between exists check and open, creating new");
+                    let default = Database::new(games_base_dir, None, cache_dir);
+                    DatabaseInterface::create_at_path(&db_path, default)
+                        .expect("Database could not be created")
+                }
                 Err(e) => handle_invalid_database(e, db_path, games_base_dir, cache_dir)
                     .expect("failed to recover from failed database"),
             }
@@ -112,18 +115,23 @@ impl DatabaseInterface {
     }
 
     pub fn create_at_path(db_path: &Path, database: Database) -> Result<DatabaseInterface, Error> {
-        let database = DatabaseVersionSerializable(database);
-        let mut database_data = ron::to_string(&database)?.into_bytes();
+        Self::write_to_path(db_path, &database)?;
+        Ok(DatabaseInterface {
+            data: RwLock::new(database),
+            path: db_path.to_path_buf(),
+        })
+    }
+
+    /// Serialize and encrypt the database to disk from a reference, avoiding a full clone.
+    fn write_to_path(db_path: &Path, database: &Database) -> Result<(), Error> {
+        let mut database_data = DatabaseVersionSerializable::serialize_ref_to_ron(database)?.into_bytes();
 
         let (key, iv) = *KEY_IV;
         let mut cipher = Aes128Ctr64LE::new(&key.into(), &iv.into());
         cipher.apply_keystream(&mut database_data);
 
         std::fs::write(db_path, database_data)?;
-        Ok(DatabaseInterface {
-            data: RwLock::new(database.0),
-            path: db_path.to_path_buf(),
-        })
+        Ok(())
     }
 
     pub fn database_is_set_up(&self) -> bool {
@@ -137,9 +145,10 @@ impl DatabaseInterface {
     }
 
     fn save(&self) -> Result<(), Error> {
-        let lock = self.data.read().expect("failed to lock database to save");
-        DatabaseInterface::create_at_path(&self.path, lock.clone())?;
-        Ok(())
+        let lock = self.data.read().map_err(|e| {
+            anyhow::anyhow!("failed to lock database to save: {}", e)
+        })?;
+        Self::write_to_path(&self.path, &lock)
     }
 
     fn borrow_data(
@@ -176,20 +185,13 @@ fn handle_invalid_database(
         base
     };
     info!("old database stored at: {}", new_path.to_string_lossy());
-    fs::rename(&db_path, &new_path).unwrap_or_else(|e| {
-        panic!(
-            "Could not rename database {} to {} with error {}",
-            db_path.display(),
-            new_path.display(),
-            e
-        )
-    });
+    fs::rename(&db_path, &new_path)?;
     fs::remove_dir_all(cache_dir.clone())?;
     fs::create_dir_all(cache_dir.clone())?;
 
     let db = Database::new(games_base_dir, Some(new_path), cache_dir);
 
-    Ok(DatabaseInterface::create_at_path(&db_path, db).expect("Database could not be created"))
+    DatabaseInterface::create_at_path(&db_path, db)
 }
 
 // To automatically save the database upon drop

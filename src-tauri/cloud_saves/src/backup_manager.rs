@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf, str::FromStr};
 #[cfg(target_os = "linux")]
 use database::platform::Platform;
 use database::{GameVersion, db::DATA_ROOT_DIR};
-use log::warn;
+use log::{debug, warn};
 
 use crate::error::BackupError;
 
@@ -65,7 +65,7 @@ pub trait BackupHandler: Send + Sync {
     }
     fn home_translate(&self, _path: &PathBuf, _game: &GameVersion) -> Result<PathBuf, BackupError> {
         let c = CommonPath::Home.get().ok_or(BackupError::NotFound);
-        println!("{:?}", c);
+        debug!("home_translate: {:?}", c);
         c
     }
     fn store_user_id_translate(
@@ -166,14 +166,72 @@ impl BackupHandler for LinuxBackupManager {
         _path: &PathBuf,
         _game: &GameVersion,
     ) -> Result<PathBuf, BackupError> {
-        CommonPath::Data.get().ok_or(BackupError::NotFound)
+        CommonPath::Config.get().ok_or(BackupError::NotFound)
     }
     fn xdg_data_translate(
         &self,
         _path: &PathBuf,
         _game: &GameVersion,
     ) -> Result<PathBuf, BackupError> {
+        CommonPath::Data.get().ok_or(BackupError::NotFound)
+    }
+    fn win_app_data_translate(
+        &self,
+        _path: &PathBuf,
+        _game: &GameVersion,
+    ) -> Result<PathBuf, BackupError> {
+        // Windows %APPDATA% (Roaming) maps to XDG_CONFIG_HOME (~/.config)
         CommonPath::Config.get().ok_or(BackupError::NotFound)
+    }
+    fn win_local_app_data_translate(
+        &self,
+        _path: &PathBuf,
+        _game: &GameVersion,
+    ) -> Result<PathBuf, BackupError> {
+        // Windows %LOCALAPPDATA% maps to XDG_DATA_HOME (~/.local/share)
+        CommonPath::DataLocal.get().ok_or(BackupError::NotFound)
+    }
+    fn win_local_app_data_low_translate(
+        &self,
+        _path: &PathBuf,
+        _game: &GameVersion,
+    ) -> Result<PathBuf, BackupError> {
+        // No direct equivalent on Linux; use data local as best match
+        CommonPath::DataLocal.get().ok_or(BackupError::NotFound)
+    }
+    fn win_documents_translate(
+        &self,
+        _path: &PathBuf,
+        _game: &GameVersion,
+    ) -> Result<PathBuf, BackupError> {
+        CommonPath::Document.get().ok_or(BackupError::NotFound)
+    }
+    fn win_public_translate(
+        &self,
+        _path: &PathBuf,
+        _game: &GameVersion,
+    ) -> Result<PathBuf, BackupError> {
+        // Linux public/shared directory
+        CommonPath::Public
+            .get()
+            .or_else(|| Some(PathBuf::from("/tmp")))
+            .ok_or(BackupError::NotFound)
+    }
+    fn win_program_data_translate(
+        &self,
+        _path: &PathBuf,
+        _game: &GameVersion,
+    ) -> Result<PathBuf, BackupError> {
+        // Windows ProgramData maps to /etc on Linux (system-wide config)
+        Ok(PathBuf::from("/etc"))
+    }
+    fn win_dir_translate(
+        &self,
+        _path: &PathBuf,
+        _game: &GameVersion,
+    ) -> Result<PathBuf, BackupError> {
+        // No direct equivalent; system root on Linux
+        Ok(PathBuf::from("/usr"))
     }
 }
 pub struct WindowsBackupManager {}
@@ -206,7 +264,11 @@ impl BackupHandler for WindowsBackupManager {
         _path: &PathBuf,
         _game: &GameVersion,
     ) -> Result<PathBuf, BackupError> {
-        Ok(PathBuf::from_str("C:/Windows").unwrap())
+        Ok(PathBuf::from(
+            std::env::var("WINDIR")
+                .or_else(|_| std::env::var("SystemRoot"))
+                .unwrap_or_else(|_| "C:\\Windows".to_string()),
+        ))
     }
     fn win_documents_translate(
         &self,
@@ -220,7 +282,11 @@ impl BackupHandler for WindowsBackupManager {
         _path: &PathBuf,
         _game: &GameVersion,
     ) -> Result<PathBuf, BackupError> {
-        Ok(PathBuf::from_str("C:/ProgramData").unwrap())
+        Ok(PathBuf::from(
+            std::env::var("ProgramData")
+                .or_else(|_| std::env::var("ALLUSERSPROFILE"))
+                .unwrap_or_else(|_| "C:\\ProgramData".to_string()),
+        ))
     }
     fn win_public_translate(
         &self,

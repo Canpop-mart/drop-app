@@ -24,14 +24,22 @@ impl CommonPath {
         static DATA_LOCAL_LOW: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
             known_folders::get_known_folder_path(known_folders::KnownFolder::LocalAppDataLow)
         });
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        static DATA_LOCAL_LOW: LazyLock<Option<PathBuf>> =
+            LazyLock::new(|| dirs::data_local_dir());
+        #[cfg(target_os = "macos")]
         static DATA_LOCAL_LOW: Option<PathBuf> = None;
 
         #[cfg(windows)]
         static SAVED_GAMES: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
             known_folders::get_known_folder_path(known_folders::KnownFolder::SavedGames)
         });
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        static SAVED_GAMES: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+            // ~/.local/share/games as the Linux equivalent of Windows Saved Games
+            dirs::data_dir().map(|p| p.join("games"))
+        });
+        #[cfg(target_os = "macos")]
         static SAVED_GAMES: Option<PathBuf> = None;
 
         match self {

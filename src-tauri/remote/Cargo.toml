@@ -31,5 +31,6 @@ reqwest-websocket = "0.5.1"
 serde = "1.0.228"
 serde_with = "3.15.0"
 tauri = "*"
+tokio = { version = "1", features = ["sync", "time"] }
 url = "2.5.7"
 utils = { path = "../utils", version = "0.1.0" }

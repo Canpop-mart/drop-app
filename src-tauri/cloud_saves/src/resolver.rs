@@ -14,9 +14,9 @@ use tempfile::tempfile;
 
 use super::{backup_manager::BackupManager, metadata::CloudSaveMetadata, normalise::normalize};
 
-pub fn resolve(meta: &mut CloudSaveMetadata) -> File {
-    let f = File::create_new("save").unwrap();
-    let compressor = zstd::Encoder::new(f, 22).unwrap();
+pub fn resolve(meta: &mut CloudSaveMetadata) -> Result<File, BackupError> {
+    let f = File::create_new("save").map_err(|e| BackupError::IoError(format!("Failed to create save file: {e}")))?;
+    let compressor = zstd::Encoder::new(f, 22).map_err(|e| BackupError::IoError(format!("Failed to create zstd encoder: {e}")))?;
     let mut tarball = tar::Builder::new(compressor);
     let manager = BackupManager::new();
     for file in meta.files.iter_mut() {
@@ -44,47 +44,79 @@ pub fn resolve(meta: &mut CloudSaveMetadata) -> File {
             None => continue,
         };
         let t_path = PathBuf::from(normalize(&file.path, os));
-        println!("{:?}", &t_path);
-        let path = parse_path(t_path, handler, &meta.game_version).unwrap();
-        let f = std::fs::metadata(&path).unwrap(); // TODO: Fix unwrap here
+        debug!("resolve: normalized path: {:?}", &t_path);
+        let path = match parse_path(t_path, handler, &meta.game_version) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Failed to parse path for file {:?}: {}", &file, e);
+                continue;
+            }
+        };
+        let f = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("Failed to read metadata for {:?}: {}", &path, e);
+                continue;
+            }
+        };
         if f.is_dir() {
-            tarball.append_dir_all(&id, path).unwrap();
+            if let Err(e) = tarball.append_dir_all(&id, &path) {
+                warn!("Failed to append directory {:?} to tarball: {}", &path, e);
+                continue;
+            }
         } else if f.is_file() {
-            tarball
-                .append_file(&id, &mut File::open(path).unwrap())
-                .unwrap();
+            match File::open(&path) {
+                Ok(mut opened) => {
+                    if let Err(e) = tarball.append_file(&id, &mut opened) {
+                        warn!("Failed to append file {:?} to tarball: {}", &path, e);
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to open file {:?}: {}", &path, e);
+                    continue;
+                }
+            }
         }
         file.id = Some(id);
     }
-    let binding = serde_json::to_string(meta).unwrap();
-    let serialized = binding.as_bytes();
-    let mut file = tempfile().unwrap();
-    file.write_all(serialized).unwrap();
-    tarball.append_file("metadata", &mut file).unwrap();
-    tarball.into_inner().unwrap().finish().unwrap()
+    let serialized = serde_json::to_vec(meta)?;
+    let mut file = tempfile().map_err(|e| BackupError::IoError(format!("Failed to create temp file: {e}")))?;
+    file.write_all(&serialized)?;
+    tarball.append_file("metadata", &mut file)?;
+    let encoder = tarball.into_inner().map_err(|e| BackupError::IoError(format!("Failed to finish tarball: {e}")))?;
+    let finished = encoder.finish().map_err(|e| BackupError::IoError(format!("Failed to finish zstd encoder: {e}")))?;
+    Ok(finished)
 }
 
 pub fn extract(file: PathBuf) -> Result<(), BackupError> {
-    let tmpdir = tempfile::tempdir().unwrap();
+    let tmpdir = tempfile::tempdir().map_err(|e| BackupError::IoError(format!("Failed to create temp dir: {e}")))?;
 
     // Reopen the file for reading
-    let file = File::open(file).unwrap();
+    let file = File::open(file)?;
 
-    let decompressor = zstd::Decoder::new(file).unwrap();
+    let decompressor = zstd::Decoder::new(file).map_err(|e| BackupError::IoError(format!("Failed to create zstd decoder: {e}")))?;
     let mut f = tar::Archive::new(decompressor);
-    f.unpack(tmpdir.path()).unwrap();
+    f.unpack(tmpdir.path())?;
 
     let path = tmpdir.path();
 
-    let mut manifest = File::open(path.join("metadata")).unwrap();
+    let mut manifest = File::open(path.join("metadata"))?;
 
     let mut manifest_slice = Vec::new();
-    manifest.read_to_end(&mut manifest_slice).unwrap();
+    manifest.read_to_end(&mut manifest_slice)?;
 
-    let manifest: CloudSaveMetadata = serde_json::from_slice(&manifest_slice).unwrap();
+    let manifest: CloudSaveMetadata = serde_json::from_slice(&manifest_slice)?;
 
     for file in manifest.files {
-        let current_path = path.join(file.id.as_ref().unwrap());
+        let file_id = match file.id.as_ref() {
+            Some(id) => id,
+            None => {
+                warn!("Skipping file with no ID in manifest: {:?}", &file);
+                continue;
+            }
+        };
+        let current_path = path.join(file_id);
 
         let manager = BackupManager::new();
         let os = match file
@@ -111,14 +143,16 @@ pub fn extract(file: PathBuf) -> Result<(), BackupError> {
         };
 
         let new_path = parse_path(file.path.into(), handler, &manifest.game_version)?;
-        create_dir_all(new_path.parent().unwrap()).unwrap();
+        if let Some(parent) = new_path.parent() {
+            create_dir_all(parent)?;
+        }
 
-        println!(
+        debug!(
             "Current path {:?} copying to {:?}",
             &current_path, &new_path
         );
 
-        copy_item(current_path, new_path).unwrap();
+        copy_item(current_path, new_path)?;
     }
 
     Ok(())
@@ -185,10 +219,13 @@ pub fn parse_path(
     backup_handler: &dyn BackupHandler,
     game: &GameVersion,
 ) -> Result<PathBuf, BackupError> {
-    println!("Parsing: {:?}", &path);
+    debug!("Parsing: {:?}", &path);
     let mut s = PathBuf::new();
     for component in path.components() {
-        match component.as_str().unwrap() {
+        let component_str = component.as_str().unwrap_or_else(|| {
+            component.as_os_str().to_str().unwrap_or_default()
+        });
+        match component_str {
             ROOT => s.push(backup_handler.root_translate(&path, game)?),
             GAME => s.push(backup_handler.game_translate(&path, game)?),
             BASE => s.push(backup_handler.base_translate(&path, game)?),
@@ -211,6 +248,6 @@ pub fn parse_path(
         }
     }
 
-    println!("Final line: {:?}", &s);
+    debug!("Final line: {:?}", &s);
     Ok(s)
 }

@@ -41,18 +41,35 @@ pub mod data {
         V0_4_0 { database: v1::Database },
     }
 
+    #[derive(Serialize)]
+    enum DatabaseVersionEnumRef<'a> {
+        V0_4_0 { database: &'a v1::Database },
+    }
+
     pub struct DatabaseVersionSerializable(pub(crate) Database);
+
+    impl DatabaseVersionSerializable {
+        /// Serialize from a reference without cloning the database.
+        pub fn serialize_ref<S>(database: &Database, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            DatabaseVersionEnumRef::V0_4_0 { database }.serialize(serializer)
+        }
+
+        /// Serialize the database to a RON string from a reference, avoiding a full clone.
+        pub fn serialize_ref_to_ron(database: &Database) -> Result<String, ron::Error> {
+            ron::to_string(&DatabaseVersionEnumRef::V0_4_0 { database })
+        }
+    }
 
     impl Serialize for DatabaseVersionSerializable {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where
             S: serde::Serializer,
         {
-            // Always serialize to latest version
-            DatabaseVersionEnum::V0_4_0 {
-                database: self.0.clone(),
-            }
-            .serialize(serializer)
+            // Always serialize to latest version (zero-copy via reference)
+            DatabaseVersionSerializable::serialize_ref(&self.0, serializer)
         }
     }
 

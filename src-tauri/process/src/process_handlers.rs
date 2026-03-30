@@ -5,7 +5,7 @@ use database::{
     Database, DownloadableMetadata, GameVersion, db::DATA_ROOT_DIR, platform::Platform,
 };
 
-use crate::{error::ProcessError, process_manager::ProcessHandler};
+use crate::{error::ProcessError, parser::ParsedCommand, process_manager::ProcessHandler};
 
 pub struct MacLauncher;
 impl ProcessHandler for MacLauncher {
@@ -37,10 +37,16 @@ impl ProcessHandler for WindowsLauncher {
         _meta: &DownloadableMetadata,
         launch_command: String,
         _game_version: &GameVersion,
-        _current_dir: &str,
+        current_dir: &str,
         _database: &Database,
     ) -> Result<String, ProcessError> {
-        Ok(format!("cmd /C \"{}\"", launch_command))
+        // Make the exe path absolute using the game's install directory.
+        // Windows does not search current_dir for executables when given a
+        // relative path, so we must resolve it here. reconstruct() then
+        // shell-quotes any spaces so the path survives re-parsing downstream.
+        let mut parsed = ParsedCommand::parse(launch_command)?;
+        parsed.make_absolute(PathBuf::from(current_dir));
+        Ok(parsed.reconstruct())
     }
 
     fn valid_for_platform(&self, _db: &Database, _target: &Platform) -> bool {
@@ -54,6 +60,30 @@ impl ProcessHandler for WindowsLauncher {
         #[cfg(target_os = "windows")]
         command.creation_flags(CREATE_NO_WINDOW);
     }
+}
+
+pub struct NativeLauncher;
+impl ProcessHandler for NativeLauncher {
+    fn create_launch_process(
+        &self,
+        _meta: &DownloadableMetadata,
+        launch_command: String,
+        _game_version: &GameVersion,
+        current_dir: &str,
+        _database: &Database,
+    ) -> Result<String, ProcessError> {
+        // Run the binary directly — no umu, no pressure-vessel, no FUSE dependency.
+        // Required for Linux-native AppImages and plain ELF binaries.
+        let mut parsed = ParsedCommand::parse(launch_command)?;
+        parsed.make_absolute(PathBuf::from(current_dir));
+        Ok(parsed.reconstruct())
+    }
+
+    fn valid_for_platform(&self, _db: &Database, _target: &Platform) -> bool {
+        true
+    }
+
+    fn modify_command(&self, _command: &mut Command) {}
 }
 
 pub struct UMUNativeLauncher;

@@ -27,10 +27,10 @@ impl Platform {
 impl From<&str> for Platform {
     fn from(value: &str) -> Self {
         match value.to_lowercase().trim() {
-            "windows" => Self::Windows,
+            "windows" | "win" | "win32" | "win64" => Self::Windows,
             "linux" => Self::Linux,
-            "mac" | "macos" => Self::macOS,
-            _ => unimplemented!(),
+            "mac" | "macos" | "darwin" | "osx" => Self::macOS,
+            other => panic!("unsupported platform string: {other:?}"),
         }
     }
 }
@@ -41,7 +41,14 @@ impl From<whoami::Platform> for Platform {
             whoami::Platform::Windows => Platform::Windows,
             whoami::Platform::Linux => Platform::Linux,
             whoami::Platform::MacOS => Platform::macOS,
-            platform => unimplemented!("Playform {} is not supported", platform),
+            whoami::Platform::Bsd
+            | whoami::Platform::Illumos
+            | whoami::Platform::Redox
+            | whoami::Platform::Unknown(_) => {
+                panic!("platform {value} is not supported")
+            }
+            // Handle any future variants added to the whoami crate
+            _ => panic!("platform {value} is not supported"),
         }
     }
 }

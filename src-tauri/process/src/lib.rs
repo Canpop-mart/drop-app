@@ -28,10 +28,13 @@ impl ProcessManagerWrapper {
         ProcessManagerWrapper(OnceLock::new())
     }
     pub fn init(app_handle: AppHandle) {
-        PROCESS_MANAGER
+        if PROCESS_MANAGER
             .0
             .set(Mutex::new(ProcessManager::new(app_handle)))
-            .unwrap_or_else(|_| panic!("Failed to initialise Process Manager")); // Using panic! here because we can't implement Debug
+            .is_err()
+        {
+            log::error!("Failed to initialise Process Manager: already initialised");
+        }
     }
 }
 impl Deref for ProcessManagerWrapper {

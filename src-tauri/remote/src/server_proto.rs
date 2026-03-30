@@ -13,7 +13,13 @@ pub async fn handle_server_proto_offline_wrapper(
 ) {
     responder.respond(match handle_server_proto_offline(request).await {
         Ok(res) => res,
-        Err(_) => unreachable!(),
+        Err(status) => {
+            error!("Unexpected error in offline proto handler: {}", status);
+            Response::builder()
+                .status(status)
+                .body(Vec::new())
+                .unwrap_or_default()
+        }
     });
 }
 
@@ -23,7 +29,7 @@ pub async fn handle_server_proto_offline(
     Ok(Response::builder()
         .status(StatusCode::NOT_FOUND)
         .body(Vec::new())
-        .expect("Failed to build error response for proto offline"))
+        .unwrap_or_default())
 }
 
 pub async fn handle_server_proto_wrapper(request: Request<Vec<u8>>, responder: UriSchemeResponder) {
@@ -35,8 +41,7 @@ pub async fn handle_server_proto_wrapper(request: Request<Vec<u8>>, responder: U
                 Response::builder()
                     .status(e)
                     .body(Vec::new())
-                    .inspect_err(|v| warn!("{:?}", v))
-                    .expect("Failed to build error response"),
+                    .unwrap_or_default(),
             );
         }
     }
@@ -56,35 +61,46 @@ async fn handle_server_proto(request: Request<Vec<u8>>) -> Result<Response<Vec<u
             Some(token) => token.clone(),
             None => return Err(StatusCode::UNAUTHORIZED),
         };
-        let remote_uri = db_handle
-            .base_url
-            .parse::<Uri>()
-            .inspect_err(|v| warn!("{:?}", v))
-            .expect("Failed to parse base url");
+        let remote_uri = match db_handle.base_url.parse::<Uri>() {
+            Ok(uri) => uri,
+            Err(e) => {
+                error!("Failed to parse base url: {}", e);
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        };
         (remote_uri, web_token)
     };
 
-    let mut new_uri = request.uri().clone().into_parts();
+    // Consume the request to move parts instead of cloning
+    let (parts, body) = request.into_parts();
+
+    let mut new_uri = parts.uri.into_parts();
     new_uri.authority = remote_uri.authority().cloned();
     new_uri.scheme = remote_uri.scheme().cloned();
-    let err_msg = &format!("Failed to build new uri from parts {new_uri:?}");
-    let new_uri = Uri::from_parts(new_uri)
-        .inspect_err(|v| warn!("{:?}", v))
-        .expect(err_msg);
+    let new_uri = match Uri::from_parts(new_uri) {
+        Ok(uri) => uri,
+        Err(e) => {
+            error!("Failed to build new uri from parts: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+    let new_uri_string = new_uri.to_string();
 
-    let mut headers = HeaderMap::new();
-    request.headers().clone_into(&mut headers);
+    let mut headers = parts.headers;
     headers.remove(USER_AGENT);
     headers.append(USER_AGENT, HeaderValue::from_static("Drop Desktop Client"));
-    headers.append(
-        "Authorization",
-        HeaderValue::from_str(&format!("Bearer {web_token}")).unwrap(),
-    );
+    match HeaderValue::from_str(&format!("Bearer {web_token}")) {
+        Ok(val) => { headers.append("Authorization", val); }
+        Err(e) => {
+            error!("Failed to create Authorization header: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
 
     let response = match DROP_CLIENT_ASYNC
-        .request(request.method().clone(), new_uri.to_string())
+        .request(parts.method, new_uri_string)
         .headers(headers)
-        .body(request.body().clone()) // TODO: refactor this into a move
+        .body(body)
         .send()
         .await
     {
@@ -100,8 +116,7 @@ async fn handle_server_proto(request: Request<Vec<u8>>) -> Result<Response<Vec<u
         .status(response_status)
         .header("Access-Control-Allow-Origin", "*");
 
-    {
-        let client_response_headers = client_http_response.headers_mut().unwrap();
+    if let Some(client_response_headers) = client_http_response.headers_mut() {
         for (header, header_value) in response.headers() {
             if header == CONTENT_SECURITY_POLICY  {
                 continue;
@@ -118,10 +133,13 @@ async fn handle_server_proto(request: Request<Vec<u8>>) -> Result<Response<Vec<u
         Err(e) => return Err(e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)),
     };
 
-    let client_http_response = client_http_response
-        .body(response_body.to_vec())
-        .inspect_err(|v| warn!("{:?}", v))
-        .expect("Failed to build server proto response");
+    let client_http_response = match client_http_response.body(response_body.to_vec()) {
+        Ok(resp) => resp,
+        Err(e) => {
+            error!("Failed to build server proto response: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
 
     Ok(client_http_response)
 }

@@ -10,7 +10,10 @@ use crate::{
 
 pub fn scan_install_dirs() {
     let mut db_lock = borrow_db_mut_checked();
-    for install_dir in db_lock.applications.install_dirs.clone() {
+    // Clone only the install_dirs paths (small Vec), not the entire DB,
+    // since we need mutable access to db_lock in the loop body.
+    let install_dirs = db_lock.applications.install_dirs.clone();
+    for install_dir in &install_dirs {
         let Ok(files) = fs::read_dir(install_dir) else {
             continue;
         };
@@ -30,6 +33,7 @@ pub fn scan_install_dirs() {
                     continue;
                 }
             };
+            // Skip games already known
             if db_lock
                 .applications
                 .game_statuses

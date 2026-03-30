@@ -32,10 +32,13 @@ impl ParsedCommand {
     }
 
     pub fn make_absolute(&mut self, base: PathBuf) {
-        self.command = base
-            .join(self.command.clone())
-            .to_string_lossy()
-            .to_string();
+        let path = PathBuf::from(&self.command);
+        if !path.is_absolute() {
+            self.command = base
+                .join(self.command.clone())
+                .to_string_lossy()
+                .to_string();
+        }
     }
 
     pub fn reconstruct(self) -> String {

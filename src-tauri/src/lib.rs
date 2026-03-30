@@ -132,22 +132,24 @@ async fn setup(handle: AppHandle) -> AppState {
     // TODO: Account for possible failure
     let (app_status, user) = auth::setup().await;
 
-    let db_handle = borrow_db_checked();
-    let mut missing_games = Vec::new();
-    let statuses = db_handle.applications.game_statuses.clone();
-    drop(db_handle);
-
-    for (game_id, status) in statuses {
-        match status {
-            GameDownloadStatus::Remote {} => {}
-            GameDownloadStatus::Installed { install_dir, .. } => {
-                let install_dir_path = Path::new(&install_dir);
-                if !install_dir_path.exists() {
-                    missing_games.push(game_id);
+    let missing_games = {
+        let db_handle = borrow_db_checked();
+        db_handle
+            .applications
+            .game_statuses
+            .iter()
+            .filter_map(|(game_id, status)| match status {
+                GameDownloadStatus::Remote {} => None,
+                GameDownloadStatus::Installed { install_dir, .. } => {
+                    if !Path::new(install_dir).exists() {
+                        Some(game_id.clone())
+                    } else {
+                        None
+                    }
                 }
-            }
-        }
-    }
+            })
+            .collect::<Vec<_>>()
+    };
 
     info!("detected games missing: {missing_games:?}");
 
@@ -305,7 +307,8 @@ pub fn run() {
                     .min_inner_size(1000.0, 500.0)
                     .inner_size(width, height)
                     .decorations(false)
-                    .shadow(false)
+                    .resizable(true)
+                    .shadow(true)
                     .build()
                     .expect("failed to build main window");
 
