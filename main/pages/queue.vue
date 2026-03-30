@@ -138,9 +138,12 @@ const queue = useQueueState();
 const stats = useStatsState();
 const speedHistory = useDownloadHistory();
 const speedHistoryMax = computed(() => windowWidth.value / 4);
-const speedMax = computed(
-  () => speedHistory.value.reduce((a, b) => (a > b ? a : b)) * 1.1,
-);
+const speedMax = computed(() => {
+  const hist = speedHistory.value;
+  if (hist.length === 0) return 1;
+  const max = hist.reduce((a, b) => (a > b ? a : b));
+  return Math.max(max, 1) * 1.1;
+});
 const previousGameId = useState<string | undefined>("previous_game");
 
 type ListIterable = { element: (typeof queue.value.queue)[0] };
@@ -155,26 +158,24 @@ function resetHistoryGraph() {
 }
 function checkReset(v: QueueState) {
   const currentGame = v.queue.at(0)?.meta.id;
-  // If we don't have a game
-  if (!currentGame) return;
 
-  // If we're finished
-  if (!currentGame && previousGameId.value) {
-    previousGameId.value = undefined;
-    resetHistoryGraph();
+  if (!currentGame) {
+    if (previousGameId.value) {
+      previousGameId.value = undefined;
+      resetHistoryGraph();
+    }
     return;
   }
-  // If we started a new download
-  if (currentGame && !previousGameId.value) {
+
+  if (!previousGameId.value) {
     previousGameId.value = currentGame;
     resetHistoryGraph();
     return;
   }
-  // If it's a different game now
-  if (currentGame != previousGameId.value) {
+
+  if (currentGame !== previousGameId.value) {
     previousGameId.value = currentGame;
     resetHistoryGraph();
-    return;
   }
 }
 watch(queue, (v) => {
@@ -195,7 +196,7 @@ function loadGamesForQueue(v: typeof queue.value) {
   for (const {
     meta: { id },
   } of v.queue) {
-    if (games.value[id]) return;
+    if (games.value[id]) continue;
     (async () => {
       const gameData = await useGame(id);
       const cover = await useObject(gameData.game.mCoverObjectId);

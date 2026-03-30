@@ -141,7 +141,7 @@ fn fetch_certificates() -> Vec<Certificate> {
                             ),
                         }
                     }
-                    Err(_) => todo!(),
+                    Err(e) => warn!("Skipping certificate directory entry: {e}"),
                 }
             }
         }

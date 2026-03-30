@@ -197,18 +197,24 @@ impl ProcessManager<'_> {
             let _ = self.app_handle.emit("launch_external_error", &game_id);
         }
 
-        let version_data = match db_handle.applications.game_versions.get(&meta.version) {
-            // This unwrap here should be resolved by just making the hashmap accept an option rather than just a String
-            Some(res) => res,
-            None => todo!(),
-        };
+        let version_data = db_handle
+            .applications
+            .game_versions
+            .get(&meta.version)
+            .cloned();
+        if version_data.is_none() {
+            warn!(
+                "game_versions missing entry for version {} (game {}); pushing status update without version",
+                meta.version, game_id
+            );
+        }
 
         let status = GameStatusManager::fetch_state(&game_id, &db_handle);
 
         push_game_update(
             &self.app_handle,
             &game_id,
-            Some(version_data.clone()),
+            version_data,
             status,
         );
         Ok(())
@@ -410,7 +416,9 @@ impl ProcessManager<'_> {
                 GameDownloadStatus::Installed {
                     install_type: InstalledGameType::SetupRequired,
                     ..
-                } => todo!(),
+                } => Err(ProcessError::InvalidArguments(
+                    "Complete emulator setup before launching games that use it.".to_string(),
+                )),
                 _ => Err(err.clone()),
             }?;
 
