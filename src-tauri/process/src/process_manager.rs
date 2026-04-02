@@ -153,12 +153,23 @@ impl ProcessManager<'_> {
             cancel.notify_one();
         }
 
-        // Report playtime stop to server (fire-and-forget, triggers achievement sync)
-        if let Some(session_id) = &process.playtime_session_id {
-            let session_id = session_id.clone();
+        // Report playtime stop and trigger server-side achievement sync
+        {
+            let stop_session_id = process.playtime_session_id.clone();
+            let sync_game_id = game_id.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = remote::playtime::stop_playtime(&session_id).await {
-                    warn!("Failed to report playtime stop: {e}");
+                // Stop playtime session
+                if let Some(session_id) = stop_session_id {
+                    if let Err(e) = remote::playtime::stop_playtime(&session_id).await {
+                        warn!("Failed to report playtime stop: {e}");
+                    }
+                }
+
+                // Notify server that game session ended — triggers Steam/RA sync
+                if let Err(e) =
+                    remote::achievements::notify_session_end(&sync_game_id).await
+                {
+                    warn!("Failed to notify session end for {}: {e}", sync_game_id);
                 }
             });
         }
@@ -575,10 +586,23 @@ impl ProcessManager<'_> {
                     poll_game_id,
                     cancel,
                     move |achievement| {
-                        info!("Achievement unlocked: {} - {}", achievement.title, achievement.description);
-                        // TODO: Show in-game toast overlay when implemented
+                        info!(
+                            "Achievement unlocked: {} - {}",
+                            achievement.title, achievement.description
+                        );
+                        // Emit event to Vue frontend for toast notification
+                        let _ = poll_app_handle.emit(
+                            "achievement_unlocked",
+                            serde_json::json!({
+                                "id": achievement.id,
+                                "title": achievement.title,
+                                "description": achievement.description,
+                                "iconUrl": achievement.icon_url,
+                            }),
+                        );
                     },
-                ).await;
+                )
+                .await;
             });
         }
 

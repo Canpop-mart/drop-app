@@ -8,6 +8,7 @@ pub mod auth;
 pub mod cache;
 pub mod error;
 pub mod fetch_object;
+pub mod goldberg;
 pub mod playtime;
 pub mod requests;
 pub mod server_proto;

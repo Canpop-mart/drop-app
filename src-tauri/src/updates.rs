@@ -107,7 +107,7 @@ impl ScheduleTask for GameUpdater {
                 .applications
                 .game_statuses
                 .get_mut(&version.game_id)
-                .ok_or(anyhow::anyhow!(""))?;
+                .ok_or(anyhow::anyhow!("game status not found for game_id"))?;
 
             if let GameDownloadStatus::Installed {
                     update_available, ..

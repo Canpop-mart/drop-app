@@ -41,7 +41,7 @@ pub fn toggle_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
         debug!("enabled autostart");
     } else {
         manager.disable().map_err(|e| e.to_string())?;
-        debug!("eisabled autostart");
+        debug!("disabled autostart");
     }
 
     // Store the state in DB

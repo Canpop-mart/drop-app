@@ -54,9 +54,9 @@ pub struct FetchLibraryResponse {
 pub async fn fetch_library_logic(
     state: tauri::State<'_, Mutex<AppState>>,
     app_handle: AppHandle,
-    hard_fresh: Option<bool>,
+    hard_refresh: Option<bool>,
 ) -> Result<FetchLibraryResponse, RemoteAccessError> {
-    let do_hard_refresh = hard_fresh.unwrap_or(false);
+    let do_hard_refresh = hard_refresh.unwrap_or(false);
     if !do_hard_refresh && let Ok(library) = get_cached_object("library") {
         return Ok(library);
     }
@@ -80,7 +80,7 @@ pub async fn fetch_library_logic(
     }
 
     let library: Vec<Game> = response.json().await?;
-    let collections = fetch_collections(state, hard_fresh).await?;
+    let collections = fetch_collections(state, hard_refresh).await?;
 
     let mut all_games = library.clone();
     all_games.extend(
