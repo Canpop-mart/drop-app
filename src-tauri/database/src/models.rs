@@ -21,6 +21,7 @@ pub mod data {
     pub type DownloadType = v1::DownloadType;
     pub type DatabaseApplications = v1::DatabaseApplications;
     pub type UserConfiguration = v1::UserConfiguration;
+    pub type MangoHudPreset = v1::MangoHudPreset;
     pub type ControllerType = v1::ControllerType;
     pub type QualityPreset = v1::QualityPreset;
 
