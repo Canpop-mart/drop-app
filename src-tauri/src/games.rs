@@ -388,6 +388,49 @@ pub async fn fetch_game_version_options(
     fetch_game_version_options_logic(game_id, state).await
 }
 
+/// Configures the Steam emulator (GBE/Goldberg) for an installed game.
+/// Writes the user's display name as the in-game profile name and ensures
+/// save paths are set correctly. Called from the cog menu on the game page.
+#[tauri::command]
+pub fn configure_game_emulator(game_id: String) -> Result<String, LibraryError> {
+    let db_lock = borrow_db_checked();
+    let install_dir = match db_lock
+        .applications
+        .game_statuses
+        .get(&game_id)
+        .ok_or(LibraryError::MetaNotFound(game_id.clone()))?
+    {
+        GameDownloadStatus::Installed { install_dir, .. } => install_dir.clone(),
+        _ => return Err(LibraryError::MetaNotFound(game_id)),
+    };
+
+    // Get the current user's display name from the cache
+    let display_name = get_cached_object::<client::user::User>("user")
+        .ok()
+        .map(|u| u.display_name().to_string());
+
+    let result = remote::goldberg::configure_saves_for_game(
+        &install_dir,
+        display_name.as_deref(),
+    );
+
+    match result {
+        Some(info) => {
+            let emu_type = match &info.emulator {
+                remote::goldberg::SteamEmulator::Goldberg { .. } => "Goldberg/GBE",
+                remote::goldberg::SteamEmulator::SmartSteamEmu { .. } => "SmartSteamEmu",
+                remote::goldberg::SteamEmulator::Unknown { .. } => "Unknown",
+            };
+            Ok(format!(
+                "Configured {} emulator. Profile name set to: {}",
+                emu_type,
+                display_name.as_deref().unwrap_or("<default>")
+            ))
+        }
+        None => Ok("No Steam emulator detected for this game.".to_string()),
+    }
+}
+
 #[tauri::command]
 pub fn update_game_configuration(
     game_id: String,
@@ -407,7 +450,7 @@ pub fn update_game_configuration(
         .applications
         .game_versions
         .get(&version)
-        .unwrap()
+        .ok_or(LibraryError::MetaNotFound(version.clone()))?
         .clone();
 
     existing_configuration.user_configuration = options;

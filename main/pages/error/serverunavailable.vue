@@ -22,7 +22,7 @@
         </p>
         <div class="mt-10 space-x-10">
           <button
-          @click="() => retry()"
+            @click="() => retry()"
             class="inline-flex gap-x-2 items-center text-sm text-left font-semibold leading-7 text-white"
           >
             Retry <ArrowPathIcon class="w-5 h-5" />

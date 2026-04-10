@@ -1,6 +1,6 @@
 app-id: org.droposs.client
 runtime: org.gnome.Platform
-runtime-version: '47'
+runtime-version: "47"
 sdk: org.gnome.Sdk
 
 sdk-extensions:
@@ -14,7 +14,7 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --share=ipc
-  - --device=all          # GPU + controllers
+  - --device=all # GPU + controllers
   # Network (Drop server + game downloads)
   - --share=network
   # Filesystem: full host access so Drop can reach game libraries anywhere
@@ -26,7 +26,6 @@ finish-args:
   - --env=PATH=/app/bin:/usr/bin:/bin
 
 modules:
-
   # ── umu-launcher ─────────────────────────────────────────────────────────────
   # Required by Drop on Linux to launch Windows games via Proton.
   # Downloaded from the official GitHub release (zipapp.tar bundle).
@@ -75,8 +74,8 @@ modules:
         # pnpm global install target
         npm_config_prefix: /run/build/drop-app/.npm-global
         # Silence npm funding/update noise
-        npm_config_fund: 'false'
-        npm_config_update_notifier: 'false'
+        npm_config_fund: "false"
+        npm_config_update_notifier: "false"
 
     sources:
       - type: git
@@ -86,7 +85,6 @@ modules:
         disable-shallow-clone: true
 
     build-commands:
-
       # ── Rust nightly ────────────────────────────────────────────────────────
       # Drop uses nightly-only features (#![feature(...)])
       - rustup toolchain install nightly --profile minimal

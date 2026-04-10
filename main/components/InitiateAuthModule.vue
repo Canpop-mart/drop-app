@@ -39,9 +39,13 @@
                 :disabled="loading"
                 class="px-3 py-1 inline-flex items-center gap-x-2 bg-zinc-700 rounded text-sm text-left font-semibold leading-7 text-white"
               >
-                Sign in with your browser <ArrowTopRightOnSquareIcon class="size-4" />
+                Sign in with your browser
+                <ArrowTopRightOnSquareIcon class="size-4" />
               </button>
-              <NuxtLink href="/auth/code" class="text-zinc-100 text-sm hover:text-zinc-300">
+              <NuxtLink
+                href="/auth/code"
+                class="text-zinc-100 text-sm hover:text-zinc-300"
+              >
                 Use a code &rarr;
               </NuxtLink>
             </span>

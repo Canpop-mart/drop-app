@@ -11,22 +11,22 @@ export function setupHooks() {
   unlistenFns.push(
     listen("auth/processing", (event) => {
       router.push("/auth/processing");
-    })
+    }),
   );
 
   unlistenFns.push(
     listen("auth/failed", (event) => {
       router.push(
-        `/auth/failed?error=${encodeURIComponent(event.payload as string)}`
+        `/auth/failed?error=${encodeURIComponent(event.payload as string)}`,
       );
-    })
+    }),
   );
 
   unlistenFns.push(
     listen("auth/finished", async (event) => {
       router.push("/library");
       state.value = JSON.parse(await invoke("fetch_state"));
-    })
+    }),
   );
 
   unlistenFns.push(
@@ -40,9 +40,9 @@ export function setupHooks() {
           ).toString()}"`,
           buttonText: "Close",
         },
-        (e, c) => c()
+        (e, c) => c(),
       );
-    })
+    }),
   );
 
   // This is for errors that (we think) aren't our fault
@@ -61,9 +61,9 @@ export function setupHooks() {
             await invoke("open_process_logs", { gameId: event.payload });
           }
           c();
-        }
+        },
       );
-    })
+    }),
   );
 
   onUnmounted(async () => {
@@ -92,7 +92,14 @@ export function initialNavigation(state: ReturnType<typeof useAppState>) {
       router.push("/auth/signedout");
       break;
     case AppStatus.ServerUnavailable:
-      router.push("/error/serverunavailable");
+      // Offline mode: if the server is unreachable but we have cached data
+      // (user was previously signed in), go to the library so installed games
+      // can still be launched. Only show the error page if there's no user data.
+      if (state.value.user) {
+        router.push("/library");
+      } else {
+        router.push("/error/serverunavailable");
+      }
       break;
     default:
       router.push("/library");

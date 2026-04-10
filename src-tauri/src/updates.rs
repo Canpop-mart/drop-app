@@ -55,7 +55,7 @@ impl ScheduleTask for GameUpdater {
         let to_check: Vec<GameVersion> = {
             let db_lock = borrow_db_checked();
 
-            
+
 
             db_lock
                 .applications

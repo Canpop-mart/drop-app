@@ -18,6 +18,8 @@ pub static PROCESS_MANAGER: ProcessManagerWrapper = ProcessManagerWrapper::new()
 pub mod compat;
 pub mod error;
 pub mod format;
+pub mod gamepad;
+pub mod m3u;
 mod parser;
 pub mod process_handlers;
 pub mod process_manager;
@@ -43,7 +45,7 @@ impl Deref for ProcessManagerWrapper {
     fn deref(&self) -> &Self::Target {
         match self.0.get() {
             Some(process_manager) => process_manager,
-            None => unreachable!("Download manager should always be initialised"),
+            None => unreachable!("Process manager should always be initialised"),
         }
     }
 }

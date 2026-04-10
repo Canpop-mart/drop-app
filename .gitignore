@@ -33,6 +33,17 @@ DEBUG.md
 .nvmrc
 *.local.sh
 
-# Secrets (just in case)
+# Nuxt build artifacts
+.output/
+.nuxt/
+.data/
+.nitro/
+.cache/
+
+# Config with local settings
+.nuxtrc
+
+# Secrets
 .env
-*.env
+.env.*
+!.env.example

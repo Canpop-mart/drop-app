@@ -2,7 +2,7 @@
   <div class="flex flex-col bg-zinc-900 overflow-hidden h-screen">
     <NuxtErrorBoundary>
       <Header class="select-none" />
-      <div class="relative grow overflow-y-auto">
+      <div data-app-scroll class="relative grow overflow-y-auto">
         <slot />
       </div>
       <template #error="{ error }">
@@ -78,5 +78,6 @@
 </template>
 
 <script setup lang="ts">
-const queueState = useQueueState();
+// Initialize global queue state
+useQueueState();
 </script>

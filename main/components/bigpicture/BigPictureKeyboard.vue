@@ -1,0 +1,328 @@
+<template>
+  <Teleport to="body">
+    <Transition name="kb-slide">
+      <div
+        v-if="visible"
+        class="fixed inset-x-0 bottom-0 z-50 flex flex-col items-center pb-4 bg-gradient-to-t from-zinc-950 via-zinc-950/95 to-transparent pt-8"
+      >
+        <!-- Input preview -->
+        <div
+          class="w-full max-w-3xl mb-4 px-6 py-3 bg-zinc-900 rounded-xl border border-zinc-700/50 text-zinc-100 text-lg font-medium min-h-[3rem] flex items-center"
+        >
+          <span v-if="modelValue">{{ modelValue }}</span>
+          <span v-else class="text-zinc-600">{{ placeholder }}</span>
+          <span class="animate-pulse ml-0.5 text-blue-400">|</span>
+        </div>
+
+        <!-- Keyboard rows -->
+        <div class="flex flex-col gap-1.5 max-w-3xl w-full">
+          <div
+            v-for="(row, rowIdx) in currentLayout"
+            :key="rowIdx"
+            class="flex justify-center gap-1.5"
+          >
+            <button
+              v-for="(key, keyIdx) in row"
+              :key="keyIdx"
+              :ref="(el: any) => registerKey(el as HTMLElement, rowIdx, keyIdx)"
+              class="flex items-center justify-center rounded-lg text-sm font-medium transition-all duration-100 select-none"
+              :class="[
+                keyClass(key),
+                focusedRow === rowIdx && focusedCol === keyIdx
+                  ? 'bg-blue-600 text-white scale-105 shadow-lg shadow-blue-500/30'
+                  : 'bg-zinc-800/80 text-zinc-300 hover:bg-zinc-700',
+              ]"
+              @click="pressKey(key)"
+            >
+              {{ keyLabel(key) }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Hints -->
+        <div class="flex gap-6 mt-3 text-xs text-zinc-500">
+          <span>
+            <span
+              class="inline-block px-1.5 py-0.5 bg-green-700/60 text-green-300 rounded text-xs mr-1"
+              >A</span
+            >
+            Type
+          </span>
+          <span>
+            <span
+              class="inline-block px-1.5 py-0.5 bg-red-700/60 text-red-300 rounded text-xs mr-1"
+              >B</span
+            >
+            Close
+          </span>
+          <span>
+            <span
+              class="inline-block px-1.5 py-0.5 bg-blue-700/60 text-blue-300 rounded text-xs mr-1"
+              >X</span
+            >
+            Backspace
+          </span>
+          <span>
+            <span
+              class="inline-block px-1.5 py-0.5 bg-yellow-700/60 text-yellow-300 rounded text-xs mr-1"
+              >Y</span
+            >
+            Space
+          </span>
+          <span>
+            <span
+              class="inline-block px-1.5 py-0.5 bg-zinc-700 text-zinc-300 rounded text-xs mr-1"
+              >LB</span
+            >
+            Shift
+          </span>
+          <span>
+            <span
+              class="inline-block px-1.5 py-0.5 bg-zinc-700 text-zinc-300 rounded text-xs mr-1"
+              >RB</span
+            >
+            Submit
+          </span>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
+</template>
+
+<script setup lang="ts">
+import { GamepadButton, useGamepad } from "~/composables/gamepad";
+import { useFocusNavigation } from "~/composables/focus-navigation";
+
+const props = defineProps<{
+  visible: boolean;
+  modelValue: string;
+  placeholder?: string;
+}>();
+
+const emit = defineEmits<{
+  "update:modelValue": [value: string];
+  close: [];
+  submit: [];
+}>();
+
+// ── Keyboard layouts ──────────────────────────────────────────────────────
+
+const LOWER = [
+  ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
+  ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
+  ["a", "s", "d", "f", "g", "h", "j", "k", "l"],
+  ["z", "x", "c", "v", "b", "n", "m"],
+];
+
+const UPPER = [
+  ["!", "@", "#", "$", "%", "^", "&", "*", "(", ")"],
+  ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
+  ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
+  ["Z", "X", "C", "V", "B", "N", "M"],
+];
+
+const shifted = ref(false);
+const currentLayout = computed(() => (shifted.value ? UPPER : LOWER));
+
+const focusedRow = ref(1); // Start on letter row
+const focusedCol = ref(0);
+
+// ── Key refs for scrolling ────────────────────────────────────────────────
+
+const keyRefs = new Map<string, HTMLElement>();
+
+function registerKey(el: HTMLElement | null, row: number, col: number) {
+  if (el) {
+    keyRefs.set(`${row}-${col}`, el);
+  }
+}
+
+// ── Key helpers ───────────────────────────────────────────────────────────
+
+function keyLabel(key: string): string {
+  return key;
+}
+
+function keyClass(key: string): string {
+  // All keys get the same base width
+  return "w-12 h-12";
+}
+
+function pressKey(key: string) {
+  emit("update:modelValue", props.modelValue + key);
+}
+
+function backspace() {
+  if (props.modelValue.length > 0) {
+    emit("update:modelValue", props.modelValue.slice(0, -1));
+  }
+}
+
+function space() {
+  emit("update:modelValue", props.modelValue + " ");
+}
+
+// ── Gamepad wiring ────────────────────────────────────────────────────────
+
+const gamepad = useGamepad();
+const focusNav = useFocusNavigation();
+const unsubs: (() => void)[] = [];
+
+// ── SteamOS keyboard detection ──────────────────────────────────────────
+// In SteamOS Game Mode, we can invoke the native virtual keyboard via
+// steam://open/keyboard. Detect by checking for Gamescope session.
+import { useDeckMode } from "~/composables/deck-mode";
+const deck = useDeckMode();
+const useSteamKeyboard = computed(
+  () => deck.isGamescope.value && typeof window !== "undefined",
+);
+
+function clampFocus() {
+  const layout = currentLayout.value;
+  if (focusedRow.value >= layout.length) focusedRow.value = layout.length - 1;
+  if (focusedRow.value < 0) focusedRow.value = 0;
+  const row = layout[focusedRow.value];
+  if (focusedCol.value >= row.length) focusedCol.value = row.length - 1;
+  if (focusedCol.value < 0) focusedCol.value = 0;
+}
+
+let kbLockId = 0;
+
+watch(
+  () => props.visible,
+  (v) => {
+    if (v) {
+      // In SteamOS Game Mode, try to invoke the native Steam keyboard
+      // which is more integrated with the Deck's touch/haptic input.
+      // Falls back to our custom keyboard if Steam keyboard is unavailable.
+      if (useSteamKeyboard.value) {
+        try {
+          window.open("steam://open/keyboard", "_self");
+        } catch {
+          // Steam keyboard unavailable, fall through to custom keyboard
+        }
+      }
+      focusedRow.value = 1;
+      focusedCol.value = 0;
+      kbLockId = focusNav.acquireInputLock();
+      wireGamepad();
+    } else {
+      unwireGamepad();
+      focusNav.releaseInputLock(kbLockId);
+    }
+  },
+);
+
+function wireGamepad() {
+  unwireGamepad();
+
+  // D-pad navigation
+  unsubs.push(
+    gamepad.onButton(GamepadButton.DPadUp, () => {
+      if (!props.visible) return;
+      focusedRow.value--;
+      clampFocus();
+    }),
+  );
+  unsubs.push(
+    gamepad.onButton(GamepadButton.DPadDown, () => {
+      if (!props.visible) return;
+      focusedRow.value++;
+      clampFocus();
+    }),
+  );
+  unsubs.push(
+    gamepad.onButton(GamepadButton.DPadLeft, () => {
+      if (!props.visible) return;
+      focusedCol.value--;
+      clampFocus();
+    }),
+  );
+  unsubs.push(
+    gamepad.onButton(GamepadButton.DPadRight, () => {
+      if (!props.visible) return;
+      focusedCol.value++;
+      clampFocus();
+    }),
+  );
+
+  // A = type focused key
+  unsubs.push(
+    gamepad.onButton(GamepadButton.South, () => {
+      if (!props.visible) return;
+      const key = currentLayout.value[focusedRow.value]?.[focusedCol.value];
+      if (key) pressKey(key);
+    }),
+  );
+
+  // B = close
+  unsubs.push(
+    gamepad.onButton(GamepadButton.East, () => {
+      if (!props.visible) return;
+      emit("close");
+    }),
+  );
+
+  // X = backspace
+  unsubs.push(
+    gamepad.onButton(GamepadButton.West, () => {
+      if (!props.visible) return;
+      backspace();
+    }),
+  );
+
+  // Y = space
+  unsubs.push(
+    gamepad.onButton(GamepadButton.North, () => {
+      if (!props.visible) return;
+      space();
+    }),
+  );
+
+  // LB = toggle shift
+  unsubs.push(
+    gamepad.onButton(GamepadButton.LeftBumper, () => {
+      if (!props.visible) return;
+      shifted.value = !shifted.value;
+    }),
+  );
+
+  // RB = submit
+  unsubs.push(
+    gamepad.onButton(GamepadButton.RightBumper, () => {
+      if (!props.visible) return;
+      emit("submit");
+    }),
+  );
+}
+
+function unwireGamepad() {
+  for (const unsub of unsubs) unsub();
+  unsubs.length = 0;
+}
+
+onUnmounted(() => {
+  unwireGamepad();
+  // L3 fix: only release lock if still held (visible). The watch handler
+  // already releases when visible→false, so this prevents a double-release
+  // that could accidentally unlock a newer lock owner.
+  if (props.visible) {
+    focusNav.releaseInputLock(kbLockId);
+  }
+});
+</script>
+
+<style scoped>
+.kb-slide-enter-active,
+.kb-slide-leave-active {
+  transition:
+    transform 0.3s ease,
+    opacity 0.3s ease;
+}
+
+.kb-slide-enter-from,
+.kb-slide-leave-to {
+  transform: translateY(100%);
+  opacity: 0;
+}
+</style>

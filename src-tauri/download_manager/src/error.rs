@@ -42,6 +42,7 @@ pub enum ApplicationDownloadError {
     IoError(Arc<io::Error>),
     DownloadError(RemoteAccessError),
     InvalidCommand,
+    ChannelBroken(String),
 }
 
 impl Display for ApplicationDownloadError {
@@ -69,6 +70,9 @@ impl Display for ApplicationDownloadError {
                 write!(f, "Download failed with error {error:?}")
             }
             ApplicationDownloadError::InvalidCommand => write!(f, "Invalid command state"),
+            ApplicationDownloadError::ChannelBroken(msg) => {
+                write!(f, "Internal channel broken: {msg}")
+            }
         }
     }
 }

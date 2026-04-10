@@ -128,7 +128,6 @@ pub fn auth_initiate_logic(mode: String) -> Result<String, RemoteAccessError> {
         platform: env::consts::OS.to_string(),
         capabilities: HashMap::from([
             ("peerAPI".to_owned(), CapabilityConfiguration {}),
-            ("cloudSaves".to_owned(), CapabilityConfiguration {}),
             ("trackPlaytime".to_owned(), CapabilityConfiguration {}),
         ]),
         mode,

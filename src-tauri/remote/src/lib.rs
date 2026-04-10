@@ -10,6 +10,7 @@ pub mod error;
 pub mod fetch_object;
 pub mod goldberg;
 pub mod playtime;
+pub mod retroarch;
 pub mod requests;
 pub mod server_proto;
 pub mod utils;

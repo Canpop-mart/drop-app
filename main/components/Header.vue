@@ -28,6 +28,12 @@
       />
       <div class="inline-flex items-center">
         <ol class="inline-flex gap-3">
+          <!-- Big Picture Mode toggle -->
+          <li>
+            <HeaderWidget @click="enterBigPicture">
+              <ArrowsPointingOutIcon class="h-5" />
+            </HeaderWidget>
+          </li>
           <HeaderProtonSupportWidget />
           <HeaderQueueWidget :object="currentQueueObject" />
           <li v-for="(item, itemIdx) in quickActions">
@@ -43,15 +49,17 @@
         </ol>
       </div>
     </div>
-    <WindowControl  />
+    <WindowControl />
   </div>
 </template>
 
 <script setup lang="ts">
 import { BellIcon, UserGroupIcon } from "@heroicons/vue/16/solid";
+import { ArrowsPointingOutIcon } from "@heroicons/vue/24/outline";
 import { AppStatus, type NavigationItem, type QuickActionNav } from "../types";
 import HeaderWidget from "./HeaderWidget.vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useBigPictureMode } from "~/composables/big-picture";
 
 const window = getCurrentWindow();
 const state = useAppState();
@@ -73,9 +81,9 @@ const navigation: Array<NavigationItem> = [
     label: "Community",
   },
   {
-    prefix: "/news",
-    route: "/news",
-    label: "News",
+    prefix: "/requests",
+    route: "/requests",
+    label: "Requests",
   },
 ];
 
@@ -94,4 +102,9 @@ const quickActions: Array<QuickActionNav> = [
 
 const queue = useQueueState();
 const currentQueueObject = computed(() => queue.value.queue.at(0));
+
+const bigPicture = useBigPictureMode();
+function enterBigPicture() {
+  bigPicture.enter();
+}
 </script>

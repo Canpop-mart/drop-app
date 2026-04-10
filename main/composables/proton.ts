@@ -22,7 +22,8 @@ export const useProtonPaths = async (): Promise<ProtonPaths> => {
       console.error("Failed to fetch Proton paths:", e);
       throw createError({
         statusCode: 500,
-        statusMessage: "Failed to load Proton compatibility data. Please check your Proton installation.",
+        statusMessage:
+          "Failed to load Proton compatibility data. Please check your Proton installation.",
         fatal: false,
       });
     }

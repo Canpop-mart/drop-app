@@ -83,3 +83,10 @@ pub async fn check_online() -> Result<bool, ()> {
     let online = make_authenticated_get(generate_url(&["/api/v1/"], &[]).unwrap()).await.is_ok();
     Ok(online)
 }
+
+/// Register Drop as a non-Steam game shortcut so it appears in SteamOS Game Mode.
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub fn register_steam_shortcut() -> ::client::steam_shortcut::ShortcutResult {
+    ::client::steam_shortcut::register_steam_shortcut()
+}

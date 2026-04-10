@@ -21,6 +21,8 @@ pub mod data {
     pub type DownloadType = v1::DownloadType;
     pub type DatabaseApplications = v1::DatabaseApplications;
     pub type UserConfiguration = v1::UserConfiguration;
+    pub type ControllerType = v1::ControllerType;
+    pub type QualityPreset = v1::QualityPreset;
 
     use std::collections::HashMap;
 
@@ -97,7 +99,41 @@ pub mod data {
                 launch_template: "{}".to_owned(),
                 override_proton_path: None,
                 enable_updates: false,
+                controller_type: None,
+                quality_preset: None,
+                widescreen: false,
+                mangohud: None,
             }
+        }
+
+        /// Controller layout type for RetroArch input mapping.
+        #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+        pub enum ControllerType {
+            Xbox,
+            PlayStation,
+            Nintendo,
+        }
+
+        /// Graphics quality preset for RetroArch.
+        #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+        pub enum QualityPreset {
+            Low,
+            Medium,
+            High,
+        }
+
+        /// MangoHud overlay preset when launching games on Linux.
+        #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+        #[serde(rename_all = "camelCase")]
+        pub enum MangoHudPreset {
+            /// No overlay
+            Off,
+            /// FPS only
+            Minimal,
+            /// FPS + frametime + GPU/CPU usage
+            Standard,
+            /// All metrics
+            Full,
         }
 
         #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -106,6 +142,15 @@ pub mod data {
             pub launch_template: String,
             pub override_proton_path: Option<String>,
             pub enable_updates: bool,
+            #[serde(default)]
+            pub controller_type: Option<ControllerType>,
+            #[serde(default)]
+            pub quality_preset: Option<QualityPreset>,
+            #[serde(default)]
+            pub widescreen: bool,
+            /// MangoHud performance overlay (Linux only)
+            #[serde(default)]
+            pub mangohud: Option<MangoHudPreset>,
         }
 
         impl Default for UserConfiguration {
@@ -146,6 +191,12 @@ pub mod data {
             pub umu_id_override: Option<String>,
 
             pub emulator: Option<LaunchConfigurationEmulator>,
+
+            /// Ordered disc image paths for multi-disc games (relative to game
+            /// install dir). When this has 2+ entries the process manager writes
+            /// a temporary .m3u playlist and passes it to the emulator via {rom}.
+            #[serde(default)]
+            pub disc_paths: Vec<String>,
         }
 
         #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -171,7 +222,10 @@ pub mod data {
         pub struct Settings {
             pub autostart: bool,
             pub max_download_threads: usize,
-            pub force_offline: bool, // ... other settings ...
+            pub force_offline: bool,
+            /// Global MangoHud preset applied when a game has no per-game override.
+            #[serde(default)]
+            pub global_mangohud: Option<MangoHudPreset>,
         }
         impl Default for Settings {
             fn default() -> Self {
@@ -179,6 +233,7 @@ pub mod data {
                     autostart: false,
                     max_download_threads: 4,
                     force_offline: false,
+                    global_mangohud: None,
                 }
             }
         }

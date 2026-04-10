@@ -24,9 +24,8 @@
         class="absolute bg-zinc-900 right-0 top-10 z-50 w-56 origin-top-right focus:outline-none shadow-md"
       >
         <div class="flex-col gap-y-2">
-          <a
-            :href="profileUrl"
-            target="_blank"
+          <NuxtLink
+            to="/profile"
             class="transition inline-flex items-center w-full py-3 px-4 hover:bg-zinc-800"
           >
             <div class="inline-flex items-center text-zinc-300">
@@ -35,7 +34,7 @@
                 state.user.displayName
               }}</span>
             </div>
-          </a>
+          </NuxtLink>
           <div class="h-0.5 rounded-full w-full bg-zinc-800" />
           <div class="flex flex-col mb-1">
             <MenuItem v-if="state.user.admin" v-slot="{ active }">
@@ -88,11 +87,8 @@ router.afterEach(() => {
 
 const state = useAppState();
 const profilePictureUrl: string = await useObject(
-  state.value?.user?.profilePictureObjectId ?? ""
+  state.value?.user?.profilePictureObjectId ?? "",
 );
-const profileUrl: string = await invoke("gen_drop_url", {
-  path: `/id/${state.value?.user?.username ?? "me"}`,
-});
 const adminUrl: string = await invoke("gen_drop_url", {
   path: "/admin",
 });

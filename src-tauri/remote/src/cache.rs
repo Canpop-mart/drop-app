@@ -2,14 +2,30 @@ use std::{
     fs::File,
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::SystemTime,
+    collections::HashMap,
 };
 
 use bitcode::{Decode, DecodeOwned, Encode};
 use database::{Database, borrow_db_checked};
 use http::{Response, header::CONTENT_TYPE, response::Builder as ResponseBuilder};
+use once_cell::sync::Lazy;
 
 use crate::error::{CacheError, RemoteAccessError};
+
+/// In-memory cache entry with expiry time
+#[derive(Clone)]
+struct MemoryCacheEntry {
+    data: Vec<u8>,
+    expiry: u64,
+}
+
+/// In-memory cache with max 100 entries (LRU policy will be handled by simple limit)
+static MEMORY_CACHE: Lazy<Arc<Mutex<HashMap<String, MemoryCacheEntry>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+const MAX_MEMORY_CACHE_SIZE: usize = 100;
 
 #[macro_export]
 macro_rules! offline {
@@ -60,30 +76,94 @@ fn delete_sync(base: &Path, key: &str) -> io::Result<()> {
 pub fn cache_object<D: Encode>(key: &str, data: &D) -> Result<(), RemoteAccessError> {
     cache_object_db(key, data, &borrow_db_checked())
 }
+
+/// Write to both memory and disk (write-through policy)
 pub fn cache_object_db<D: Encode>(
     key: &str,
     data: &D,
     database: &Database,
 ) -> Result<(), RemoteAccessError> {
     let bytes = bitcode::encode(data);
-    write_sync(&database.cache_dir, key, bytes).map_err(RemoteAccessError::Cache)
+
+    // Write to disk
+    write_sync(&database.cache_dir, key, bytes.clone()).map_err(RemoteAccessError::Cache)?;
+
+    // Write to memory cache with default 24 hour expiry
+    let expiry = get_sys_time_in_secs() + 60 * 60 * 24;
+    store_in_memory_cache(key.to_string(), bytes, expiry);
+
+    Ok(())
 }
 pub fn get_cached_object<D: Encode + DecodeOwned>(key: &str) -> Result<D, RemoteAccessError> {
     get_cached_object_db::<D>(key, &borrow_db_checked())
 }
+
+/// Try to get from in-memory cache first, then fall back to disk
+fn get_from_memory_cache(key: &str) -> Option<Vec<u8>> {
+    let cache = MEMORY_CACHE.lock().ok()?;
+    if let Some(entry) = cache.get(key) {
+        // Check if entry has expired
+        if entry.expiry >= get_sys_time_in_secs() {
+            return Some(entry.data.clone());
+        }
+    }
+    None
+}
+
+/// Store in both memory and disk (write-through)
+fn store_in_memory_cache(key: String, data: Vec<u8>, expiry: u64) {
+    if let Ok(mut cache) = MEMORY_CACHE.lock() {
+        // Simple eviction: if cache is full, clear oldest entries
+        if cache.len() >= MAX_MEMORY_CACHE_SIZE {
+            // Remove all expired entries first
+            cache.retain(|_, entry| entry.expiry >= get_sys_time_in_secs());
+            // If still too full, clear 25% of entries
+            if cache.len() >= MAX_MEMORY_CACHE_SIZE {
+                let to_remove = (MAX_MEMORY_CACHE_SIZE / 4).max(1);
+                let keys_to_remove: Vec<String> = cache.keys().take(to_remove).cloned().collect();
+                for key in keys_to_remove {
+                    cache.remove(&key);
+                }
+            }
+        }
+        cache.insert(key, MemoryCacheEntry { data, expiry });
+    }
+}
+
 pub fn get_cached_object_db<D: DecodeOwned>(
     key: &str,
     db: &Database,
 ) -> Result<D, RemoteAccessError> {
+    // Try memory cache first
+    if let Some(bytes) = get_from_memory_cache(key) {
+        let data = bitcode::decode::<D>(&bytes)
+            .map_err(|e| RemoteAccessError::Cache(io::Error::other(e)))?;
+        return Ok(data);
+    }
+
+    // Fall back to disk cache
     let bytes = read_sync(&db.cache_dir, key).map_err(RemoteAccessError::Cache)?;
     let data =
         bitcode::decode::<D>(&bytes).map_err(|e| RemoteAccessError::Cache(io::Error::other(e)))?;
+
+    // Store in memory cache for future hits
+    let expiry = get_sys_time_in_secs() + 60 * 60 * 24; // Default 24 hour expiry
+    store_in_memory_cache(key.to_string(), bytes, expiry);
+
     Ok(data)
 }
 pub fn clear_cached_object(key: &str) -> Result<(), RemoteAccessError> {
     clear_cached_object_db(key, &borrow_db_checked())
 }
+
+/// Clear from both memory and disk
 pub fn clear_cached_object_db(key: &str, db: &Database) -> Result<(), RemoteAccessError> {
+    // Remove from memory cache
+    if let Ok(mut cache) = MEMORY_CACHE.lock() {
+        cache.remove(key);
+    }
+
+    // Remove from disk
     delete_sync(&db.cache_dir, key).map_err(RemoteAccessError::Cache)?;
     Ok(())
 }

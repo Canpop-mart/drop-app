@@ -1,9 +1,12 @@
-import { type DownloadableMetadata, DownloadableType } from '~/types'
+import { type DownloadableMetadata, DownloadableType } from "~/types";
 
-export default function generateGameMeta(gameId: string, version: string): DownloadableMetadata {
-    return {
-        id: gameId,
-        version,
-        downloadType: DownloadableType.Game
-    }
+export default function generateGameMeta(
+  gameId: string,
+  version: string,
+): DownloadableMetadata {
+  return {
+    id: gameId,
+    version,
+    downloadType: DownloadableType.Game,
+  };
 }
