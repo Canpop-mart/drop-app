@@ -54,7 +54,7 @@ pub fn kill_game(game_id: String) -> Result<(), ProcessError> {
 pub fn open_process_logs(game_id: String, app_handle: AppHandle) -> Result<(), ProcessError> {
     let process_manager_lock = PROCESS_MANAGER.lock();
 
-    let dir = process_manager_lock.get_log_dir(game_id);
+    let dir = process_manager_lock.get_log_dir(&game_id);
     app_handle
         .opener()
         .open_path(dir.display().to_string(), None::<&str>)

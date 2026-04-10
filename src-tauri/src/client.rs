@@ -41,7 +41,7 @@ pub fn toggle_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
         debug!("enabled autostart");
     } else {
         manager.disable().map_err(|e| e.to_string())?;
-        debug!("eisabled autostart");
+        debug!("disabled autostart");
     }
 
     // Store the state in DB
@@ -82,4 +82,11 @@ pub fn open_fs(path: String, app_handle: AppHandle) -> Result<(), tauri_plugin_o
 pub async fn check_online() -> Result<bool, ()> {
     let online = make_authenticated_get(generate_url(&["/api/v1/"], &[]).unwrap()).await.is_ok();
     Ok(online)
+}
+
+/// Register Drop as a non-Steam game shortcut so it appears in SteamOS Game Mode.
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub fn register_steam_shortcut() -> ::client::steam_shortcut::ShortcutResult {
+    ::client::steam_shortcut::register_steam_shortcut()
 }

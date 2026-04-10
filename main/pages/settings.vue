@@ -47,6 +47,7 @@ import {
   HomeIcon,
   RectangleGroupIcon,
   BugAntIcon,
+  TrophyIcon,
 } from "@heroicons/vue/16/solid";
 import type { Component } from "vue";
 import type { NavigationItem } from "~/types";
@@ -122,6 +123,12 @@ const navigation = computed(() => [
         },
       ]
     : []),
+  {
+    label: "Achievements",
+    route: "/settings/achievements",
+    prefix: "/settings/achievements",
+    icon: TrophyIcon,
+  },
   {
     label: "Account",
     route: "/settings/account",

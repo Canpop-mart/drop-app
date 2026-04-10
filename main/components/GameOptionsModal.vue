@@ -29,7 +29,9 @@
             </li>
           </ul>
         </nav>
-        <div class="border-l-2 border-zinc-800 w-full grow pl-4 overflow-y-scroll">
+        <div
+          class="border-l-2 border-zinc-800 w-full grow pl-4 overflow-y-scroll"
+        >
           <component
             v-model="configuration"
             :is="tabs[currentTabIndex]?.page"
@@ -91,7 +93,9 @@ const open = defineModel<boolean>();
 const props = defineProps<{ gameId: string }>();
 const game = await useGame(props.gameId);
 
-const configuration: Ref<GameVersion["userConfiguration"]> = ref(game.version.value!.userConfiguration);
+const configuration: Ref<GameVersion["userConfiguration"]> = ref(
+  game.version.value!.userConfiguration,
+);
 
 const hasWindows = !!(
   game.version.value!.setups.find((v) => v.platform === "Windows") ??

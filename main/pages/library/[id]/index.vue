@@ -2,6 +2,127 @@
   <div
     class="mx-auto w-full relative flex flex-col justify-center pt-72 overflow-hidden"
   >
+    <!-- Game options gear — pinned top-left above banner -->
+    <Menu as="div" class="absolute top-3 left-4 z-20">
+      <MenuButton
+        class="rounded-lg p-1.5 bg-zinc-800/50 text-zinc-100 hover:bg-zinc-800 transition-colors"
+      >
+        <Cog6ToothIcon class="size-5" />
+      </MenuButton>
+      <Transition
+        enter-active-class="transition ease-out duration-100"
+        enter-from-class="opacity-0 scale-95"
+        enter-to-class="opacity-100 scale-100"
+        leave-active-class="transition ease-in duration-75"
+        leave-from-class="opacity-100 scale-100"
+        leave-to-class="opacity-0 scale-95"
+      >
+        <MenuItems
+          class="absolute left-0 z-[500] mt-2 w-56 origin-top-left rounded-lg bg-zinc-900 shadow-lg ring-1 ring-zinc-100/5 focus:outline-none overflow-hidden"
+        >
+          <div class="py-1">
+            <MenuItem v-if="isNativeGame" v-slot="{ active }">
+              <button
+                @click="applyProfileName"
+                :class="[
+                  active
+                    ? 'bg-zinc-800 text-zinc-100 outline-none'
+                    : 'text-zinc-400',
+                  'w-full px-4 py-2 text-sm inline-flex justify-between',
+                ]"
+              >
+                Set Account Name
+                <UserIcon class="size-5 text-green-400" />
+              </button>
+            </MenuItem>
+            <!-- Controller layout selector — only for emulated (RetroArch) games -->
+            <MenuItem v-if="isEmulatedGame" as="div" disabled>
+              <div class="w-full px-4 py-2 text-sm text-zinc-300">
+                <div class="flex justify-between items-center mb-1.5">
+                  <span>Controller Layout</span>
+                  <AdjustmentsHorizontalIcon class="size-4 text-blue-400" />
+                </div>
+                <div class="flex gap-1">
+                  <button
+                    v-for="opt in controllerOptions"
+                    :key="opt.value"
+                    class="flex-1 px-2 py-1 rounded text-xs font-medium transition-colors"
+                    :class="
+                      selectedController === opt.value
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600 hover:text-zinc-200'
+                    "
+                    @click.stop="setController(opt.value)"
+                  >
+                    {{ opt.label }}
+                  </button>
+                </div>
+              </div>
+            </MenuItem>
+            <!-- Quality preset selector — only for emulated (RetroArch) games -->
+            <MenuItem v-if="isEmulatedGame" as="div" disabled>
+              <div class="w-full px-4 py-2 text-sm text-zinc-300">
+                <div class="flex justify-between items-center mb-1.5">
+                  <span>Quality Preset</span>
+                  <SparklesIcon class="size-4 text-purple-400" />
+                </div>
+                <div class="flex gap-1">
+                  <button
+                    v-for="opt in qualityOptions"
+                    :key="opt.value"
+                    class="flex-1 px-2 py-1 rounded text-xs font-medium transition-colors"
+                    :class="
+                      selectedQuality === opt.value
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600 hover:text-zinc-200'
+                    "
+                    @click.stop="setQuality(opt.value)"
+                  >
+                    {{ opt.label }}
+                  </button>
+                </div>
+              </div>
+            </MenuItem>
+            <!-- Widescreen toggle — only for emulated (RetroArch) games -->
+            <MenuItem v-if="isEmulatedGame" as="div" disabled>
+              <div class="w-full px-4 py-2 text-sm text-zinc-300">
+                <div class="flex justify-between items-center">
+                  <span>Widescreen (16:9)</span>
+                  <button
+                    class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
+                    :class="widescreenEnabled ? 'bg-green-600' : 'bg-zinc-700'"
+                    @click.stop="toggleWidescreen"
+                  >
+                    <span
+                      class="inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform"
+                      :class="
+                        widescreenEnabled ? 'translate-x-4' : 'translate-x-0.5'
+                      "
+                    />
+                  </button>
+                </div>
+              </div>
+            </MenuItem>
+            <div class="border-t border-zinc-800 my-1" />
+            <MenuItem v-if="achievements.length > 0" v-slot="{ active }">
+              <button
+                @click="confirmResetAchievements"
+                :class="[
+                  active
+                    ? 'bg-zinc-800 text-zinc-100 outline-none'
+                    : 'text-zinc-400',
+                  'w-full px-4 py-2 text-sm inline-flex justify-between',
+                ]"
+              >
+                Reset Achievements
+                <TrophyIcon class="size-5 text-yellow-500" />
+              </button>
+            </MenuItem>
+          </div>
+        </MenuItems>
+      </Transition>
+    </Menu>
+
     <div class="absolute inset-0 z-0">
       <img
         :src="bannerUrl"
@@ -22,10 +143,16 @@
         >
           {{ game.mName }}
         </h1>
-        <div class="relative" v-if="status.type === 'Installed' && status.install_type.type != InstalledType.PartiallyInstalled">
+        <div
+          v-if="
+            status.type === 'Installed' &&
+            status.install_type.type != InstalledType.PartiallyInstalled
+          "
+          class="mt-1"
+        >
           <div
             v-if="!version?.userConfiguration?.enableUpdates"
-            class="absolute mt-1 inline-flex items-center gap-x-1 text-xs text-zinc-400"
+            class="inline-flex items-center gap-x-1 text-xs text-zinc-400"
           >
             Version pinned
             <svg
@@ -42,19 +169,19 @@
           </div>
           <div
             v-else-if="!status.update_available"
-            class="absolute mt-1 inline-flex items-center gap-x-1 text-xs text-zinc-400"
+            class="inline-flex items-center gap-x-1 text-xs text-zinc-400"
           >
             Up to date <CheckCircleIcon class="size-3 text-green-600" />
           </div>
           <div
             v-else-if="status.update_available"
-            class="absolute mt-1 inline-flex items-center gap-x-1 text-xs text-zinc-400"
+            class="inline-flex items-center gap-x-1 text-xs text-zinc-400"
           >
             Update available <ArrowDownTrayIcon class="size-3 text-blue-600" />
           </div>
         </div>
 
-        <div class="mt-8 flex flex-row gap-x-4 items-stretch">
+        <div class="mt-3 flex flex-row gap-x-4 items-stretch">
           <!-- Do not add scale animations to this: https://stackoverflow.com/a/35683068 -->
           <GameStatusButton
             @install="() => installFlow()"
@@ -88,12 +215,68 @@
         </div>
       </div>
 
+      <!-- Stat bar -->
+      <div
+        v-if="!statsLoading"
+        class="mt-6 mx-8 flex items-center gap-6 rounded-lg bg-zinc-800/60 backdrop-blur-sm px-6 py-3 border border-zinc-700/50"
+      >
+        <div
+          v-if="gameStats.lastPlayedAt"
+          class="flex items-center gap-2 text-sm"
+        >
+          <CalendarIcon class="size-4 text-zinc-400 shrink-0" />
+          <span class="text-zinc-400">Last Played</span>
+          <span class="text-zinc-100 font-medium">{{
+            formatLastPlayed(gameStats.lastPlayedAt)
+          }}</span>
+        </div>
+        <div v-if="gameStats.lastPlayedAt" class="w-px h-4 bg-zinc-600" />
+        <div class="flex items-center gap-2 text-sm">
+          <ClockIcon class="size-4 text-zinc-400 shrink-0" />
+          <span class="text-zinc-400">Play Time</span>
+          <span class="text-zinc-100 font-medium">{{
+            formatPlaytime(gameStats.playtimeSeconds)
+          }}</span>
+        </div>
+        <div
+          v-if="gameStats.achievementsTotal > 0"
+          class="w-px h-4 bg-zinc-600"
+        />
+        <div
+          v-if="gameStats.achievementsTotal > 0"
+          class="flex items-center gap-2 text-sm"
+        >
+          <TrophyIcon class="size-4 text-yellow-500 shrink-0" />
+          <span class="text-zinc-400">Achievements</span>
+          <span class="text-zinc-100 font-medium"
+            >{{ gameStats.achievementsUnlocked }}/{{
+              gameStats.achievementsTotal
+            }}</span
+          >
+          <div class="w-24 h-1.5 bg-zinc-700 rounded-full overflow-hidden">
+            <div
+              class="h-full bg-blue-500 rounded-full transition-all duration-500"
+              :style="{
+                width:
+                  Math.round(
+                    (gameStats.achievementsUnlocked /
+                      gameStats.achievementsTotal) *
+                      100,
+                  ) + '%',
+              }"
+            />
+          </div>
+        </div>
+      </div>
+
       <!-- Main content -->
       <div class="mt-8 w-full bg-zinc-900 px-8">
         <div class="grid grid-cols-[2fr,1fr] gap-8">
           <div class="space-y-4">
             <!-- Collapsible Description -->
-            <div class="bg-zinc-800/50 rounded-xl backdrop-blur-sm overflow-hidden">
+            <div
+              class="bg-zinc-800/50 rounded-xl backdrop-blur-sm overflow-hidden"
+            >
               <button
                 @click="descriptionOpen = !descriptionOpen"
                 class="w-full flex items-center justify-between p-6 text-left hover:bg-zinc-700/30 transition-colors"
@@ -125,17 +308,7 @@
               </Transition>
             </div>
 
-            <!-- Server-rendered content (achievements, future sections) -->
-            <!-- Loaded via iframe so server-side changes don't require client rebuild -->
-            <iframe
-              v-if="showServerContent"
-              ref="serverContentFrame"
-              :src="gameContentUrl"
-              scrolling="no"
-              class="w-full border-0 rounded-xl overflow-hidden bg-zinc-800/50"
-              :style="{ height: serverContentHeight + 'px' }"
-              @error="showServerContent = false"
-            />
+            <!-- Future server-rendered sections can go here -->
           </div>
 
           <div class="space-y-6">
@@ -226,6 +399,107 @@
                   <p class="text-zinc-500 text-sm">
                     Game screenshots will appear here when available
                   </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Achievements -->
+            <div class="bg-zinc-800/50 rounded-xl p-6 backdrop-blur-sm">
+              <h2 class="text-xl font-display font-semibold text-zinc-100 mb-4">
+                Achievements
+              </h2>
+              <div v-if="achievementsLoading" class="flex justify-center py-4">
+                <div
+                  class="w-5 h-5 border-2 border-zinc-600 border-t-zinc-100 rounded-full animate-spin"
+                />
+              </div>
+              <div
+                v-else-if="achievements.length === 0"
+                class="flex flex-col items-center justify-center text-center py-4"
+              >
+                <svg
+                  class="size-10 text-zinc-600 mb-2"
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                >
+                  <path
+                    fill-rule="evenodd"
+                    d="M5.166 2.621v.858c-1.035.148-2.059.33-3.071.543a.75.75 0 0 0-.584.859 6.753 6.753 0 0 0 6.138 5.6 6.73 6.73 0 0 0 2.743 1.346A6.707 6.707 0 0 1 9.279 15H8.54c-1.036 0-1.875.84-1.875 1.875V19.5h-.75a2.25 2.25 0 0 0-2.25 2.25c0 .414.336.75.75.75h15.19a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-2.25-2.25h-.75v-2.625c0-1.036-.84-1.875-1.875-1.875h-.739a6.707 6.707 0 0 1-1.112-3.173 6.73 6.73 0 0 0 2.743-1.347 6.753 6.753 0 0 0 6.139-5.6.75.75 0 0 0-.585-.858 47.077 47.077 0 0 0-3.07-.543V2.62a.75.75 0 0 0-.658-.744 49.22 49.22 0 0 0-6.093-.377c-2.063 0-4.096.128-6.093.377a.75.75 0 0 0-.657.744Zm0 2.629c0 1.196.312 2.32.857 3.294A5.266 5.266 0 0 1 3.16 5.337a45.6 45.6 0 0 1 2.006-.343v.256Zm13.5 0v-.256c.674.1 1.343.214 2.006.343a5.265 5.265 0 0 1-2.863 3.207 6.72 6.72 0 0 0 .857-3.294Z"
+                    clip-rule="evenodd"
+                  />
+                </svg>
+                <p class="text-zinc-500 text-sm">No achievements available</p>
+              </div>
+              <div
+                v-else
+                class="space-y-2 max-h-80 overflow-y-auto custom-scrollbar pr-1"
+              >
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-xs text-zinc-400">
+                    {{ achievementsUnlocked }} /
+                    {{ achievements.length }} unlocked
+                  </span>
+                  <div
+                    class="flex-1 ml-3 h-1.5 bg-zinc-700 rounded-full overflow-hidden"
+                  >
+                    <div
+                      class="h-full bg-yellow-500 rounded-full transition-all"
+                      :style="{
+                        width: `${achievements.length > 0 ? (achievementsUnlocked / achievements.length) * 100 : 0}%`,
+                      }"
+                    />
+                  </div>
+                </div>
+                <div
+                  v-for="ach in achievements"
+                  :key="ach.id"
+                  class="flex items-center gap-3 py-2 px-2 rounded-lg hover:bg-zinc-700/30 transition-colors"
+                >
+                  <img
+                    v-if="ach.iconUrl"
+                    :src="ach.iconUrl"
+                    :class="[
+                      'size-9 rounded shrink-0',
+                      ach.unlocked ? '' : 'grayscale opacity-50',
+                    ]"
+                  />
+                  <div
+                    v-else
+                    :class="[
+                      'size-9 rounded shrink-0 bg-zinc-700/50 flex items-center justify-center',
+                      ach.unlocked ? '' : 'opacity-50',
+                    ]"
+                  >
+                    <svg
+                      class="size-5 text-zinc-500"
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 24 24"
+                      fill="currentColor"
+                    >
+                      <path
+                        fill-rule="evenodd"
+                        d="M5.166 2.621v.858c-1.035.148-2.059.33-3.071.543a.75.75 0 0 0-.584.859 6.753 6.753 0 0 0 6.138 5.6 6.73 6.73 0 0 0 2.743 1.346A6.707 6.707 0 0 1 9.279 15H8.54c-1.036 0-1.875.84-1.875 1.875V19.5h-.75a2.25 2.25 0 0 0-2.25 2.25c0 .414.336.75.75.75h15.19a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-2.25-2.25h-.75v-2.625c0-1.036-.84-1.875-1.875-1.875h-.739a6.707 6.707 0 0 1-1.112-3.173 6.73 6.73 0 0 0 2.743-1.347 6.753 6.753 0 0 0 6.139-5.6.75.75 0 0 0-.585-.858 47.077 47.077 0 0 0-3.07-.543V2.62a.75.75 0 0 0-.658-.744 49.22 49.22 0 0 0-6.093-.377c-2.063 0-4.096.128-6.093.377a.75.75 0 0 0-.657.744Zm0 2.629c0 1.196.312 2.32.857 3.294A5.266 5.266 0 0 1 3.16 5.337a45.6 45.6 0 0 1 2.006-.343v.256Zm13.5 0v-.256c.674.1 1.343.214 2.006.343a5.265 5.265 0 0 1-2.863 3.207 6.72 6.72 0 0 0 .857-3.294Z"
+                        clip-rule="evenodd"
+                      />
+                    </svg>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <p
+                      :class="[
+                        'text-sm font-medium truncate',
+                        ach.unlocked ? 'text-zinc-100' : 'text-zinc-500',
+                      ]"
+                    >
+                      {{ ach.title }}
+                    </p>
+                    <p class="text-xs text-zinc-500 truncate">
+                      {{ ach.description }}
+                    </p>
+                  </div>
+                  <div v-if="ach.unlocked" class="shrink-0">
+                    <CheckCircleIcon class="size-4 text-yellow-500" />
+                  </div>
                 </div>
               </div>
             </div>
@@ -679,6 +953,52 @@
     v-if="dependencyRequiredModal"
     v-model="dependencyRequiredModal"
   />
+
+  <!-- Achievement Reset Confirmation Modal -->
+  <Transition
+    enter-active-class="ease-out duration-200"
+    enter-from-class="opacity-0"
+    enter-to-class="opacity-100"
+    leave-active-class="ease-in duration-150"
+    leave-from-class="opacity-100"
+    leave-to-class="opacity-0"
+  >
+    <div
+      v-if="resetConfirmOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      @click.self="resetConfirmOpen = false"
+    >
+      <div
+        class="w-full max-w-sm rounded-xl bg-zinc-900 border border-zinc-700 shadow-2xl"
+      >
+        <div class="px-6 py-5">
+          <h3 class="text-base font-semibold font-display text-zinc-100">
+            Reset Achievements
+          </h3>
+          <p class="mt-2 text-sm text-zinc-400">
+            Reset all achievements for
+            <span class="text-zinc-200 font-medium">{{ game.mName }}</span
+            >? This cannot be undone.
+          </p>
+        </div>
+        <div class="flex justify-end gap-3 border-t border-zinc-700 px-6 py-4">
+          <button
+            @click="resetConfirmOpen = false"
+            class="rounded-md px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            @click="executeResetAchievements"
+            :disabled="resetBusy"
+            class="rounded-md px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 transition-colors"
+          >
+            {{ resetBusy ? "Resetting..." : "Reset" }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Transition>
 </template>
 
 <script setup lang="ts">
@@ -688,6 +1008,10 @@ import {
   ListboxLabel,
   ListboxOption,
   ListboxOptions,
+  Menu,
+  MenuButton,
+  MenuItem,
+  MenuItems,
 } from "@headlessui/vue";
 import {
   CheckIcon,
@@ -702,19 +1026,34 @@ import {
   PlayIcon,
   InformationCircleIcon,
 } from "@heroicons/vue/20/solid";
-import { BuildingStorefrontIcon } from "@heroicons/vue/24/outline";
 import {
+  BuildingStorefrontIcon,
+  Cog6ToothIcon,
+  TrashIcon,
+} from "@heroicons/vue/24/outline";
+import {
+  AdjustmentsHorizontalIcon,
   ArrowDownTrayIcon,
+  CalendarIcon,
   CheckCircleIcon,
+  ClockIcon,
   MapPinIcon,
   MinusIcon,
   ServerIcon,
+  SparklesIcon,
+  TrophyIcon,
+  UserIcon,
   XCircleIcon,
 } from "@heroicons/vue/24/solid";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { micromark } from "micromark";
 import { InstalledType } from "~/types";
-import { rewriteDescriptionImages } from "~/composables/use-server-fetch";
+import type { ControllerType, QualityPreset } from "~/types";
+import {
+  rewriteDescriptionImages,
+  serverUrl,
+} from "~/composables/use-server-fetch";
 
 const route = useRoute();
 const router = useRouter();
@@ -727,29 +1066,155 @@ const bannerUrl = await useObject(game.mBannerObjectId);
 const rawHtml = micromark(game.mDescription);
 const htmlDescription = rewriteDescriptionImages(rawHtml);
 
+// ── Game type detection ─────────────────────────────────────────────────
+// ROM games run through an emulator (RetroArch) — show controller/quality/widescreen
+// Non-emulator games may use Goldberg/Steam emu — show Set Account Name
+const isEmulatedGame = computed(
+  () => version.value?.launches?.some((l: any) => l.emulator != null) ?? false,
+);
+const isNativeGame = computed(() => !isEmulatedGame.value);
+
+// ── Controller & Quality presets ─────────────────────────────────────────
+const controllerOptions: { label: string; value: ControllerType | null }[] = [
+  { label: "Auto", value: null },
+  { label: "Xbox", value: "Xbox" },
+  { label: "PS", value: "PlayStation" },
+  { label: "Nintendo", value: "Nintendo" },
+];
+const qualityOptions: { label: string; value: QualityPreset | null }[] = [
+  { label: "Auto", value: null },
+  { label: "Low", value: "Low" },
+  { label: "Med", value: "Medium" },
+  { label: "High", value: "High" },
+];
+
+const selectedController = ref<ControllerType | null>(
+  version.value?.userConfiguration?.controllerType ?? null,
+);
+const selectedQuality = ref<QualityPreset | null>(
+  version.value?.userConfiguration?.qualityPreset ?? null,
+);
+const widescreenEnabled = ref<boolean>(
+  version.value?.userConfiguration?.widescreen ?? false,
+);
+
+async function saveUserConfig() {
+  if (!version.value) return;
+  try {
+    const config = {
+      ...version.value.userConfiguration,
+      controllerType: selectedController.value,
+      qualityPreset: selectedQuality.value,
+      widescreen: widescreenEnabled.value,
+    };
+    await invoke("update_game_configuration", {
+      gameId: game.id,
+      options: config,
+    });
+  } catch (e) {
+    console.error("Failed to save config:", e);
+  }
+}
+
+function setController(value: ControllerType | null) {
+  selectedController.value = value;
+  saveUserConfig();
+}
+
+function setQuality(value: QualityPreset | null) {
+  selectedQuality.value = value;
+  saveUserConfig();
+}
+
+function toggleWidescreen() {
+  widescreenEnabled.value = !widescreenEnabled.value;
+  saveUserConfig();
+}
+
 const descriptionOpen = ref(true);
 
-// Server-rendered content iframe (achievements + future sections)
-const gameContentUrl = convertFileSrc("dummyvalue", "server").replace(
-  "dummyvalue",
-  `client/game/${game.id}`,
-);
-const showServerContent = ref(true);
-const serverContentHeight = ref(10); // Start small, auto-resize via postMessage
-const serverContentFrame = ref<HTMLIFrameElement | null>(null);
+// Game stats bar
+const statsLoading = ref(true);
+const gameStats = reactive({
+  playtimeSeconds: 0,
+  lastPlayedAt: null as string | null,
+  achievementsUnlocked: 0,
+  achievementsTotal: 0,
+});
 
-onMounted(() => {
-  window.addEventListener("message", (event) => {
-    if (event.data?.type === "drop-resize") {
-      const height = event.data.height;
-      if (height < 10) {
-        // No content (no achievements) — hide the iframe
-        showServerContent.value = false;
-      } else {
-        serverContentHeight.value = height;
-      }
+onMounted(async () => {
+  try {
+    const res = await fetch(serverUrl(`api/v1/games/${game.id}/stats`));
+    if (res.ok) {
+      const data = await res.json();
+      Object.assign(gameStats, data);
     }
+  } catch {
+    // Stats are non-critical; silently fail
+  } finally {
+    statsLoading.value = false;
+  }
+});
+
+function formatPlaytime(seconds: number): string {
+  if (seconds < 60) return "< 1 min";
+  const hours = seconds / 3600;
+  if (hours >= 1) {
+    const rounded = Math.round(hours * 10) / 10;
+    return `${rounded} ${rounded === 1 ? "hour" : "hours"}`;
+  }
+  return `${Math.round(seconds / 60)} min`;
+}
+
+function formatLastPlayed(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 30) return `${diffDays} days ago`;
+
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: date.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
   });
+}
+
+// Achievements
+type AchievementData = {
+  id: string;
+  title: string;
+  description: string;
+  iconUrl: string;
+  unlocked: boolean;
+};
+
+const achievements = ref<AchievementData[]>([]);
+const achievementsLoading = ref(true);
+const achievementsUnlocked = computed(
+  () => achievements.value.filter((a) => a.unlocked).length,
+);
+
+// Fetch achievements from the server via the authenticated protocol
+const achievementsUrl = serverUrl(`api/v1/games/${game.id}/achievements`);
+onMounted(async () => {
+  try {
+    const res = await fetch(achievementsUrl);
+    if (res.ok) {
+      const data = await res.json();
+      // Server returns a plain array
+      achievements.value = Array.isArray(data)
+        ? data
+        : (data.achievements ?? []);
+    }
+  } catch {
+    achievements.value = [];
+  } finally {
+    achievementsLoading.value = false;
+  }
 });
 
 const installFlowOpen = ref(false);
@@ -939,6 +1404,50 @@ function previousImage() {
 }
 
 const fullscreenImage = ref<string | null>(null);
+
+// ── Achievement reset (per-game) ──────────────────────────────────────────
+
+const resetConfirmOpen = ref(false);
+const resetBusy = ref(false);
+
+function confirmResetAchievements() {
+  resetConfirmOpen.value = true;
+}
+
+async function executeResetAchievements() {
+  resetBusy.value = true;
+  try {
+    const res = await fetch(
+      serverUrl(`api/v1/user/achievements/reset?gameId=${game.id}`),
+      { method: "DELETE" },
+    );
+    if (res.ok) {
+      const data = await res.json();
+      achievements.value = achievements.value.map((a) => ({
+        ...a,
+        unlocked: false,
+      }));
+      resetConfirmOpen.value = false;
+    }
+  } catch {
+    // Keep modal open so user sees the failure context
+  } finally {
+    resetBusy.value = false;
+  }
+}
+
+// ── Apply profile name to Steam emulator ──────────────────────────────────
+
+async function applyProfileName() {
+  try {
+    const msg = await invoke<string>("configure_game_emulator", {
+      gameId: game.id,
+    });
+    console.log("[EMU]", msg);
+  } catch (e) {
+    console.error("[EMU] Failed to apply profile:", e);
+  }
+}
 </script>
 
 <style scoped>

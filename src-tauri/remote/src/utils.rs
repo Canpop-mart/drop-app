@@ -116,11 +116,12 @@ fn fetch_certificates() -> Vec<Certificate> {
                         }
                         .read_to_end(&mut buf)
                         .unwrap_or_else(|e| {
-                            panic!(
+                            warn!(
                                 "Failed to read to end of certificate file {} with error {}",
                                 c.path().display(),
                                 e
-                            )
+                            );
+                            0
                         });
 
                         match Certificate::from_pem_bundle(&buf) {
@@ -174,6 +175,8 @@ pub fn get_client_async() -> ClientWithMiddleware {
     let normal_client = client
         .use_rustls_tls()
         .user_agent("Drop Desktop Client")
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(15))
         .build()
         .expect("Failed to build asynchronous client");
 

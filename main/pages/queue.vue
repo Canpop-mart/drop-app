@@ -124,11 +124,6 @@ import { ServerIcon, XMarkIcon, CloudIcon } from "@heroicons/vue/20/solid";
 import { invoke } from "@tauri-apps/api/core";
 import { type DownloadableMetadata, type Game, type GameStatus } from "~/types";
 
-// const actionNames = {
-//   [GameStatusEnum.Downloading]: "downloading",
-//   [GameStatusEnum.Verifying]: "verifying",
-// }
-
 const windowWidth = ref(window.innerWidth);
 window.addEventListener("resize", (event) => {
   windowWidth.value = window.innerWidth;

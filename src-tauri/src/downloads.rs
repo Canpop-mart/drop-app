@@ -44,7 +44,12 @@ pub async fn download_game(
     let base_dir = {
         let db_lock = borrow_db_checked();
 
-        db_lock.applications.install_dirs[install_dir].clone()
+        db_lock
+            .applications
+            .install_dirs
+            .get(install_dir)
+            .cloned()
+            .ok_or(ApplicationDownloadError::InvalidCommand)?
     };
 
     let game_download_agent = GameDownloadAgent::new(
@@ -62,7 +67,7 @@ pub async fn download_game(
     DOWNLOAD_MANAGER
         .queue_download(game_download_agent.clone())
         .await
-        .unwrap();
+        .map_err(|e| ApplicationDownloadError::ChannelBroken(e.to_string()))?;
 
     Ok(())
 }
@@ -117,6 +122,6 @@ pub async fn resume_download(game_id: String) -> Result<(), ApplicationDownloadE
     DOWNLOAD_MANAGER
         .queue_download(game_download_agent)
         .await
-        .unwrap();
+        .map_err(|e| ApplicationDownloadError::ChannelBroken(e.to_string()))?;
     Ok(())
 }

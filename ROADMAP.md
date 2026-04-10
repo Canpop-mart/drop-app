@@ -24,17 +24,20 @@ Custom fork of the official Drop-OSS desktop app with enhanced achievement syste
 ## 📋 Planned / Wishlist
 
 ### High Priority
+
 - Achievement toast overlays / in-game popups  
   (Windows transparent window or Goldberg built-in overlay + Steam Deck Decky Loader plugin)
 - Goldberg client-side DLL injection & monitoring  
   (copy DLL before launch, read `achievements.json`, report unlocks)
 
 ### Medium Priority
+
 - Cloud saves support
 - Multi-disc ROM support
 - Version tracking / SteamDB sync (“Update Available” indicators)
 
 ### Low Priority / Nice-to-have
+
 - Profile customization (avatar, banner, themes)
 - TV Mode / full gamepad navigation
 - Drop Badges (activity rewards)

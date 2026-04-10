@@ -2,7 +2,7 @@ import type { RouteLocationNormalized } from "vue-router";
 import type { NavigationItem } from "~/types";
 
 export const useCurrentNavigationIndex = (
-  navigation: Array<NavigationItem>
+  navigation: Array<NavigationItem>,
 ) => {
   const router = useRouter();
   const route = useRoute();
@@ -26,7 +26,10 @@ export const useCurrentNavigationIndex = (
     currentNavigation.value = calculateCurrentNavIndex(to);
   });
 
-  return {currentNavigation, recalculateNavigation: () => {
-    currentNavigation.value = calculateCurrentNavIndex(route);
-  }};
+  return {
+    currentNavigation,
+    recalculateNavigation: () => {
+      currentNavigation.value = calculateCurrentNavIndex(route);
+    },
+  };
 };

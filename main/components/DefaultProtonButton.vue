@@ -23,8 +23,6 @@ async function setDefault() {
     @click="setDefault"
     :disabled="!props.path"
   >
-    <StarIcon
-      :class="['size-[0.7rem]', isDefault ? 'text-zinc-100' : 'text-zinc-100']"
-    />
+    <StarIcon class="size-[0.7rem] text-zinc-100" />
   </button>
 </template>

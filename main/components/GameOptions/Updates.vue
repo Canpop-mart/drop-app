@@ -24,13 +24,12 @@
         />
       </Switch>
     </div>
-
   </div>
 </template>
 
 <script setup lang="ts">
 import { Switch } from "@headlessui/vue";
-import type { GameVersion } from '~/types';
+import type { GameVersion } from "~/types";
 
 const model = defineModel<GameVersion["userConfiguration"]>({ required: true });
 </script>

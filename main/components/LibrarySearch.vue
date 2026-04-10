@@ -98,7 +98,9 @@
               </div>
             </div>
           </NuxtLink>
-          <span v-if="nav.items.length == 0" class="text-xs text-zinc-500 mx-auto"
+          <span
+            v-if="nav.items.length == 0"
+            class="text-xs text-zinc-500 mx-auto"
             >No games in this category</span
           >
         </DisclosurePanel>
@@ -137,7 +139,6 @@ import {
   ArrowPathIcon,
   MagnifyingGlassIcon,
   MinusIcon,
-  PlusIcon,
 } from "@heroicons/vue/20/solid";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -243,9 +244,15 @@ async function calculateGamesLogic(clearAll = false, forceRefresh = false) {
     ...library.missing,
   ].filter((v, i, a) => a.indexOf(v) === i);
 
-  for (const game of allGames) {
-    if (games[game.id]) continue;
-    games[game.id] = await useGame(game.id);
+  // Load new games with concurrency limit to avoid request storms
+  const newGames = allGames.filter((game) => !games[game.id]);
+  const batchSize = 3;
+  for (let i = 0; i < newGames.length; i += batchSize) {
+    const batch = newGames.slice(i, i + batchSize);
+    const results = await Promise.all(batch.map((game) => useGame(game.id)));
+    for (let j = 0; j < batch.length; j++) {
+      games[batch[j].id] = results[j];
+    }
   }
 
   const libraryCollection = {
@@ -288,7 +295,7 @@ await new Promise<void>((r) => {
     if (!hasResolved) r();
     hasResolved = true;
   };
-  calculateGames(true).then(resolveFunc);
+  calculateGames(true, true).then(resolveFunc);
   setTimeout(resolveFunc, 300);
 });
 
@@ -338,13 +345,18 @@ const filteredNavigation = computed(() => {
     .filter((e) => e.items.length > 0);
 });
 
-listen("update_library", async (event) => {
-  console.log("Updating library");
-  let oldNavigation = currentNavigation.value;
-  await calculateGames(false, true);
-  if (oldNavigation !== currentNavigation.value) {
-    router.push("/library");
-  }
+// Debounce library updates to prevent request storms when multiple events fire rapidly
+let libraryUpdateTimeout: ReturnType<typeof setTimeout> | null = null;
+listen("update_library", () => {
+  if (libraryUpdateTimeout) clearTimeout(libraryUpdateTimeout);
+  libraryUpdateTimeout = setTimeout(async () => {
+    console.log("Updating library (debounced)");
+    let oldNavigation = currentNavigation.value;
+    await calculateGames(false, true);
+    if (oldNavigation !== currentNavigation.value) {
+      router.push("/library");
+    }
+  }, 500);
 });
 </script>
 

@@ -90,10 +90,13 @@ const router = useRouter();
 const showHttps = computed(() => {
   const prefixes = ["http://", "https://"];
 
-  const doesntHavePrefix = prefixes.findIndex((e) => url.value.startsWith(e.slice(0, url.value.length))) == -1;
+  const doesntHavePrefix =
+    prefixes.findIndex((e) =>
+      url.value.startsWith(e.slice(0, url.value.length)),
+    ) == -1;
 
   return doesntHavePrefix;
-})
+});
 
 async function connect() {
   const newUrl = url.value.startsWith("http")

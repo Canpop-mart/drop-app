@@ -13,7 +13,7 @@ use std::{
 };
 
 use ::client::{
-    app_state::{AppState, UmuState},
+    app_state::{AppState, SessionType, UmuState},
     app_status::AppStatus,
     autostart::sync_autostart_on_startup,
     compat::UMU_LAUNCHER_EXECUTABLE,
@@ -105,6 +105,11 @@ async fn setup(handle: AppHandle) -> AppState {
     ProcessManagerWrapper::init(handle.clone());
     DownloadManagerWrapper::init(handle.clone());
 
+    // Gamepad input is now handled via the Web Gamepad API in the Vue
+    // frontend (composables/gamepad.ts) because gilrs's WGI backend on
+    // Windows intermittently fails to deliver input for HID controllers.
+    // ::process::gamepad::start_polling(handle.clone());
+
     debug!("checking if database is set up");
     let is_set_up = DB.database_is_set_up();
 
@@ -117,6 +122,13 @@ async fn setup(handle: AppHandle) -> AppState {
         false => UmuState::NotInstalled,
     };
 
+    let session_type = SessionType::detect();
+    info!("detected session type: {:?}", match &session_type {
+        SessionType::Desktop => "Desktop",
+        SessionType::Gamescope => "Gamescope",
+        SessionType::SteamDeckDesktop => "SteamDeckDesktop",
+    });
+
     scan_install_dirs();
 
     if !is_set_up {
@@ -124,12 +136,12 @@ async fn setup(handle: AppHandle) -> AppState {
             status: AppStatus::NotConfigured,
             user: None,
             umu_state,
+            session_type,
         };
     }
 
     debug!("database is set up");
 
-    // TODO: Account for possible failure
     let (app_status, user) = auth::setup().await;
 
     let missing_games = {
@@ -175,6 +187,7 @@ async fn setup(handle: AppHandle) -> AppState {
         status: app_status,
         user,
         umu_state,
+        session_type,
     }
 }
 
@@ -247,6 +260,7 @@ pub fn run() {
             fetch_game_status,
             fetch_game_version_options,
             update_game_configuration,
+            configure_game_emulator,
             // Downloads
             download_game,
             resume_download,
@@ -262,6 +276,8 @@ pub fn run() {
             get_autostart_enabled,
             open_process_logs,
             get_launch_options,
+            detect_package_format,
+            detect_removable_storage,
             #[cfg(target_os = "linux")]
             ::process::compat::fetch_proton_paths,
             #[cfg(target_os = "linux")]
@@ -269,7 +285,9 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             ::process::compat::remove_proton_layer,
             #[cfg(target_os = "linux")]
-            ::process::compat::set_default
+            ::process::compat::set_default,
+            #[cfg(target_os = "linux")]
+            register_steam_shortcut
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -283,6 +301,7 @@ pub fn run() {
             tauri::async_runtime::block_on(async move {
                 let state = setup(handle.clone()).await;
                 info!("initialized drop client");
+                let is_gamescope = state.session_type == SessionType::Gamescope;
                 app.manage(Mutex::new(state));
 
                 let global_app_handle = handle;
@@ -299,16 +318,34 @@ pub fn run() {
 
                 let handle = app.handle().clone();
 
-                let width = 1536.0;
-                let height = 864.0;
+                // In Gamescope (SteamOS Game Mode), start fullscreen with
+                // Deck-appropriate dimensions. On desktop, use normal window.
+                let (width, height) = if is_gamescope {
+                    (1280.0, 800.0) // Steam Deck internal display
+                } else {
+                    (1536.0, 864.0)
+                };
 
-                let main_window = WindowBuilder::new(&handle, "main")
+                let mut window_builder = WindowBuilder::new(&handle, "main")
                     .title("Drop Desktop App")
                     .min_inner_size(1000.0, 500.0)
                     .inner_size(width, height)
-                    .decorations(false)
-                    .resizable(true)
-                    .shadow(true)
+                    .resizable(true);
+
+                // In Gamescope, go fullscreen and skip window decorations/shadow
+                // (Gamescope handles the compositor chrome)
+                if is_gamescope {
+                    window_builder = window_builder
+                        .fullscreen(true)
+                        .decorations(false)
+                        .shadow(false);
+                } else {
+                    window_builder = window_builder
+                        .decorations(false)
+                        .shadow(true);
+                }
+
+                let main_window = window_builder
                     .build()
                     .expect("failed to build main window");
 
@@ -332,10 +369,16 @@ pub fn run() {
                         }
                     };
                     if let Some("handshake") = url.host_str() {
-                        tauri::async_runtime::spawn(recieve_handshake(
-                            handle.clone(),
-                            url.path().to_string(),
-                        ));
+                        let path = url.path().to_string();
+                        // Validate path: must be non-empty and must not contain traversal sequences
+                        if !path.is_empty() && !path.contains("..") {
+                            tauri::async_runtime::spawn(recieve_handshake(
+                                handle.clone(),
+                                path,
+                            ));
+                        } else {
+                            warn!("Invalid handshake path received: {}", path);
+                        }
                     }
                 });
                 let open_menu_item = MenuItem::with_id(app, "open", "Open", true, None::<&str>)
@@ -352,11 +395,6 @@ pub fn run() {
                     &[
                         &open_menu_item,
                         &sep,
-                        /*
-                        &MenuItem::with_id(app, "show_library", "Library", true, None::<&str>)?,
-                        &MenuItem::with_id(app, "show_settings", "Settings", true, None::<&str>)?,
-                        &PredefinedMenuItem::separator(app)?,
-                         */
                         &quit_menu_item,
                     ],
                 )
@@ -534,7 +572,11 @@ async fn recieve_handshake_logic(app: &AppHandle, path: String) -> Result<(), Re
         token.text().await?
     };
     let mut handle = borrow_db_mut_checked();
-    handle.auth.as_mut().unwrap().web_token = Some(web_token);
+    if let Some(auth) = handle.auth.as_mut() {
+        auth.web_token = Some(web_token);
+    } else {
+        warn!("Auth not initialized when setting web token");
+    }
 
     Ok(())
 }

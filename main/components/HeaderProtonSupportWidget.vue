@@ -1,8 +1,5 @@
 <template>
-  <NuxtLink
-    v-if="onLinux"
-    to="/settings/compat"
-  >
+  <NuxtLink v-if="onLinux" to="/settings/compat">
     <HeaderWidget :problem="protonError">
       <img
         src="/proton-logo.png"

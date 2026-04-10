@@ -70,10 +70,10 @@ const versionOptions = await invoke<Array<VersionOption>>(
   "fetch_game_version_options",
   {
     gameId: game.id,
-  }
+  },
 );
 const version = versionOptions.find(
-  (v) => v.versionId === model.value.versionId
+  (v) => v.versionId === model.value.versionId,
 )!;
 
 const installDirs = await invoke<string[]>("fetch_download_dir_stats");

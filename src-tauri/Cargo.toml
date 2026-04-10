@@ -9,7 +9,6 @@ edition = "2024"
 resolver = "3"
 members = [
   "client",
-  "cloud_saves",
   "database",
   "download_manager",
   "games",

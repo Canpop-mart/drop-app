@@ -22,9 +22,16 @@ export type User = {
 
 type UmuState = "Installed" | "NotInstalled" | "NotNeeded";
 
+/**
+ * Describes the display session the app is running in.
+ * Detected on the Rust side from environment variables and hardware info.
+ */
+export type SessionType = "desktop" | "gamescope" | "steamDeckDesktop";
+
 export type AppState = {
   status: AppStatus;
   umuState: UmuState;
+  sessionType: SessionType;
   user?: User;
 };
 
@@ -49,14 +56,29 @@ export type Collection = {
   entries: Array<{ gameId: string; game: Game }>;
 };
 
+export type ControllerType = "Xbox" | "PlayStation" | "Nintendo";
+export type QualityPreset = "Low" | "Medium" | "High";
+export type MangoHudPreset = "off" | "minimal" | "standard" | "full";
+
 export type GameVersion = {
   userConfiguration: {
     launchTemplate: string;
     overrideProtonPath: string;
-    enableUpdates: boolean
+    enableUpdates: boolean;
+    controllerType: ControllerType | null;
+    qualityPreset: QualityPreset | null;
+    widescreen: boolean;
+    mangohud: MangoHudPreset | null;
   };
   setups: Array<{ platform: string }>;
-  launches: Array<{ platform: string }>;
+  launches: Array<{
+    platform: string;
+    emulator?: {
+      gameId: string;
+      versionId: string;
+      launchId: string;
+    };
+  }>;
 };
 
 export enum AppStatus {
@@ -119,4 +141,5 @@ export type Settings = {
   autostart: boolean;
   maxDownloadThreads: number;
   forceOffline: boolean;
+  globalMangohud?: MangoHudPreset | null;
 };

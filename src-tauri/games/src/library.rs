@@ -142,11 +142,6 @@ pub fn uninstall_game_logic(meta: DownloadableMetadata, app_handle: &AppHandle) 
         }
     };
 
-    db_handle
-        .applications
-        .transient_statuses
-        .insert(meta.clone(), ApplicationTransientStatus::Uninstalling {});
-
     drop(db_handle);
 
     let app_handle = app_handle.clone();
@@ -164,7 +159,6 @@ pub fn uninstall_game_logic(meta: DownloadableMetadata, app_handle: &AppHandle) 
             .applications
             .game_statuses
             .insert(meta.id.clone(), GameDownloadStatus::Remote {});
-        let _ = db_handle.applications.transient_statuses.remove(&meta);
 
         push_game_update(
             &app_handle,

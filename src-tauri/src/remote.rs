@@ -69,7 +69,6 @@ pub fn gen_drop_url(path: String) -> Result<String, RemoteAccessError> {
 
 #[tauri::command]
 pub fn fetch_drop_object(path: String) -> Result<Vec<u8>, RemoteAccessError> {
-    let _drop_url = gen_drop_url(path.clone())?;
     let req = generate_url(&[&path], &[])?;
     let req = remote::utils::DROP_CLIENT_SYNC
         .get(req)

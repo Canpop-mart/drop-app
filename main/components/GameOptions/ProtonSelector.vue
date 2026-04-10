@@ -1,9 +1,5 @@
 <template>
-  <Listbox
-    as="div"
-    v-model="model.overrideProtonPath"
-    class="mt-6"
-  >
+  <Listbox as="div" v-model="model.overrideProtonPath" class="mt-6">
     <ListboxLabel class="block text-sm/6 font-medium text-white"
       >Proton override</ListboxLabel
     >

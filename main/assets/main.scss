@@ -62,6 +62,58 @@ $helvetica: (
   font-style: italic;
 }
 
+/* ===== Big Picture Focus ===== */
+.bp-focused {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(59, 130, 246, 0.8),
+    0 0 20px rgba(59, 130, 246, 0.3);
+  transform: scale(1.02);
+  transition:
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+  z-index: 10;
+  position: relative;
+}
+
+.bp-focused.bp-tile {
+  transform: scale(1.05);
+}
+
+/* Ensure non-focused elements have base transition for smooth focus changes */
+[data-focusable] {
+  transition:
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+
+/* ===== Steam Deck / Handheld mode ===== */
+.deck-mode {
+  /* Larger touch targets */
+  -webkit-tap-highlight-color: rgba(59, 130, 246, 0.2);
+  touch-action: manipulation;
+
+  /* Slightly larger focus glow on small screens */
+  .bp-focused {
+    box-shadow:
+      0 0 0 3px rgba(59, 130, 246, 0.9),
+      0 0 24px rgba(59, 130, 246, 0.4);
+  }
+
+  /* Bigger minimum hit areas for interactive elements */
+  button,
+  a,
+  [data-focusable] {
+    min-height: 36px;
+  }
+
+  /* Smooth momentum scrolling for touch */
+  [data-bp-scroll] {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+  }
+}
+
 /* ===== Scrollbar CSS ===== */
 /* Firefox */
 * {

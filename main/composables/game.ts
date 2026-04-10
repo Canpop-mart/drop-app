@@ -8,10 +8,39 @@ import type {
   RawGameStatus,
 } from "~/types";
 
-const gameRegistry: { [key: string]: { game: Game; version: Ref<GameVersion | undefined> } } =
-  {};
+const gameRegistry: {
+  [key: string]: { game: Game; version: Ref<GameVersion | undefined> };
+} = {};
 
 const gameStatusRegistry: { [key: string]: Ref<GameStatus> } = {};
+
+// Request deduplication: maps command:args to pending promise
+const pendingRequests = new Map<string, Promise<any>>();
+
+/**
+ * Deduplicates invoke requests - if the same command with same args is already in-flight,
+ * returns the existing promise instead of making a new request.
+ */
+export const deduplicatedInvoke = async <T>(
+  command: string,
+  args: any,
+): Promise<T> => {
+  const key = `${command}:${JSON.stringify(args || {})}`;
+
+  // If request is already in-flight, return the existing promise
+  if (pendingRequests.has(key)) {
+    return pendingRequests.get(key)!;
+  }
+
+  // Create new request and store it
+  const promise = invoke<T>(command, args).finally(() => {
+    // Clean up after request completes (success or error)
+    pendingRequests.delete(key);
+  });
+
+  pendingRequests.set(key, promise);
+  return promise;
+};
 
 export const parseStatus = (status: RawGameStatus): GameStatus => {
   if (status[0]) {
@@ -26,11 +55,12 @@ export const parseStatus = (status: RawGameStatus): GameStatus => {
 export const useGame = async (gameId: string) => {
   if (!gameRegistry[gameId]) {
     try {
+      // Use deduplication for fetch_game invocations
       const data: {
         game: Game;
         status: RawGameStatus;
         version?: GameVersion;
-      } = await invoke("fetch_game", {
+      } = await deduplicatedInvoke("fetch_game", {
         gameId,
       });
       gameRegistry[gameId] = { game: data.game, version: ref(data.version) };
