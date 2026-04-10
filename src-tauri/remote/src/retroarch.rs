@@ -229,13 +229,13 @@ pub fn configure_retroarch_for_game(
 
     // ── Controller layout mapping ────────────────────────────────────────
     if let Some(cfg) = user_config {
-        if let Some(ref controller) = cfg.controller_type {
+        if let Some(controller) = &cfg.controller_type {
             apply_controller_mappings(&mut overrides, controller);
             info!("[RETROARCH] Applied {:?} controller layout", controller);
         }
 
         // ── Quality preset (retroarch.cfg portion) ──────────────────────
-        if let Some(ref quality) = cfg.quality_preset {
+        if let Some(quality) = &cfg.quality_preset {
             apply_quality_preset(&mut overrides, quality);
             info!("[RETROARCH] Applied {:?} quality preset", quality);
         }
@@ -259,7 +259,7 @@ pub fn configure_retroarch_for_game(
         let core_opts_path = emu_root.join("retroarch-core-options.cfg");
         let mut core_overrides: HashMap<&str, String> = HashMap::new();
 
-        if let Some(ref quality) = cfg.quality_preset {
+        if let Some(quality) = &cfg.quality_preset {
             apply_core_quality_options(&mut core_overrides, quality);
             info!("[RETROARCH] Patched core options for {:?} quality", quality);
         }

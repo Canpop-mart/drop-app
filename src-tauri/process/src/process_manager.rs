@@ -635,7 +635,7 @@ impl ProcessManager<'_> {
             let effective_preset = user_configuration.mangohud.clone().or_else(|| {
                 borrow_db_checked().settings.global_mangohud.clone()
             });
-            if let Some(ref preset) = effective_preset {
+            if let Some(preset) = &effective_preset {
                 match preset {
                     MangoHudPreset::Off => {}
                     MangoHudPreset::Minimal => {
@@ -671,7 +671,7 @@ impl ProcessManager<'_> {
         // saves, system BIOS, and controller autoconfig.
         // Also fetch RA Connect credentials so RetroArch can authenticate
         // with RetroAchievements automatically (no manual login needed).
-        if let Some(ref emu_dir) = effective_cwd {
+        if let Some(emu_dir) = &effective_cwd {
             let ra_creds = tauri::async_runtime::block_on(
                 remote::retroarch::fetch_ra_credentials(),
             );

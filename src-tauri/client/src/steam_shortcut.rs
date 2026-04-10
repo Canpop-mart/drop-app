@@ -37,7 +37,7 @@ fn find_steam_userdata_dirs() -> Vec<PathBuf> {
     ];
 
     for path_opt in &steam_paths {
-        if let Some(ref path) = path_opt {
+        if let Some(path) = path_opt {
             if path.is_dir() {
                 if let Ok(entries) = fs::read_dir(path) {
                     for entry in entries.flatten() {

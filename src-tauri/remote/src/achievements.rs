@@ -368,7 +368,7 @@ pub async fn poll_achievements(
 ) {
     info!("{TAG} Starting achievement polling for game {game_id}");
 
-    if let Some(ref info) = emulator_info {
+    if let Some(info) = &emulator_info {
         info!("{TAG} Emulator: {:?}", info.emulator);
     }
 
@@ -457,7 +457,7 @@ pub async fn poll_achievements(
         tokio::select! {
             _ = cancel.notified() => {
                 // On session end, do one final check for Goldberg mode
-                if let AchievementMode::Goldberg { ref app_ids } = mode {
+                if let AchievementMode::Goldberg { app_ids } = &mode {
                     let final_reports = check_and_report_local(
                         &game_id,
                         app_ids,
@@ -496,12 +496,12 @@ pub async fn poll_achievements(
             _ = tokio::time::sleep(tokio::time::Duration::from_secs(15)) => {}
         }
 
-        match mode {
-            AchievementMode::Goldberg { ref app_ids } => {
+        match &mode {
+            AchievementMode::Goldberg { app_ids } => {
                 // On first poll, run GBE diagnostics
                 if first_poll {
                     first_poll = false;
-                    if let Some(ref info) = emulator_info {
+                    if let Some(info) = &emulator_info {
                         goldberg::check_gbe_activity(info.dll_dir());
                     }
                 }
