@@ -33,6 +33,12 @@ DEBUG.md
 .nvmrc
 *.local.sh
 
+# Binary documents (planning docs, reports)
+*.docx
+*.doc
+*.xlsx
+*.pptx
+
 # Nuxt build artifacts
 .output/
 .nuxt/
