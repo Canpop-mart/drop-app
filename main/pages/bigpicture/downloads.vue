@@ -183,11 +183,28 @@ async function togglePause() {
 }
 
 function formatSpeed(bytesPerSec: number): string {
-  return formatKilobytes(bytesPerSec);
+  return _formatBytesImpl(bytesPerSec) + "/s";
 }
 
 function formatBytes(bytes: number): string {
-  return formatKilobytes(bytes);
+  return _formatBytesImpl(bytes);
+}
+
+/** Properly format byte values starting from B (not KB). */
+function _formatBytesImpl(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+  const scalar = 1000;
+
+  while (value >= scalar && unitIndex < units.length - 1) {
+    value /= scalar;
+    unitIndex++;
+  }
+
+  return unitIndex === 0
+    ? `${Math.round(value)} ${units[unitIndex]}`
+    : `${value.toFixed(1)} ${units[unitIndex]}`;
 }
 
 function formatETA(seconds: number): string {

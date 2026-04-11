@@ -77,14 +77,31 @@ const BUTTON_MAP_STANDARD: Record<number, string> = {
 
 // Steam Deck in Gaming Mode (SteamOS / Gamescope): Steam Input reports
 // buttons 2 (West/X) and 3 (North/Y) swapped through the Web Gamepad API.
+// IMPORTANT: Only active in Gamescope sessions — NOT on Windows/Desktop where
+// Steam also wraps controllers as "Steam Virtual Gamepad" but doesn't swap.
 const BUTTON_MAP_DECK: Record<number, string> = {
   ...BUTTON_MAP_STANDARD,
   2: GamepadButton.North, // Physical Y (top) reports as index 2 on Deck
   3: GamepadButton.West, // Physical X (left) reports as index 3 on Deck
 };
 
-// Active button map — switches when Steam Deck controller is detected
+// Active button map — only swapped in Gamescope (SteamOS Gaming Mode)
 let activeButtonMap = BUTTON_MAP_STANDARD;
+
+/** Set by initButtonMapForSession() once the Rust session type is known. */
+let _gamescopeSession = false;
+
+/**
+ * Called once from app.vue after setSessionType() so the gamepad module
+ * knows whether to swap X↔Y for Gamescope. Controller-name detection
+ * alone isn't reliable because Steam Input on Windows ALSO names its
+ * virtual controller "Steam Virtual Gamepad" but does NOT swap the buttons.
+ */
+export function initButtonMapForSession(isGamescope: boolean) {
+  _gamescopeSession = isGamescope;
+  activeButtonMap = isGamescope ? BUTTON_MAP_DECK : BUTTON_MAP_STANDARD;
+  console.log(`[GAMEPAD] Button map: ${isGamescope ? "Deck (swapped X↔Y)" : "Standard"}`);
+}
 
 const AXIS_NAMES: Record<number, string> = {
   0: "LeftStickX",
@@ -142,17 +159,9 @@ function pollFrame() {
       controllerId.value = cid;
       controllerName.value = gp.id;
 
-      // Detect Steam Deck / Steam Input controllers which swap West↔North
-      const gpName = gp.id.toLowerCase();
-      const isSteamController =
-        gpName.includes("steam") || gpName.includes("valve");
-      activeButtonMap = isSteamController
-        ? BUTTON_MAP_DECK
-        : BUTTON_MAP_STANDARD;
-
       console.log(
         `[GAMEPAD] Controller connected: ${gp.id} (index ${cid})` +
-          (isSteamController ? " [Steam Deck mapping]" : ""),
+          (_gamescopeSession ? " [Gamescope — Deck button map active]" : ""),
       );
     }
 

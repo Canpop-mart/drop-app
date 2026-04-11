@@ -16,15 +16,24 @@
       <BigPictureContextBar />
     </div>
 
-    <!-- Debug overlay (toggle with Select + Start) -->
+    <!-- Debug overlay (toggle with Select button) -->
     <div
       v-if="debugVisible"
       class="fixed bottom-14 right-4 w-[32rem] max-h-80 overflow-y-auto bg-black/90 border border-zinc-700 rounded-lg p-3 z-[999] font-mono text-[11px] leading-tight"
     >
       <div class="flex items-center justify-between mb-2">
         <span class="text-green-400 font-bold">BPM Debug Console</span>
-        <button class="text-zinc-500 hover:text-zinc-300" @click="debugVisible = false">✕</button>
+        <div class="flex items-center gap-2">
+          <button
+            class="px-2 py-0.5 text-[10px] bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded"
+            @click="exportDebugLog"
+          >
+            Export Log
+          </button>
+          <button class="text-zinc-500 hover:text-zinc-300" @click="debugVisible = false">✕</button>
+        </div>
       </div>
+      <div v-if="exportMessage" class="text-green-400 text-[10px] mb-1">{{ exportMessage }}</div>
       <div v-for="(msg, i) in debugMessages" :key="i" :class="msg.color">
         {{ msg.text }}
       </div>
@@ -54,6 +63,42 @@ function debugLog(msg: string, level: "info" | "warn" | "error" = "info") {
   const ts = new Date().toLocaleTimeString("en", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
   debugMessages.value.push({ text: `[${ts}] ${msg}`, color: colors[level] });
   if (debugMessages.value.length > MAX_DEBUG) debugMessages.value.shift();
+}
+
+const exportMessage = ref("");
+
+/**
+ * Export debug log — writes to a file in the app's data dir AND copies
+ * to clipboard so the user can paste it after exiting Gaming Mode.
+ */
+async function exportDebugLog() {
+  const logText = debugMessages.value.map((m) => m.text).join("\n");
+
+  // Try clipboard first
+  try {
+    await navigator.clipboard.writeText(logText);
+    exportMessage.value = "Copied to clipboard!";
+  } catch {
+    exportMessage.value = "Clipboard unavailable — downloading file...";
+  }
+
+  // Also offer a download as a file
+  try {
+    const blob = new Blob([logText], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `bpm-debug-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.log`;
+    a.click();
+    URL.revokeObjectURL(url);
+    if (!exportMessage.value.includes("Copied")) {
+      exportMessage.value = "Log file downloaded!";
+    }
+  } catch (e) {
+    console.error("[BPM:LAYOUT] Failed to export log:", e);
+  }
+
+  setTimeout(() => { exportMessage.value = ""; }, 3000);
 }
 
 // Expose globally so other components can use it
