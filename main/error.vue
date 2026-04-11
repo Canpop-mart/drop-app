@@ -1,5 +1,32 @@
 <template>
-  <NuxtLayout name="default">
+  <!-- BPM error: stay in BPM layout, don't break out to desktop -->
+  <div v-if="isBigPicture" class="flex h-screen w-screen bg-zinc-950 items-center justify-center">
+    <div class="max-w-lg text-center px-8">
+      <p class="text-6xl font-bold text-red-500 mb-4">{{ error?.statusCode ?? "Error" }}</p>
+      <h1 class="text-3xl font-bold font-display text-zinc-100 mb-3">Something went wrong</h1>
+      <p v-if="message" class="text-base text-red-400 mb-4">{{ message }}</p>
+      <p class="text-sm text-zinc-500 mb-8">
+        Press the back button or select an option below to continue.
+      </p>
+      <div class="flex items-center justify-center gap-4">
+        <button
+          class="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl transition-colors"
+          @click="goBack"
+        >
+          Go Back
+        </button>
+        <button
+          class="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold rounded-xl transition-colors"
+          @click="goLibrary"
+        >
+          Library
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Desktop error: original layout -->
+  <NuxtLayout v-else name="default">
     <div
       class="grid min-h-full grid-cols-1 grid-rows-[1fr,auto,1fr] lg:grid-cols-[max(50%,36rem),1fr]"
     >
@@ -86,5 +113,27 @@ const message =
   props.error?.message ||
   "An unknown error occurred.";
 
-console.error(props.error);
+// Detect if we were in Big Picture Mode when the error occurred
+const isBigPicture = ref(false);
+
+onMounted(() => {
+  // Check if we came from a BPM route or if BPM is active
+  const referrer = document.referrer || "";
+  const currentUrl = window.location.href;
+  isBigPicture.value =
+    currentUrl.includes("/bigpicture") ||
+    referrer.includes("/bigpicture") ||
+    // Also check if the app was in fullscreen (BPM is always fullscreen)
+    !!document.fullscreenElement;
+});
+
+function goBack() {
+  clearError({ redirect: "/bigpicture/library" });
+}
+
+function goLibrary() {
+  clearError({ redirect: "/bigpicture/library" });
+}
+
+console.error("[ERROR PAGE]", props.error);
 </script>

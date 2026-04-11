@@ -113,6 +113,23 @@ if (typeof document !== "undefined") {
   });
 }
 
+// ── Router error detection for BPM debugging ───────────────────────────
+// Catch navigation failures that happen before any page component mounts
+router.onError((error, to, from) => {
+  console.error(`[BPM:ROUTER] Navigation error from ${from?.fullPath} to ${to?.fullPath}:`, error);
+  // If in BPM, try to recover by navigating to library
+  if (to?.fullPath?.startsWith("/bigpicture") || from?.fullPath?.startsWith("/bigpicture")) {
+    console.error("[BPM:ROUTER] Attempting recovery — redirecting to /bigpicture/library");
+    router.push("/bigpicture/library").catch(() => {});
+  }
+});
+
+router.afterEach((to, from) => {
+  if (to.fullPath.startsWith("/bigpicture") || from.fullPath.startsWith("/bigpicture")) {
+    console.log(`[BPM:ROUTER] Navigation complete: ${from.fullPath} → ${to.fullPath}`);
+  }
+});
+
 useHead({
   title: "Drop",
 });

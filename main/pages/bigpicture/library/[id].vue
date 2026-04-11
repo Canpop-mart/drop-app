@@ -351,8 +351,11 @@ import { GamepadButton, useGamepad } from "~/composables/gamepad";
 
 definePageMeta({ layout: "bigpicture" });
 
+console.log("[BPM:GAME] >>> Script setup executing (synchronous) <<<");
+
 const route = useRoute();
 const gameId = route.params.id as string;
+console.log(`[BPM:GAME] Route param gameId: ${gameId}`);
 
 const game = ref<Game | null>(null);
 const statusRef = shallowRef<any>(null);
