@@ -798,6 +798,9 @@ impl ProcessManager<'_> {
             launch_parameters.0
         );
 
+        // Save command string before it's moved into Command::new()
+        let spawn_executable = launch_parameters.0.command.clone();
+
         let mut command = {
             let mut command = Command::new(launch_parameters.0.command);
             command.args(launch_parameters.0.args);
@@ -956,7 +959,7 @@ impl ProcessManager<'_> {
         let _ = self.app_handle.emit("launch_trace", serde_json::json!({
             "step": "8_spawning",
             "game_id": &game_id,
-            "command": format!("{:?}", &launch_parameters.0.command),
+            "command": &spawn_executable,
         }));
 
         let child = match command.spawn() {
@@ -974,8 +977,8 @@ impl ProcessManager<'_> {
                     "game_id": &game_id,
                     "error": format!("{}", e),
                     "error_kind": format!("{:?}", e.kind()),
-                    "executable": &launch_parameters.0.command,
-                    "executable_exists": std::path::Path::new(&launch_parameters.0.command).exists(),
+                    "executable": &spawn_executable,
+                    "executable_exists": std::path::Path::new(&spawn_executable).exists(),
                 }));
                 return Err(e.into());
             }
