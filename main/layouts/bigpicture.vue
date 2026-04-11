@@ -24,6 +24,13 @@ import { useFocusNavigation } from "~/composables/focus-navigation";
 
 const focusNav = useFocusNavigation();
 
+// Catch Vue rendering errors in BPM so they get logged instead of
+// triggering Nuxt's error page (which breaks out of BPM layout)
+onErrorCaptured((err, instance, info) => {
+  console.error("[BPM:LAYOUT] Vue error captured:", err, "\nInfo:", info, "\nComponent:", instance?.$options?.name ?? instance?.$options?.__name);
+  return false; // prevent propagation to Nuxt error handler
+});
+
 onMounted(() => {
   focusNav.enabled.value = true;
 });

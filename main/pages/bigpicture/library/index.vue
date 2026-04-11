@@ -84,8 +84,13 @@
               (el: any) =>
                 registerTile(el, {
                   onSelect: () => {
+                    console.log(`[BPM:LIB] Selecting game: ${entry.game.id} (${entry.game.mName})`);
                     focusNav.saveFocusSnapshot(route.path);
-                    $router.push(`/bigpicture/library/${entry.game.id}`);
+                    $router.push(`/bigpicture/library/${entry.game.id}`).then(() => {
+                      console.log(`[BPM:LIB] Navigation complete for: ${entry.game.id}`);
+                    }).catch((e: any) => {
+                      console.error(`[BPM:LIB] Navigation FAILED for ${entry.game.id}:`, e);
+                    });
                   },
                   onFocus: () => prefetchGame(entry.game.id),
                 })

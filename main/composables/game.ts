@@ -53,8 +53,10 @@ export const parseStatus = (status: RawGameStatus): GameStatus => {
 };
 
 export const useGame = async (gameId: string) => {
+  console.log(`[useGame] Fetching game: ${gameId} (cached: ${!!gameRegistry[gameId]})`);
   if (!gameRegistry[gameId]) {
     try {
+      console.time(`[useGame] invoke fetch_game ${gameId}`);
       // Use deduplication for fetch_game invocations
       const data: {
         game: Game;
@@ -63,6 +65,8 @@ export const useGame = async (gameId: string) => {
       } = await deduplicatedInvoke("fetch_game", {
         gameId,
       });
+      console.timeEnd(`[useGame] invoke fetch_game ${gameId}`);
+      console.log(`[useGame] Got game: ${data.game.mName}, status:`, data.status, "version:", !!data.version);
       gameRegistry[gameId] = { game: data.game, version: ref(data.version) };
       if (!gameStatusRegistry[gameId]) {
         gameStatusRegistry[gameId] = ref(parseStatus(data.status));
@@ -74,25 +78,17 @@ export const useGame = async (gameId: string) => {
           } = event.payload as any;
           gameStatusRegistry[gameId].value = parseStatus(payload.status);
 
-          /**
-           * I am not super happy about this.
-           *
-           * This will mean that we will still have a version assigned if we have a game installed then uninstall it.
-           * It is necessary because a flag to check if we should overwrite seems excessive, and this function gets called
-           * on transient state updates.
-           */
           if (payload.version) {
             gameRegistry[gameId].version.value = payload.version;
           }
         });
       }
     } catch (e) {
-      console.error(`Failed to fetch game data for "${gameId}":`, e);
-      throw createError({
-        statusCode: 500,
-        statusMessage: `Failed to load game data. Please try again later.`,
-        fatal: false,
-      });
+      console.error(`[useGame] FAILED for "${gameId}":`, e);
+      console.error(`[useGame] Error type: ${e?.constructor?.name}, message: ${e instanceof Error ? e.message : String(e)}`);
+      // Don't use createError() in BPM — it triggers Nuxt's error page
+      // which breaks out of the BPM layout. Throw a plain error instead.
+      throw new Error(`Failed to load game data for ${gameId}`);
     }
   }
 

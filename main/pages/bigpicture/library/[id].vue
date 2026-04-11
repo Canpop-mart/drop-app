@@ -565,38 +565,59 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
 }
 
 onMounted(async () => {
+  console.log(`[BPM:GAME] === Page mounted for gameId: ${gameId} ===`);
+  console.log(`[BPM:GAME] Route: ${route.fullPath}`);
+
   // Wire up gamepad immediately — don't wait for data to load
   _unsubs.push(
     gamepad.onButton(GamepadButton.Start, () => {
       showOptions.value = true;
     }),
   );
+  console.log("[BPM:GAME] Gamepad wired. Starting data fetch...");
 
   // Fetch all data in parallel with timeouts to prevent hangs on SteamOS
+  console.time("[BPM:GAME] All data fetched");
+
+  const gamePromise = useGame(gameId)
+    .then((r) => { console.log("[BPM:GAME] useGame resolved:", r?.game?.mName ?? "null"); return r; })
+    .catch((e) => { console.error("[BPM:GAME] useGame FAILED:", e); return null; });
+
+  const versionPromise = invoke<VersionOption[]>("fetch_game_version_options", { gameId })
+    .then((r) => { console.log("[BPM:GAME] version_options resolved:", r?.length ?? 0, "options"); return r; })
+    .catch((e) => { console.warn("[BPM:GAME] version_options failed:", e); return null; });
+
+  const achievementsUrl = serverUrl(`api/v1/games/${gameId}/achievements`);
+  console.log("[BPM:GAME] Achievements URL:", achievementsUrl);
+  const achievementsPromise = fetch(achievementsUrl)
+    .then((res) => {
+      console.log("[BPM:GAME] achievements fetch status:", res.status);
+      return res.ok ? res.json() : null;
+    })
+    .catch((e) => { console.warn("[BPM:GAME] achievements fetch FAILED:", e); return null; });
+
   const [gameResult, versionResult, achievementsResult] = await Promise.all([
-    withTimeout(useGame(gameId).catch((e) => {
-      console.error("Failed to load game:", e);
-      return null;
-    }), 10000),
-    withTimeout(invoke<VersionOption[]>("fetch_game_version_options", { gameId }).catch(() => null), 10000),
-    withTimeout(
-      fetch(serverUrl(`api/v1/games/${gameId}/achievements`))
-        .then((res) => res.ok ? res.json() : null)
-        .catch(() => null),
-      10000,
-    ),
+    withTimeout(gamePromise, 10000).then((r) => { if (!r) console.warn("[BPM:GAME] useGame TIMED OUT or null"); return r; }),
+    withTimeout(versionPromise, 10000).then((r) => { if (!r) console.warn("[BPM:GAME] version_options timed out or null"); return r; }),
+    withTimeout(achievementsPromise, 10000).then((r) => { if (!r) console.warn("[BPM:GAME] achievements timed out or null"); return r; }),
   ]);
+
+  console.timeEnd("[BPM:GAME] All data fetched");
+  console.log("[BPM:GAME] Results — game:", !!gameResult, "versions:", !!versionResult, "achievements:", !!achievementsResult);
 
   if (gameResult) {
     game.value = gameResult.game;
     statusRef.value = gameResult.status;
     version.value = gameResult.version?.value ?? null;
+    console.log("[BPM:GAME] Game loaded:", gameResult.game.mName, "| Status:", gameResult.status?.value);
 
     if (version.value?.userConfiguration) {
       selectedController.value = version.value.userConfiguration.controllerType ?? null;
       selectedQuality.value = version.value.userConfiguration.qualityPreset ?? null;
       widescreenEnabled.value = version.value.userConfiguration.widescreen ?? false;
     }
+  } else {
+    console.error("[BPM:GAME] No game data loaded — page will show loading state");
   }
 
   if (versionResult) {
@@ -607,10 +628,13 @@ onMounted(async () => {
     achievements.value = Array.isArray(achievementsResult)
       ? achievementsResult
       : (achievementsResult.achievements ?? []);
+    console.log("[BPM:GAME] Achievements loaded:", achievements.value.length);
   }
 
+  console.log("[BPM:GAME] Setting up focus...");
   nextTick(() => updateTabIndicator());
   focusNav.autoFocusContent("content");
+  console.log("[BPM:GAME] === Page setup complete ===");
 });
 
 function _onResize() {

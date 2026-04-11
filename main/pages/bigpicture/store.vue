@@ -302,8 +302,13 @@ function objectUrl(id: string): string {
 
 function goToGame(gameId?: string) {
   if (!gameId) return;
+  console.log(`[BPM:STORE] Navigating to game: ${gameId}`);
   focusNav.saveFocusSnapshot("/bigpicture/store");
-  router.push(`/bigpicture/library/${gameId}`);
+  router.push(`/bigpicture/library/${gameId}`).then(() => {
+    console.log(`[BPM:STORE] Navigation complete for: ${gameId}`);
+  }).catch((e) => {
+    console.error(`[BPM:STORE] Navigation FAILED for ${gameId}:`, e);
+  });
 }
 
 // Hero auto-advance

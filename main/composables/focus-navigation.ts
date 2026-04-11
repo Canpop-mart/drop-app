@@ -808,9 +808,15 @@ function wireGamepad() {
       }
 
       if (currentFocused.value?.onSelect) {
+        console.log("[FOCUS] A pressed — calling onSelect for:", el?.tagName, el?.textContent?.slice(0, 30));
         gamepad.vibrate("medium");
-        currentFocused.value.onSelect();
+        try {
+          currentFocused.value.onSelect();
+        } catch (e) {
+          console.error("[FOCUS] onSelect THREW:", e);
+        }
       } else if (el) {
+        console.log("[FOCUS] A pressed — clicking element:", el.tagName, el.textContent?.slice(0, 30));
         gamepad.vibrate("medium");
         el.click();
       }
