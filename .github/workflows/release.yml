@@ -55,6 +55,7 @@ jobs:
         run: pnpm install
 
       - uses: tauri-apps/tauri-action@v0
+        id: tauri-build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NO_STRIP: true
@@ -65,3 +66,52 @@ jobs:
           releaseDraft: false
           prerelease: true
           args: ${{ matrix.args }}
+
+      # Strip bundled WebKitGTK from the AppImage so it uses the system's
+      # version instead. The bundled Ubuntu 22.04 WebKit is incompatible
+      # with SteamOS/non-Ubuntu GPU drivers (EGL crash + version mismatch).
+      - name: Fix AppImage for SteamOS compatibility
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "No AppImage found, skipping"
+            exit 0
+          fi
+          echo "Fixing AppImage: $APPIMAGE"
+
+          chmod +x "$APPIMAGE"
+          "$APPIMAGE" --appimage-extract
+
+          # Remove bundled WebKitGTK libs that conflict with system versions
+          find squashfs-root -name "libwebkit2gtk*" -delete
+          find squashfs-root -name "libjavascriptcoregtk*" -delete
+          find squashfs-root -name "WebKitNetworkProcess" -delete
+          find squashfs-root -name "WebKitWebProcess" -delete
+          find squashfs-root -name "libsoup*" -delete
+
+          # Download appimagetool to repack
+          curl -Lo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+
+          # Repack the AppImage
+          ARCH=x86_64 ./appimagetool squashfs-root "$APPIMAGE"
+          rm -rf squashfs-root appimagetool
+
+      # Re-upload the fixed AppImage to the release
+      - name: Upload fixed AppImage
+        if: matrix.platform == 'ubuntu-22.04'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
+          if [ -z "$APPIMAGE" ]; then exit 0; fi
+          FILENAME=$(basename "$APPIMAGE")
+          TAG_NAME=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.4.0")
+
+          # Delete the old AppImage asset and upload the fixed one
+          RELEASE_ID=$(gh release view "$TAG_NAME" --json id -q .id 2>/dev/null || true)
+          if [ -n "$RELEASE_ID" ]; then
+            gh release delete-asset "$TAG_NAME" "$FILENAME" --yes 2>/dev/null || true
+            gh release upload "$TAG_NAME" "$APPIMAGE" --clobber
+          fi
