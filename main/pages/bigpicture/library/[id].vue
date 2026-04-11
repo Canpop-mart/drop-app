@@ -363,7 +363,9 @@ const status = computed<GameStatus | null>(() => statusRef.value?.value ?? null)
 const version = ref<GameVersion | null>(null);
 const versionOptions = ref<VersionOption[] | null>(null);
 const activeTab = ref("achievements");
-const tabRefs = ref<Record<string, HTMLElement | null>>({});
+// Plain object — NOT reactive. Storing DOM refs in a reactive ref causes
+// infinite update loops when set from :ref callbacks during render.
+const tabRefs: Record<string, HTMLElement | null> = {};
 const tabIndicatorStyle = ref({ left: "0", width: "0" });
 const launchError = ref<string | null>(null);
 const showOptions = ref(false);
@@ -540,13 +542,15 @@ const achievements: Ref<AchievementItem[]> = ref([]);
 
 function registerTabRef(value: string, el: any) {
   if (el) {
-    tabRefs.value[value] = el;
-    updateTabIndicator();
+    tabRefs[value] = el;
+    // Do NOT call updateTabIndicator() here — this runs inside a :ref
+    // callback during render. Modifying reactive state (tabIndicatorStyle)
+    // during render causes an infinite update loop.
   }
 }
 
 function updateTabIndicator() {
-  const activeEl = tabRefs.value[activeTab.value];
+  const activeEl = tabRefs[activeTab.value];
   if (activeEl) {
     tabIndicatorStyle.value = {
       left: `${activeEl.offsetLeft}px`,
