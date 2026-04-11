@@ -67,9 +67,11 @@ jobs:
           prerelease: true
           args: ${{ matrix.args }}
 
-      # Strip bundled WebKitGTK from the AppImage so it uses the system's
-      # version instead. The bundled Ubuntu 22.04 WebKit is incompatible
-      # with SteamOS/non-Ubuntu GPU drivers (EGL crash + version mismatch).
+      # Repack the AppImage without ANY bundled shared libraries so it uses
+      # the host system's versions. The Ubuntu 22.04 CI libs are incompatible
+      # with SteamOS (EGL crash, glib symbol mismatches). Since the .deb binary
+      # works fine on SteamOS using system libs, the AppImage should too — it
+      # just needs to stop overriding them via LD_LIBRARY_PATH.
       - name: Fix AppImage for SteamOS compatibility
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -83,12 +85,8 @@ jobs:
           chmod +x "$APPIMAGE"
           "$APPIMAGE" --appimage-extract
 
-          # Remove bundled WebKitGTK libs that conflict with system versions
-          find squashfs-root -name "libwebkit2gtk*" -delete
-          find squashfs-root -name "libjavascriptcoregtk*" -delete
-          find squashfs-root -name "WebKitNetworkProcess" -delete
-          find squashfs-root -name "WebKitWebProcess" -delete
-          find squashfs-root -name "libsoup*" -delete
+          # Remove ALL bundled shared libraries — the binary will use system libs
+          rm -rf squashfs-root/usr/lib
 
           # Download appimagetool to repack
           curl -Lo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
