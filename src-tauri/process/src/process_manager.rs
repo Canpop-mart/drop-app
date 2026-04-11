@@ -551,10 +551,11 @@ impl ProcessManager<'_> {
                         .iter()
                         .filter(|v| v.platform == Platform::Windows)
                         .nth(launch_process_index)
-                        .map(|lc| {
-                            let mut p = ParsedCommand::parse(lc.command.clone()).unwrap();
-                            p.make_absolute(PathBuf::from(install_dir));
-                            p.reconstruct()
+                        .and_then(|lc| {
+                            ParsedCommand::parse(lc.command.clone()).ok().map(|mut p| {
+                                p.make_absolute(PathBuf::from(install_dir));
+                                p.reconstruct()
+                            })
                         })
                         .unwrap_or(reconstructed_cmd);
 
