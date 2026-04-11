@@ -216,10 +216,12 @@ pub fn run() {
     // The bundled WebKitGTK in AppImages can fail with "Could not create default
     // EGL display: EGL_BAD_PARAMETER" — disabling the DMA-BUF renderer forces a
     // fallback that works on Steam Deck and other embedded Linux systems.
+    // SAFETY: Called at the very start of main, before any threads are spawned,
+    // so there are no concurrent readers of the environment.
     #[cfg(target_os = "linux")]
     {
         if env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
-            env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            unsafe { env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
         }
     }
 
