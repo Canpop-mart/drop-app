@@ -11,7 +11,10 @@
     <!-- Right: contextual actions -->
     <div class="flex items-center gap-6">
       <BigPictureButtonPrompt v-if="showSearch" button="Y" label="Search" />
-      <BigPictureButtonPrompt v-if="showOptions" button="X" label="Options" />
+      <BigPictureButtonPrompt v-if="showSort" button="X" label="Sort" />
+      <BigPictureButtonPrompt v-else-if="showOptions" button="X" label="Options" />
+      <BigPictureButtonPrompt button="LT" label="" />
+      <BigPictureButtonPrompt button="RT" label="Scroll" />
       <BigPictureButtonPrompt button="LB" label="" />
       <BigPictureButtonPrompt button="RB" label="Switch Tab" />
     </div>
@@ -23,9 +26,18 @@ import BigPictureButtonPrompt from "~/components/bigpicture/BigPictureButtonProm
 
 const route = useRoute();
 
-const showSearch = computed(() => route.path.startsWith("/bigpicture/library"));
+const showSearch = computed(() =>
+  route.path.startsWith("/bigpicture/library") ||
+  route.path.startsWith("/bigpicture/store"),
+);
 
 const showOptions = computed(() =>
-  route.path.startsWith("/bigpicture/library/"),
+  route.path.startsWith("/bigpicture/library/") &&
+  route.path !== "/bigpicture/library",
+);
+
+const showSort = computed(() =>
+  route.path === "/bigpicture/library" ||
+  route.path.startsWith("/bigpicture/store"),
 );
 </script>

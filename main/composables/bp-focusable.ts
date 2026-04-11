@@ -59,6 +59,47 @@ export function useBpFocusableGroup(group: string) {
     options?: {
       onSelect?: () => void;
       onContext?: () => void;
+      onFocus?: () => void;
+    },
+  ) {
+    if (!el) return;
+    const htmlEl = (el as any).$el ?? el;
+    if (!(htmlEl instanceof HTMLElement)) return;
+    const unregister = focusNav.registerElement(htmlEl, group, options);
+    cleanups.push(unregister);
+  };
+}
+
+/**
+ * Like useBpFocusableGroup, but also registers the group as a grid.
+ * Grid groups use index-aligned (column-sticky) navigation instead of
+ * spatial cone search, which produces predictable movement in tile grids.
+ *
+ * Usage:
+ *   const registerTile = useBpFocusableGrid("content");
+ *   // In template: :ref="(el) => registerTile(el, { onSelect: ... })"
+ */
+export function useBpFocusableGrid(group: string) {
+  const focusNav = useFocusNavigation();
+  const cleanups: (() => void)[] = [];
+
+  // Register this group as a grid on mount
+  onMounted(() => {
+    focusNav.registerGrid(group);
+  });
+
+  onUnmounted(() => {
+    focusNav.unregisterGrid(group);
+    for (const cleanup of cleanups) cleanup();
+    cleanups.length = 0;
+  });
+
+  return function register(
+    el: Element | ComponentPublicInstance | null,
+    options?: {
+      onSelect?: () => void;
+      onContext?: () => void;
+      onFocus?: () => void;
     },
   ) {
     if (!el) return;

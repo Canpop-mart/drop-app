@@ -1,5 +1,5 @@
 <template>
-  <div :class="deck.isDeckMode.value ? 'px-4 py-3' : 'px-8 py-6'">
+  <div class="px-8 py-6">
     <!-- Download stats header (speed + ETA) -->
     <div
       v-if="queue.length > 0 && (stats.speed > 0 || stats.time > 0)"
@@ -41,12 +41,10 @@
     >
       <div class="text-center">
         <ArrowDownTrayIcon
-          class="text-zinc-600 mx-auto mb-4"
-          :class="deck.isDeckMode.value ? 'size-12' : 'size-20'"
+          class="size-20 text-zinc-600 mx-auto mb-4"
         />
         <h2
-          class="font-semibold font-display text-zinc-300 mb-2"
-          :class="deck.isDeckMode.value ? 'text-lg' : 'text-2xl'"
+          class="text-2xl font-semibold font-display text-zinc-300 mb-2"
         >
           Your download queue is empty
         </h2>
@@ -62,15 +60,25 @@
           (el: any) =>
             registerItem(el, { onSelect: () => navigateToGame(item.meta.id) })
         "
-        class="flex items-center gap-4 bg-zinc-900/50 rounded-xl"
-        :class="deck.isDeckMode.value ? 'p-4 gap-4' : 'p-6 gap-6'"
+        class="flex items-center gap-6 bg-zinc-900/50 rounded-xl p-6"
       >
+        <!-- Cover art -->
+        <div class="size-16 rounded-lg overflow-hidden bg-zinc-800 flex-shrink-0">
+          <img
+            v-if="gameNames[item.meta.id]?.coverUrl"
+            :src="gameNames[item.meta.id].coverUrl"
+            class="w-full h-full object-cover"
+          />
+          <div v-else class="w-full h-full flex items-center justify-center text-zinc-600 text-xl font-bold">
+            {{ (gameNames[item.meta.id]?.name || item.meta.id)[0] }}
+          </div>
+        </div>
+
         <div class="flex-1 min-w-0">
           <p
-            class="font-medium text-zinc-200"
-            :class="deck.isDeckMode.value ? 'text-sm' : 'text-lg'"
+            class="text-lg font-medium text-zinc-200"
           >
-            {{ item.meta.id }}
+            {{ gameNames[item.meta.id]?.name || item.meta.id }}
           </p>
           <div class="flex items-center gap-2 mt-0.5">
             <span class="text-xs text-zinc-500">{{ item.status }}</span>
@@ -83,7 +91,7 @@
 
         <div
           v-if="item.dl_progress != null"
-          :class="deck.isDeckMode.value ? 'w-32' : 'w-48'"
+          class="w-48"
         >
           <div class="h-2 bg-zinc-800 rounded-full overflow-hidden">
             <div
@@ -108,21 +116,50 @@ import {
   useStatsState,
   formatKilobytes,
 } from "~/composables/downloads";
+import { useGame } from "~/composables/game";
+import { serverUrl } from "~/composables/use-server-fetch";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
-import { useDeckMode } from "~/composables/deck-mode";
-
+import { useFocusNavigation } from "~/composables/focus-navigation";
 definePageMeta({ layout: "bigpicture" });
-
-const deck = useDeckMode();
 const queueState = useQueueState();
 const statsState = useStatsState();
 const queue = computed(() => queueState.value?.queue ?? []);
 const stats = computed(() => statsState.value ?? { speed: 0, time: 0 });
 const isPaused = computed(() => queueState.value?.status === "Paused");
 
+// Fetch game names for queue items (they only have IDs in meta)
+const gameNames = ref<Record<string, { name: string; coverUrl?: string }>>({});
+
+function objectUrl(id: string): string {
+  return serverUrl(`api/v1/object/${id}`);
+}
+
+async function loadGameNames() {
+  for (const item of queue.value) {
+    const id = item.meta.id;
+    if (gameNames.value[id]) continue;
+    try {
+      const data = await useGame(id);
+      gameNames.value[id] = {
+        name: data.game.mName,
+        coverUrl: data.game.mCoverObjectId ? objectUrl(data.game.mCoverObjectId) : undefined,
+      };
+    } catch {
+      // Game data not available — will keep showing ID
+    }
+  }
+}
+
+watch(queue, () => loadGameNames(), { immediate: true });
+
 // C6 fix: register items with focus group so controller can interact
+const focusNav = useFocusNavigation();
 const registerItem = useBpFocusableGroup("content");
 const registerAction = useBpFocusableGroup("content");
+
+onMounted(() => {
+  focusNav.autoFocusContent("content");
+});
 
 // Download listeners are set up in app.vue via useDownloadListeners(),
 // which updates the shared useState("queue") that useQueueState() reads.

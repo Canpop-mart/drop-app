@@ -170,11 +170,11 @@ const unsubs: (() => void)[] = [];
 
 // ── SteamOS keyboard detection ──────────────────────────────────────────
 // In SteamOS Game Mode, we can invoke the native virtual keyboard via
-// steam://open/keyboard. Detect by checking for Gamescope session.
+// steam://open/keyboard. Detect Gamescope session via the composable.
 import { useDeckMode } from "~/composables/deck-mode";
-const deck = useDeckMode();
+const { isGamescope } = useDeckMode();
 const useSteamKeyboard = computed(
-  () => deck.isGamescope.value && typeof window !== "undefined",
+  () => isGamescope.value && typeof window !== "undefined",
 );
 
 function clampFocus() {

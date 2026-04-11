@@ -17,9 +17,9 @@ sudo pacman -Syu --noconfirm --needed \
   patchelf \
   xdg-utils \
   openssl \
-  libfuse2 \
+  fuse2 \
   file \
-  pkg-config
+  pkgconf
 
 echo "[3/7] Installing Rust nightly..."
 if command -v rustup &> /dev/null; then

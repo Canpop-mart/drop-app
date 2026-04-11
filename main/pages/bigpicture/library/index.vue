@@ -1,10 +1,7 @@
 <template>
   <div class="flex flex-col h-full">
     <!-- Filter tabs + search -->
-    <div
-      class="flex items-center gap-2 border-b border-zinc-800/30"
-      :class="deck.isDeckMode.value ? 'px-4 py-2' : 'px-8 py-4'"
-    >
+    <div class="flex items-center gap-2 px-8 py-4 border-b border-zinc-800/30">
       <button
         v-for="filter in filters"
         :key="filter.value"
@@ -14,9 +11,8 @@
               onSelect: () => (activeFilter = filter.value),
             })
         "
-        class="rounded-lg font-medium transition-colors"
+        class="px-4 py-2 text-sm rounded-lg font-medium transition-colors"
         :class="[
-          deck.isDeckMode.value ? 'px-3 py-1.5 text-xs' : 'px-4 py-2 text-sm',
           activeFilter === filter.value
             ? 'bg-blue-600/20 text-blue-400'
             : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50',
@@ -31,11 +27,15 @@
 
       <div class="flex-1" />
 
+      <!-- Sort indicator (cycled via X button) -->
+      <div class="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-zinc-500">
+        <ArrowsUpDownIcon class="size-4" />
+        {{ sortLabel }}
+      </div>
+
+      <!-- Search -->
       <button
-        class="flex items-center gap-2 rounded-lg font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 transition-colors"
-        :class="
-          deck.isDeckMode.value ? 'px-3 py-1.5 text-xs' : 'px-4 py-2 text-sm'
-        "
+        class="flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 transition-colors"
         @click="showKeyboard = true"
       >
         <MagnifyingGlassIcon class="size-4" />
@@ -55,12 +55,8 @@
     />
 
     <!-- Loading state with skeleton grid -->
-    <div
-      v-if="loading"
-      class="flex-1 overflow-y-auto"
-      :class="deck.isDeckMode.value ? 'px-4 py-3' : 'px-8 py-6'"
-    >
-      <div class="grid gap-3" :class="gridCols">
+    <div v-if="loading" class="flex-1 overflow-y-auto px-8 py-6">
+      <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
         <div
           v-for="i in 12"
           :key="i"
@@ -73,10 +69,9 @@
     <div
       v-else
       ref="scrollContainer"
-      class="flex-1 overflow-y-auto py-4"
-      :class="deck.isDeckMode.value ? 'px-4 py-3' : 'px-8 py-6'"
+      class="flex-1 overflow-y-auto px-8 py-6"
     >
-      <div class="tile-grid grid gap-3" :class="gridCols">
+      <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
         <div
           v-for="(entry, index) in filteredGames"
           :key="entry.game.id"
@@ -88,8 +83,11 @@
             :ref="
               (el: any) =>
                 registerTile(el, {
-                  onSelect: () =>
-                    $router.push(`/bigpicture/library/${entry.game.id}`),
+                  onSelect: () => {
+                    focusNav.saveFocusSnapshot(route.path);
+                    $router.push(`/bigpicture/library/${entry.game.id}`);
+                  },
+                  onFocus: () => prefetchGame(entry.game.id),
                 })
             "
             :game="entry.game"
@@ -156,18 +154,20 @@ import {
   MagnifyingGlassIcon,
   XMarkIcon,
   Square3Stack3DIcon,
+  ArrowsUpDownIcon,
 } from "@heroicons/vue/24/outline";
 import BigPictureGameTile from "~/components/bigpicture/BigPictureGameTile.vue";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
-import { parseStatus } from "~/composables/game";
-import { GamepadButton, useGamepad } from "~/composables/gamepad";
+import { parseStatus, deduplicatedInvoke } from "~/composables/game";
+import { useGamepad, GamepadButton } from "~/composables/gamepad";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
-import { useDeckMode } from "~/composables/deck-mode";
+import { useFocusNavigation } from "~/composables/focus-navigation";
 import type { Game, GameStatus, Collection, RawGameStatus } from "~/types";
 
-/**
- * Run async tasks with a concurrency limit to avoid request storms.
- */
+function prefetchGame(gameId: string) {
+  deduplicatedInvoke("fetch_game", { gameId }).catch(() => {});
+}
+
 async function pLimit<T>(
   tasks: (() => Promise<T>)[],
   concurrency: number,
@@ -192,8 +192,6 @@ async function pLimit<T>(
 
 definePageMeta({ layout: "bigpicture" });
 
-const deck = useDeckMode();
-
 interface LibraryEntry {
   game: Game;
   status: GameStatus;
@@ -213,11 +211,11 @@ const showKeyboard = ref(false);
 const loading = ref(true);
 const tilesReady = ref(false);
 const scrollContainer = ref<HTMLElement | null>(null);
+const focusNav = useFocusNavigation();
 const registerTile = useBpFocusableGroup("content");
 const registerFilter = useBpFocusableGroup("content");
 
 const gamepad = useGamepad();
-// C4 fix: store gamepad unsubscribes for cleanup
 const _unsubs: (() => void)[] = [];
 
 _unsubs.push(
@@ -226,31 +224,29 @@ _unsubs.push(
   }),
 );
 
-// Wire LT (LeftTrigger) for page up scroll and RT (RightTrigger) for page down scroll
+// X button = cycle sort mode
 _unsubs.push(
-  gamepad.onButton(GamepadButton.LeftTrigger, () => {
-    if (scrollContainer.value) {
-      const pageHeight = scrollContainer.value.clientHeight;
-      scrollContainer.value.scrollBy({ top: -pageHeight, behavior: "smooth" });
-    }
+  gamepad.onButton(GamepadButton.West, () => {
+    cycleSort();
   }),
 );
 
-_unsubs.push(
-  gamepad.onButton(GamepadButton.RightTrigger, () => {
-    if (scrollContainer.value) {
-      const pageHeight = scrollContainer.value.clientHeight;
-      scrollContainer.value.scrollBy({ top: pageHeight, behavior: "smooth" });
-    }
-  }),
-);
+// ── Sort options ────────────────────────────────────────────────────────
+type SortMode = "name" | "recent" | "status";
+const sortMode = ref<SortMode>("name");
 
-// Deck uses fewer, larger columns; desktop uses more columns
-const gridCols = computed(() =>
-  deck.isDeckMode.value
-    ? "grid-cols-3 sm:grid-cols-4 md:grid-cols-5"
-    : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7",
-);
+const sortLabels: Record<SortMode, string> = {
+  name: "Name",
+  recent: "Recent",
+  status: "Status",
+};
+const sortLabel = computed(() => sortLabels[sortMode.value]);
+
+function cycleSort() {
+  const modes: SortMode[] = ["name", "recent", "status"];
+  const idx = modes.indexOf(sortMode.value);
+  sortMode.value = modes[(idx + 1) % modes.length];
+}
 
 async function loadLibrary(hardRefresh = false) {
   try {
@@ -268,7 +264,6 @@ async function loadLibrary(hardRefresh = false) {
       ...data.missing,
     ];
 
-    // Deduplicate games
     for (const game of allRawGames) {
       if (!seen.has(game.id)) {
         seen.add(game.id);
@@ -276,7 +271,6 @@ async function loadLibrary(hardRefresh = false) {
       }
     }
 
-    // Fetch game statuses with concurrency limit to avoid request storms
     const statusResults = await pLimit(
       uniqueGames.map((game) => async () => {
         try {
@@ -288,12 +282,10 @@ async function loadLibrary(hardRefresh = false) {
           return { game, status: { type: "Remote" } as GameStatus };
         }
       }),
-      5, // max 5 concurrent status fetches
+      5,
     );
 
-    library.value = statusResults.sort((a, b) =>
-      a.game.mName.localeCompare(b.game.mName),
-    );
+    library.value = statusResults;
   } catch (e) {
     console.error("Failed to fetch library:", e);
   } finally {
@@ -304,12 +296,15 @@ async function loadLibrary(hardRefresh = false) {
   }
 }
 
-// Always hard-refresh on mount so newly-added games (e.g. from store iframe)
-// are picked up immediately. The 500ms debounced update_library listener
-// handles mid-session changes like downloads completing.
-onMounted(() => loadLibrary(true));
+const route = useRoute();
 
-// C3 fix: Debounced refresh when library changes — properly store unlisten
+onMounted(async () => {
+  await loadLibrary(true);
+  if (!focusNav.restoreFocusSnapshot(route.path)) {
+    focusNav.autoFocusContent("content");
+  }
+});
+
 let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
 let _unlistenLibrary: (() => void) | undefined;
 
@@ -321,14 +316,9 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  // Clean up all gamepad subscriptions
   for (const unsub of _unsubs) unsub();
   _unsubs.length = 0;
-
-  // Clean up Tauri listener
   _unlistenLibrary?.();
-
-  // Clean up debounce timer
   if (refreshTimeout) {
     clearTimeout(refreshTimeout);
     refreshTimeout = null;
@@ -350,12 +340,47 @@ const filters = computed(() => [
 ]);
 
 const filteredGames = computed(() => {
-  let games = library.value;
+  let games = [...library.value];
+
+  // Status filter
   if (activeFilter.value === "installed") {
     games = games.filter((e) => e.status.type === "Installed");
   } else if (activeFilter.value === "remote") {
     games = games.filter((e) => e.status.type !== "Installed");
   }
+
+  // Search filter
+  if (searchQuery.value.trim()) {
+    const q = searchQuery.value.trim().toLowerCase();
+    games = games.filter((e) => e.game.mName.toLowerCase().includes(q));
+  }
+
+  // Sort
+  switch (sortMode.value) {
+    case "name":
+      games.sort((a, b) => a.game.mName.localeCompare(b.game.mName));
+      break;
+    case "status":
+      // Installed first, then running, then remote
+      const statusOrder: Record<string, number> = {
+        Running: 0,
+        Downloading: 1,
+        Installed: 2,
+        Remote: 3,
+        Queued: 4,
+      };
+      games.sort(
+        (a, b) =>
+          (statusOrder[a.status.type] ?? 99) -
+          (statusOrder[b.status.type] ?? 99),
+      );
+      break;
+    case "recent":
+      // Keep server order (most recently added first)
+      games.reverse();
+      break;
+  }
+
   return games;
 });
 </script>
