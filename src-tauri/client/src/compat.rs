@@ -31,22 +31,38 @@ fn create_new_compat_info() -> Option<CompatInfo> {
 }
 
 const UMU_BASE_LAUNCHER_EXECUTABLE: &str = "umu-run";
-const UMU_INSTALL_DIRS: [&str; 4] = ["/app/share", "/use/local/share", "/usr/share", "/opt"];
+const UMU_INSTALL_DIRS: [&str; 7] = [
+    "/usr/bin",
+    "/usr/local/bin",
+    "/app/share",
+    "/usr/local/share",
+    "/usr/share",
+    "/opt",
+    "/home/deck/.local/bin",
+];
 
 fn get_umu_executable() -> Option<PathBuf> {
-    if check_executable_exists(UMU_BASE_LAUNCHER_EXECUTABLE) {
-        return Some(PathBuf::from(UMU_BASE_LAUNCHER_EXECUTABLE));
+    // First check if umu-run is on PATH using `which`
+    if let Ok(output) = Command::new("which")
+        .arg(UMU_BASE_LAUNCHER_EXECUTABLE)
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                info!("Found umu-run on PATH: {}", path);
+                return Some(PathBuf::from(path));
+            }
+        }
     }
 
+    // Fallback: check known installation directories
     for dir in UMU_INSTALL_DIRS {
         let p = PathBuf::from(dir).join(UMU_BASE_LAUNCHER_EXECUTABLE);
-        if check_executable_exists(&p) {
+        if p.exists() && p.is_file() {
+            info!("Found umu-run at: {}", p.display());
             return Some(p);
         }
     }
     None
-}
-fn check_executable_exists<P: AsRef<OsStr>>(exec: P) -> bool {
-    let has_umu_installed = Command::new(exec).stdout(Stdio::null()).output();
-    has_umu_installed.is_ok()
 }
