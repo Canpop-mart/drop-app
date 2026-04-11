@@ -211,6 +211,18 @@ pub fn custom_panic_handler(e: &PanicHookInfo) -> Option<()> {
 pub fn run() {
     // let global_span = span!(Level::TRACE, "global_span");
     // let _enter = global_span.enter();
+
+    // Workaround for WebKitGTK EGL crash on SteamOS / non-standard GPU drivers.
+    // The bundled WebKitGTK in AppImages can fail with "Could not create default
+    // EGL display: EGL_BAD_PARAMETER" — disabling the DMA-BUF renderer forces a
+    // fallback that works on Steam Deck and other embedded Linux systems.
+    #[cfg(target_os = "linux")]
+    {
+        if env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
+            env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+
     std::panic::set_hook(Box::new(|e| {
         let _ = custom_panic_handler(e);
         println!("{e}");
