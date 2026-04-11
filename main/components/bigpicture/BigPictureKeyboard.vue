@@ -57,6 +57,7 @@
 import BigPictureButtonPrompt from "~/components/bigpicture/BigPictureButtonPrompt.vue";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useFocusNavigation } from "~/composables/focus-navigation";
+import { useDeckMode } from "~/composables/deck-mode";
 
 const props = defineProps<{
   visible: boolean;
@@ -131,7 +132,14 @@ function space() {
 
 const gamepad = useGamepad();
 const focusNav = useFocusNavigation();
+const { isGamescope: _isGS } = useDeckMode();
 const unsubs: (() => void)[] = [];
+
+// On Gamescope (Steam Deck), physical X reports as West and physical Y as
+// North — swapped from standard.  We swap which logical button triggers
+// backspace vs space so the physical buttons match the on-screen labels.
+const _bkspBtn = _isGS.value ? GamepadButton.North : GamepadButton.West;
+const _spaceBtn = _isGS.value ? GamepadButton.West : GamepadButton.North;
 
 // Note: Previously tried invoking steam://open/keyboard on SteamOS but
 // the Tauri webview can't navigate to steam:// protocol URLs. Our custom
@@ -213,17 +221,17 @@ function wireGamepad() {
     }),
   );
 
-  // X = backspace
+  // X = backspace (swapped on Gamescope so physical button matches label)
   unsubs.push(
-    gamepad.onButton(GamepadButton.West, () => {
+    gamepad.onButton(_bkspBtn, () => {
       if (!props.visible) return;
       backspace();
     }),
   );
 
-  // Y = space
+  // Y = space (swapped on Gamescope so physical button matches label)
   unsubs.push(
-    gamepad.onButton(GamepadButton.North, () => {
+    gamepad.onButton(_spaceBtn, () => {
       if (!props.visible) return;
       space();
     }),

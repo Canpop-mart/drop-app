@@ -76,6 +76,18 @@ impl ProcessHandler for NativeLauncher {
         // Required for Linux-native AppImages and plain ELF binaries.
         let mut parsed = ParsedCommand::parse(launch_command)?;
         parsed.make_absolute(PathBuf::from(current_dir));
+
+        // Safety check: detect Windows executables being launched natively on Linux.
+        // This prevents confusing "exec format error (os error 8)" messages when a
+        // game is incorrectly marked as Linux-native but is actually a Windows binary.
+        #[cfg(target_os = "linux")]
+        {
+            let cmd_lower = parsed.command.to_lowercase();
+            if cmd_lower.ends_with(".exe") || cmd_lower.ends_with(".bat") || cmd_lower.ends_with(".cmd") {
+                return Err(ProcessError::NeedsCompat(parsed.command.clone()));
+            }
+        }
+
         Ok(parsed.reconstruct())
     }
 

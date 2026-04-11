@@ -155,7 +155,13 @@ if (typeof window !== "undefined") {
   });
 }
 
-debugLog("BPM layout setup (sync)", "info");
+// Log session and UMU info for debugging launch issues
+{
+  const _st = useState<any>("state");
+  const _umuState = _st.value?.umuState ?? "unknown";
+  const _sessionType = _st.value?.sessionType ?? "unknown";
+  debugLog(`BPM layout setup | session: ${_sessionType} | gamescope: ${isGamescope.value} | UMU: ${_umuState}`, "info");
+}
 
 onMounted(() => {
   focusNav.enabled.value = true;

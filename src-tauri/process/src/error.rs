@@ -20,6 +20,7 @@ pub enum ProcessError {
     InvalidArguments(String),
     FailedLaunch(String),
     NoCompat,
+    NeedsCompat(String),
 }
 
 impl Display for ProcessError {
@@ -44,6 +45,12 @@ impl Display for ProcessError {
                 game_id, version_id
             ),
             ProcessError::NoCompat => "No Proton compatibility layer could be found for this tool. Add an override or set your global default in settings.",
+            ProcessError::NeedsCompat(binary) => &format!(
+                "Cannot run '{}' natively — this appears to be a Windows executable. \
+                 It needs a compatibility layer (Proton/UMU). Check that the game's \
+                 platform is set to Windows and that Proton is configured in settings.",
+                binary
+            ),
         };
         write!(f, "{s}")
     }

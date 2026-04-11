@@ -729,7 +729,18 @@ async function launchGame() {
       launchError.value = `Failed to launch: ${result.result}`;
     }
   } catch (e) {
-    launchError.value = `Launch error: ${e instanceof Error ? e.message : String(e)}`;
+    const errMsg = e instanceof Error ? e.message : String(e);
+    console.error("[BPM:GAME] Launch error:", errMsg);
+    // Provide user-friendly hints for common errors
+    if (errMsg.includes("exec format error") || errMsg.includes("os error 8")) {
+      launchError.value = "This game appears to be a Windows executable that can't run natively on Linux. Check that Proton is configured in Settings and the game's platform is set correctly.";
+    } else if (errMsg.includes("NoCompat") || errMsg.includes("compatibility layer")) {
+      launchError.value = "No Proton compatibility layer found. Set a default Proton path in Settings or add an override for this game.";
+    } else if (errMsg.includes("InvalidPlatform")) {
+      launchError.value = "This game can't be played on the current platform. It may need a compatibility layer like Proton.";
+    } else {
+      launchError.value = `Launch error: ${errMsg}`;
+    }
   }
 }
 

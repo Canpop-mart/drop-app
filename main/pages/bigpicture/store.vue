@@ -251,6 +251,7 @@ import { deduplicatedInvoke } from "~/composables/game";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
+import { useDeckMode } from "~/composables/deck-mode";
 
 definePageMeta({ layout: "bigpicture" });
 
@@ -382,18 +383,25 @@ watch(searchQuery, () => {
   }
 });
 
-// Y button = toggle search keyboard
+// Face button handlers for Search (Y) and Sort (X).
+// On Steam Deck (Gamescope), the Web Gamepad API reports physical Y as index 2
+// (mapped to West) and physical X as index 3 (mapped to North). Instead of
+// relying on a button-map swap, we register the handlers on the correct
+// logical buttons per-platform so the physical buttons always match the
+// context bar labels (Y glyph = Search, X glyph = Sort).
+const { isGamescope } = useDeckMode();
+const searchButton = isGamescope.value ? GamepadButton.West : GamepadButton.North;
+const sortButton = isGamescope.value ? GamepadButton.North : GamepadButton.West;
+
 const _unsubs: (() => void)[] = [];
 _unsubs.push(
-  gamepad.onButton(GamepadButton.North, () => {
+  gamepad.onButton(searchButton, () => {
     showSearch.value = !showSearch.value;
     if (showSearch.value) activeTab.value = "browse";
   }),
 );
-
-// X button = cycle sort mode
 _unsubs.push(
-  gamepad.onButton(GamepadButton.West, () => {
+  gamepad.onButton(sortButton, () => {
     cycleBrowseSort();
   }),
 );

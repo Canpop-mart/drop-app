@@ -19,7 +19,6 @@ import { listen } from "@tauri-apps/api/event";
 import { AppStatus, type AppState } from "./types.js";
 import { setSessionType } from "./composables/deck-mode.js";
 import { useBigPictureMode } from "./composables/big-picture.js";
-import { initButtonMapForSession } from "./composables/gamepad.js";
 
 const router = useRouter();
 
@@ -50,8 +49,6 @@ await fetchState();
 // Propagate Rust-side session detection to the frontend deck-mode composable
 if (state.value?.sessionType) {
   setSessionType(state.value.sessionType);
-  // Tell the gamepad module whether to swap X↔Y buttons (Gamescope only)
-  initButtonMapForSession(state.value.sessionType === "gamescope");
 }
 
 const unlistenState = listen("update_state", (event) => {

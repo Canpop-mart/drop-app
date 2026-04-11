@@ -167,6 +167,7 @@ import { parseStatus, deduplicatedInvoke } from "~/composables/game";
 import { useGamepad, GamepadButton } from "~/composables/gamepad";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
+import { useDeckMode } from "~/composables/deck-mode";
 import type { Game, GameStatus, Collection, RawGameStatus } from "~/types";
 
 function prefetchGame(gameId: string) {
@@ -223,15 +224,19 @@ const registerFilter = useBpFocusableGroup("content");
 const gamepad = useGamepad();
 const _unsubs: (() => void)[] = [];
 
+// Swap search/sort buttons on Gamescope (Deck reports Y↔X swapped)
+const { isGamescope: _isGS } = useDeckMode();
+const _searchBtn = _isGS.value ? GamepadButton.West : GamepadButton.North;
+const _sortBtn = _isGS.value ? GamepadButton.North : GamepadButton.West;
+
 _unsubs.push(
-  gamepad.onButton(GamepadButton.North, () => {
+  gamepad.onButton(_searchBtn, () => {
     showKeyboard.value = !showKeyboard.value;
   }),
 );
 
-// X button = cycle sort mode
 _unsubs.push(
-  gamepad.onButton(GamepadButton.West, () => {
+  gamepad.onButton(_sortBtn, () => {
     cycleSort();
   }),
 );
