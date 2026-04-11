@@ -199,6 +199,23 @@ pub fn configure_retroarch_for_game(
     overrides.insert("savestate_auto_save", "false".into());
     overrides.insert("savestate_auto_load", "false".into());
 
+    // ── Gamescope / Steam Deck video driver ─────────────────────────────
+    // Gamescope (SteamOS Gaming Mode) is a nested Wayland compositor that
+    // works best with Vulkan.  Cores that default to OpenGL (e.g.
+    // mupen64plus_next for N64) fail to create a visible surface in
+    // Gamescope.  Forcing Vulkan ensures all cores render correctly —
+    // HW-accelerated cores use native Vulkan and software cores render to
+    // a texture that RetroArch presents via Vulkan.
+    #[cfg(target_os = "linux")]
+    {
+        let in_gamescope = std::env::var("GAMESCOPE_WAYLAND_DISPLAY").is_ok()
+            || std::env::var("SteamGamepadUI").is_ok();
+        if in_gamescope {
+            overrides.insert("video_driver", "\"vulkan\"".into());
+            info!("[RETROARCH] Gamescope detected — forcing Vulkan video driver");
+        }
+    }
+
     // Modern menu driver — controller-friendly if user opens the menu
     overrides.insert("menu_driver", "\"ozone\"".into());
 

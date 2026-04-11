@@ -357,6 +357,10 @@ impl ProcessManager<'_> {
 
         let target_platform = meta.target_platform;
 
+        // Set to true when NeedsCompat fallback fires — we correct stored
+        // platform metadata after the database lock is released.
+        let mut needs_platform_correction = false;
+
         let (target_command, emulator, disc_paths) = match game_status {
 
             GameDownloadStatus::Installed {
@@ -517,13 +521,62 @@ impl ProcessManager<'_> {
                 &db_lock,
             )?
         } else {
-            process_handler.create_launch_process(
+            // Save the reconstructed command string before passing to the
+            // handler (reconstruct() consumes the ParsedCommand).
+            let reconstructed_cmd = target_command.reconstruct();
+            match process_handler.create_launch_process(
                 &meta,
-                target_command.reconstruct(),
+                reconstructed_cmd.clone(),
                 game_version,
                 install_dir,
                 &db_lock,
-            )?
+            ) {
+                Ok(s) => s,
+                Err(ProcessError::NeedsCompat(ref _binary)) => {
+                    // NativeLauncher detected a Windows executable (.exe/.bat/.cmd)
+                    // but target_platform was Linux.  Automatically fall through to
+                    // the Windows compat handler (UMU/Proton) so the game launches.
+                    warn!(
+                        "NeedsCompat for {:?} — falling through to Windows handler",
+                        _binary
+                    );
+                    let compat = self.fetch_process_handler(&db_lock, &Platform::Windows)
+                        .map_err(|_| ProcessError::NoCompat)?;
+
+                    // Re-derive the launch command for the Windows platform.
+                    // Try a dedicated Windows launch config first; fall back to the
+                    // original command (the .exe) if none exists.
+                    let win_launch_cmd = game_version
+                        .launches
+                        .iter()
+                        .filter(|v| v.platform == Platform::Windows)
+                        .nth(launch_process_index)
+                        .map(|lc| {
+                            let mut p = ParsedCommand::parse(lc.command.clone()).unwrap();
+                            p.make_absolute(PathBuf::from(install_dir));
+                            p.reconstruct()
+                        })
+                        .unwrap_or(reconstructed_cmd);
+
+                    // Build a Windows-targeted metadata clone for compat handler
+                    let mut win_meta = meta.clone();
+                    win_meta.target_platform = Platform::Windows;
+
+                    let result = compat.create_launch_process(
+                        &win_meta,
+                        win_launch_cmd,
+                        game_version,
+                        install_dir,
+                        &db_lock,
+                    )?;
+
+                    // Flag that we need to correct stored platform after db_lock drops
+                    needs_platform_correction = true;
+
+                    result
+                }
+                Err(e) => return Err(e),
+            }
         };
 
         // For emulator launches, use the emulator's dir as CWD; otherwise use the game's.
@@ -562,6 +615,23 @@ impl ProcessManager<'_> {
         // Drop the DB write lock before spawning — everything below only
         // needs owned data. We re-acquire briefly for the status update.
         drop(db_lock);
+
+        // If the NeedsCompat fallback fired, persist the corrected platform
+        // so future launches go directly through the compat handler.
+        if needs_platform_correction {
+            let mut db_w = borrow_db_mut_checked();
+            if let Some(stored) = db_w
+                .applications
+                .installed_game_version
+                .get_mut(&game_id)
+            {
+                stored.target_platform = Platform::Windows;
+                info!(
+                    "Corrected target_platform for {} to Windows",
+                    &game_id
+                );
+            }
+        }
 
         let launch_parameters = LaunchParameters(
             ParsedCommand::parse(target_launch_string)?,

@@ -4,6 +4,7 @@ use client::compat::{COMPAT_INFO, UMU_LAUNCHER_EXECUTABLE};
 use database::{
     Database, DownloadableMetadata, GameVersion, db::DATA_ROOT_DIR, platform::Platform,
 };
+use log::debug;
 
 use crate::{error::ProcessError, parser::ParsedCommand, process_manager::ProcessHandler};
 
@@ -80,10 +81,31 @@ impl ProcessHandler for NativeLauncher {
         // Safety check: detect Windows executables being launched natively on Linux.
         // This prevents confusing "exec format error (os error 8)" messages when a
         // game is incorrectly marked as Linux-native but is actually a Windows binary.
+        // Check both the file extension AND the PE magic bytes (MZ header).
         #[cfg(target_os = "linux")]
         {
             let cmd_lower = parsed.command.to_lowercase();
-            if cmd_lower.ends_with(".exe") || cmd_lower.ends_with(".bat") || cmd_lower.ends_with(".cmd") {
+            let is_win_ext = cmd_lower.ends_with(".exe")
+                || cmd_lower.ends_with(".bat")
+                || cmd_lower.ends_with(".cmd");
+            let is_pe_binary = if !is_win_ext {
+                // Read first 2 bytes to check for MZ (PE) header
+                std::fs::File::open(&parsed.command)
+                    .and_then(|mut f| {
+                        use std::io::Read;
+                        let mut magic = [0u8; 2];
+                        f.read_exact(&mut magic)?;
+                        Ok(magic == [0x4D, 0x5A]) // "MZ"
+                    })
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            if is_win_ext || is_pe_binary {
+                debug!(
+                    "NativeLauncher: detected Windows binary {:?} (ext={}, pe={})",
+                    &parsed.command, is_win_ext, is_pe_binary
+                );
                 return Err(ProcessError::NeedsCompat(parsed.command.clone()));
             }
         }

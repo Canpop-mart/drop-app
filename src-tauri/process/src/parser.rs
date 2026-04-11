@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::error::ProcessError;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParsedCommand {
     pub env: Vec<String>,
     pub command: String,
