@@ -241,83 +241,57 @@
       @confirm="dismissLaunchError"
     />
 
-    <!-- Options menu dialog -->
+    <!-- Uninstall confirmation dialog -->
     <BigPictureDialog
-      :visible="showOptions"
-      title="Game Options"
-      @cancel="showOptions = false"
-    >
-      <div class="space-y-3">
-        <button
-          v-if="isNativeGame"
-          class="w-full text-left px-4 py-2 bg-zinc-800/50 hover:bg-zinc-700 rounded-lg transition-colors text-zinc-200 text-sm"
-          @click="applyProfileName"
-        >
-          Set Account Name
-        </button>
+      :visible="confirmUninstall"
+      title="Uninstall Game"
+      :message="`Are you sure you want to uninstall ${game?.mName ?? 'this game'}? This will delete all local game files.`"
+      confirm-label="Uninstall"
+      cancel-label="Cancel"
+      :destructive="true"
+      @confirm="doUninstall"
+      @cancel="confirmUninstall = false"
+    />
 
-        <div v-if="isEmulatedGame" class="px-4 py-2 bg-zinc-800/50 rounded-lg">
-          <p class="text-zinc-400 text-xs font-medium mb-2">Controller Layout</p>
-          <div class="flex gap-1.5">
-            <button
-              v-for="opt in controllerOptions"
-              :key="opt.label"
-              class="flex-1 px-2 py-1.5 rounded text-xs font-medium transition-colors"
-              :class="selectedController === opt.value ? 'bg-blue-600 text-white' : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'"
-              @click="setController(opt.value)"
-            >
-              {{ opt.label }}
-            </button>
+    <!-- Options menu overlay — fully gamepad-navigable -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-opacity duration-200"
+        leave-active-class="transition-opacity duration-200"
+        enter-from-class="opacity-0"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="showOptions"
+          class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+        >
+          <div class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4">
+            <h2 class="text-xl font-semibold font-display text-zinc-100 mb-4">Game Options</h2>
+
+            <div class="space-y-1.5">
+              <button
+                v-for="(item, idx) in optionsMenuItems"
+                :key="item.id"
+                class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
+                :class="optionsFocusIdx === idx
+                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                  : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                @click="item.action()"
+              >
+                <span class="font-medium">{{ item.label }}</span>
+                <span v-if="item.valueLabel" class="text-xs opacity-75">{{ item.valueLabel }}</span>
+              </button>
+            </div>
+
+            <!-- Hints -->
+            <div class="flex gap-6 mt-4 text-xs text-zinc-500 justify-end">
+              <BigPictureButtonPrompt button="A" label="Select" size="sm" />
+              <BigPictureButtonPrompt button="B" label="Close" size="sm" />
+            </div>
           </div>
         </div>
-
-        <div v-if="isEmulatedGame" class="px-4 py-2 bg-zinc-800/50 rounded-lg">
-          <p class="text-zinc-400 text-xs font-medium mb-2">Quality Preset</p>
-          <div class="flex gap-1.5">
-            <button
-              v-for="opt in qualityOptions"
-              :key="opt.label"
-              class="flex-1 px-2 py-1.5 rounded text-xs font-medium transition-colors"
-              :class="selectedQuality === opt.value ? 'bg-purple-600 text-white' : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'"
-              @click="setQuality(opt.value)"
-            >
-              {{ opt.label }}
-            </button>
-          </div>
-        </div>
-
-        <div v-if="isEmulatedGame" class="px-4 py-2 bg-zinc-800/50 rounded-lg">
-          <div class="flex justify-between items-center">
-            <p class="text-zinc-300 text-sm">Widescreen (16:9)</p>
-            <button
-              class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
-              :class="widescreenEnabled ? 'bg-green-600' : 'bg-zinc-700'"
-              @click="toggleWidescreen"
-            >
-              <span
-                class="inline-block h-4 w-4 rounded-full bg-white transition-transform"
-                :class="widescreenEnabled ? 'translate-x-6' : 'translate-x-1'"
-              />
-            </button>
-          </div>
-        </div>
-
-        <div class="border-t border-zinc-800 my-1" />
-
-        <button
-          class="w-full text-left px-4 py-2 bg-zinc-800/50 hover:bg-zinc-700 rounded-lg transition-colors text-zinc-200 text-sm"
-          @click="openStore"
-        >
-          View on Store
-        </button>
-        <button
-          class="w-full text-left px-4 py-2 bg-zinc-800/50 hover:bg-zinc-700 rounded-lg transition-colors text-zinc-200 text-sm"
-          @click="checkForUpdates"
-        >
-          Check for Updates
-        </button>
-      </div>
-    </BigPictureDialog>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -330,6 +304,7 @@ import {
   TrophyIcon,
 } from "@heroicons/vue/24/solid";
 import BigPictureDialog from "~/components/bigpicture/BigPictureDialog.vue";
+import BigPictureButtonPrompt from "~/components/bigpicture/BigPictureButtonPrompt.vue";
 import {
   useGame,
   type LaunchResult,
@@ -372,6 +347,8 @@ const tabRefs: Record<string, HTMLElement | null> = {};
 const tabIndicatorStyle = ref({ left: "0", width: "0" });
 const launchError = ref<string | null>(null);
 const showOptions = ref(false);
+const optionsFocusIdx = ref(0);
+let optionsLockId = 0;
 
 const focusNav = useFocusNavigation();
 const registerAction = useBpFocusableGroup("content");
@@ -524,6 +501,143 @@ async function applyProfileName() {
     console.log("[EMU]", msg);
   } catch (e) {
     console.error("[EMU] Failed to apply profile:", e);
+  }
+}
+
+// ── Options menu: gamepad-navigable list ──────────────────────────────────
+interface OptionsMenuItem {
+  id: string;
+  label: string;
+  valueLabel?: string;
+  action: () => void;
+}
+
+const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
+  const items: OptionsMenuItem[] = [];
+
+  if (isEmulatedGame.value) {
+    items.push({
+      id: "controller",
+      label: "Controller Layout",
+      valueLabel: controllerLabel.value,
+      action: cycleController,
+    });
+    items.push({
+      id: "quality",
+      label: "Quality Preset",
+      valueLabel: qualityLabel.value,
+      action: cycleQuality,
+    });
+    items.push({
+      id: "widescreen",
+      label: "Widescreen (16:9)",
+      valueLabel: widescreenEnabled.value ? "On" : "Off",
+      action: toggleWidescreen,
+    });
+  }
+
+  if (isNativeGame.value) {
+    items.push({
+      id: "profile",
+      label: "Set Account Name",
+      action: applyProfileName,
+    });
+  }
+
+  items.push({
+    id: "store",
+    label: "View on Store",
+    action: () => {
+      showOptions.value = false;
+      openStore();
+    },
+  });
+  items.push({
+    id: "updates",
+    label: "Check for Updates",
+    action: () => {
+      showOptions.value = false;
+      checkForUpdates();
+    },
+  });
+
+  if (status.value?.type === "Installed") {
+    items.push({
+      id: "uninstall",
+      label: "Uninstall",
+      action: uninstallGame,
+    });
+  }
+
+  return items;
+});
+
+const _optionsSubs: (() => void)[] = [];
+
+function wireOptionsGamepad() {
+  unwireOptionsGamepad();
+
+  _optionsSubs.push(
+    gamepad.onButton(GamepadButton.DPadUp, () => {
+      if (!showOptions.value) return;
+      optionsFocusIdx.value = Math.max(0, optionsFocusIdx.value - 1);
+    }),
+  );
+  _optionsSubs.push(
+    gamepad.onButton(GamepadButton.DPadDown, () => {
+      if (!showOptions.value) return;
+      optionsFocusIdx.value = Math.min(
+        optionsMenuItems.value.length - 1,
+        optionsFocusIdx.value + 1,
+      );
+    }),
+  );
+  _optionsSubs.push(
+    gamepad.onButton(GamepadButton.South, () => {
+      if (!showOptions.value) return;
+      const item = optionsMenuItems.value[optionsFocusIdx.value];
+      if (item) item.action();
+    }),
+  );
+  _optionsSubs.push(
+    gamepad.onButton(GamepadButton.East, () => {
+      if (!showOptions.value) return;
+      showOptions.value = false;
+    }),
+  );
+}
+
+function unwireOptionsGamepad() {
+  for (const unsub of _optionsSubs) unsub();
+  _optionsSubs.length = 0;
+}
+
+watch(showOptions, (v) => {
+  if (v) {
+    optionsFocusIdx.value = 0;
+    optionsLockId = focusNav.acquireInputLock();
+    wireOptionsGamepad();
+  } else {
+    unwireOptionsGamepad();
+    focusNav.releaseInputLock(optionsLockId);
+  }
+});
+
+const confirmUninstall = ref(false);
+
+function uninstallGame() {
+  showOptions.value = false;
+  confirmUninstall.value = true;
+}
+
+async function doUninstall() {
+  confirmUninstall.value = false;
+  try {
+    await invoke("uninstall_game", { gameId });
+    navigateTo("/bigpicture/library");
+  } catch (e) {
+    console.error("[BPM:GAME] Uninstall failed:", e);
+    launchError.value = `Uninstall failed: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
@@ -688,6 +802,8 @@ onMounted(() => {
 onUnmounted(() => {
   for (const unsub of _unsubs) unsub();
   _unsubs.length = 0;
+  unwireOptionsGamepad();
+  if (showOptions.value) focusNav.releaseInputLock(optionsLockId);
   window.removeEventListener("resize", _onResize);
 });
 

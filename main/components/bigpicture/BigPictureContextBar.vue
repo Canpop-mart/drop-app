@@ -12,7 +12,7 @@
     <div class="flex items-center gap-6">
       <BigPictureButtonPrompt v-if="showSearch" button="Y" label="Search" />
       <BigPictureButtonPrompt v-if="showSort" button="X" label="Sort" />
-      <BigPictureButtonPrompt v-else-if="showOptions" button="X" label="Options" />
+      <BigPictureButtonPrompt v-if="showOptions" button="Start" label="Options" />
       <BigPictureButtonPrompt button="LT" label="" />
       <BigPictureButtonPrompt button="RT" label="Scroll" />
       <BigPictureButtonPrompt button="LB" label="" />

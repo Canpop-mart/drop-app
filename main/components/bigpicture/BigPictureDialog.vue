@@ -75,6 +75,10 @@
 
 <script setup lang="ts">
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
+import { useFocusNavigation } from "~/composables/focus-navigation";
+
+const focusNav = useFocusNavigation();
+let lockId = 0;
 
 const props = withDefaults(
   defineProps<{
@@ -116,9 +120,11 @@ watch(
   (v) => {
     if (v) {
       focusedButton.value = "confirm";
+      lockId = focusNav.acquireInputLock();
       wireGamepad();
     } else {
       unwireGamepad();
+      focusNav.releaseInputLock(lockId);
     }
   },
 );
@@ -175,7 +181,12 @@ function unwireGamepad() {
   unsubs.length = 0;
 }
 
-onUnmounted(() => unwireGamepad());
+onUnmounted(() => {
+  unwireGamepad();
+  if (props.visible) {
+    focusNav.releaseInputLock(lockId);
+  }
+});
 </script>
 
 <style scoped>

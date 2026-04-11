@@ -194,26 +194,33 @@ pub fn configure_retroarch_for_game(
     overrides.insert("input_autodetect_enable", "true".into());
 
     // Sane defaults for a "just works" experience
-    overrides.insert("video_fullscreen", "true".into());
     overrides.insert("pause_nonactive", "false".into());
     overrides.insert("savestate_auto_save", "false".into());
     overrides.insert("savestate_auto_load", "false".into());
 
-    // ── Gamescope / Steam Deck video driver ─────────────────────────────
+    // ── Gamescope / Steam Deck ──────────────────────────────────────────
     // Gamescope (SteamOS Gaming Mode) is a nested Wayland compositor that
-    // works best with Vulkan.  Cores that default to OpenGL (e.g.
-    // mupen64plus_next for N64) fail to create a visible surface in
-    // Gamescope.  Forcing Vulkan ensures all cores render correctly —
-    // HW-accelerated cores use native Vulkan and software cores render to
-    // a texture that RetroArch presents via Vulkan.
+    // composites every window as fullscreen.  RetroArch must NOT try to
+    // go fullscreen itself (it may try to grab the display, change
+    // resolution, or use exclusive-fullscreen — all of which fail in
+    // Gamescope and result in an invisible window).
+    //
+    // Instead we run RetroArch in windowed mode and let Gamescope handle
+    // fullscreen compositing.  Also force Vulkan so cores that default to
+    // OpenGL (e.g. mupen64plus_next) get a visible surface.
     #[cfg(target_os = "linux")]
-    {
-        let in_gamescope = std::env::var("GAMESCOPE_WAYLAND_DISPLAY").is_ok()
-            || std::env::var("SteamGamepadUI").is_ok();
-        if in_gamescope {
-            overrides.insert("video_driver", "\"vulkan\"".into());
-            info!("[RETROARCH] Gamescope detected — forcing Vulkan video driver");
-        }
+    let in_gamescope = std::env::var("GAMESCOPE_WAYLAND_DISPLAY").is_ok()
+        || std::env::var("SteamGamepadUI").is_ok();
+    #[cfg(not(target_os = "linux"))]
+    let in_gamescope = false;
+
+    if in_gamescope {
+        overrides.insert("video_fullscreen", "false".into());
+        overrides.insert("video_windowed_fullscreen", "true".into());
+        overrides.insert("video_driver", "\"vulkan\"".into());
+        info!("[RETROARCH] Gamescope detected — windowed mode + Vulkan driver");
+    } else {
+        overrides.insert("video_fullscreen", "true".into());
     }
 
     // Modern menu driver — controller-friendly if user opens the menu
