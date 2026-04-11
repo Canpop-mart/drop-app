@@ -307,6 +307,18 @@ impl ProcessManager<'_> {
         game_id: String,
         launch_process_index: usize,
     ) -> Result<(), ProcessError> {
+        // Helper macro to emit debug events to the frontend console
+        macro_rules! emit_dbg {
+            ($step:expr, $($key:expr => $val:expr),+ $(,)?) => {
+                let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                    "step": $step,
+                    "game_id": &game_id,
+                    $($key: $val),+
+                }));
+                info!(concat!("[LAUNCH:{}] ", $step), &game_id);
+            };
+        }
+
         if self.processes.contains_key(&game_id) {
             return Err(ProcessError::AlreadyRunning);
         }
@@ -335,12 +347,6 @@ impl ProcessManager<'_> {
             } => (version_name, install_dir),
             _ => return Err(ProcessError::NotInstalled),
         };
-
-        debug!(
-            "Launching process {:?} with version {:?}",
-            &game_id,
-            db_lock.applications.game_versions.get(version_name)
-        );
 
         let game_version = db_lock
             .applications
@@ -375,6 +381,32 @@ impl ProcessManager<'_> {
             )))?;
 
         let target_platform = meta.target_platform;
+
+        // ── STEP 1: Game metadata ──────────────────────────────────────────
+        let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+            "step": "1_metadata",
+            "game_id": &game_id,
+            "target_platform": format!("{:?}", target_platform),
+            "version_id": version_name,
+            "install_dir": install_dir,
+            "install_type": format!("{:?}", match game_status {
+                GameDownloadStatus::Installed { install_type, .. } => format!("{:?}", install_type),
+                other => format!("{:?}", other),
+            }),
+            "launch_template": &game_version.user_configuration.launch_template,
+            "override_proton_path": &game_version.user_configuration.override_proton_path,
+            "all_launches": game_version.launches.iter().map(|l| {
+                serde_json::json!({
+                    "name": &l.name,
+                    "platform": format!("{:?}", l.platform),
+                    "command": &l.command,
+                    "has_emulator": l.emulator.is_some(),
+                    "emulator_game_id": l.emulator.as_ref().map(|e| &e.game_id),
+                    "emulator_version_id": l.emulator.as_ref().map(|e| &e.version_id),
+                    "emulator_launch_id": l.emulator.as_ref().map(|e| &e.launch_id),
+                })
+            }).collect::<Vec<_>>(),
+        }));
         info!(
             "[LAUNCH] Game {:?} — target_platform={:?}, version={:?}, install_dir={:?}",
             &game_id, target_platform, version_name, install_dir
@@ -384,12 +416,26 @@ impl ProcessManager<'_> {
         // platform metadata after the database lock is released.
         let mut needs_platform_correction = false;
 
+        // ── STEP 2: Select launch config ───────────────────────────────────
         let (target_command, emulator, disc_paths) = match game_status {
-
             GameDownloadStatus::Installed {
                 install_type: InstalledGameType::Installed,
                 ..
             } => {
+                let matching_launches: Vec<_> = game_version
+                    .launches
+                    .iter()
+                    .filter(|v| v.platform == target_platform)
+                    .collect();
+                let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                    "step": "2_launch_config_filter",
+                    "game_id": &game_id,
+                    "filter_platform": format!("{:?}", target_platform),
+                    "matching_count": matching_launches.len(),
+                    "matching_names": matching_launches.iter().map(|l| &l.name).collect::<Vec<_>>(),
+                    "requested_index": launch_process_index,
+                }));
+
                 let (_, launch_config) = game_version
                     .launches
                     .iter()
@@ -397,6 +443,16 @@ impl ProcessManager<'_> {
                     .enumerate()
                     .find(|(i, _)| *i == launch_process_index)
                     .ok_or(ProcessError::NotInstalled)?;
+
+                let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                    "step": "2_launch_config_selected",
+                    "game_id": &game_id,
+                    "command": &launch_config.command,
+                    "has_emulator": launch_config.emulator.is_some(),
+                    "emulator_game_id": launch_config.emulator.as_ref().map(|e| &e.game_id),
+                    "disc_paths": &launch_config.disc_paths,
+                }));
+
                 (
                     launch_config.command.clone(),
                     launch_config.emulator.as_ref(),
@@ -413,6 +469,11 @@ impl ProcessManager<'_> {
                     .find(|v| v.platform == target_platform)
                     .ok_or(ProcessError::NotInstalled)?;
 
+                let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                    "step": "2_setup_config",
+                    "game_id": &game_id,
+                    "command": &setup_config.command,
+                }));
                 (setup_config.command.clone(), None, Vec::new())
             }
             _ => unreachable!("Game registered as 'Partially Installed'"),
@@ -420,12 +481,22 @@ impl ProcessManager<'_> {
 
         let mut target_command = ParsedCommand::parse(target_command)?;
 
-        // Select handler based on emulator's platform if present, otherwise game's platform.
-        // This ensures Linux AppImages run via NativeLauncher even when the game target is Windows.
+        // ── STEP 3: Handler selection ──────────────────────────────────────
         let handler_target_platform = emulator
             .and_then(|e| db_lock.applications.installed_game_version.get(&e.game_id))
             .map(|m| m.target_platform)
             .unwrap_or(target_platform);
+
+        let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+            "step": "3_handler_selection",
+            "game_id": &game_id,
+            "game_target_platform": format!("{:?}", target_platform),
+            "handler_target_platform": format!("{:?}", handler_target_platform),
+            "has_emulator": emulator.is_some(),
+            "emulator_overrides_platform": emulator.is_some() && handler_target_platform != target_platform,
+            "current_platform": format!("{:?}", self.current_platform),
+        }));
+
         let process_handler = self.fetch_process_handler(&db_lock, &handler_target_platform)?;
 
         // Track the effective working directory — for emulator launches this
@@ -433,6 +504,7 @@ impl ProcessManager<'_> {
         // emulator command (e.g. `cores/snes9x_libretro.dll`) resolve correctly.
         let mut effective_cwd: Option<String> = None;
 
+        // ── STEP 4: Build launch command ───────────────────────────────────
         let target_launch_string = if let Some(emulator) = emulator {
             let err = ProcessError::RequiredDependency(
                 emulator.game_id.clone(),
@@ -466,8 +538,6 @@ impl ProcessManager<'_> {
                 _ => Err(err.clone()),
             }?;
 
-            // Use the emulator's install dir as CWD so relative paths in the
-            // emulator command (cores, configs, autoconfig) resolve correctly.
             effective_cwd = Some(emulator_install_dir.clone());
 
             let emulator_game_version = db_lock
@@ -483,14 +553,11 @@ impl ProcessManager<'_> {
                 .ok_or(err)?;
 
             let mut exe_command = ParsedCommand::parse(emulator_launch_config.command.clone())?;
-            // Move env vars instead of cloning, since target_command.env is not needed after this
             exe_command.env.extend(std::mem::take(&mut target_command.env));
             exe_command.make_absolute(emulator_install_dir.into());
 
             target_command.make_absolute(PathBuf::from(install_dir.clone()));
 
-            // For multi-disc games, generate a .m3u playlist and use it as {rom}
-            // instead of the single ROM path. Clean up any stale .m3u from previous runs.
             let rom_path = if disc_paths.len() > 1 {
                 let game_dir = std::path::Path::new(install_dir);
                 crate::m3u::cleanup_m3u(game_dir);
@@ -500,7 +567,6 @@ impl ProcessManager<'_> {
                 target_command.command.clone()
             };
 
-            // Substitute {rom} placeholder in emulator args with the actual ROM path
             let mut has_rom_placeholder = false;
             for arg in &mut exe_command.args {
                 if arg.contains("{rom}") {
@@ -508,45 +574,65 @@ impl ProcessManager<'_> {
                     has_rom_placeholder = true;
                 }
             }
-            // Also check the command itself for {rom}
             if exe_command.command.contains("{rom}") {
                 exe_command.command = exe_command.command.replace("{rom}", &rom_path);
                 has_rom_placeholder = true;
             }
-            // If the emulator command has no {rom} placeholder at all,
-            // auto-append the ROM path as the last argument so the emulator
-            // knows which game to load (e.g. retroarch.exe <rom_path>).
-            // For RetroArch, also auto-detect and inject the -L <core> flag.
-            if !has_rom_placeholder && !rom_path.is_empty() {
-                log::info!("Emulator command has no {{rom}} placeholder — auto-appending ROM path: {}", rom_path);
 
-                // Check if this is RetroArch and no -L flag is present
+            let mut auto_core_path: Option<String> = None;
+            if !has_rom_placeholder && !rom_path.is_empty() {
                 let has_core_flag = exe_command.args.iter().any(|a| a == "-L" || a.starts_with("--libretro"));
                 if !has_core_flag {
                     if let Some(core_path) = remote::retroarch::resolve_core_for_rom(
                         std::path::Path::new(&emulator_install_dir),
                         &rom_path,
                     ) {
-                        log::info!("Auto-detected RetroArch core: {}", core_path.display());
+                        auto_core_path = Some(core_path.to_string_lossy().to_string());
                         exe_command.args.push("-L".to_string());
                         exe_command.args.push(core_path.to_string_lossy().to_string());
                     }
                 }
-
-                exe_command.args.push(rom_path);
+                exe_command.args.push(rom_path.clone());
             }
+
+            let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                "step": "4_emulator_build",
+                "game_id": &game_id,
+                "emulator_game_id": &emulator.game_id,
+                "emulator_install_dir": &emulator_install_dir,
+                "emulator_command_raw": &emulator_launch_config.command,
+                "rom_path": &rom_path,
+                "has_rom_placeholder": has_rom_placeholder,
+                "auto_core_path": &auto_core_path,
+                "final_exe_command": &exe_command.command,
+                "final_exe_args": &exe_command.args,
+                "final_exe_env": &exe_command.env,
+            }));
+
+            let reconstructed = exe_command.reconstruct();
+
+            let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                "step": "4_emulator_reconstructed",
+                "game_id": &game_id,
+                "reconstructed_command": &reconstructed,
+            }));
 
             process_handler.create_launch_process(
                 emulator_metadata,
-                exe_command.reconstruct(),
+                reconstructed,
                 emulator_game_version,
                 emulator_install_dir,
                 &db_lock,
             )?
         } else {
-            // Save the reconstructed command string before passing to the
-            // handler (reconstruct() consumes the ParsedCommand).
             let reconstructed_cmd = target_command.reconstruct();
+
+            let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                "step": "4_direct_launch",
+                "game_id": &game_id,
+                "reconstructed_command": &reconstructed_cmd,
+            }));
+
             match process_handler.create_launch_process(
                 &meta,
                 reconstructed_cmd.clone(),
@@ -554,11 +640,20 @@ impl ProcessManager<'_> {
                 install_dir,
                 &db_lock,
             ) {
-                Ok(s) => s,
+                Ok(s) => {
+                    let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                        "step": "4_handler_result_ok",
+                        "game_id": &game_id,
+                        "handler_output": &s,
+                    }));
+                    s
+                },
                 Err(ProcessError::NeedsCompat(ref _binary)) => {
-                    // NativeLauncher detected a Windows executable (.exe/.bat/.cmd)
-                    // but target_platform was Linux.  Automatically fall through to
-                    // the Windows compat handler (UMU/Proton) so the game launches.
+                    let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                        "step": "4_needs_compat_fallback",
+                        "game_id": &game_id,
+                        "binary": _binary,
+                    }));
                     warn!(
                         "NeedsCompat for {:?} — falling through to Windows handler",
                         _binary
@@ -566,9 +661,6 @@ impl ProcessManager<'_> {
                     let compat = self.fetch_process_handler(&db_lock, &Platform::Windows)
                         .map_err(|_| ProcessError::NoCompat)?;
 
-                    // Re-derive the launch command for the Windows platform.
-                    // Try a dedicated Windows launch config first; fall back to the
-                    // original command (the .exe) if none exists.
                     let win_launch_cmd = game_version
                         .launches
                         .iter()
@@ -582,28 +674,39 @@ impl ProcessManager<'_> {
                         })
                         .unwrap_or(reconstructed_cmd);
 
-                    // Build a Windows-targeted metadata clone for compat handler
                     let mut win_meta = meta.clone();
                     win_meta.target_platform = Platform::Windows;
 
                     let result = compat.create_launch_process(
                         &win_meta,
-                        win_launch_cmd,
+                        win_launch_cmd.clone(),
                         game_version,
                         install_dir,
                         &db_lock,
                     )?;
 
-                    // Flag that we need to correct stored platform after db_lock drops
-                    needs_platform_correction = true;
+                    let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                        "step": "4_compat_result",
+                        "game_id": &game_id,
+                        "compat_command": &win_launch_cmd,
+                        "compat_output": &result,
+                    }));
 
+                    needs_platform_correction = true;
                     result
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                        "step": "4_handler_error",
+                        "game_id": &game_id,
+                        "error": format!("{}", e),
+                    }));
+                    return Err(e);
+                },
             }
         };
 
-        // For emulator launches, use the emulator's dir as CWD; otherwise use the game's.
+        // ── STEP 5: Format through launch template ─────────────────────────
         let working_dir = effective_cwd.as_deref().unwrap_or(install_dir);
 
         let mut parsed_launch = ParsedCommand::parse(target_launch_string.clone())?;
@@ -611,6 +714,18 @@ impl ProcessManager<'_> {
         let working_dir_owned = working_dir.to_string();
         let game_install_dir_owned = install_dir.to_string();
         parsed_launch.make_absolute(working_dir.into());
+
+        let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+            "step": "5_pre_template",
+            "game_id": &game_id,
+            "handler_output_raw": &target_launch_string,
+            "parsed_command": &parsed_launch.command,
+            "parsed_args": &parsed_launch.args,
+            "parsed_env": &parsed_launch.env,
+            "working_dir": &working_dir_owned,
+            "effective_cwd": &effective_cwd,
+            "launch_template": &game_version.user_configuration.launch_template,
+        }));
 
         let format_args = DropFormatArgs::new(
             target_launch_string,
@@ -633,15 +748,17 @@ impl ProcessManager<'_> {
             .map_err(|e| ProcessError::FormatError(e.to_string()))?
             .to_string();
 
+        let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+            "step": "5_post_template",
+            "game_id": &game_id,
+            "final_launch_string": &target_launch_string,
+        }));
+
         // Clone user config before dropping the DB lock (needed for RetroArch setup below)
         let user_configuration = game_version.user_configuration.clone();
 
-        // Drop the DB write lock before spawning — everything below only
-        // needs owned data. We re-acquire briefly for the status update.
         drop(db_lock);
 
-        // If the NeedsCompat fallback fired, persist the corrected platform
-        // so future launches go directly through the compat handler.
         if needs_platform_correction {
             let mut db_w = borrow_db_mut_checked();
             if let Some(stored) = db_w
@@ -657,10 +774,23 @@ impl ProcessManager<'_> {
             }
         }
 
+        // ── STEP 6: Final command parsing ──────────────────────────────────
         let launch_parameters = LaunchParameters(
-            ParsedCommand::parse(target_launch_string)?,
+            ParsedCommand::parse(target_launch_string.clone())?,
             working_dir_owned.clone().into(),
         );
+
+        let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+            "step": "6_final_command",
+            "game_id": &game_id,
+            "executable": &launch_parameters.0.command,
+            "executable_exists": std::path::Path::new(&launch_parameters.0.command).exists(),
+            "args": &launch_parameters.0.args,
+            "env_vars": &launch_parameters.0.env,
+            "working_dir": &working_dir_owned,
+            "working_dir_exists": std::path::Path::new(&working_dir_owned).exists(),
+            "needs_platform_correction": needs_platform_correction,
+        }));
 
         info!(
             "launching (in {}): {:?}",
@@ -765,19 +895,91 @@ impl ProcessManager<'_> {
         // saves, system BIOS, and controller autoconfig.
         // Also fetch RA Connect credentials so RetroArch can authenticate
         // with RetroAchievements automatically (no manual login needed).
+        // ── STEP 7: RetroArch configuration ─────────────────────────────
         if let Some(emu_dir) = &effective_cwd {
+            let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                "step": "7_retroarch_config_start",
+                "game_id": &game_id,
+                "emu_dir": emu_dir,
+            }));
+
             let ra_creds = tauri::async_runtime::block_on(
                 remote::retroarch::fetch_ra_credentials(),
             );
-            let _retroarch_info = remote::retroarch::configure_retroarch_for_game(
+            let retroarch_info = remote::retroarch::configure_retroarch_for_game(
                 emu_dir,
                 &game_id,
                 ra_creds.as_ref(),
                 Some(&user_configuration),
             );
+
+            // Dump the written retroarch.cfg to frontend for debugging
+            let cfg_path = std::path::Path::new(emu_dir).join("retroarch.cfg");
+            let cfg_content = std::fs::read_to_string(&cfg_path).unwrap_or_else(|e| {
+                format!("[ERROR reading {}: {}]", cfg_path.display(), e)
+            });
+            // Extract key lines for Gamescope/controller/video debugging
+            let debug_lines: Vec<&str> = cfg_content
+                .lines()
+                .filter(|l| {
+                    let t = l.trim();
+                    t.starts_with("video_fullscreen")
+                        || t.starts_with("video_windowed")
+                        || t.starts_with("video_driver")
+                        || t.starts_with("input_joypad_driver")
+                        || t.starts_with("input_autodetect")
+                        || t.starts_with("libretro_directory")
+                        || t.starts_with("menu_driver")
+                        || t.starts_with("savefile_directory")
+                        || t.starts_with("joypad_autoconfig_dir")
+                })
+                .collect();
+            let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                "step": "7_retroarch_config_result",
+                "game_id": &game_id,
+                "cfg_path": cfg_path.display().to_string(),
+                "cfg_exists": cfg_path.exists(),
+                "retroarch_detected": retroarch_info.is_some(),
+                "has_ra_credentials": ra_creds.is_some(),
+                "key_settings": debug_lines,
+                "cfg_line_count": cfg_content.lines().count(),
+            }));
+        } else {
+            let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                "step": "7_no_emulator",
+                "game_id": &game_id,
+                "reason": "effective_cwd is None (no emulator configured)",
+            }));
         }
 
-        let child = command.spawn()?;
+        // ── STEP 8: Spawn process ──────────────────────────────────────────
+        let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+            "step": "8_spawning",
+            "game_id": &game_id,
+            "command": format!("{:?}", &launch_parameters.0.command),
+        }));
+
+        let child = match command.spawn() {
+            Ok(child) => {
+                let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                    "step": "8_spawn_success",
+                    "game_id": &game_id,
+                    "pid": child.id(),
+                }));
+                child
+            }
+            Err(e) => {
+                let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                    "step": "8_spawn_FAILED",
+                    "game_id": &game_id,
+                    "error": format!("{}", e),
+                    "error_kind": format!("{:?}", e.kind()),
+                    "executable": &launch_parameters.0.command,
+                    "executable_exists": std::path::Path::new(&launch_parameters.0.command).exists(),
+                }));
+                return Err(e.into());
+            }
+        };
 
         let launch_process_handle = Arc::new(SharedChild::new(child)?);
 

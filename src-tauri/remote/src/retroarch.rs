@@ -119,10 +119,18 @@ pub fn configure_retroarch_for_game(
     let emu_root = PathBuf::from(emulator_install_dir);
 
     if !is_retroarch(&emu_root) {
-        debug!(
-            "No RetroArch detected in {}, skipping config",
+        warn!(
+            "[RETROARCH] No RetroArch detected in {} — checked for: retroarch, retroarch.exe, retroarch.AppImage, retroarch.cfg, cores/ dir. Skipping config.",
             emulator_install_dir
         );
+        // Log what files DO exist in emu_root for debugging
+        if let Ok(entries) = fs::read_dir(&emu_root) {
+            let files: Vec<String> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect();
+            warn!("[RETROARCH] Files in {}: {:?}", emulator_install_dir, files);
+        }
         return None;
     }
 

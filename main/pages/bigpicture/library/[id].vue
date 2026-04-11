@@ -734,6 +734,12 @@ onMounted(async () => {
 
   // Listen for external launch errors (process crashes / wrong binary format)
   const { listen } = await import("@tauri-apps/api/event");
+  const unlistenLaunchTrace = await listen("launch_trace", (event) => {
+    const p = event.payload as any;
+    console.log(`[BPM:TRACE:${p.step}]`, JSON.stringify(p, null, 2));
+  });
+  _unsubs.push(() => unlistenLaunchTrace());
+
   const unlistenLaunchError = await listen("launch_external_error", (event) => {
     if (event.payload === gameId) {
       console.error("[BPM:GAME] External launch error for:", gameId);

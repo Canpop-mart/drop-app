@@ -73,15 +73,12 @@ impl ProcessHandler for NativeLauncher {
         current_dir: &str,
         _database: &Database,
     ) -> Result<String, ProcessError> {
-        // Run the binary directly — no umu, no pressure-vessel, no FUSE dependency.
-        // Required for Linux-native AppImages and plain ELF binaries.
+        info!("[NativeLauncher] create_launch_process: command={:?}, current_dir={:?}", &launch_command, current_dir);
         let mut parsed = ParsedCommand::parse(launch_command)?;
         parsed.make_absolute(PathBuf::from(current_dir));
+        info!("[NativeLauncher] absolute command: {:?}", &parsed.command);
+        info!("[NativeLauncher] command exists on disk: {}", std::path::Path::new(&parsed.command).exists());
 
-        // Safety check: detect Windows executables being launched natively on Linux.
-        // This prevents confusing "exec format error (os error 8)" messages when a
-        // game is incorrectly marked as Linux-native but is actually a Windows binary.
-        // Check both the file extension AND the PE magic bytes (MZ header).
         #[cfg(target_os = "linux")]
         {
             let cmd_lower = parsed.command.to_lowercase();
@@ -89,37 +86,39 @@ impl ProcessHandler for NativeLauncher {
                 || cmd_lower.ends_with(".bat")
                 || cmd_lower.ends_with(".cmd");
             let is_pe_binary = if !is_win_ext {
-                // Read first 2 bytes to check for MZ (PE) header
                 match std::fs::File::open(&parsed.command) {
                     Ok(mut f) => {
                         use std::io::Read;
                         let mut magic = [0u8; 2];
                         match f.read_exact(&mut magic) {
-                            Ok(()) => magic == [0x4D, 0x5A], // "MZ"
+                            Ok(()) => {
+                                info!("[NativeLauncher] PE check: magic bytes = [{:#04x}, {:#04x}]", magic[0], magic[1]);
+                                magic == [0x4D, 0x5A]
+                            }
                             Err(e) => {
-                                warn!("NativeLauncher: could not read magic bytes from {:?}: {}", &parsed.command, e);
+                                warn!("[NativeLauncher] could not read magic bytes from {:?}: {}", &parsed.command, e);
                                 false
                             }
                         }
                     }
                     Err(e) => {
-                        warn!("NativeLauncher: could not open {:?} for PE check: {}", &parsed.command, e);
+                        warn!("[NativeLauncher] could not open {:?} for PE check: {}", &parsed.command, e);
                         false
                     }
                 }
             } else {
                 false
             };
+            info!("[NativeLauncher] Windows check: is_win_ext={}, is_pe_binary={}", is_win_ext, is_pe_binary);
             if is_win_ext || is_pe_binary {
-                debug!(
-                    "NativeLauncher: detected Windows binary {:?} (ext={}, pe={})",
-                    &parsed.command, is_win_ext, is_pe_binary
-                );
+                info!("[NativeLauncher] → Returning NeedsCompat for {:?}", &parsed.command);
                 return Err(ProcessError::NeedsCompat(parsed.command.clone()));
             }
         }
 
-        Ok(parsed.reconstruct())
+        let result = parsed.reconstruct();
+        info!("[NativeLauncher] → Returning OK: {:?}", &result);
+        Ok(result)
     }
 
     fn valid_for_platform(&self, _db: &Database, _target: &Platform) -> bool {
@@ -234,22 +233,29 @@ impl ProcessHandler for UMUCompatLauncher {
             return Err(ProcessError::NoCompat);
         }
         let proton_env = format!("PROTONPATH={}", proton_path);
+        info!("[UMUCompat] Proton valid. Building launch command...");
 
-        Ok(format!(
+        let umu_exe = UMU_LAUNCHER_EXECUTABLE
+            .as_ref()
+            .expect("Failed to get UMU_LAUNCHER_EXECUTABLE as ref");
+
+        let result = format!(
             "GAMEID={game_id} {} WINEPREFIX={} {umu:?} {launch}",
             proton_env,
             pfx_dir.to_string_lossy(),
-            umu = UMU_LAUNCHER_EXECUTABLE
-                .as_ref()
-                .expect("Failed to get UMU_LAUNCHER_EXECUTABLE as ref"),
+            umu = umu_exe,
             launch = launch_command,
-        ))
+        );
+        info!("[UMUCompat] → Final command: {}", &result);
+        Ok(result)
     }
 
     fn valid_for_platform(&self, _db: &Database, _target: &Platform) -> bool {
         let Some(compat_info) = &*COMPAT_INFO else {
+            info!("[UMUCompat] valid_for_platform: COMPAT_INFO is None");
             return false;
         };
+        info!("[UMUCompat] valid_for_platform: umu_installed={}", compat_info.umu_installed);
         compat_info.umu_installed
     }
 
