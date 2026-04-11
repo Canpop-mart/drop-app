@@ -334,7 +334,7 @@ pub fn configure_retroarch_for_game(
 
 /// Returns `true` if the directory looks like a RetroArch installation.
 fn is_retroarch(dir: &Path) -> bool {
-    // Check for retroarch executable (any platform)
+    // Check for well-known exact names first
     let executables = [
         "retroarch",
         "retroarch.exe",
@@ -343,18 +343,53 @@ fn is_retroarch(dir: &Path) -> bool {
     ];
     for exe in &executables {
         if dir.join(exe).exists() {
+            info!("[RETROARCH] is_retroarch: matched exact name {:?}", exe);
             return true;
+        }
+    }
+
+    // Scan directory for any file whose name contains "retroarch" (case-insensitive).
+    // This catches variants like "RetroArch-Linux-x86_64.AppImage".
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_lower = name.to_string_lossy().to_lowercase();
+            if name_lower.contains("retroarch")
+                && (name_lower.ends_with(".appimage")
+                    || name_lower.ends_with(".exe")
+                    || !name_lower.contains('.'))
+            {
+                info!(
+                    "[RETROARCH] is_retroarch: matched by scan: {:?}",
+                    entry.file_name()
+                );
+                return true;
+            }
         }
     }
 
     // Check for retroarch.cfg as a fallback indicator
     if dir.join("retroarch.cfg").exists() {
+        info!("[RETROARCH] is_retroarch: matched via retroarch.cfg");
         return true;
     }
 
     // Check for a cores/ directory (common RetroArch structure)
-    if dir.join("cores").is_dir() && dir.join("retroarch.cfg").exists() {
+    if dir.join("cores").is_dir() {
+        info!("[RETROARCH] is_retroarch: matched via cores/ directory");
         return true;
+    }
+
+    // Log what we actually found for debugging
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let files: Vec<String> = entries
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        info!(
+            "[RETROARCH] is_retroarch: NO match in {:?}, contents: {:?}",
+            dir, files
+        );
     }
 
     false
