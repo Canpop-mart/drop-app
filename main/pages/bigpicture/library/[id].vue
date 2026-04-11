@@ -556,50 +556,61 @@ watch(activeTab, () => {
   nextTick(() => updateTabIndicator());
 });
 
+// Helper: race a promise against a timeout
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  return Promise.race([
+    promise,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
+}
+
 onMounted(async () => {
-  try {
-    const result = await useGame(gameId);
-    game.value = result.game;
-    statusRef.value = result.status;
-    version.value = result.version?.value ?? null;
+  // Wire up gamepad immediately — don't wait for data to load
+  _unsubs.push(
+    gamepad.onButton(GamepadButton.Start, () => {
+      showOptions.value = true;
+    }),
+  );
+
+  // Fetch all data in parallel with timeouts to prevent hangs on SteamOS
+  const [gameResult, versionResult, achievementsResult] = await Promise.all([
+    withTimeout(useGame(gameId).catch((e) => {
+      console.error("Failed to load game:", e);
+      return null;
+    }), 10000),
+    withTimeout(invoke<VersionOption[]>("fetch_game_version_options", { gameId }).catch(() => null), 10000),
+    withTimeout(
+      fetch(serverUrl(`api/v1/games/${gameId}/achievements`))
+        .then((res) => res.ok ? res.json() : null)
+        .catch(() => null),
+      10000,
+    ),
+  ]);
+
+  if (gameResult) {
+    game.value = gameResult.game;
+    statusRef.value = gameResult.status;
+    version.value = gameResult.version?.value ?? null;
 
     if (version.value?.userConfiguration) {
       selectedController.value = version.value.userConfiguration.controllerType ?? null;
       selectedQuality.value = version.value.userConfiguration.qualityPreset ?? null;
       widescreenEnabled.value = version.value.userConfiguration.widescreen ?? false;
     }
-  } catch (e) {
-    console.error("Failed to load game:", e);
   }
 
-  // Fetch version options for install flow
-  try {
-    versionOptions.value = await invoke<VersionOption[]>(
-      "fetch_game_version_options",
-      { gameId },
-    );
-  } catch {
-    // Not all games have version options
+  if (versionResult) {
+    versionOptions.value = versionResult;
   }
 
-  try {
-    const res = await fetch(serverUrl(`api/v1/games/${gameId}/achievements`));
-    if (res.ok) {
-      const data = await res.json();
-      achievements.value = Array.isArray(data) ? data : (data.achievements ?? []);
-    }
-  } catch {
-    // No achievements available
+  if (achievementsResult) {
+    achievements.value = Array.isArray(achievementsResult)
+      ? achievementsResult
+      : (achievementsResult.achievements ?? []);
   }
 
   nextTick(() => updateTabIndicator());
   focusNav.autoFocusContent("content");
-
-  _unsubs.push(
-    gamepad.onButton(GamepadButton.Start, () => {
-      showOptions.value = true;
-    }),
-  );
 });
 
 function _onResize() {

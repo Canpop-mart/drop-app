@@ -41,48 +41,12 @@
 
         <!-- Hints -->
         <div class="flex gap-6 mt-3 text-xs text-zinc-500">
-          <span>
-            <span
-              class="inline-block px-1.5 py-0.5 bg-green-700/60 text-green-300 rounded text-xs mr-1"
-              >A</span
-            >
-            Type
-          </span>
-          <span>
-            <span
-              class="inline-block px-1.5 py-0.5 bg-red-700/60 text-red-300 rounded text-xs mr-1"
-              >B</span
-            >
-            Close
-          </span>
-          <span>
-            <span
-              class="inline-block px-1.5 py-0.5 bg-blue-700/60 text-blue-300 rounded text-xs mr-1"
-              >X</span
-            >
-            Backspace
-          </span>
-          <span>
-            <span
-              class="inline-block px-1.5 py-0.5 bg-yellow-700/60 text-yellow-300 rounded text-xs mr-1"
-              >Y</span
-            >
-            Space
-          </span>
-          <span>
-            <span
-              class="inline-block px-1.5 py-0.5 bg-zinc-700 text-zinc-300 rounded text-xs mr-1"
-              >LB</span
-            >
-            Shift
-          </span>
-          <span>
-            <span
-              class="inline-block px-1.5 py-0.5 bg-zinc-700 text-zinc-300 rounded text-xs mr-1"
-              >RB</span
-            >
-            Submit
-          </span>
+          <BigPictureButtonPrompt button="A" label="Type" size="sm" />
+          <BigPictureButtonPrompt button="B" label="Close" size="sm" />
+          <BigPictureButtonPrompt button="X" label="Backspace" size="sm" />
+          <BigPictureButtonPrompt button="Y" label="Space" size="sm" />
+          <BigPictureButtonPrompt button="LB" label="Shift" size="sm" />
+          <BigPictureButtonPrompt button="RB" label="Submit" size="sm" />
         </div>
       </div>
     </Transition>
@@ -90,6 +54,7 @@
 </template>
 
 <script setup lang="ts">
+import BigPictureButtonPrompt from "~/components/bigpicture/BigPictureButtonPrompt.vue";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 
@@ -168,14 +133,9 @@ const gamepad = useGamepad();
 const focusNav = useFocusNavigation();
 const unsubs: (() => void)[] = [];
 
-// ── SteamOS keyboard detection ──────────────────────────────────────────
-// In SteamOS Game Mode, we can invoke the native virtual keyboard via
-// steam://open/keyboard. Detect Gamescope session via the composable.
-import { useDeckMode } from "~/composables/deck-mode";
-const { isGamescope } = useDeckMode();
-const useSteamKeyboard = computed(
-  () => isGamescope.value && typeof window !== "undefined",
-);
+// Note: Previously tried invoking steam://open/keyboard on SteamOS but
+// the Tauri webview can't navigate to steam:// protocol URLs. Our custom
+// on-screen keyboard works reliably on all platforms including Steam Deck.
 
 function clampFocus() {
   const layout = currentLayout.value;
@@ -192,16 +152,6 @@ watch(
   () => props.visible,
   (v) => {
     if (v) {
-      // In SteamOS Game Mode, try to invoke the native Steam keyboard
-      // which is more integrated with the Deck's touch/haptic input.
-      // Falls back to our custom keyboard if Steam keyboard is unavailable.
-      if (useSteamKeyboard.value) {
-        try {
-          window.open("steam://open/keyboard", "_self");
-        } catch {
-          // Steam keyboard unavailable, fall through to custom keyboard
-        }
-      }
       focusedRow.value = 1;
       focusedCol.value = 0;
       kbLockId = focusNav.acquireInputLock();

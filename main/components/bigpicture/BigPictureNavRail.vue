@@ -40,8 +40,9 @@
 
     <div class="flex-1" />
 
-    <!-- Exit Big Picture -->
+    <!-- Exit Big Picture (hidden on Steam Deck Gaming Mode — no desktop to return to) -->
     <button
+      v-if="!isGamescopeSession"
       :ref="(el: any) => registerNav(el, { onSelect: () => exitBigPicture() })"
       class="flex items-center justify-center w-14 h-14 rounded-xl text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50 transition-all duration-200"
       @click="exitBigPicture"
@@ -65,8 +66,10 @@ import {
 import { useBigPictureMode } from "~/composables/big-picture";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
+import { useDeckMode } from "~/composables/deck-mode";
 
 const router = useRouter();
+const { isGamescope: isGamescopeSession } = useDeckMode();
 const route = useRoute();
 const bigPicture = useBigPictureMode();
 const registerNav = useBpFocusableGroup("nav");

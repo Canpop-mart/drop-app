@@ -1,6 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { GamepadButton, useGamepad } from "./gamepad";
 import { useFocusNavigation } from "./focus-navigation";
+import { useDeckMode } from "./deck-mode";
 
 // ── Singleton state ──────────────────────────────────────────────────────────
 
@@ -34,6 +35,14 @@ export function useBigPictureMode() {
 
   async function exit() {
     if (!isActive.value) return;
+
+    // On Steam Deck in Gaming Mode (Gamescope), there's no windowed
+    // desktop to return to — exiting BPM would cause a white screen.
+    const { isGamescope } = useDeckMode();
+    if (isGamescope.value) {
+      console.log("[BPM] Exit blocked — running in Gamescope session");
+      return;
+    }
 
     isActive.value = false;
 

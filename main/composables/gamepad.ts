@@ -55,7 +55,7 @@ export const GamepadButton = {
 // ── Web Gamepad API button index → name mapping ─────────────────────────────
 // Standard Gamepad layout: https://w3c.github.io/gamepad/#remapping
 
-const BUTTON_MAP: Record<number, string> = {
+const BUTTON_MAP_STANDARD: Record<number, string> = {
   0: GamepadButton.South,
   1: GamepadButton.East,
   2: GamepadButton.West,
@@ -74,6 +74,17 @@ const BUTTON_MAP: Record<number, string> = {
   15: GamepadButton.DPadRight,
   16: GamepadButton.Guide,
 };
+
+// Steam Deck in Gaming Mode (SteamOS / Gamescope): Steam Input reports
+// buttons 2 (West/X) and 3 (North/Y) swapped through the Web Gamepad API.
+const BUTTON_MAP_DECK: Record<number, string> = {
+  ...BUTTON_MAP_STANDARD,
+  2: GamepadButton.North, // Physical Y (top) reports as index 2 on Deck
+  3: GamepadButton.West, // Physical X (left) reports as index 3 on Deck
+};
+
+// Active button map — switches when Steam Deck controller is detected
+let activeButtonMap = BUTTON_MAP_STANDARD;
 
 const AXIS_NAMES: Record<number, string> = {
   0: "LeftStickX",
@@ -130,12 +141,24 @@ function pollFrame() {
       connected.value = true;
       controllerId.value = cid;
       controllerName.value = gp.id;
-      console.log(`[GAMEPAD] Controller connected: ${gp.id} (index ${cid})`);
+
+      // Detect Steam Deck / Steam Input controllers which swap West↔North
+      const gpName = gp.id.toLowerCase();
+      const isSteamController =
+        gpName.includes("steam") || gpName.includes("valve");
+      activeButtonMap = isSteamController
+        ? BUTTON_MAP_DECK
+        : BUTTON_MAP_STANDARD;
+
+      console.log(
+        `[GAMEPAD] Controller connected: ${gp.id} (index ${cid})` +
+          (isSteamController ? " [Steam Deck mapping]" : ""),
+      );
     }
 
     // ── Buttons ──────────────────────────────────────────────────
     for (let i = 0; i < gp.buttons.length; i++) {
-      const name = BUTTON_MAP[i];
+      const name = activeButtonMap[i];
       if (!name) continue;
 
       const btn = gp.buttons[i];

@@ -846,7 +846,11 @@ function wireGamepad() {
         // Save focus snapshot before navigating back (Phase 1b)
         _saveFocusSnapshot(path);
         // On a deep page (e.g. /bigpicture/library/xyz) — navigate to parent
-        const parentPath = "/bigpicture/" + segments[0];
+        // Profile pages are reached from community, so go back there
+        const parentPath =
+          segments[0] === "profile"
+            ? "/bigpicture/community"
+            : "/bigpicture/" + segments[0];
         router.push(parentPath);
       }
     }),
