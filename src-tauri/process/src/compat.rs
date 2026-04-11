@@ -8,7 +8,7 @@ use std::{
 };
 
 use database::{borrow_db_checked, borrow_db_mut_checked};
-use log::warn;
+use log::{info, warn};
 use serde::Serialize;
 
 static SEARCH_PATHS: LazyLock<Vec<String>> = LazyLock::new(|| {
@@ -171,4 +171,142 @@ pub async fn set_default(path: String) -> Result<(), String> {
     db_lock.applications.default_proton_path = Some(path);
 
     Ok(())
+}
+
+/// Diagnostic report for debugging launch issues on Steam Deck / Linux.
+/// Returns a human-readable summary of the entire launch environment.
+#[derive(Serialize)]
+pub struct LaunchDiagnostics {
+    pub umu_installed: bool,
+    pub umu_path: Option<String>,
+    pub proton_default: Option<String>,
+    pub proton_default_valid: bool,
+    pub proton_autodiscovered: Vec<String>,
+    pub proton_custom: Vec<String>,
+    pub gamescope_detected: bool,
+    pub session_type: String,
+    pub env_display: Option<String>,
+    pub env_wayland: Option<String>,
+    pub env_gamescope: Option<String>,
+    pub env_xdg_runtime: Option<String>,
+    pub installed_games: Vec<GameDiagnostic>,
+}
+
+#[derive(Serialize)]
+pub struct GameDiagnostic {
+    pub game_id: String,
+    pub target_platform: String,
+    pub version: String,
+    pub install_dir: Option<String>,
+    pub has_emulator: bool,
+}
+
+#[tauri::command]
+pub async fn diagnose_launch_environment() -> Result<LaunchDiagnostics, String> {
+    use client::compat::{COMPAT_INFO, UMU_LAUNCHER_EXECUTABLE};
+
+    let umu_installed = COMPAT_INFO
+        .as_ref()
+        .map(|c| c.umu_installed)
+        .unwrap_or(false);
+    let umu_path = UMU_LAUNCHER_EXECUTABLE
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string());
+
+    let db = borrow_db_checked();
+    let proton_default = db.applications.default_proton_path.clone();
+    let proton_default_valid = proton_default
+        .as_ref()
+        .and_then(|p| read_proton_path(PathBuf::from(p)).ok())
+        .flatten()
+        .is_some();
+
+    let proton_autodiscovered = discover_proton_paths()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| format!("{} ({})", p.name, p.path))
+        .collect();
+
+    let proton_custom = db
+        .applications
+        .additional_proton_paths
+        .iter()
+        .flat_map(|v| read_proton_path(PathBuf::from(v)))
+        .flatten()
+        .map(|p| format!("{} ({})", p.name, p.path))
+        .collect();
+
+    let gamescope_detected = std::env::var("GAMESCOPE_WAYLAND_DISPLAY").is_ok()
+        || std::env::var("SteamGamepadUI").is_ok();
+
+    let session_type = if gamescope_detected {
+        "Gamescope (Gaming Mode)".to_string()
+    } else if std::env::var("WAYLAND_DISPLAY").is_ok() {
+        "Wayland (Desktop)".to_string()
+    } else if std::env::var("DISPLAY").is_ok() {
+        "X11 (Desktop)".to_string()
+    } else {
+        "Unknown".to_string()
+    };
+
+    let installed_games = db
+        .applications
+        .installed_game_version
+        .iter()
+        .map(|(game_id, meta)| {
+            let install_dir = db
+                .applications
+                .game_statuses
+                .get(game_id)
+                .and_then(|s| match s {
+                    database::GameDownloadStatus::Installed { install_dir, .. } => {
+                        Some(install_dir.clone())
+                    }
+                    _ => None,
+                });
+            let has_emulator = db
+                .applications
+                .game_versions
+                .get(&meta.version)
+                .and_then(|gv| {
+                    gv.launches
+                        .iter()
+                        .find(|l| l.platform == meta.target_platform)
+                })
+                .and_then(|l| l.emulator.as_ref())
+                .is_some();
+
+            GameDiagnostic {
+                game_id: game_id.clone(),
+                target_platform: format!("{:?}", meta.target_platform),
+                version: meta.version.clone(),
+                install_dir,
+                has_emulator,
+            }
+        })
+        .collect();
+
+    let diag = LaunchDiagnostics {
+        umu_installed,
+        umu_path,
+        proton_default,
+        proton_default_valid,
+        proton_autodiscovered,
+        proton_custom,
+        gamescope_detected,
+        session_type,
+        env_display: std::env::var("DISPLAY").ok(),
+        env_wayland: std::env::var("WAYLAND_DISPLAY").ok(),
+        env_gamescope: std::env::var("GAMESCOPE_WAYLAND_DISPLAY").ok(),
+        env_xdg_runtime: std::env::var("XDG_RUNTIME_DIR").ok(),
+        installed_games,
+    };
+
+    info!("[DIAGNOSTICS] UMU: installed={}, path={:?}", diag.umu_installed, diag.umu_path);
+    info!("[DIAGNOSTICS] Proton: default={:?}, valid={}", diag.proton_default, diag.proton_default_valid);
+    info!("[DIAGNOSTICS] Session: {}, gamescope={}", diag.session_type, diag.gamescope_detected);
+    info!("[DIAGNOSTICS] Env: DISPLAY={:?}, WAYLAND={:?}, GAMESCOPE={:?}, XDG_RUNTIME={:?}",
+        diag.env_display, diag.env_wayland, diag.env_gamescope, diag.env_xdg_runtime);
+
+    Ok(diag)
 }

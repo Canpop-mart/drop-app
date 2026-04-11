@@ -4,7 +4,7 @@ use client::compat::{COMPAT_INFO, UMU_LAUNCHER_EXECUTABLE};
 use database::{
     Database, DownloadableMetadata, GameVersion, db::DATA_ROOT_DIR, platform::Platform,
 };
-use log::debug;
+use log::{debug, info, warn};
 
 use crate::{error::ProcessError, parser::ParsedCommand, process_manager::ProcessHandler};
 
@@ -90,14 +90,23 @@ impl ProcessHandler for NativeLauncher {
                 || cmd_lower.ends_with(".cmd");
             let is_pe_binary = if !is_win_ext {
                 // Read first 2 bytes to check for MZ (PE) header
-                std::fs::File::open(&parsed.command)
-                    .and_then(|mut f| {
+                match std::fs::File::open(&parsed.command) {
+                    Ok(mut f) => {
                         use std::io::Read;
                         let mut magic = [0u8; 2];
-                        f.read_exact(&mut magic)?;
-                        Ok(magic == [0x4D, 0x5A]) // "MZ"
-                    })
-                    .unwrap_or(false)
+                        match f.read_exact(&mut magic) {
+                            Ok(()) => magic == [0x4D, 0x5A], // "MZ"
+                            Err(e) => {
+                                warn!("NativeLauncher: could not read magic bytes from {:?}: {}", &parsed.command, e);
+                                false
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("NativeLauncher: could not open {:?} for PE check: {}", &parsed.command, e);
+                        false
+                    }
+                }
             } else {
                 false
             };
@@ -198,8 +207,17 @@ impl ProcessHandler for UMUCompatLauncher {
             .user_configuration
             .override_proton_path
             .as_ref()
-            .or(database.applications.default_proton_path.as_ref())
-            .ok_or(ProcessError::NoCompat)?;
+            .or(database.applications.default_proton_path.as_ref());
+
+        if proton_path.is_none() {
+            warn!(
+                "[UMUCompat] No Proton path configured (no per-game override, no global default). \
+                 Set a default Proton path in Settings → Compatibility."
+            );
+            return Err(ProcessError::NoCompat);
+        }
+        let proton_path = proton_path.unwrap();
+        info!("[UMUCompat] Using Proton path: {}", proton_path);
 
         #[cfg(target_os = "linux")]
         let proton_valid = crate::compat::read_proton_path(PathBuf::from(proton_path))
@@ -209,6 +227,10 @@ impl ProcessHandler for UMUCompatLauncher {
         #[cfg(not(target_os = "linux"))]
         let proton_valid = false;
         if !proton_valid {
+            warn!(
+                "[UMUCompat] Proton path {:?} is invalid (missing proton binary or compatibilitytool.vdf)",
+                proton_path
+            );
             return Err(ProcessError::NoCompat);
         }
         let proton_env = format!("PROTONPATH={}", proton_path);

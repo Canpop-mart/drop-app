@@ -236,17 +236,36 @@ impl ProcessManager<'_> {
         db_lock: &Database,
         target_platform: &Platform,
     ) -> Result<&(dyn ProcessHandler + Send + Sync), ProcessError> {
-        Ok(self
+        info!(
+            "[LAUNCH] Selecting handler: current={:?}, target={:?}",
+            self.current_platform, target_platform
+        );
+        let handler = self
             .game_launchers
             .iter()
             .find(|e| {
                 let (e_current, e_target) = e.0;
-                e_current == self.current_platform
-                    && e_target == *target_platform
-                    && e.1.valid_for_platform(db_lock, target_platform)
+                let platform_match = e_current == self.current_platform && e_target == *target_platform;
+                if platform_match {
+                    let valid = e.1.valid_for_platform(db_lock, target_platform);
+                    debug!(
+                        "[LAUNCH]   Handler ({:?}->{:?}) platform match, valid={}",
+                        e_current, e_target, valid
+                    );
+                    valid
+                } else {
+                    false
+                }
             })
-            .ok_or(ProcessError::InvalidPlatform)?
-            .1)
+            .ok_or_else(|| {
+                warn!(
+                    "[LAUNCH] No valid handler found for {:?}->{:?}",
+                    self.current_platform, target_platform
+                );
+                ProcessError::InvalidPlatform
+            })?;
+        info!("[LAUNCH] Selected handler for {:?}->{:?}", handler.0.0, handler.0.1);
+        Ok(handler.1)
     }
 
     pub fn valid_platform(&self, platform: &Platform) -> bool {
@@ -356,6 +375,10 @@ impl ProcessManager<'_> {
             )))?;
 
         let target_platform = meta.target_platform;
+        info!(
+            "[LAUNCH] Game {:?} — target_platform={:?}, version={:?}, install_dir={:?}",
+            &game_id, target_platform, version_name, install_dir
+        );
 
         // Set to true when NeedsCompat fallback fires — we correct stored
         // platform metadata after the database lock is released.

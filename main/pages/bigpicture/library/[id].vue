@@ -346,6 +346,26 @@ const activeTab = ref("achievements");
 const tabRefs: Record<string, HTMLElement | null> = {};
 const tabIndicatorStyle = ref({ left: "0", width: "0" });
 const launchError = ref<string | null>(null);
+const diagnosticsRan = ref(false);
+
+/** Run launch diagnostics and log to console for debug capture */
+async function runDiagnostics() {
+  if (diagnosticsRan.value) return;
+  diagnosticsRan.value = true;
+  try {
+    const diag = await invoke("diagnose_launch_environment");
+    console.log("[BPM:DIAG] === LAUNCH DIAGNOSTICS ===");
+    console.log("[BPM:DIAG] UMU installed:", (diag as any).umu_installed, "path:", (diag as any).umu_path);
+    console.log("[BPM:DIAG] Proton default:", (diag as any).proton_default, "valid:", (diag as any).proton_default_valid);
+    console.log("[BPM:DIAG] Proton autodiscovered:", (diag as any).proton_autodiscovered);
+    console.log("[BPM:DIAG] Session:", (diag as any).session_type, "gamescope:", (diag as any).gamescope_detected);
+    console.log("[BPM:DIAG] Env:", { display: (diag as any).env_display, wayland: (diag as any).env_wayland, gamescope: (diag as any).env_gamescope, xdg: (diag as any).env_xdg_runtime });
+    console.log("[BPM:DIAG] Installed games:", (diag as any).installed_games);
+    console.log("[BPM:DIAG] === END DIAGNOSTICS ===");
+  } catch (e) {
+    console.warn("[BPM:DIAG] Diagnostics not available:", e);
+  }
+}
 const showOptions = ref(false);
 const optionsFocusIdx = ref(0);
 let optionsLockId = 0;
@@ -718,6 +738,7 @@ onMounted(async () => {
     if (event.payload === gameId) {
       console.error("[BPM:GAME] External launch error for:", gameId);
       launchError.value = "The game may have failed to launch. Check the game's compatibility — Windows games require Proton/UMU on Linux.";
+      runDiagnostics();
     }
   });
   _unsubs.push(() => unlistenLaunchError());
@@ -847,6 +868,8 @@ async function launchGame() {
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
     console.error("[BPM:GAME] Launch error:", errMsg);
+    // Auto-run diagnostics on any launch failure for debug logs
+    runDiagnostics();
     // Provide user-friendly hints for common errors
     if (errMsg.includes("exec format error") || errMsg.includes("os error 8")) {
       launchError.value = "This game appears to be a Windows executable that can't run natively on Linux. Check that Proton is configured in Settings and the game's platform is set correctly.";

@@ -167,6 +167,15 @@ pub fn configure_retroarch_for_game(
         );
     }
 
+    // Ensure autoconfig dir exists (for controller profiles)
+    if let Err(e) = fs::create_dir_all(&autoconfig_dir) {
+        warn!(
+            "[RETROARCH] Failed to create autoconfig dir {}: {}",
+            autoconfig_dir.display(),
+            e
+        );
+    }
+
     // Build the config overrides
     let mut overrides: HashMap<&str, String> = HashMap::new();
 
@@ -200,14 +209,12 @@ pub fn configure_retroarch_for_game(
 
     // ── Gamescope / Steam Deck ──────────────────────────────────────────
     // Gamescope (SteamOS Gaming Mode) is a nested Wayland compositor that
-    // composites every window as fullscreen.  RetroArch must NOT try to
-    // go fullscreen itself (it may try to grab the display, change
-    // resolution, or use exclusive-fullscreen — all of which fail in
-    // Gamescope and result in an invisible window).
-    //
-    // Instead we run RetroArch in windowed mode and let Gamescope handle
-    // fullscreen compositing.  Also force Vulkan so cores that default to
-    // OpenGL (e.g. mupen64plus_next) get a visible surface.
+    // composites every window as fullscreen. We use borderless fullscreen
+    // (video_fullscreen + video_windowed_fullscreen) so RetroArch fills
+    // the Gamescope surface without trying exclusive mode or resolution
+    // switching. Also force Vulkan so cores that default to OpenGL
+    // (e.g. mupen64plus_next) get a visible surface, and SDL2 input so
+    // the Steam Deck controls are auto-detected.
     #[cfg(target_os = "linux")]
     let in_gamescope = std::env::var("GAMESCOPE_WAYLAND_DISPLAY").is_ok()
         || std::env::var("SteamGamepadUI").is_ok();
@@ -215,16 +222,23 @@ pub fn configure_retroarch_for_game(
     let in_gamescope = false;
 
     if in_gamescope {
-        overrides.insert("video_fullscreen", "false".into());
+        // Gamescope composites every window as fullscreen. We use
+        // video_fullscreen + video_windowed_fullscreen so RetroArch goes
+        // borderless-fullscreen inside the compositor — no resolution
+        // switching, no invisible windows.
+        overrides.insert("video_fullscreen", "true".into());
         overrides.insert("video_windowed_fullscreen", "true".into());
-        overrides.insert("video_driver", "\"vulkan\"".into());
-        info!("[RETROARCH] Gamescope detected — windowed mode + Vulkan driver");
+        overrides.insert("video_driver", "vulkan".into());
+        // SDL2 joypad driver has built-in Xbox/Steam Deck controller
+        // mappings via gamecontrollerdb — no autoconfig profiles needed.
+        overrides.insert("input_joypad_driver", "sdl2".into());
+        info!("[RETROARCH] Gamescope detected — borderless fullscreen + Vulkan + SDL2 input");
     } else {
         overrides.insert("video_fullscreen", "true".into());
     }
 
     // Modern menu driver — controller-friendly if user opens the menu
-    overrides.insert("menu_driver", "\"ozone\"".into());
+    overrides.insert("menu_driver", "ozone".into());
 
     // Content browser starts at the emulator root
     overrides.insert("rgui_browser_directory", path_to_cfg(&emu_root));
