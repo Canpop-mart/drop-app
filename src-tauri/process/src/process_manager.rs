@@ -358,27 +358,30 @@ impl ProcessManager<'_> {
         create_dir_all(game_log_folder)?;
 
         let current_time = chrono::offset::Local::now();
+        let log_path = game_log_folder.join(format!(
+            "{}-{}.log",
+            &meta.version,
+            current_time.timestamp()
+        ));
+        let error_log_path = game_log_folder.join(format!(
+            "{}-{}-error.log",
+            &meta.version,
+            current_time.timestamp()
+        ));
+
         let log_file = OpenOptions::new()
             .write(true)
             .truncate(true)
             .read(true)
             .create(true)
-            .open(game_log_folder.join(format!(
-                "{}-{}.log",
-                &meta.version,
-                current_time.timestamp()
-            )))?;
+            .open(&log_path)?;
 
         let error_file = OpenOptions::new()
             .write(true)
             .truncate(true)
             .read(true)
             .create(true)
-            .open(game_log_folder.join(format!(
-                "{}-{}-error.log",
-                &meta.version,
-                current_time.timestamp()
-            )))?;
+            .open(&error_log_path)?;
 
         let target_platform = meta.target_platform;
 
@@ -798,8 +801,11 @@ impl ProcessManager<'_> {
             launch_parameters.0
         );
 
-        // Save command string before it's moved into Command::new()
+        // Save command string and args/env before they're moved, so we can
+        // retry with bash wrapping if we hit ENOEXEC.
         let spawn_executable = launch_parameters.0.command.clone();
+        let spawn_args = launch_parameters.0.args.clone();
+        let spawn_env = launch_parameters.0.env.clone();
 
         // On Linux, scripts installed via pip/pipx (like umu-run) can fail
         // with ENOEXEC when executed directly via execvp if their shebang
@@ -807,14 +813,30 @@ impl ProcessManager<'_> {
         // Detect scripts by reading the first two bytes and wrap them in a
         // shell invocation so bash resolves the shebang correctly.
         #[cfg(target_os = "linux")]
-        let is_script = std::fs::File::open(&launch_parameters.0.command)
-            .and_then(|mut f| {
+        let is_script = match std::fs::File::open(&launch_parameters.0.command) {
+            Ok(mut f) => {
                 use std::io::Read as _;
                 let mut magic = [0u8; 2];
-                f.read_exact(&mut magic)?;
-                Ok(magic == [b'#', b'!'])
-            })
-            .unwrap_or(false);
+                match f.read_exact(&mut magic) {
+                    Ok(()) => {
+                        let result = magic == [b'#', b'!'];
+                        info!(
+                            "[LAUNCH] Script detection for {:?}: magic=[0x{:02x}, 0x{:02x}], is_script={}",
+                            &launch_parameters.0.command, magic[0], magic[1], result
+                        );
+                        result
+                    }
+                    Err(e) => {
+                        warn!("[LAUNCH] Script detection: failed to read magic bytes from {:?}: {}", &launch_parameters.0.command, e);
+                        false
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("[LAUNCH] Script detection: failed to open {:?}: {}", &launch_parameters.0.command, e);
+                false
+            }
+        };
         #[cfg(not(target_os = "linux"))]
         let is_script = false;
 
@@ -1080,15 +1102,124 @@ impl ProcessManager<'_> {
                 child
             }
             Err(e) => {
-                let _ = self.app_handle.emit("launch_trace", serde_json::json!({
-                    "step": "8_spawn_FAILED",
-                    "game_id": &game_id,
-                    "error": format!("{}", e),
-                    "error_kind": format!("{:?}", e.kind()),
-                    "executable": &spawn_executable,
-                    "executable_exists": std::path::Path::new(&spawn_executable).exists(),
-                }));
-                return Err(e.into());
+                // ── ENOEXEC fallback ─────────────────────────────────────
+                // If the initial spawn failed with ENOEXEC and we didn't
+                // already wrap in bash, retry by invoking `/bin/bash -c`
+                // with the full command string. This handles cases where
+                // umu-run (or other pip-installed scripts) can't be
+                // detected as scripts via magic bytes (e.g. symlinks,
+                // compiled entry points, permission issues).
+                #[cfg(target_os = "linux")]
+                {
+                    let is_enoexec = e.raw_os_error() == Some(8); // ENOEXEC
+                    if is_enoexec && !is_script {
+                        warn!(
+                            "[LAUNCH] ENOEXEC on {:?} — retrying with bash wrapper",
+                            &spawn_executable
+                        );
+                        let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                            "step": "8_enoexec_retry",
+                            "game_id": &game_id,
+                            "original_error": format!("{}", e),
+                            "executable": &spawn_executable,
+                        }));
+
+                        let mut shell_cmd = shell_words::quote(&spawn_executable).to_string();
+                        for arg in &spawn_args {
+                            shell_cmd.push(' ');
+                            shell_cmd.push_str(&shell_words::quote(arg));
+                        }
+
+                        let mut retry_cmd = Command::new("/bin/bash");
+                        retry_cmd.args(["-c", &shell_cmd]);
+                        for env_str in &spawn_env {
+                            if let Some((key, value)) = env_str.split_once('=') {
+                                retry_cmd.env(key, value);
+                            }
+                        }
+                        retry_cmd
+                            .stderr(std::process::Stdio::from(
+                                std::fs::OpenOptions::new()
+                                    .create(true).append(true)
+                                    .open(&error_log_path)
+                                    .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap())
+                            ))
+                            .stdout(std::process::Stdio::from(
+                                std::fs::OpenOptions::new()
+                                    .create(true).append(true)
+                                    .open(&log_path)
+                                    .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap())
+                            ))
+                            .env_remove("RUST_LOG")
+                            .current_dir(&working_dir_owned);
+
+                        // Re-apply Gamescope env vars for the retry
+                        #[cfg(target_os = "linux")]
+                        {
+                            let in_gamescope_retry = std::env::var("GAMESCOPE_WAYLAND_DISPLAY").is_ok()
+                                || std::env::var("SteamGamepadUI").is_ok();
+                            if in_gamescope_retry {
+                                retry_cmd.env_remove("LD_PRELOAD");
+                                for var in &[
+                                    "DISPLAY", "WAYLAND_DISPLAY",
+                                    "GAMESCOPE_WAYLAND_DISPLAY",
+                                    "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
+                                ] {
+                                    if let Ok(val) = std::env::var(var) {
+                                        retry_cmd.env(var, val);
+                                    }
+                                }
+                                retry_cmd.env("SteamGameId", &game_id);
+                                retry_cmd.env("SteamAppId", &game_id);
+                            }
+                        }
+
+                        match retry_cmd.spawn() {
+                            Ok(child) => {
+                                let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                                    "step": "8_enoexec_retry_success",
+                                    "game_id": &game_id,
+                                    "pid": child.id(),
+                                }));
+                                child
+                            }
+                            Err(retry_err) => {
+                                let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                                    "step": "8_spawn_FAILED",
+                                    "game_id": &game_id,
+                                    "error": format!("{}", retry_err),
+                                    "error_kind": format!("{:?}", retry_err.kind()),
+                                    "executable": &spawn_executable,
+                                    "executable_exists": std::path::Path::new(&spawn_executable).exists(),
+                                    "was_enoexec_retry": true,
+                                }));
+                                return Err(retry_err.into());
+                            }
+                        }
+                    } else {
+                        let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                            "step": "8_spawn_FAILED",
+                            "game_id": &game_id,
+                            "error": format!("{}", e),
+                            "error_kind": format!("{:?}", e.kind()),
+                            "executable": &spawn_executable,
+                            "executable_exists": std::path::Path::new(&spawn_executable).exists(),
+                        }));
+                        return Err(e.into());
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                        "step": "8_spawn_FAILED",
+                        "game_id": &game_id,
+                        "error": format!("{}", e),
+                        "error_kind": format!("{:?}", e.kind()),
+                        "executable": &spawn_executable,
+                        "executable_exists": std::path::Path::new(&spawn_executable).exists(),
+                    }));
+                    return Err(e.into());
+                }
             }
         };
 

@@ -142,7 +142,6 @@ pub fn configure_retroarch_for_game(
     // Build absolute paths for all directories RetroArch needs
     let cores_dir = emu_root.join("cores");
     let system_dir = emu_root.join("system");
-    let autoconfig_dir = emu_root.join("autoconfig");
     let assets_dir = emu_root.join("assets");
 
     // Per-game save directories under drop-saves/<game_id>/
@@ -189,14 +188,10 @@ pub fn configure_retroarch_for_game(
         info!("[RETROARCH] PS1 BIOS found in system directory");
     }
 
-    // Ensure autoconfig dir exists (for controller profiles)
-    if let Err(e) = fs::create_dir_all(&autoconfig_dir) {
-        warn!(
-            "[RETROARCH] Failed to create autoconfig dir {}: {}",
-            autoconfig_dir.display(),
-            e
-        );
-    }
+    // NOTE: We do NOT create or override joypad_autoconfig_dir. The
+    // RetroArch AppImage bundles its own autoconfig profiles internally.
+    // Overriding the path to an empty directory causes "not configured —
+    // using fallback" messages because no profiles are found.
 
     // Build the config overrides
     let mut overrides: HashMap<&str, String> = HashMap::new();
@@ -204,7 +199,8 @@ pub fn configure_retroarch_for_game(
     // Core/system paths
     overrides.insert("libretro_directory", path_to_cfg(&cores_dir));
     overrides.insert("system_directory", path_to_cfg(&system_dir));
-    overrides.insert("joypad_autoconfig_dir", path_to_cfg(&autoconfig_dir));
+    // joypad_autoconfig_dir is intentionally NOT overridden — the AppImage
+    // bundles its own profiles (e.g. "Valve Software Steam Controller").
     overrides.insert("assets_directory", path_to_cfg(&assets_dir));
 
     // Save paths — per-game isolation

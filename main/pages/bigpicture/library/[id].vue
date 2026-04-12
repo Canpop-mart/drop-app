@@ -73,6 +73,28 @@
             Install
           </button>
 
+          <!-- Add to Library (without installing) — shows for Remote games not yet in library -->
+          <button
+            v-if="status?.type === 'Remote' && !inLibrary"
+            :ref="(el: any) => registerAction(el, { onSelect: addToLibrary })"
+            class="inline-flex items-center px-6 py-4 text-lg gap-3 bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 rounded-xl transition-colors backdrop-blur-sm"
+            @click="addToLibrary"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="size-5 text-blue-400">
+              <path fill-rule="evenodd" d="M12 3.75a.75.75 0 01.75.75v6.75h6.75a.75.75 0 010 1.5h-6.75v6.75a.75.75 0 01-1.5 0v-6.75H4.5a.75.75 0 010-1.5h6.75V4.5a.75.75 0 01.75-.75z" clip-rule="evenodd" />
+            </svg>
+            {{ libraryLoading ? "Adding..." : "Add to Library" }}
+          </button>
+          <span
+            v-if="status?.type === 'Remote' && inLibrary"
+            class="inline-flex items-center px-4 py-3 text-sm text-zinc-500 gap-2"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="size-4 text-green-500">
+              <path fill-rule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clip-rule="evenodd" />
+            </svg>
+            In Library
+          </span>
+
           <!-- Controller, Quality & Widescreen cycle buttons — only for emulated games -->
           <template v-if="isEmulatedGame">
             <button
@@ -933,6 +955,48 @@ async function downloadGame() {
   } catch (e) {
     console.error("Failed to start download:", e);
     launchError.value = `Download failed: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+// ── Add to Library (without installing) ─────────────────────────────────
+
+const inLibrary = ref(false);
+const libraryLoading = ref(false);
+
+// Check if this game is already in the user's library on mount
+onMounted(async () => {
+  try {
+    const url = serverUrl("api/v1/collection/default");
+    const res = await fetch(url);
+    if (res.ok) {
+      const collection = await res.json();
+      const entries = collection.entries ?? [];
+      inLibrary.value = entries.some((e: any) => e.gameId === gameId);
+    }
+  } catch (e) {
+    console.warn("[BPM:GAME] Failed to check library status:", e);
+  }
+});
+
+async function addToLibrary() {
+  if (libraryLoading.value || inLibrary.value) return;
+  libraryLoading.value = true;
+  try {
+    const url = serverUrl("api/v1/collection/default/entry");
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: gameId }),
+    });
+    if (res.ok) {
+      inLibrary.value = true;
+    } else {
+      console.error("[BPM:GAME] Failed to add to library:", res.status);
+    }
+  } catch (e) {
+    console.error("[BPM:GAME] Add to library error:", e);
+  } finally {
+    libraryLoading.value = false;
   }
 }
 
