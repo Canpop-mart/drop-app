@@ -875,6 +875,11 @@ impl ProcessManager<'_> {
                     }
                 }
 
+                // Remove Steam's LD_PRELOAD — it injects the 32-bit
+                // gameoverlayrenderer.so into 64-bit processes, which
+                // fails and can interfere with video surface creation.
+                command.env_remove("LD_PRELOAD");
+
                 // Enable Steam Game Mode integration for Proton games
                 // This tells the game/Proton that we're in a "Steam-like" session
                 command.env("SteamGameId", &game_id);
@@ -989,6 +994,31 @@ impl ProcessManager<'_> {
                 .map(|p| p.exists())
                 .unwrap_or(false);
 
+            // Also read key lines from the AppImage.home config for debugging
+            let appimage_debug_lines: Vec<String> = appimage_home_cfg
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .map(|content| {
+                    content
+                        .lines()
+                        .filter(|l| {
+                            let t = l.trim();
+                            t.starts_with("video_fullscreen")
+                                || t.starts_with("video_windowed")
+                                || t.starts_with("video_driver")
+                                || t.starts_with("video_context")
+                                || t.starts_with("input_joypad_driver")
+                                || t.starts_with("input_autodetect")
+                                || t.starts_with("libretro_directory")
+                                || t.starts_with("menu_driver")
+                                || t.starts_with("savefile_directory")
+                                || t.starts_with("joypad_autoconfig_dir")
+                        })
+                        .map(|s| s.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+
             let _ = self.app_handle.emit("launch_trace", serde_json::json!({
                 "step": "7_retroarch_config_result",
                 "game_id": &game_id,
@@ -1000,6 +1030,7 @@ impl ProcessManager<'_> {
                 "cfg_line_count": cfg_content.lines().count(),
                 "appimage_home_cfg": appimage_home_cfg.as_ref().map(|p| p.display().to_string()),
                 "appimage_home_cfg_exists": appimage_cfg_exists,
+                "appimage_home_key_settings": appimage_debug_lines,
             }));
 
             // ── Inject --appendconfig so RetroArch actually reads our config ──
@@ -1018,6 +1049,10 @@ impl ProcessManager<'_> {
                     command.arg("--appendconfig");
                     command.arg(cfg_path.as_os_str());
                 }
+                // Enable verbose logging so RetroArch dumps video driver
+                // initialization to stderr — critical for diagnosing
+                // "audio but no video" issues in Gamescope.
+                command.arg("--verbose");
             }
         } else {
             let _ = self.app_handle.emit("launch_trace", serde_json::json!({

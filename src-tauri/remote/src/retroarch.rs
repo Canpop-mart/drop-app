@@ -236,15 +236,16 @@ pub fn configure_retroarch_for_game(
         // resolution switching (which can fail in a nested compositor).
         overrides.insert("video_fullscreen", "true".into());
         overrides.insert("video_windowed_fullscreen", "true".into());
-        // Use glcore — universally compatible with all libretro cores.
-        // Vulkan can fail for lighter cores (mGBA, snes9x, etc.) that
-        // don't fully initialize a Vulkan swapchain, leading to audio
-        // without video output in Gamescope.
-        overrides.insert("video_driver", "glcore".into());
+        // Do NOT force a specific video_driver — let RetroArch auto-detect
+        // the best driver for the system. The AppImage may bundle its own
+        // mesa/vulkan libraries; forcing "glcore" or "vulkan" can cause
+        // silent failures where audio works but no video surface is created.
+        // RetroArch tries drivers in order: vulkan → gl → glcore → sdl2.
+        //
         // SDL2 joypad driver has built-in Xbox/Steam Deck controller
         // mappings via gamecontrollerdb — no autoconfig profiles needed.
         overrides.insert("input_joypad_driver", "sdl2".into());
-        info!("[RETROARCH] Gamescope detected — borderless fullscreen + glcore + SDL2 input");
+        info!("[RETROARCH] Gamescope detected — borderless fullscreen + auto video driver + SDL2 input");
     } else {
         overrides.insert("video_fullscreen", "true".into());
     }
