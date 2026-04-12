@@ -246,7 +246,13 @@ pub fn collect_bug_report_diagnostics() -> HashMap<String, String> {
 
     // Session type
     let session_type = ::client::app_state::SessionType::detect();
-    info.insert("sessionType".into(), format!("{:?}", session_type));
+    let session_str = match &session_type {
+        st if *st == ::client::app_state::SessionType::Desktop => "Desktop",
+        st if *st == ::client::app_state::SessionType::Gamescope => "Gamescope",
+        st if *st == ::client::app_state::SessionType::SteamDeckDesktop => "SteamDeckDesktop",
+        _ => "Unknown",
+    };
+    info.insert("sessionType".into(), session_str.into());
 
     // Data directory
     info.insert("dataDir".into(), DATA_ROOT_DIR.to_string_lossy().to_string());
