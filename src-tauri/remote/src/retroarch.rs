@@ -272,12 +272,31 @@ pub fn configure_retroarch_for_game(
     // Single press to quit back to Drop (no double-tap confirmation)
     overrides.insert("quit_press_twice", "false".into());
 
+    // Force port 1 device to Classic Controller Pro for Dolphin Wii games.
+    // Without this, Dolphin defaults to emulated Wiimote which doesn't map
+    // well to a standard gamepad. For GameCube games Dolphin uses SI device
+    // ports instead, so this setting only affects Wii titles.
+    // Device IDs: 1=Wiimote, 513=Wiimote(SW), 769=Wiimote+Nunchuk,
+    //   1025=Classic Controller, 1281=Classic Controller Pro, 1537=GC on Wii
+    overrides.insert("input_libretro_device_p1", "1281".into());
+
+    // Enable core-specific input remaps (for Nintendo A↔B swap etc.)
+    // input_remap_binds_enable allows remaps to take effect at all,
+    // input_autoload_remaps tells RetroArch to auto-load .rmp files
+    // from the remaps directory when a core starts.
+    let remaps_dir = emu_root.join("config").join("remaps");
+    overrides.insert("input_remap_binds_enable", "true".into());
+    overrides.insert("input_autoload_remaps", "true".into());
+    overrides.insert("remaps_directory", path_to_cfg(&remaps_dir));
+
     // Point core options to our file so --appendconfig picks up the right path.
-    // Without this, RetroArch reads core options from the AppImage's $HOME default.
-    // We write core options to both locations, but core_options_path tells
-    // RetroArch where to READ them from. Use the emulator root copy since
-    // --appendconfig will make this override stick.
+    // global_core_options = true prevents RetroArch from creating per-core
+    // .opt files (e.g. config/dolphin-emu/dolphin-emu.opt) that would
+    // override our core_options_path. Without this, after the first launch
+    // the per-core file takes precedence and our quality settings are ignored.
+    // See: https://github.com/libretro/RetroArch/issues/12901
     let core_opts_file = emu_root.join("retroarch-core-options.cfg");
+    overrides.insert("global_core_options", "true".into());
     overrides.insert("core_options_path", path_to_cfg(&core_opts_file));
 
     // RetroAchievements — enable cheevos so RetroArch handles in-game
@@ -295,6 +314,52 @@ pub fn configure_retroarch_for_game(
             creds.username
         );
     }
+
+    // ── Hotkey bindings ────────────────────────────────────────────────────
+    // Keyboard hotkeys work on all platforms (desktop + Steam Deck w/ virtual KB).
+    // RetroArch defaults: Escape=quit, F2=save, F4=load, space=fast-forward.
+    // We set them explicitly so they survive any base config that disables them.
+    overrides.insert("input_exit_emulator", "escape".into());
+    overrides.insert("input_save_state", "f2".into());
+    overrides.insert("input_load_state", "f4".into());
+    overrides.insert("input_toggle_fast_forward", "space".into());
+    overrides.insert("input_state_slot_increase", "f7".into());
+    overrides.insert("input_state_slot_decrease", "f6".into());
+
+    // Controller button combos — hold R3 (right stick click) + press a
+    // button for quick actions without opening the RetroArch menu.
+    //
+    // Button indices differ by input driver:
+    //   SDL2 (Linux):  R3=8  Start=6  L1=9  R1=10  R2(btn)=5  DL=13 DR=14
+    //   XInput (Win):  R3=9  Start=7  LB=4  RB=5   RT=axis+5
+    //   (XInput DPad = hat, not buttons; RT = analog axis, use +5)
+    //
+    // Combos (hold R3 + press):
+    //   R3 + Start       → Quit RetroArch
+    //   R3 + R1/RB       → Save state
+    //   R3 + L1/LB       → Load state
+    //   R3 + RT/R2       → Toggle fast forward
+    //   R3 + DPad R/L    → Save slot nav (Linux only; use F6/F7 on Windows)
+    #[cfg(target_os = "linux")]
+    {
+        overrides.insert("input_enable_hotkey_btn", "8".into());     // R3
+        overrides.insert("input_exit_emulator_btn", "6".into());     // Start
+        overrides.insert("input_save_state_btn", "10".into());       // R1
+        overrides.insert("input_load_state_btn", "9".into());        // L1
+        overrides.insert("input_toggle_fast_forward_btn", "5".into()); // R2 (as button)
+        overrides.insert("input_state_slot_increase_btn", "14".into()); // DPad Right
+        overrides.insert("input_state_slot_decrease_btn", "13".into()); // DPad Left
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        overrides.insert("input_enable_hotkey_btn", "9".into());     // R3
+        overrides.insert("input_exit_emulator_btn", "7".into());     // Start
+        overrides.insert("input_save_state_btn", "5".into());        // RB
+        overrides.insert("input_load_state_btn", "4".into());        // LB
+        overrides.insert("input_toggle_fast_forward_axis", "+5".into()); // RT (analog axis on XInput)
+        // DPad doesn't register as buttons on XInput — use F6/F7 keyboard for slot nav
+    }
+    info!("[RETROARCH] Applied hotkey bindings (keyboard + R3 controller combos)");
 
     // ── Controller layout mapping ────────────────────────────────────────
     if let Some(cfg) = user_config {
@@ -318,11 +383,35 @@ pub fn configure_retroarch_for_game(
 
     // Keys to DELETE from the config file. These are stale settings from
     // previous Drop versions that interfere with RetroArch's built-in defaults.
-    // In particular, `joypad_autoconfig_dir` was previously set to an empty
-    // directory, causing "not configured — using fallback" messages because
-    // no autoconfig profiles were found. Removing it lets the AppImage use
-    // its bundled autoconfig profiles (e.g. "Valve Software Steam Controller").
-    let stale_keys: &[&str] = &["joypad_autoconfig_dir"];
+    let stale_keys: &[&str] = &[
+        // Old empty autoconfig dir caused "not configured" fallback warnings
+        "joypad_autoconfig_dir",
+        // Old Nintendo mode manually mapped all axes/buttons/triggers.
+        // These stale keys override autoconfig and break sticks if left behind.
+        "input_autodetect_enable",
+        "input_player1_l_btn",
+        "input_player1_r_btn",
+        "input_player1_select_btn",
+        "input_player1_start_btn",
+        "input_player1_up_btn",
+        "input_player1_down_btn",
+        "input_player1_left_btn",
+        "input_player1_right_btn",
+        "input_player1_l3_btn",
+        "input_player1_r3_btn",
+        "input_player1_l_x_plus_axis",
+        "input_player1_l_x_minus_axis",
+        "input_player1_l_y_plus_axis",
+        "input_player1_l_y_minus_axis",
+        "input_player1_r_x_plus_axis",
+        "input_player1_r_x_minus_axis",
+        "input_player1_r_y_plus_axis",
+        "input_player1_r_y_minus_axis",
+        "input_player1_l2_axis",
+        "input_player1_r2_axis",
+        // Old fast-forward was mapped to Back/Select button; now uses RT axis
+        "input_toggle_fast_forward_btn",
+    ];
 
     // Write the main config to the emulator directory (used by --appendconfig)
     let cfg_path = emu_root.join("retroarch.cfg");
@@ -335,7 +424,7 @@ pub fn configure_retroarch_for_game(
     // appendconfig overlay. This is critical for Gamescope/Steam Deck
     // where video driver and display settings must be correct from the start.
     let appimage_config_dir = find_appimage_config_dir(&emu_root);
-    if let Some(ref ai_cfg_dir) = appimage_config_dir {
+    if let Some(ai_cfg_dir) = &appimage_config_dir {
         if let Err(e) = fs::create_dir_all(ai_cfg_dir) {
             warn!(
                 "[RETROARCH] Failed to create AppImage config dir {}: {}",
@@ -356,13 +445,44 @@ pub fn configure_retroarch_for_game(
     // The main retroarch.cfg only affects windowed scaling. For fullscreen,
     // internal resolution is controlled by per-core options stored in a
     // separate file. We patch that for quality presets and widescreen hacks.
+    //
+    // Clean up any stale per-core .opt files left from before we set
+    // global_core_options = true. These would take precedence over our
+    // core_options_path and silently ignore quality changes.
+    let per_core_config_dir = emu_root.join("config");
+    if per_core_config_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&per_core_config_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    // Look for <core_name>.opt files inside each core config dir
+                    if let Ok(files) = fs::read_dir(&path) {
+                        for file in files.flatten() {
+                            let fp = file.path();
+                            if fp.extension().and_then(|e| e.to_str()) == Some("opt") {
+                                if let Err(e) = fs::remove_file(&fp) {
+                                    warn!("[RETROARCH] Failed to remove stale .opt file {}: {}", fp.display(), e);
+                                } else {
+                                    info!("[RETROARCH] Removed stale per-core options: {}", fp.display());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if let Some(cfg) = user_config {
         let core_opts_path = emu_root.join("retroarch-core-options.cfg");
         let mut core_overrides: HashMap<&str, String> = HashMap::new();
 
         if let Some(quality) = &cfg.quality_preset {
             apply_core_quality_options(&mut core_overrides, quality);
-            info!("[RETROARCH] Patched core options for {:?} quality", quality);
+            info!("[RETROARCH] Patching core options for {:?} quality — {} keys", quality, core_overrides.len());
+            for (k, v) in &core_overrides {
+                info!("[RETROARCH] core option: {} = {}", k, v);
+            }
         }
 
         apply_core_widescreen_options(&mut core_overrides, cfg.widescreen);
@@ -372,9 +492,10 @@ pub fn configure_retroarch_for_game(
 
         if !core_overrides.is_empty() {
             patch_retroarch_cfg(&core_opts_path, &core_overrides);
+            info!("[RETROARCH] Wrote core options to: {}", core_opts_path.display());
 
             // Also write core options to AppImage.home so RetroArch finds them
-            if let Some(ref ai_cfg_dir) = appimage_config_dir {
+            if let Some(ai_cfg_dir) = &appimage_config_dir {
                 let ai_core_opts = ai_cfg_dir.join("retroarch-core-options.cfg");
                 patch_retroarch_cfg(&ai_core_opts, &core_overrides);
                 info!(
@@ -382,8 +503,22 @@ pub fn configure_retroarch_for_game(
                     ai_core_opts.display()
                 );
             }
+        } else {
+            info!("[RETROARCH] No core options to write (quality: {:?}, widescreen: {})",
+                cfg.quality_preset, cfg.widescreen);
         }
     }
+
+    // ── Core-specific button remaps ────────────────────────────────────────
+    // Nintendo console emulators (Dolphin for GC/Wii, Mupen64Plus for N64)
+    // map their console's A button (right-side position) to RetroPad B (east).
+    // This means on an Xbox-layout controller, the physical A button (south)
+    // sends the wrong input when the game says "Press A".
+    //
+    // Fix: Write core-specific remap files that swap A↔B for these cores.
+    // RetroArch remap indices: 0=B, 1=Y, 2=Select, 3=Start, 4=Up, 5=Down,
+    //   6=Left, 7=Right, 8=A, 9=X, 10=L, 11=R, 12=L2, 13=R2, 14=L3, 15=R3
+    write_nintendo_core_remaps(&emu_root, &appimage_config_dir);
 
     info!(
         "[RETROARCH] Configured: saves={}, states={}",
@@ -426,6 +561,75 @@ fn find_appimage_config_dir(emu_root: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Write core-specific remap files for Nintendo console emulators.
+///
+/// The Dolphin (GameCube/Wii) and Mupen64Plus (N64) libretro cores map the
+/// console's A button (right-side position) to RetroPad B (east), because
+/// that matches the physical position on the original controller. However,
+/// on modern Xbox-layout controllers (including Steam Deck), RetroPad A is
+/// the south/bottom button — so pressing the physical "A" button doesn't
+/// trigger the game's "A" action.
+///
+/// This writes remap files that swap A↔B for these cores, making the
+/// physical A button on an Xbox-layout controller match the game's A prompt.
+///
+/// RetroArch remap file button indices:
+///   0=B  1=Y  2=Select  3=Start  4=Up  5=Down  6=Left  7=Right
+///   8=A  9=X  10=L  11=R  12=L2  13=R2  14=L3  15=R3
+fn write_nintendo_core_remaps(emu_root: &Path, appimage_config_dir: &Option<PathBuf>) {
+    // Remap content: swap A(8)↔B(0) so physical south=A goes to core B
+    // and physical east=B goes to core A. All other buttons stay default.
+    let remap_content = r#"input_player1_btn_a = "0"
+input_player1_btn_b = "8"
+input_player1_btn_x = "9"
+input_player1_btn_y = "1"
+input_player1_btn_select = "2"
+input_player1_btn_start = "3"
+input_player1_btn_up = "4"
+input_player1_btn_down = "5"
+input_player1_btn_left = "6"
+input_player1_btn_right = "7"
+input_player1_btn_l = "10"
+input_player1_btn_r = "11"
+input_player1_btn_l2 = "12"
+input_player1_btn_r2 = "13"
+input_player1_btn_l3 = "14"
+input_player1_btn_r3 = "15"
+"#;
+
+    // Core names that need the Nintendo A↔B remap
+    let nintendo_cores = &[
+        "dolphin-emu",     // Dolphin (GameCube/Wii)
+        "Mupen64Plus-Next", // N64
+        "parallel_n64",    // N64 (alternate)
+    ];
+
+    for core_name in nintendo_cores {
+        // Write to emu_root/config/remaps/<core>/<core>.rmp
+        let remap_dir = emu_root.join("config").join("remaps").join(core_name);
+        write_remap_file(&remap_dir, core_name, remap_content);
+
+        // Also write to AppImage.home if present
+        if let Some(ai_cfg_dir) = &appimage_config_dir {
+            let ai_remap_dir = ai_cfg_dir.join("config").join("remaps").join(core_name);
+            write_remap_file(&ai_remap_dir, core_name, remap_content);
+        }
+    }
+}
+
+/// Helper to write a single remap file.
+fn write_remap_file(remap_dir: &Path, core_name: &str, content: &str) {
+    if let Err(e) = fs::create_dir_all(remap_dir) {
+        warn!("[RETROARCH] Failed to create remap dir {}: {}", remap_dir.display(), e);
+        return;
+    }
+    let remap_path = remap_dir.join(format!("{}.rmp", core_name));
+    match fs::write(&remap_path, content) {
+        Ok(_) => info!("[RETROARCH] Wrote remap file: {}", remap_path.display()),
+        Err(e) => warn!("[RETROARCH] Failed to write remap {}: {}", remap_path.display(), e),
+    }
 }
 
 /// Returns `true` if the directory looks like a RetroArch installation.
@@ -588,7 +792,7 @@ fn extract_cfg_key(line: &str) -> Option<&str> {
 ///
 /// Strategy:
 /// - **Xbox / PlayStation**: Leave autoconfig enabled (default = Xbox layout).
-///   Only set display labels (PlayStation gets Cross/Circle/Square/Triangle).
+///   Only set display labels (PlayStation kept for compat, same as Xbox).
 ///   Do NOT write manual `input_player1_*_btn` values — autoconfig wins.
 /// - **Nintendo**: Disable autoconfig and provide a COMPLETE manual SDL2
 ///   GameController mapping with A↔B and X↔Y swapped. This is the only
@@ -612,50 +816,20 @@ fn apply_controller_mappings(overrides: &mut HashMap<&str, String>, controller: 
             overrides.insert("input_player1_y_btn_label", "\"Triangle\"".into());
         }
         ControllerType::Nintendo => {
-            // Nintendo swaps A↔B and X↔Y relative to Xbox. To make this
-            // stick we MUST disable autoconfig (otherwise it resets our
-            // bindings) and provide the complete SDL2 GameController mapping.
+            // Nintendo swaps A↔B and X↔Y relative to Xbox.
+            // Only override face buttons — let autoconfig handle sticks,
+            // triggers, shoulders, and everything else. This avoids
+            // breaking analog stick axes which differ across drivers.
             //
-            // SDL2 GameController button indices (standardised):
+            // SDL2 GameController button indices:
             //   0=A/south  1=B/east  2=X/west  3=Y/north
-            //   4=Back  5=Guide  6=Start  7=L3  8=R3
-            //   9=L1  10=R1  11=DUp  12=DDown  13=DLeft  14=DRight
             //
             // Nintendo convention: A=east, B=south, X=north, Y=west
-            // → Map SDL east(1) to RetroPad A, SDL south(0) to RetroPad B, etc.
-            overrides.insert("input_autodetect_enable", "false".into());
-
-            // Face buttons — swapped for Nintendo layout
-            overrides.insert("input_player1_a_btn", "1".into());       // SDL east → RetroPad A
-            overrides.insert("input_player1_b_btn", "0".into());       // SDL south → RetroPad B
-            overrides.insert("input_player1_x_btn", "3".into());       // SDL north → RetroPad X
-            overrides.insert("input_player1_y_btn", "2".into());       // SDL west → RetroPad Y
-
-            // All other buttons — standard SDL2 GameController indices
-            overrides.insert("input_player1_l_btn", "9".into());       // L shoulder
-            overrides.insert("input_player1_r_btn", "10".into());      // R shoulder
-            overrides.insert("input_player1_select_btn", "4".into());  // Back/Select
-            overrides.insert("input_player1_start_btn", "6".into());   // Start
-            overrides.insert("input_player1_up_btn", "11".into());     // DPad Up
-            overrides.insert("input_player1_down_btn", "12".into());   // DPad Down
-            overrides.insert("input_player1_left_btn", "13".into());   // DPad Left
-            overrides.insert("input_player1_right_btn", "14".into());  // DPad Right
-            overrides.insert("input_player1_l3_btn", "7".into());      // Left stick click
-            overrides.insert("input_player1_r3_btn", "8".into());      // Right stick click
-
-            // Analog sticks
-            overrides.insert("input_player1_l_x_plus_axis", "+0".into());
-            overrides.insert("input_player1_l_x_minus_axis", "-0".into());
-            overrides.insert("input_player1_l_y_plus_axis", "+1".into());
-            overrides.insert("input_player1_l_y_minus_axis", "-1".into());
-            overrides.insert("input_player1_r_x_plus_axis", "+3".into());
-            overrides.insert("input_player1_r_x_minus_axis", "-3".into());
-            overrides.insert("input_player1_r_y_plus_axis", "+4".into());
-            overrides.insert("input_player1_r_y_minus_axis", "-4".into());
-
-            // Triggers (axes, not buttons)
-            overrides.insert("input_player1_l2_axis", "+2".into());
-            overrides.insert("input_player1_r2_axis", "+5".into());
+            // → Map east(1) to RetroPad A, south(0) to RetroPad B, etc.
+            overrides.insert("input_player1_a_btn", "1".into());  // East → A
+            overrides.insert("input_player1_b_btn", "0".into());  // South → B
+            overrides.insert("input_player1_x_btn", "3".into());  // North → X
+            overrides.insert("input_player1_y_btn", "2".into());  // West → Y
 
             // Labels
             overrides.insert("input_player1_a_btn_label", "\"A\"".into());
@@ -687,7 +861,7 @@ fn apply_quality_preset(overrides: &mut HashMap<&str, String>, quality: &Quality
             overrides.insert("video_scale_integer", "false".into());
             overrides.insert("video_gpu_screenshot", "true".into());
         }
-        QualityPreset::High => {
+        QualityPreset::High | QualityPreset::Ultra => {
             overrides.insert("video_smooth", "true".into());
             overrides.insert("video_shader_enable", "false".into());
             overrides.insert("video_scale_integer", "false".into());
@@ -702,16 +876,18 @@ fn apply_quality_preset(overrides: &mut HashMap<&str, String>, quality: &Quality
 /// We write all known core resolution keys so the setting applies regardless
 /// of which core ends up running the game.
 fn apply_core_quality_options(overrides: &mut HashMap<&str, String>, quality: &QualityPreset) {
-    let (dolphin_efb, n64_res, pcsx_rearmed, beetle_psx_res, ppsspp_res) = match quality {
-        QualityPreset::Low => ("1", "320x240", "1", "1x(native)", "1"),
-        QualityPreset::Medium => ("3", "640x480", "2", "2x(native)", "2"),
-        QualityPreset::High => ("5", "1280x960", "4", "4x(native)", "4"),
+    //                          dolphin_efb  n64_res       pcsx_rearmed  beetle_psx_res  ppsspp_res
+    let (dolphin_efb, n64_res, _pcsx_rearmed, beetle_psx_res, ppsspp_res) = match quality {
+        QualityPreset::Low    => ("1", "320x240",  "1", "1x(native)",  "1"),
+        QualityPreset::Medium => ("3", "640x480",  "2", "2x(native)",  "2"),
+        QualityPreset::High   => ("5", "1280x960", "4", "4x(native)",  "4"),
+        QualityPreset::Ultra  => ("6", "1920x1440","8", "8x(native)",  "8"),
     };
 
-    // Dolphin (GameCube/Wii) — internal EFB scale
+    // Dolphin (GameCube/Wii) — internal EFB scale (Ultra = 6x = 3840×3168, max)
     overrides.insert("dolphin_efb_scale", format!("\"{}\"", dolphin_efb));
 
-    // Mupen64Plus-Next (N64) — resolution
+    // Mupen64Plus-Next (N64) — resolution (Ultra = 1920×1440 = 6x native)
     overrides.insert("mupen64plus-Resolution", format!("\"{}\"", n64_res));
     overrides.insert("parallel-n64-screensize", format!("\"{}\"", n64_res));
 
@@ -720,30 +896,77 @@ fn apply_core_quality_options(overrides: &mut HashMap<&str, String>, quality: &Q
         if matches!(quality, QualityPreset::Low) { "disabled" } else { "enabled" }));
     overrides.insert("pcsx_rearmed_neon_enhancement_no_main", "\"disabled\"".into());
 
-    // Beetle PSX HW (PS1 HW) — internal GPU resolution
+    // Beetle PSX HW (PS1 HW) — internal GPU resolution (Ultra = 8x native)
     overrides.insert("beetle_psx_hw_internal_resolution", format!("\"{}\"", beetle_psx_res));
 
     // SwanStation / DuckStation (PS1) — GPU resolution scale
-    // The core was renamed from DuckStation to SwanStation but some builds
-    // still use the old prefix. Write both so the setting always applies.
     let ps1_res_scale = match quality {
         QualityPreset::Low => "1",
         QualityPreset::Medium => "2",
         QualityPreset::High => "4",
+        QualityPreset::Ultra => "8",
     };
     overrides.insert("swanstation_GPU.ResolutionScale", format!("\"{}\"", ps1_res_scale));
     overrides.insert("duckstation_GPU.ResolutionScale", format!("\"{}\"", ps1_res_scale));
 
-    // PPSSPP (PSP) — internal resolution
+    // PPSSPP (PSP) — internal resolution (Ultra = 8x)
     overrides.insert("ppsspp_internal_resolution", format!("\"{}\"", ppsspp_res));
 
-    // mGBA (GBA) — no internal resolution option, but color correction
+    // mGBA (GBA) — color correction
     overrides.insert("mgba_color_correction", format!("\"{}\"",
         if matches!(quality, QualityPreset::Low) { "OFF" } else { "Game Boy Advance" }));
 
     // Snes9x — hi-res blending
     overrides.insert("snes9x_hires_blend", format!("\"{}\"",
         if matches!(quality, QualityPreset::Low) { "disabled" } else { "merge" }));
+
+    // Beetle PSX HW — additional quality settings
+    // Ultra adds perspective-correct texturing for PS1
+    let (psx_dither, psx_filter, psx_pgxp) = match quality {
+        QualityPreset::Low => ("1x(native)", "nearest", "disabled"),
+        QualityPreset::Medium => ("1x(native)", "nearest", "enabled"),
+        QualityPreset::High => ("disabled", "bilinear", "enabled"),
+        QualityPreset::Ultra => ("disabled", "bilinear", "enabled"),
+    };
+    overrides.insert("beetle_psx_hw_dither_mode", format!("\"{}\"", psx_dither));
+    overrides.insert("beetle_psx_hw_filter", format!("\"{}\"", psx_filter));
+    overrides.insert("beetle_psx_hw_pgxp_mode", format!("\"{}\"", psx_pgxp));
+    // Ultra: PGXP perspective-correct texturing eliminates PS1 texture warping
+    if matches!(quality, QualityPreset::Ultra) {
+        overrides.insert("beetle_psx_hw_pgxp_texture", "\"enabled\"".into());
+    } else {
+        overrides.insert("beetle_psx_hw_pgxp_texture", "\"disabled\"".into());
+    }
+
+    // Mupen64Plus-Next — texture filtering
+    let (n64_txfilter, n64_aspect) = match quality {
+        QualityPreset::Low => ("None", "4:3"),
+        QualityPreset::Medium => ("None", "4:3"),
+        QualityPreset::High | QualityPreset::Ultra => ("6xBRZ", "16:9 adjusted"),
+    };
+    overrides.insert("mupen64plus-txFilterMode", format!("\"{}\"", n64_txfilter));
+    overrides.insert("mupen64plus-aspect", format!("\"{}\"", n64_aspect));
+
+    // Dolphin — anti-aliasing (Ultra = 8x MSAA)
+    let (dolphin_aa, dolphin_efb_copy) = match quality {
+        QualityPreset::Low => ("None", "disabled"),
+        QualityPreset::Medium => ("2x MSAA", "enabled"),
+        QualityPreset::High => ("4x MSAA", "enabled"),
+        QualityPreset::Ultra => ("8x MSAA", "enabled"),
+    };
+    overrides.insert("dolphin_anti_aliasing", format!("\"{}\"", dolphin_aa));
+    overrides.insert("dolphin_efb_access_enable", format!("\"{}\"", dolphin_efb_copy));
+
+    // PPSSPP — texture filtering + scaling (Ultra adds xBRZ texture upscaling)
+    let ppsspp_texfilter = match quality {
+        QualityPreset::Low | QualityPreset::Medium => "Auto",
+        QualityPreset::High | QualityPreset::Ultra => "Linear",
+    };
+    overrides.insert("ppsspp_texture_filtering", format!("\"{}\"", ppsspp_texfilter));
+    if matches!(quality, QualityPreset::Ultra) {
+        overrides.insert("ppsspp_texture_scaling_type", "\"xBRZ\"".into());
+        overrides.insert("ppsspp_texture_scaling_level", "\"3\"".into());
+    }
 }
 
 // ── Widescreen helpers ─────────────────────────────────────────────────

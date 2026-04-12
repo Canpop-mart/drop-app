@@ -36,7 +36,7 @@
     </div>
 
     <div
-      v-if="queue.length === 0"
+      v-if="queue.length === 0 && completedDownloads.length === 0"
       class="flex items-center justify-center py-24"
     >
       <div class="text-center">
@@ -52,7 +52,8 @@
       </div>
     </div>
 
-    <div v-else class="space-y-3">
+    <!-- Active downloads -->
+    <div v-if="queue.length > 0" class="space-y-3">
       <div
         v-for="item in queue"
         :key="item.meta.id"
@@ -105,15 +106,59 @@
         </div>
       </div>
     </div>
+
+    <!-- Completed downloads (history) -->
+    <div v-if="completedDownloads.length > 0" class="mt-6">
+      <h3 class="text-sm font-medium text-zinc-500 mb-3 px-1">Recently Completed</h3>
+      <div class="space-y-2">
+        <div
+          v-for="item in completedDownloads"
+          :key="item.gameId + item.completedAt"
+          :ref="
+            (el: any) =>
+              registerItem(el, { onSelect: () => navigateToGame(item.gameId) })
+          "
+          class="flex items-center gap-6 bg-zinc-900/30 rounded-xl p-5"
+        >
+          <!-- Cover art -->
+          <div class="size-14 rounded-lg overflow-hidden bg-zinc-800 flex-shrink-0">
+            <img
+              v-if="gameNames[item.gameId]?.coverUrl"
+              :src="gameNames[item.gameId].coverUrl"
+              class="w-full h-full object-cover"
+            />
+            <div v-else class="w-full h-full flex items-center justify-center text-zinc-600 text-lg font-bold">
+              {{ (gameNames[item.gameId]?.name || item.gameId)[0] }}
+            </div>
+          </div>
+
+          <div class="flex-1 min-w-0">
+            <p class="text-base font-medium text-zinc-300">
+              {{ gameNames[item.gameId]?.name || item.gameId }}
+            </p>
+            <span class="text-xs text-zinc-600">
+              {{ formatTimeAgo(item.completedAt) }}
+            </span>
+          </div>
+
+          <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600/10">
+            <CheckCircleIcon class="size-4 text-green-500" />
+            <span class="text-xs font-medium text-green-400">Installed</span>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowDownTrayIcon, ClockIcon } from "@heroicons/vue/24/outline";
+import { CheckCircleIcon } from "@heroicons/vue/24/solid";
 import {
   useQueueState,
   useStatsState,
+  useCompletedDownloads,
   formatKilobytes,
 } from "~/composables/downloads";
 import { useGame } from "~/composables/game";
@@ -123,6 +168,7 @@ import { useFocusNavigation } from "~/composables/focus-navigation";
 definePageMeta({ layout: "bigpicture" });
 const queueState = useQueueState();
 const statsState = useStatsState();
+const completedDownloads = useCompletedDownloads();
 const queue = computed(() => queueState.value?.queue ?? []);
 const stats = computed(() => statsState.value ?? { speed: 0, time: 0 });
 const isPaused = computed(() => queueState.value?.status === "Paused");
@@ -134,23 +180,38 @@ function objectUrl(id: string): string {
   return serverUrl(`api/v1/object/${id}`);
 }
 
+async function loadGameName(id: string) {
+  if (gameNames.value[id]) return;
+  try {
+    const data = await useGame(id);
+    gameNames.value[id] = {
+      name: data.game.mName,
+      coverUrl: data.game.mCoverObjectId ? objectUrl(data.game.mCoverObjectId) : undefined,
+    };
+  } catch {
+    // Game data not available — will keep showing ID
+  }
+}
+
 async function loadGameNames() {
   for (const item of queue.value) {
-    const id = item.meta.id;
-    if (gameNames.value[id]) continue;
-    try {
-      const data = await useGame(id);
-      gameNames.value[id] = {
-        name: data.game.mName,
-        coverUrl: data.game.mCoverObjectId ? objectUrl(data.game.mCoverObjectId) : undefined,
-      };
-    } catch {
-      // Game data not available — will keep showing ID
-    }
+    await loadGameName(item.meta.id);
+  }
+  for (const item of completedDownloads.value) {
+    await loadGameName(item.gameId);
   }
 }
 
 watch(queue, () => loadGameNames(), { immediate: true });
+watch(completedDownloads, () => loadGameNames());
+
+function formatTimeAgo(timestamp: number): string {
+  const diff = Math.floor((Date.now() - timestamp) / 1000);
+  if (diff < 60) return "Just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
 
 // C6 fix: register items with focus group so controller can interact
 const focusNav = useFocusNavigation();

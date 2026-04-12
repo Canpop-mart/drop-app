@@ -1078,7 +1078,6 @@ const isNativeGame = computed(() => !isEmulatedGame.value);
 const controllerOptions: { label: string; value: ControllerType | null }[] = [
   { label: "Auto", value: null },
   { label: "Xbox", value: "Xbox" },
-  { label: "PS", value: "PlayStation" },
   { label: "Nintendo", value: "Nintendo" },
 ];
 const qualityOptions: { label: string; value: QualityPreset | null }[] = [
@@ -1086,6 +1085,7 @@ const qualityOptions: { label: string; value: QualityPreset | null }[] = [
   { label: "Low", value: "Low" },
   { label: "Med", value: "Medium" },
   { label: "High", value: "High" },
+  { label: "Ultra", value: "Ultra" },
 ];
 
 const selectedController = ref<ControllerType | null>(

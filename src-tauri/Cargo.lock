@@ -4777,6 +4777,7 @@ dependencies = [
  "games",
  "gilrs",
  "keyvalues-parser",
+ "libc",
  "log",
  "page_size",
  "remote",

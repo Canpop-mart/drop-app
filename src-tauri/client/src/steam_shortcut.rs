@@ -130,14 +130,17 @@ fn is_already_registered(vdf_path: &PathBuf) -> bool {
 fn build_shortcut_entry(index: u32) -> Option<Vec<u8>> {
     let exe = find_drop_executable()?;
     let name = "Drop Desktop App";
-    let app_id = generate_shortcut_id(&exe, name);
+    // Steam requires the exe and name to be quoted in the VDF for the
+    // AppName to display correctly (otherwise it falls back to filename).
+    let quoted_exe = format!("\"{}\"", exe);
+    let app_id = generate_shortcut_id(&quoted_exe, name);
 
     let mut buf = Vec::new();
     vdf_start_map(&mut buf, &index.to_string());
 
     vdf_write_int(&mut buf, "appid", app_id);
     vdf_write_string(&mut buf, "AppName", name);
-    vdf_write_string(&mut buf, "Exe", &exe);
+    vdf_write_string(&mut buf, "Exe", &quoted_exe);
     vdf_write_string(&mut buf, "StartDir", "");
     vdf_write_string(&mut buf, "icon", "");
     vdf_write_string(&mut buf, "ShortcutPath", "");
@@ -313,14 +316,15 @@ fn is_game_registered(vdf_path: &PathBuf, game_name: &str) -> bool {
 /// Build a shortcut entry for a specific game launched via Drop.
 fn build_game_shortcut_entry(index: u32, info: &GameShortcutInfo) -> Option<Vec<u8>> {
     let exe = find_drop_executable()?;
-    let app_id = generate_shortcut_id(&exe, &info.game_name);
+    let quoted_exe = format!("\"{}\"", exe);
+    let app_id = generate_shortcut_id(&quoted_exe, &info.game_name);
 
     let mut buf = Vec::new();
     vdf_start_map(&mut buf, &index.to_string());
 
     vdf_write_int(&mut buf, "appid", app_id);
     vdf_write_string(&mut buf, "AppName", &info.game_name);
-    vdf_write_string(&mut buf, "Exe", &exe);
+    vdf_write_string(&mut buf, "Exe", &quoted_exe);
     vdf_write_string(&mut buf, "StartDir", "");
     vdf_write_string(&mut buf, "icon", "");
     vdf_write_string(&mut buf, "ShortcutPath", "");
@@ -347,6 +351,7 @@ fn build_game_shortcut_entry(index: u32, info: &GameShortcutInfo) -> Option<Vec<
 
 /// Save artwork files into Steam's grid directory for a given shortcut.
 /// `config_dir` is the `userdata/<uid>/config/` directory (parent of shortcuts.vdf).
+/// `exe` should be the quoted exe string used in `generate_shortcut_id`.
 fn save_artwork(config_dir: &PathBuf, exe: &str, info: &GameShortcutInfo) {
     let app_id = generate_shortcut_id(exe, &info.game_name);
     let grid_dir = config_dir.join("grid");
@@ -389,6 +394,7 @@ pub fn add_game_to_steam(info: GameShortcutInfo) -> ShortcutResult {
             };
         }
     };
+    let quoted_exe = format!("\"{}\"", exe);
 
     let mut registered_count = 0;
     let mut errors = Vec::new();
@@ -398,7 +404,7 @@ pub fn add_game_to_steam(info: GameShortcutInfo) -> ShortcutResult {
             info!("[STEAM] Game '{}' already registered in {}", info.game_name, vdf_path.display());
             // Still update artwork even if already registered
             if let Some(parent) = vdf_path.parent() {
-                save_artwork(&parent.to_path_buf(), &exe, &info);
+                save_artwork(&parent.to_path_buf(), &quoted_exe, &info);
             }
             registered_count += 1;
             continue;
@@ -455,7 +461,7 @@ pub fn add_game_to_steam(info: GameShortcutInfo) -> ShortcutResult {
                 info!("[STEAM] Registered game '{}' in {}", info.game_name, vdf_path.display());
                 // Save artwork
                 if let Some(parent) = vdf_path.parent() {
-                    save_artwork(&parent.to_path_buf(), &exe, &info);
+                    save_artwork(&parent.to_path_buf(), &quoted_exe, &info);
                 }
                 registered_count += 1;
             }

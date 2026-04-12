@@ -33,7 +33,28 @@ export function useDownloadListeners() {
   onMounted(async () => {
     unlistenQueue = await listen("update_queue", (event) => {
       const queue = useQueueState();
-      queue.value = event.payload as QueueState;
+      const completed = useCompletedDownloads();
+      const prev = queue.value;
+      const next = event.payload as QueueState;
+
+      // Detect items that were in the previous queue but are no longer present
+      // — these have completed (or been cancelled, but we treat them as done).
+      if (prev.queue.length > 0) {
+        const nextIds = new Set(next.queue.map((q) => q.meta.id));
+        for (const item of prev.queue) {
+          if (
+            !nextIds.has(item.meta.id) &&
+            !completed.value.some((c) => c.gameId === item.meta.id)
+          ) {
+            completed.value = [
+              { gameId: item.meta.id, completedAt: Date.now() },
+              ...completed.value,
+            ].slice(0, 50); // Keep last 50
+          }
+        }
+      }
+
+      queue.value = next;
     });
 
     unlistenStats = await listen("update_stats", (event) => {
@@ -50,6 +71,14 @@ export function useDownloadListeners() {
 
 export const useDownloadHistory = () =>
   useState<Array<number>>("history", () => []);
+
+export type CompletedDownload = {
+  gameId: string;
+  completedAt: number; // Unix ms timestamp
+};
+
+export const useCompletedDownloads = () =>
+  useState<CompletedDownload[]>("completed_downloads", () => []);
 
 export function formatKilobytes(bytes: number): string {
   const units = ["K", "M", "G", "T", "P"];

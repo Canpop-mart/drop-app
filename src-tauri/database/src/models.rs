@@ -121,6 +121,7 @@ pub mod data {
             Low,
             Medium,
             High,
+            Ultra,
         }
 
         /// MangoHud overlay preset when launching games on Linux.

@@ -37,7 +37,7 @@
           <button
             v-if="status?.type === 'Installed'"
             :ref="(el: any) => registerAction(el, { onSelect: launchGame })"
-            class="inline-flex items-center px-8 py-4 text-lg gap-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl transition-colors shadow-lg shadow-blue-600/20"
+            class="inline-flex items-center px-8 py-4 text-lg gap-3 bg-blue-600 hover:bg-blue-400 text-white font-semibold rounded-xl transition-all shadow-lg shadow-blue-600/20 hover:shadow-blue-500/30 hover:scale-105"
             @click="launchGame"
           >
             <PlayIcon class="size-6" />
@@ -459,7 +459,6 @@ const isNativeGame = computed(() => !isEmulatedGame.value);
 const controllerOptions: { label: string; value: ControllerType | null }[] = [
   { label: "Auto", value: null },
   { label: "Xbox", value: "Xbox" },
-  { label: "PS", value: "PlayStation" },
   { label: "Nintendo", value: "Nintendo" },
 ];
 const qualityOptions: { label: string; value: QualityPreset | null }[] = [
@@ -467,6 +466,7 @@ const qualityOptions: { label: string; value: QualityPreset | null }[] = [
   { label: "Low", value: "Low" },
   { label: "Med", value: "Medium" },
   { label: "High", value: "High" },
+  { label: "Ultra", value: "Ultra" },
 ];
 
 const selectedController = ref<ControllerType | null>(null);
@@ -683,25 +683,12 @@ async function doUninstall() {
   try {
     await invoke("uninstall_game", { gameId });
 
-    // Remove from library collection so the game disappears from BPM.
-    // The Tauri uninstall_game sets the local status to "Remote" but
-    // doesn't touch the server collection, so we do that here.
-    try {
-      const url = serverUrl("api/v1/collection/default/entry");
-      const res = await fetch(url, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: gameId }),
-      });
-      console.log("[BPM:GAME] Library removal response:", res.status);
-    } catch (libErr) {
-      console.warn("[BPM:GAME] Failed to remove from library after uninstall:", libErr);
-    }
-
-    // The Tauri uninstall runs in a background thread and emits
-    // "update_library" when done. Give it a moment to clean up the
-    // local DB before we navigate — otherwise the library page may
-    // still show the game in its old state.
+    // The Tauri uninstall runs in a background thread: it deletes local
+    // files, sets the game status to "Remote", and emits "update_library".
+    // We do NOT remove the game from the server-side collection — the game
+    // should remain in the user's library as "not installed" after uninstall.
+    // Give the background thread a moment to update the local DB before
+    // navigating, otherwise the library page may show stale state.
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     navigateTo("/bigpicture/library");

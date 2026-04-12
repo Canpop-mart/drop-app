@@ -116,41 +116,41 @@ impl ProcessManager<'_> {
                 // A simple kill() sends SIGKILL to the top process but
                 // leaves Wine children orphaned, causing a slow cleanup.
                 //
-                // Strategy: send SIGTERM to the process group first (if
-                // we can determine it), wait briefly, then SIGKILL.
+                // Strategy: send SIGTERM to the process group, then
+                // schedule SIGKILL in a background thread. Do NOT block
+                // the UI waiting for the process to exit — the background
+                // wait thread (spawned at launch time) handles cleanup.
                 #[cfg(target_os = "linux")]
                 {
                     let pid = process.handle.id() as i32;
                     info!("[KILL] Sending SIGTERM to process group (pid {})", pid);
 
-                    // Try to kill the entire process group. If the game
-                    // was spawned without setsid, the pgid equals the pid.
-                    // kill(-pid, SIGTERM) sends to all processes in the
-                    // group with pgid == pid.
                     unsafe {
-                        // SIGTERM to process group
                         libc::kill(-pid, libc::SIGTERM);
                     }
 
-                    // Give processes a moment to exit gracefully
-                    std::thread::sleep(Duration::from_millis(500));
-
-                    // If still alive, force kill the whole group
-                    unsafe {
-                        libc::kill(-pid, libc::SIGKILL);
-                    }
-
-                    // Also kill the direct child in case pgid differs
-                    let _ = process.handle.kill();
+                    // Spawn a thread to send SIGKILL after a grace period.
+                    // This avoids blocking the UI thread on slow Wine cleanup.
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(500));
+                        info!("[KILL] Sending SIGKILL to process group (pid {})", pid);
+                        unsafe {
+                            libc::kill(-pid, libc::SIGKILL);
+                        }
+                    });
                 }
 
                 #[cfg(not(target_os = "linux"))]
                 {
-                    process.handle.kill()?;
+                    let _ = process.handle.kill();
                 }
 
-                let exit_status = process.handle.wait()?;
-                info!("[KILL] exit status: {:?}", exit_status);
+                // Do NOT call process.handle.wait() here — it blocks until
+                // the entire process tree exits, which can take 10+ seconds
+                // for Proton/Wine. The background wait thread (spawned when
+                // the game was launched) will call on_process_finish() and
+                // clean up state when the process actually terminates.
+                info!("[KILL] Kill signals sent, returning immediately");
                 Ok(())
             }
             None => Err(io::Error::new(
@@ -1023,9 +1023,20 @@ impl ProcessManager<'_> {
                 "emu_dir": emu_dir,
             }));
 
-            let ra_creds = tauri::async_runtime::block_on(
-                remote::retroarch::fetch_ra_credentials(),
-            );
+            // Fetch RA credentials with a tight timeout so slow network
+            // doesn't delay game launch. RA auto-login is nice-to-have,
+            // not a blocker — the user can always log in manually.
+            let ra_creds = tauri::async_runtime::block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    remote::retroarch::fetch_ra_credentials(),
+                )
+                .await
+                .unwrap_or_else(|_| {
+                    info!("[RETROARCH] RA credential fetch timed out after 2s, skipping");
+                    None
+                })
+            });
             let retroarch_info = remote::retroarch::configure_retroarch_for_game(
                 emu_dir,
                 &game_id,

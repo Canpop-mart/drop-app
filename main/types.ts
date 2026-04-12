@@ -56,8 +56,8 @@ export type Collection = {
   entries: Array<{ gameId: string; game: Game }>;
 };
 
-export type ControllerType = "Xbox" | "PlayStation" | "Nintendo";
-export type QualityPreset = "Low" | "Medium" | "High";
+export type ControllerType = "Xbox" | "PlayStation" | "Nintendo"; // PlayStation kept for backwards compat, hidden from UI
+export type QualityPreset = "Low" | "Medium" | "High" | "Ultra";
 export type MangoHudPreset = "off" | "minimal" | "standard" | "full";
 
 export type GameVersion = {
