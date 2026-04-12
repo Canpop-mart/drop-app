@@ -303,7 +303,9 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             ::process::compat::diagnose_launch_environment,
             #[cfg(target_os = "linux")]
-            register_steam_shortcut
+            register_steam_shortcut,
+            #[cfg(target_os = "linux")]
+            add_game_to_steam
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

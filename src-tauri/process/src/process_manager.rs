@@ -110,9 +110,47 @@ impl ProcessManager<'_> {
         match self.processes.get_mut(&game_id) {
             Some(process) => {
                 process.manually_killed = true;
-                process.handle.kill()?;
+
+                // For Proton/Wine games, the process tree is:
+                //   bash → umu-run (python) → proton → wine → game.exe
+                // A simple kill() sends SIGKILL to the top process but
+                // leaves Wine children orphaned, causing a slow cleanup.
+                //
+                // Strategy: send SIGTERM to the process group first (if
+                // we can determine it), wait briefly, then SIGKILL.
+                #[cfg(target_os = "linux")]
+                {
+                    let pid = process.handle.id() as i32;
+                    info!("[KILL] Sending SIGTERM to process group (pid {})", pid);
+
+                    // Try to kill the entire process group. If the game
+                    // was spawned without setsid, the pgid equals the pid.
+                    // kill(-pid, SIGTERM) sends to all processes in the
+                    // group with pgid == pid.
+                    unsafe {
+                        // SIGTERM to process group
+                        libc::kill(-pid, libc::SIGTERM);
+                    }
+
+                    // Give processes a moment to exit gracefully
+                    std::thread::sleep(Duration::from_millis(500));
+
+                    // If still alive, force kill the whole group
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                    }
+
+                    // Also kill the direct child in case pgid differs
+                    let _ = process.handle.kill();
+                }
+
+                #[cfg(not(target_os = "linux"))]
+                {
+                    process.handle.kill()?;
+                }
+
                 let exit_status = process.handle.wait()?;
-                info!("exit status: {:?}", exit_status);
+                info!("[KILL] exit status: {:?}", exit_status);
                 Ok(())
             }
             None => Err(io::Error::new(
@@ -913,6 +951,23 @@ impl ProcessManager<'_> {
                 // This tells the game/Proton that we're in a "Steam-like" session
                 command.env("SteamGameId", &game_id);
                 command.env("SteamAppId", &game_id);
+
+                // Tell Proton/Wine the target resolution. Without this,
+                // some games default to tiny resolutions (e.g. 320x200)
+                // because Proton doesn't know the display size. The
+                // Steam Deck display is 1280x800; desktop Gamescope
+                // sessions may differ but 1280x800 is a safe default.
+                command.env("STEAM_DISPLAY", ":1");
+                // SCREEN_WIDTH/HEIGHT are read by some Wine/Proton builds
+                // to set the virtual desktop size when no display info is
+                // available. Gamescope composites everything fullscreen so
+                // this just ensures the game picks a reasonable resolution.
+                if std::env::var("SCREEN_WIDTH").is_err() {
+                    command.env("SCREEN_WIDTH", "1280");
+                }
+                if std::env::var("SCREEN_HEIGHT").is_err() {
+                    command.env("SCREEN_HEIGHT", "800");
+                }
             }
         }
 
@@ -1098,6 +1153,19 @@ impl ProcessManager<'_> {
             "command": &spawn_executable,
             "wrapped_in_bash": is_script,
         }));
+
+        // Create a new process group for the child so we can send signals
+        // to the entire process tree (bash → umu-run → proton → wine → game)
+        // at once, rather than just the top-level process. This makes
+        // kill_game terminate everything cleanly and quickly.
+        #[cfg(unix)]
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            command.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
 
         let child = match command.spawn() {
             Ok(child) => {

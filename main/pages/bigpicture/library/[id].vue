@@ -587,6 +587,12 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
   }
 
   items.push({
+    id: "add-to-steam",
+    label: "Add to Steam",
+    valueLabel: addedToSteam.value ? "Added" : undefined,
+    action: addToSteam,
+  });
+  items.push({
     id: "store",
     label: "View on Store",
     action: () => {
@@ -677,18 +683,26 @@ async function doUninstall() {
   try {
     await invoke("uninstall_game", { gameId });
 
-    // Also remove from library collection so it doesn't linger in BPM
+    // Remove from library collection so the game disappears from BPM.
+    // The Tauri uninstall_game sets the local status to "Remote" but
+    // doesn't touch the server collection, so we do that here.
     try {
       const url = serverUrl("api/v1/collection/default/entry");
-      await fetch(url, {
+      const res = await fetch(url, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: gameId }),
       });
+      console.log("[BPM:GAME] Library removal response:", res.status);
     } catch (libErr) {
-      // Non-fatal — game is already uninstalled, just couldn't clean library
       console.warn("[BPM:GAME] Failed to remove from library after uninstall:", libErr);
     }
+
+    // The Tauri uninstall runs in a background thread and emits
+    // "update_library" when done. Give it a moment to clean up the
+    // local DB before we navigate — otherwise the library page may
+    // still show the game in its old state.
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     navigateTo("/bigpicture/library");
   } catch (e) {
@@ -1016,6 +1030,40 @@ async function addToLibrary() {
 
 function openStore() {
   navigateTo(`/store/${gameId}`);
+}
+
+// ── Add to Steam ────────────────────────────────────────────────────────
+
+const addedToSteam = ref(false);
+const steamLoading = ref(false);
+
+async function addToSteam() {
+  if (steamLoading.value || addedToSteam.value) return;
+  steamLoading.value = true;
+  try {
+    const g = game.value;
+    const result = await invoke<{ success: boolean; message: string }>(
+      "add_game_to_steam",
+      {
+        gameId,
+        gameName: g?.mName ?? "Unknown Game",
+        bannerObjectId: g?.mBannerObjectId || null,
+        coverObjectId: g?.mCoverObjectId || null,
+        iconObjectId: g?.mIconObjectId || null,
+      },
+    );
+    console.log("[BPM:GAME] Add to Steam result:", result);
+    if (result.success) {
+      addedToSteam.value = true;
+    } else {
+      launchError.value = result.message;
+    }
+  } catch (e) {
+    console.error("[BPM:GAME] Add to Steam failed:", e);
+    launchError.value = `Failed to add to Steam: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    steamLoading.value = false;
+  }
 }
 
 async function checkForUpdates() {

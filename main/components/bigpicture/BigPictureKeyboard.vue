@@ -7,7 +7,7 @@
       >
         <!-- Input preview -->
         <div
-          class="w-full max-w-3xl mb-4 px-6 py-3 bg-zinc-900 rounded-xl border border-zinc-700/50 text-zinc-100 text-lg font-medium min-h-[3rem] flex items-center"
+          class="w-full max-w-4xl mb-4 px-6 py-3 bg-zinc-900 rounded-xl border border-zinc-700/50 text-zinc-100 text-lg font-medium min-h-[3rem] flex items-center"
         >
           <span v-if="modelValue">{{ modelValue }}</span>
           <span v-else class="text-zinc-600">{{ placeholder }}</span>
@@ -15,7 +15,7 @@
         </div>
 
         <!-- Keyboard rows -->
-        <div class="flex flex-col gap-1.5 max-w-3xl w-full">
+        <div class="flex flex-col gap-1.5 max-w-4xl w-full">
           <div
             v-for="(row, rowIdx) in currentLayout"
             :key="rowIdx"
@@ -110,8 +110,8 @@ function keyLabel(key: string): string {
 }
 
 function keyClass(key: string): string {
-  // All keys get the same base width
-  return "w-12 h-12";
+  // All keys get the same base width — sized for Steam Deck readability
+  return "w-16 h-14 text-base";
 }
 
 function pressKey(key: string) {

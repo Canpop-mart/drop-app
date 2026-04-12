@@ -260,6 +260,228 @@ pub fn register_steam_shortcut() -> ShortcutResult {
     }
 }
 
+/// Artwork types that Steam uses in the grid directory.
+/// Each has a specific filename pattern: `{appid}{suffix}.png`
+pub enum SteamArtworkType {
+    /// Hero banner (960x342) — shown on game detail page
+    Hero,
+    /// Grid/cover (600x900) — shown in library grid view
+    Grid,
+    /// Logo (transparent PNG) — overlaid on hero
+    Logo,
+    /// Wide grid / header (460x215) — used in recent games
+    Header,
+    /// Icon (square)
+    Icon,
+}
+
+impl SteamArtworkType {
+    fn suffix(&self) -> &'static str {
+        match self {
+            SteamArtworkType::Hero => "_hero",
+            SteamArtworkType::Grid => "p",
+            SteamArtworkType::Logo => "_logo",
+            SteamArtworkType::Header => "",
+            SteamArtworkType::Icon => "_icon",
+        }
+    }
+}
+
+/// Information about a game to add as a Steam shortcut.
+pub struct GameShortcutInfo {
+    pub game_id: String,
+    pub game_name: String,
+    /// Map of artwork type suffix → PNG bytes (e.g. "_hero" → bytes)
+    pub artwork: Vec<(SteamArtworkType, Vec<u8>)>,
+}
+
+/// Check if a game is already registered in a shortcuts.vdf file.
+fn is_game_registered(vdf_path: &PathBuf, game_name: &str) -> bool {
+    if !vdf_path.exists() {
+        return false;
+    }
+    if let Ok(contents) = fs::read(vdf_path) {
+        let needle = game_name.as_bytes();
+        contents
+            .windows(needle.len())
+            .any(|window| window == needle)
+    } else {
+        false
+    }
+}
+
+/// Build a shortcut entry for a specific game launched via Drop.
+fn build_game_shortcut_entry(index: u32, info: &GameShortcutInfo) -> Option<Vec<u8>> {
+    let exe = find_drop_executable()?;
+    let app_id = generate_shortcut_id(&exe, &info.game_name);
+
+    let mut buf = Vec::new();
+    vdf_start_map(&mut buf, &index.to_string());
+
+    vdf_write_int(&mut buf, "appid", app_id);
+    vdf_write_string(&mut buf, "AppName", &info.game_name);
+    vdf_write_string(&mut buf, "Exe", &exe);
+    vdf_write_string(&mut buf, "StartDir", "");
+    vdf_write_string(&mut buf, "icon", "");
+    vdf_write_string(&mut buf, "ShortcutPath", "");
+    vdf_write_string(&mut buf, "LaunchOptions", &format!("--launch {}", info.game_id));
+    vdf_write_int(&mut buf, "IsHidden", 0);
+    vdf_write_int(&mut buf, "AllowDesktopConfig", 1);
+    vdf_write_int(&mut buf, "AllowOverlay", 1);
+    vdf_write_int(&mut buf, "OpenVR", 0);
+    vdf_write_int(&mut buf, "Devkit", 0);
+    vdf_write_string(&mut buf, "DevkitGameID", "");
+    vdf_write_int(&mut buf, "DevkitOverrideAppID", 0);
+    vdf_write_int(&mut buf, "LastPlayTime", 0);
+    vdf_write_string(&mut buf, "FlatpakAppID", "");
+    // Tags
+    vdf_start_map(&mut buf, "tags");
+    vdf_write_string(&mut buf, "0", "Drop");
+    vdf_write_string(&mut buf, "1", "Games");
+    vdf_end_map(&mut buf);
+
+    vdf_end_map(&mut buf);
+
+    Some(buf)
+}
+
+/// Save artwork files into Steam's grid directory for a given shortcut.
+/// `config_dir` is the `userdata/<uid>/config/` directory (parent of shortcuts.vdf).
+fn save_artwork(config_dir: &PathBuf, exe: &str, info: &GameShortcutInfo) {
+    let app_id = generate_shortcut_id(exe, &info.game_name);
+    let grid_dir = config_dir.join("grid");
+
+    if let Err(e) = fs::create_dir_all(&grid_dir) {
+        warn!("Failed to create grid directory {}: {}", grid_dir.display(), e);
+        return;
+    }
+
+    for (art_type, bytes) in &info.artwork {
+        if bytes.is_empty() {
+            continue;
+        }
+        let filename = format!("{}{}.png", app_id, art_type.suffix());
+        let path = grid_dir.join(&filename);
+        match fs::write(&path, bytes) {
+            Ok(_) => info!("[STEAM] Saved artwork {} ({} bytes)", path.display(), bytes.len()),
+            Err(e) => warn!("[STEAM] Failed to save artwork {}: {}", path.display(), e),
+        }
+    }
+}
+
+/// Register a specific game as a non-Steam shortcut with artwork.
+pub fn add_game_to_steam(info: GameShortcutInfo) -> ShortcutResult {
+    let vdf_paths = find_steam_userdata_dirs();
+
+    if vdf_paths.is_empty() {
+        return ShortcutResult {
+            success: false,
+            message: "Steam installation not found. Make sure Steam is installed.".to_string(),
+        };
+    }
+
+    let exe = match find_drop_executable() {
+        Some(e) => e,
+        None => {
+            return ShortcutResult {
+                success: false,
+                message: "Could not determine Drop executable path.".to_string(),
+            };
+        }
+    };
+
+    let mut registered_count = 0;
+    let mut errors = Vec::new();
+
+    for vdf_path in &vdf_paths {
+        if is_game_registered(vdf_path, &info.game_name) {
+            info!("[STEAM] Game '{}' already registered in {}", info.game_name, vdf_path.display());
+            // Still update artwork even if already registered
+            if let Some(parent) = vdf_path.parent() {
+                save_artwork(&parent.to_path_buf(), &exe, &info);
+            }
+            registered_count += 1;
+            continue;
+        }
+
+        // Read existing file or start fresh
+        let mut contents = if vdf_path.exists() {
+            match fs::read(vdf_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("Failed to read {}: {}", vdf_path.display(), e);
+                    errors.push(format!("{}: {}", vdf_path.display(), e));
+                    continue;
+                }
+            }
+        } else {
+            let mut new = Vec::new();
+            vdf_start_map(&mut new, "shortcuts");
+            vdf_end_map(&mut new);
+            new
+        };
+
+        // Find the next index
+        let existing_count = contents
+            .windows(8)
+            .filter(|w| w == b"AppName\x00" || w == b"appname\x00")
+            .count() as u32;
+
+        let entry = match build_game_shortcut_entry(existing_count, &info) {
+            Some(e) => e,
+            None => {
+                errors.push("Could not determine Drop executable path".to_string());
+                continue;
+            }
+        };
+
+        // Insert entry before the final 0x08 (end of root map)
+        if let Some(last_byte_pos) = contents.iter().rposition(|&b| b == 0x08) {
+            contents.splice(last_byte_pos..last_byte_pos, entry);
+        } else {
+            let mut new_contents = Vec::new();
+            vdf_start_map(&mut new_contents, "shortcuts");
+            new_contents.extend_from_slice(&entry);
+            vdf_end_map(&mut new_contents);
+            contents = new_contents;
+        }
+
+        if let Some(parent) = vdf_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        match fs::write(vdf_path, &contents) {
+            Ok(_) => {
+                info!("[STEAM] Registered game '{}' in {}", info.game_name, vdf_path.display());
+                // Save artwork
+                if let Some(parent) = vdf_path.parent() {
+                    save_artwork(&parent.to_path_buf(), &exe, &info);
+                }
+                registered_count += 1;
+            }
+            Err(e) => {
+                warn!("Failed to write {}: {}", vdf_path.display(), e);
+                errors.push(format!("{}: {}", vdf_path.display(), e));
+            }
+        }
+    }
+
+    if registered_count > 0 {
+        ShortcutResult {
+            success: true,
+            message: format!(
+                "'{}' added to Steam. Restart Steam to see it in Game Mode.",
+                info.game_name
+            ),
+        }
+    } else {
+        ShortcutResult {
+            success: false,
+            message: format!("Failed to add game to Steam: {}", errors.join("; ")),
+        }
+    }
+}
+
 /// Remove Drop's non-Steam shortcut from all user profiles.
 pub fn unregister_steam_shortcut() -> ShortcutResult {
     let vdf_paths = find_steam_userdata_dirs();

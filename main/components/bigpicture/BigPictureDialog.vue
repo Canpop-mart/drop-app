@@ -38,11 +38,7 @@
               ]"
               @click="handleCancel"
             >
-              <span
-                class="inline-block px-1 py-0.5 bg-red-700/60 text-red-300 rounded text-xs mr-1"
-                >B</span
-              >
-              {{ cancelLabel }}
+              <BigPictureButtonPrompt button="B" :label="cancelLabel" size="sm" />
             </button>
 
             <button
@@ -60,11 +56,7 @@
               ]"
               @click="handleConfirm"
             >
-              <span
-                class="inline-block px-1 py-0.5 bg-green-700/60 text-green-300 rounded text-xs mr-1"
-                >A</span
-              >
-              {{ confirmLabel }}
+              <BigPictureButtonPrompt button="A" :label="confirmLabel" size="sm" />
             </button>
           </div>
         </div>
@@ -74,6 +66,7 @@
 </template>
 
 <script setup lang="ts">
+import BigPictureButtonPrompt from "~/components/bigpicture/BigPictureButtonPrompt.vue";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 
