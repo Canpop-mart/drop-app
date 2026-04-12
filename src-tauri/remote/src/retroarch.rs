@@ -257,6 +257,11 @@ pub fn configure_retroarch_for_game(
     // Single press to quit back to Drop (no double-tap confirmation)
     overrides.insert("quit_press_twice", "false".into());
 
+    // Point core options to our file so --appendconfig picks up the right path.
+    // Without this, RetroArch reads core options from the AppImage's $HOME default.
+    let core_opts_file = emu_root.join("retroarch-core-options.cfg");
+    overrides.insert("core_options_path", path_to_cfg(&core_opts_file));
+
     // RetroAchievements — enable cheevos so RetroArch handles in-game
     // unlock popups. If we have Connect credentials, inject them so
     // RetroArch authenticates automatically without manual login.

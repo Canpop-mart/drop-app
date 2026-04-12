@@ -801,18 +801,46 @@ impl ProcessManager<'_> {
         // Save command string before it's moved into Command::new()
         let spawn_executable = launch_parameters.0.command.clone();
 
+        // On Linux, scripts installed via pip/pipx (like umu-run) can fail
+        // with ENOEXEC when executed directly via execvp if their shebang
+        // references an interpreter not on the restricted Gaming Mode PATH.
+        // Detect scripts by reading the first two bytes and wrap them in a
+        // shell invocation so bash resolves the shebang correctly.
+        #[cfg(target_os = "linux")]
+        let is_script = std::fs::File::open(&launch_parameters.0.command)
+            .and_then(|mut f| {
+                use std::io::Read as _;
+                let mut magic = [0u8; 2];
+                f.read_exact(&mut magic)?;
+                Ok(magic == [b'#', b'!'])
+            })
+            .unwrap_or(false);
+        #[cfg(not(target_os = "linux"))]
+        let is_script = false;
+
         let mut command = {
-            let mut command = Command::new(launch_parameters.0.command);
-            command.args(launch_parameters.0.args);
-            for parts in launch_parameters
-                .0
-                .env
-                .into_iter()
-                .map(|e| e.split("=").map(|v| v.to_string()).collect::<Vec<String>>())
-            {
-                if let Some(key) = parts.first()
-                    && let Some(value) = parts.get(1)
-                {
+            let mut command = if is_script {
+                info!(
+                    "[LAUNCH] Detected script executable, wrapping in bash: {}",
+                    &launch_parameters.0.command
+                );
+                let mut cmd = Command::new("/bin/bash");
+                // Build a single shell command string: /path/to/script arg1 arg2 ...
+                let mut shell_cmd = shell_words::quote(&launch_parameters.0.command).to_string();
+                for arg in &launch_parameters.0.args {
+                    shell_cmd.push(' ');
+                    shell_cmd.push_str(&shell_words::quote(arg));
+                }
+                cmd.args(["-c", &shell_cmd]);
+                cmd
+            } else {
+                let mut cmd = Command::new(launch_parameters.0.command);
+                cmd.args(launch_parameters.0.args);
+                cmd
+            };
+
+            for env_str in launch_parameters.0.env {
+                if let Some((key, value)) = env_str.split_once('=') {
                     command.env(key, value);
                 }
             }
@@ -947,6 +975,24 @@ impl ProcessManager<'_> {
                 "key_settings": debug_lines,
                 "cfg_line_count": cfg_content.lines().count(),
             }));
+
+            // ── Inject --appendconfig so RetroArch actually reads our config ──
+            // The RetroArch AppImage overrides $HOME to its own .home directory,
+            // so RetroArch reads config from $HOME/.config/retroarch/retroarch.cfg
+            // instead of the file Drop writes in the emulator directory.
+            // --appendconfig loads our settings ON TOP of the AppImage's defaults.
+            if retroarch_info.is_some() && cfg_path.exists() {
+                if is_script {
+                    warn!("[LAUNCH] RetroArch is script-wrapped — cannot inject --appendconfig");
+                } else {
+                    info!(
+                        "[LAUNCH] Injecting --appendconfig {}",
+                        cfg_path.display()
+                    );
+                    command.arg("--appendconfig");
+                    command.arg(cfg_path.as_os_str());
+                }
+            }
         } else {
             let _ = self.app_handle.emit("launch_trace", serde_json::json!({
                 "step": "7_no_emulator",
@@ -960,6 +1006,7 @@ impl ProcessManager<'_> {
             "step": "8_spawning",
             "game_id": &game_id,
             "command": &spawn_executable,
+            "wrapped_in_bash": is_script,
         }));
 
         let child = match command.spawn() {
