@@ -965,6 +965,30 @@ impl ProcessManager<'_> {
                         || t.starts_with("joypad_autoconfig_dir")
                 })
                 .collect();
+            // Check for AppImage.home config too
+            let appimage_home_cfg = std::fs::read_dir(emu_dir)
+                .ok()
+                .and_then(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .find(|e| {
+                            let n = e.file_name().to_string_lossy().to_lowercase();
+                            n.contains("retroarch") && n.ends_with(".appimage")
+                        })
+                        .map(|e| {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            std::path::Path::new(emu_dir)
+                                .join(format!("{}.home", name))
+                                .join(".config")
+                                .join("retroarch")
+                                .join("retroarch.cfg")
+                        })
+                });
+            let appimage_cfg_exists = appimage_home_cfg
+                .as_ref()
+                .map(|p| p.exists())
+                .unwrap_or(false);
+
             let _ = self.app_handle.emit("launch_trace", serde_json::json!({
                 "step": "7_retroarch_config_result",
                 "game_id": &game_id,
@@ -974,6 +998,8 @@ impl ProcessManager<'_> {
                 "has_ra_credentials": ra_creds.is_some(),
                 "key_settings": debug_lines,
                 "cfg_line_count": cfg_content.lines().count(),
+                "appimage_home_cfg": appimage_home_cfg.as_ref().map(|p| p.display().to_string()),
+                "appimage_home_cfg_exists": appimage_cfg_exists,
             }));
 
             // ── Inject --appendconfig so RetroArch actually reads our config ──

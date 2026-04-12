@@ -230,17 +230,21 @@ pub fn configure_retroarch_for_game(
     let in_gamescope = false;
 
     if in_gamescope {
-        // Gamescope composites every window as fullscreen. We use
-        // video_fullscreen + video_windowed_fullscreen so RetroArch goes
-        // borderless-fullscreen inside the compositor — no resolution
-        // switching, no invisible windows.
+        // Gamescope (SteamOS Gaming Mode) composites everything as
+        // fullscreen. Use BORDERLESS fullscreen so RetroArch fills the
+        // Gamescope surface without attempting exclusive mode or
+        // resolution switching (which can fail in a nested compositor).
         overrides.insert("video_fullscreen", "true".into());
         overrides.insert("video_windowed_fullscreen", "true".into());
-        overrides.insert("video_driver", "vulkan".into());
+        // Use glcore — universally compatible with all libretro cores.
+        // Vulkan can fail for lighter cores (mGBA, snes9x, etc.) that
+        // don't fully initialize a Vulkan swapchain, leading to audio
+        // without video output in Gamescope.
+        overrides.insert("video_driver", "glcore".into());
         // SDL2 joypad driver has built-in Xbox/Steam Deck controller
         // mappings via gamecontrollerdb — no autoconfig profiles needed.
         overrides.insert("input_joypad_driver", "sdl2".into());
-        info!("[RETROARCH] Gamescope detected — borderless fullscreen + Vulkan + SDL2 input");
+        info!("[RETROARCH] Gamescope detected — borderless fullscreen + glcore + SDL2 input");
     } else {
         overrides.insert("video_fullscreen", "true".into());
     }
@@ -259,6 +263,9 @@ pub fn configure_retroarch_for_game(
 
     // Point core options to our file so --appendconfig picks up the right path.
     // Without this, RetroArch reads core options from the AppImage's $HOME default.
+    // We write core options to both locations, but core_options_path tells
+    // RetroArch where to READ them from. Use the emulator root copy since
+    // --appendconfig will make this override stick.
     let core_opts_file = emu_root.join("retroarch-core-options.cfg");
     overrides.insert("core_options_path", path_to_cfg(&core_opts_file));
 
@@ -298,9 +305,33 @@ pub fn configure_retroarch_for_game(
         }
     }
 
-    // Write the main config
+    // Write the main config to the emulator directory (used by --appendconfig)
     let cfg_path = emu_root.join("retroarch.cfg");
     patch_retroarch_cfg(&cfg_path, &overrides);
+
+    // ── Also write config to AppImage.home ──────────────────────────────
+    // The RetroArch AppImage overrides $HOME to <AppImage>.home/, so its
+    // "real" config lives at <AppImage>.home/.config/retroarch/retroarch.cfg.
+    // Writing there ensures our settings are the BASE config, not just an
+    // appendconfig overlay. This is critical for Gamescope/Steam Deck
+    // where video driver and display settings must be correct from the start.
+    let appimage_config_dir = find_appimage_config_dir(&emu_root);
+    if let Some(ref ai_cfg_dir) = appimage_config_dir {
+        if let Err(e) = fs::create_dir_all(ai_cfg_dir) {
+            warn!(
+                "[RETROARCH] Failed to create AppImage config dir {}: {}",
+                ai_cfg_dir.display(),
+                e
+            );
+        } else {
+            let ai_cfg_path = ai_cfg_dir.join("retroarch.cfg");
+            patch_retroarch_cfg(&ai_cfg_path, &overrides);
+            info!(
+                "[RETROARCH] Also wrote config to AppImage home: {}",
+                ai_cfg_path.display()
+            );
+        }
+    }
 
     // ── Core options (retroarch-core-options.cfg) ─────────────────────────
     // The main retroarch.cfg only affects windowed scaling. For fullscreen,
@@ -322,6 +353,16 @@ pub fn configure_retroarch_for_game(
 
         if !core_overrides.is_empty() {
             patch_retroarch_cfg(&core_opts_path, &core_overrides);
+
+            // Also write core options to AppImage.home so RetroArch finds them
+            if let Some(ref ai_cfg_dir) = appimage_config_dir {
+                let ai_core_opts = ai_cfg_dir.join("retroarch-core-options.cfg");
+                patch_retroarch_cfg(&ai_core_opts, &core_overrides);
+                info!(
+                    "[RETROARCH] Also wrote core options to AppImage home: {}",
+                    ai_core_opts.display()
+                );
+            }
         }
     }
 
@@ -335,6 +376,37 @@ pub fn configure_retroarch_for_game(
         savefile_directory: savefile_dir.to_string_lossy().to_string(),
         savestate_directory: savestate_dir.to_string_lossy().to_string(),
     })
+}
+
+/// Finds the AppImage `.home` config directory inside the emulator root.
+///
+/// RetroArch AppImages create a portable `$HOME` at
+/// `<AppImage-filename>.home/` next to the AppImage binary.
+/// RetroArch reads its config from `$HOME/.config/retroarch/retroarch.cfg`
+/// inside this directory. To ensure our settings are actually used, we
+/// need to write config there — not just to the emulator root.
+///
+/// Returns `Some(path)` to the `.config/retroarch/` directory inside
+/// the AppImage home, or `None` if no AppImage is found.
+fn find_appimage_config_dir(emu_root: &Path) -> Option<PathBuf> {
+    if let Ok(entries) = std::fs::read_dir(emu_root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            let name_lower = name_str.to_lowercase();
+            if name_lower.contains("retroarch") && name_lower.ends_with(".appimage") {
+                // Found the AppImage — derive the .home path
+                let home_dir = emu_root.join(format!("{}.home", name_str));
+                let config_dir = home_dir.join(".config").join("retroarch");
+                info!(
+                    "[RETROARCH] AppImage home config dir: {}",
+                    config_dir.display()
+                );
+                return Some(config_dir);
+            }
+        }
+    }
+    None
 }
 
 /// Returns `true` if the directory looks like a RetroArch installation.
