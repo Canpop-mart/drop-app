@@ -676,6 +676,20 @@ async function doUninstall() {
   confirmUninstall.value = false;
   try {
     await invoke("uninstall_game", { gameId });
+
+    // Also remove from library collection so it doesn't linger in BPM
+    try {
+      const url = serverUrl("api/v1/collection/default/entry");
+      await fetch(url, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: gameId }),
+      });
+    } catch (libErr) {
+      // Non-fatal — game is already uninstalled, just couldn't clean library
+      console.warn("[BPM:GAME] Failed to remove from library after uninstall:", libErr);
+    }
+
     navigateTo("/bigpicture/library");
   } catch (e) {
     console.error("[BPM:GAME] Uninstall failed:", e);

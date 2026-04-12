@@ -873,6 +873,13 @@ impl ProcessManager<'_> {
             .stderr(error_file)
             .stdout(log_file)
             .env_remove("RUST_LOG")
+            // Steam/Gamescope sets PYTHONHOME and PYTHONPATH to its own
+            // bundled Python runtime. When umu-run (a system Python script)
+            // inherits these, it fails with "No module named 'encodings'"
+            // because it tries to load Steam's Python stdlib instead of
+            // the system one. Clear these so umu-run uses system Python.
+            .env_remove("PYTHONHOME")
+            .env_remove("PYTHONPATH")
             .current_dir(launch_parameters.1);
 
         // ── Gamescope / Steam Deck env vars ─────────────────────────────

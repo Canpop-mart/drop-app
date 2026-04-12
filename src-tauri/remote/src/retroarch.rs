@@ -316,9 +316,17 @@ pub fn configure_retroarch_for_game(
         }
     }
 
+    // Keys to DELETE from the config file. These are stale settings from
+    // previous Drop versions that interfere with RetroArch's built-in defaults.
+    // In particular, `joypad_autoconfig_dir` was previously set to an empty
+    // directory, causing "not configured — using fallback" messages because
+    // no autoconfig profiles were found. Removing it lets the AppImage use
+    // its bundled autoconfig profiles (e.g. "Valve Software Steam Controller").
+    let stale_keys: &[&str] = &["joypad_autoconfig_dir"];
+
     // Write the main config to the emulator directory (used by --appendconfig)
     let cfg_path = emu_root.join("retroarch.cfg");
-    patch_retroarch_cfg(&cfg_path, &overrides);
+    patch_retroarch_cfg_with_deletions(&cfg_path, &overrides, stale_keys);
 
     // ── Also write config to AppImage.home ──────────────────────────────
     // The RetroArch AppImage overrides $HOME to <AppImage>.home/, so its
@@ -336,7 +344,7 @@ pub fn configure_retroarch_for_game(
             );
         } else {
             let ai_cfg_path = ai_cfg_dir.join("retroarch.cfg");
-            patch_retroarch_cfg(&ai_cfg_path, &overrides);
+            patch_retroarch_cfg_with_deletions(&ai_cfg_path, &overrides, stale_keys);
             info!(
                 "[RETROARCH] Also wrote config to AppImage home: {}",
                 ai_cfg_path.display()
@@ -495,7 +503,19 @@ fn path_to_cfg(path: &Path) -> String {
 ///
 /// RetroArch config format is simple `key = "value"` lines.
 /// We only override keys in our set, preserving everything else.
+/// Keys listed in `delete_keys` are REMOVED from the file entirely.
 fn patch_retroarch_cfg(cfg_path: &Path, overrides: &HashMap<&str, String>) {
+    patch_retroarch_cfg_with_deletions(cfg_path, overrides, &[]);
+}
+
+/// Like `patch_retroarch_cfg` but also removes lines whose keys appear
+/// in `delete_keys`. This is needed to clean up stale settings from
+/// previous launches (e.g. `joypad_autoconfig_dir` pointing to an empty dir).
+fn patch_retroarch_cfg_with_deletions(
+    cfg_path: &Path,
+    overrides: &HashMap<&str, String>,
+    delete_keys: &[&str],
+) {
     let existing = fs::read_to_string(cfg_path).unwrap_or_default();
 
     let mut found_keys: HashMap<&str, bool> = overrides.keys().map(|k| (*k, false)).collect();
@@ -506,6 +526,12 @@ fn patch_retroarch_cfg(cfg_path: &Path, overrides: &HashMap<&str, String>) {
 
         // Check if this line sets one of our override keys
         if let Some(key) = extract_cfg_key(trimmed) {
+            // Delete stale keys entirely
+            if delete_keys.iter().any(|dk| *dk == key) {
+                info!("[RETROARCH] Removing stale config key: {}", key);
+                continue;
+            }
+
             if let Some(value) = overrides.get(key) {
                 // Replace with our value
                 lines.push(format!("{} = {}", key, value));

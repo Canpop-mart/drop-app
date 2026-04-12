@@ -41,28 +41,132 @@ const UMU_INSTALL_DIRS: [&str; 7] = [
     "/home/deck/.local/bin",
 ];
 
+/// Returns true if the path points to a valid, non-empty, executable file.
+/// Follows symlinks to check the real file. This catches broken installs
+/// where `~/.local/bin/umu-run` is a 0-byte placeholder or dangling symlink.
+fn is_valid_executable(path: &PathBuf) -> bool {
+    // Resolve symlinks to find the real file
+    let resolved = match path.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            info!(
+                "[UMU] Cannot resolve {:?}: {} (dangling symlink?)",
+                path, e
+            );
+            return false;
+        }
+    };
+
+    // Check the real file exists and is non-empty
+    match std::fs::metadata(&resolved) {
+        Ok(meta) => {
+            if meta.len() == 0 {
+                info!(
+                    "[UMU] {:?} (resolved to {:?}) is 0 bytes — broken install",
+                    path, resolved
+                );
+                return false;
+            }
+            if !meta.is_file() {
+                info!("[UMU] {:?} is not a regular file", resolved);
+                return false;
+            }
+            // On Unix, check execute permission
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = meta.permissions().mode();
+                if mode & 0o111 == 0 {
+                    info!("[UMU] {:?} is not executable (mode {:o})", resolved, mode);
+                    return false;
+                }
+            }
+            true
+        }
+        Err(e) => {
+            info!("[UMU] Cannot stat {:?}: {}", resolved, e);
+            false
+        }
+    }
+}
+
 fn get_umu_executable() -> Option<PathBuf> {
-    // First check if umu-run is on PATH using `which`
+    // Build a list of candidate paths from multiple sources, then validate
+    // each one. This handles the common Steam Deck case where
+    // ~/.local/bin/umu-run is a 0-byte broken file (from a failed pipx
+    // install or SteamOS update) but the real executable lives in the
+    // pipx venv at ~/.local/share/pipx/venvs/umu-launcher/bin/umu-run.
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // 1. pipx venv paths FIRST — these are most likely to have the real
+    //    executable on Steam Deck, even when the ~/.local/bin shim is broken.
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        candidates.push(
+            home.join(".local/share/pipx/venvs/umu-launcher/bin/umu-run"),
+        );
+        candidates.push(
+            home.join(".local/share/pipx/venvs/umu-run/bin/umu-run"),
+        );
+    }
+
+    // 2. Check `which` output (may return a broken shim, validated below)
     if let Ok(output) = Command::new("which")
         .arg(UMU_BASE_LAUNCHER_EXECUTABLE)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
         .output()
     {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !path.is_empty() {
-                info!("Found umu-run on PATH: {}", path);
-                return Some(PathBuf::from(path));
+                candidates.push(PathBuf::from(path));
             }
         }
     }
 
-    // Fallback: check known installation directories
+    // 3. Known system directories
     for dir in UMU_INSTALL_DIRS {
-        let p = PathBuf::from(dir).join(UMU_BASE_LAUNCHER_EXECUTABLE);
-        if p.exists() && p.is_file() {
-            info!("Found umu-run at: {}", p.display());
-            return Some(p);
+        candidates.push(PathBuf::from(dir).join(UMU_BASE_LAUNCHER_EXECUTABLE));
+    }
+
+    // 4. Flatpak paths
+    candidates.push(PathBuf::from("/app/bin/umu-run"));
+
+    // Validate each candidate and return the first valid one
+    for candidate in &candidates {
+        if candidate.exists() && is_valid_executable(candidate) {
+            // Resolve to the real path to avoid broken shims at runtime
+            let resolved = candidate
+                .canonicalize()
+                .unwrap_or_else(|_| candidate.clone());
+            info!(
+                "[UMU] Found valid umu-run at: {} (resolved: {})",
+                candidate.display(),
+                resolved.display()
+            );
+            return Some(resolved);
         }
     }
+
+    // Log all candidates we checked for debugging
+    info!(
+        "[UMU] No valid umu-run found. Checked {} candidates:",
+        candidates.len()
+    );
+    for c in &candidates {
+        let exists = c.exists();
+        let resolved = c.canonicalize().ok();
+        let size = c.metadata().ok().map(|m| m.len());
+        info!(
+            "[UMU]   {} — exists={}, size={:?}, resolved={:?}",
+            c.display(),
+            exists,
+            size,
+            resolved
+        );
+    }
+
     None
 }
