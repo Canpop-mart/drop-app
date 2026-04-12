@@ -175,6 +175,20 @@ pub fn configure_retroarch_for_game(
         );
     }
 
+    // Check for PS1 BIOS files — SwanStation/DuckStation and Beetle PSX
+    // require firmware to boot games past the splash screen.
+    let ps1_bios_names = ["scph5501.bin", "scph1001.bin", "SCPH5501.BIN", "SCPH1001.BIN", "psxonpsp660.bin"];
+    let has_ps1_bios = ps1_bios_names.iter().any(|name| system_dir.join(name).exists());
+    if !has_ps1_bios {
+        warn!(
+            "[RETROARCH] No PS1 BIOS found in {}. PS1 games (SwanStation/Beetle PSX) \
+             may black-screen after the splash. Place scph5501.bin or scph1001.bin there.",
+            system_dir.display()
+        );
+    } else {
+        info!("[RETROARCH] PS1 BIOS found in system directory");
+    }
+
     // Ensure autoconfig dir exists (for controller profiles)
     if let Err(e) = fs::create_dir_all(&autoconfig_dir) {
         warn!(
@@ -543,46 +557,85 @@ fn extract_cfg_key(line: &str) -> Option<&str> {
 
 // ── Controller layout helpers ────────────────────────────────────────────
 
-/// Writes `input_player1_*_btn` overrides so the on-screen prompts and
-/// the physical button positions match the selected controller family.
+/// Applies controller layout configuration for the selected controller family.
 ///
 /// RetroArch's RetroPad layout mirrors Xbox by default (A=south, B=east,
-/// X=west, Y=north). Nintendo swaps A↔B and X↔Y. PlayStation just
-/// relabels but keeps the same positional layout as Xbox.
+/// X=west, Y=north). With `input_autodetect_enable = true` and the SDL2
+/// joypad driver, autoconfig profiles set `input_player1_*_btn` bindings
+/// automatically — and those OVERRIDE anything we write to retroarch.cfg.
 ///
-/// We also write the corresponding `input_player1_*_label` keys so the
-/// RetroArch menu shows the correct glyphs.
+/// Strategy:
+/// - **Xbox / PlayStation**: Leave autoconfig enabled (default = Xbox layout).
+///   Only set display labels (PlayStation gets Cross/Circle/Square/Triangle).
+///   Do NOT write manual `input_player1_*_btn` values — autoconfig wins.
+/// - **Nintendo**: Disable autoconfig and provide a COMPLETE manual SDL2
+///   GameController mapping with A↔B and X↔Y swapped. This is the only
+///   reliable way to override the physical button layout.
 fn apply_controller_mappings(overrides: &mut HashMap<&str, String>, controller: &ControllerType) {
     match controller {
         ControllerType::Xbox => {
-            // Xbox layout (RetroArch default) — south=A, east=B, west=X, north=Y
-            overrides.insert("input_player1_a_btn", "1".into());       // south face
-            overrides.insert("input_player1_b_btn", "0".into());       // east face
-            overrides.insert("input_player1_x_btn", "3".into());       // west face
-            overrides.insert("input_player1_y_btn", "2".into());       // north face
+            // Xbox layout = RetroArch + SDL2 autoconfig default. Nothing to
+            // override for buttons — just set labels for the RetroArch menu.
             overrides.insert("input_player1_a_btn_label", "\"A\"".into());
             overrides.insert("input_player1_b_btn_label", "\"B\"".into());
             overrides.insert("input_player1_x_btn_label", "\"X\"".into());
             overrides.insert("input_player1_y_btn_label", "\"Y\"".into());
         }
         ControllerType::PlayStation => {
-            // PlayStation — same positions as Xbox but different labels
-            overrides.insert("input_player1_a_btn", "1".into());       // Cross (south)
-            overrides.insert("input_player1_b_btn", "0".into());       // Circle (east)
-            overrides.insert("input_player1_x_btn", "3".into());       // Square (west)
-            overrides.insert("input_player1_y_btn", "2".into());       // Triangle (north)
+            // PlayStation has the same physical layout as Xbox — Cross=south,
+            // Circle=east, Square=west, Triangle=north. Only labels differ.
             overrides.insert("input_player1_a_btn_label", "\"Cross\"".into());
             overrides.insert("input_player1_b_btn_label", "\"Circle\"".into());
             overrides.insert("input_player1_x_btn_label", "\"Square\"".into());
             overrides.insert("input_player1_y_btn_label", "\"Triangle\"".into());
         }
         ControllerType::Nintendo => {
-            // Nintendo — A/B swapped, X/Y swapped relative to Xbox
-            // Nintendo A = east face, Nintendo B = south face
-            overrides.insert("input_player1_a_btn", "0".into());       // east face (Nintendo A)
-            overrides.insert("input_player1_b_btn", "1".into());       // south face (Nintendo B)
-            overrides.insert("input_player1_x_btn", "2".into());       // north face (Nintendo X)
-            overrides.insert("input_player1_y_btn", "3".into());       // west face (Nintendo Y)
+            // Nintendo swaps A↔B and X↔Y relative to Xbox. To make this
+            // stick we MUST disable autoconfig (otherwise it resets our
+            // bindings) and provide the complete SDL2 GameController mapping.
+            //
+            // SDL2 GameController button indices (standardised):
+            //   0=A/south  1=B/east  2=X/west  3=Y/north
+            //   4=Back  5=Guide  6=Start  7=L3  8=R3
+            //   9=L1  10=R1  11=DUp  12=DDown  13=DLeft  14=DRight
+            //
+            // Nintendo convention: A=east, B=south, X=north, Y=west
+            // → Map SDL east(1) to RetroPad A, SDL south(0) to RetroPad B, etc.
+            overrides.insert("input_autodetect_enable", "false".into());
+
+            // Face buttons — swapped for Nintendo layout
+            overrides.insert("input_player1_a_btn", "1".into());       // SDL east → RetroPad A
+            overrides.insert("input_player1_b_btn", "0".into());       // SDL south → RetroPad B
+            overrides.insert("input_player1_x_btn", "3".into());       // SDL north → RetroPad X
+            overrides.insert("input_player1_y_btn", "2".into());       // SDL west → RetroPad Y
+
+            // All other buttons — standard SDL2 GameController indices
+            overrides.insert("input_player1_l_btn", "9".into());       // L shoulder
+            overrides.insert("input_player1_r_btn", "10".into());      // R shoulder
+            overrides.insert("input_player1_select_btn", "4".into());  // Back/Select
+            overrides.insert("input_player1_start_btn", "6".into());   // Start
+            overrides.insert("input_player1_up_btn", "11".into());     // DPad Up
+            overrides.insert("input_player1_down_btn", "12".into());   // DPad Down
+            overrides.insert("input_player1_left_btn", "13".into());   // DPad Left
+            overrides.insert("input_player1_right_btn", "14".into());  // DPad Right
+            overrides.insert("input_player1_l3_btn", "7".into());      // Left stick click
+            overrides.insert("input_player1_r3_btn", "8".into());      // Right stick click
+
+            // Analog sticks
+            overrides.insert("input_player1_l_x_plus_axis", "+0".into());
+            overrides.insert("input_player1_l_x_minus_axis", "-0".into());
+            overrides.insert("input_player1_l_y_plus_axis", "+1".into());
+            overrides.insert("input_player1_l_y_minus_axis", "-1".into());
+            overrides.insert("input_player1_r_x_plus_axis", "+3".into());
+            overrides.insert("input_player1_r_x_minus_axis", "-3".into());
+            overrides.insert("input_player1_r_y_plus_axis", "+4".into());
+            overrides.insert("input_player1_r_y_minus_axis", "-4".into());
+
+            // Triggers (axes, not buttons)
+            overrides.insert("input_player1_l2_axis", "+2".into());
+            overrides.insert("input_player1_r2_axis", "+5".into());
+
+            // Labels
             overrides.insert("input_player1_a_btn_label", "\"A\"".into());
             overrides.insert("input_player1_b_btn_label", "\"B\"".into());
             overrides.insert("input_player1_x_btn_label", "\"X\"".into());
@@ -648,8 +701,16 @@ fn apply_core_quality_options(overrides: &mut HashMap<&str, String>, quality: &Q
     // Beetle PSX HW (PS1 HW) — internal GPU resolution
     overrides.insert("beetle_psx_hw_internal_resolution", format!("\"{}\"", beetle_psx_res));
 
-    // SwanStation (PS1) — GPU resolution scale
-    overrides.insert("swanstation_GPU.ResolutionScale", format!("\"{}\"", pcsx_rearmed));
+    // SwanStation / DuckStation (PS1) — GPU resolution scale
+    // The core was renamed from DuckStation to SwanStation but some builds
+    // still use the old prefix. Write both so the setting always applies.
+    let ps1_res_scale = match quality {
+        QualityPreset::Low => "1",
+        QualityPreset::Medium => "2",
+        QualityPreset::High => "4",
+    };
+    overrides.insert("swanstation_GPU.ResolutionScale", format!("\"{}\"", ps1_res_scale));
+    overrides.insert("duckstation_GPU.ResolutionScale", format!("\"{}\"", ps1_res_scale));
 
     // PPSSPP (PSP) — internal resolution
     overrides.insert("ppsspp_internal_resolution", format!("\"{}\"", ppsspp_res));
@@ -705,9 +766,10 @@ fn apply_core_widescreen_options(overrides: &mut HashMap<&str, String>, enabled:
     overrides.insert("beetle_psx_hw_widescreen_hack", format!("\"{}\"", val));
     overrides.insert("beetle_psx_hw_widescreen_hack_aspect_ratio", "\"16:9\"".into());
 
-    // SwanStation (PS1) — GPU widescreen hack
-    overrides.insert("swanstation_GPU.WidescreenHack", format!("\"{}\"",
-        if enabled { "true" } else { "false" }));
+    // SwanStation / DuckStation (PS1) — GPU widescreen hack
+    let ws_bool = if enabled { "true" } else { "false" };
+    overrides.insert("swanstation_GPU.WidescreenHack", format!("\"{}\"", ws_bool));
+    overrides.insert("duckstation_GPU.WidescreenHack", format!("\"{}\"", ws_bool));
 
     // PCSX ReARMed — widescreen
     overrides.insert("pcsx_rearmed_widescreen", format!("\"{}\"", val));

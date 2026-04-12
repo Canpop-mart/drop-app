@@ -280,6 +280,68 @@
         </div>
       </div>
 
+      <!-- ═══════ Compatibility ═══════ -->
+      <div
+        v-if="activeSection === 'compatibility'"
+        class="space-y-5 max-w-xl"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          Compatibility
+        </h3>
+
+        <!-- Proton / UMU status -->
+        <div class="bg-zinc-900/50 rounded-xl p-4">
+          <div class="mb-3">
+            <p class="font-medium text-zinc-200 text-sm">
+              Proton (Windows Game Support)
+            </p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Select a Proton installation to run Windows games on Linux.
+            </p>
+          </div>
+
+          <div v-if="protonLoading" class="text-zinc-500 text-xs py-2">
+            Discovering Proton installations...
+          </div>
+
+          <div v-else-if="allProtonPaths.length === 0" class="py-2">
+            <p class="text-yellow-400/80 text-xs">
+              No Proton installations found. Install Proton via Steam
+              (Settings → Compatibility → Enable Steam Play) or place it in
+              <code class="bg-zinc-800 px-1 rounded">~/.steam/root/compatibilitytools.d/</code>.
+            </p>
+          </div>
+
+          <div v-else class="space-y-2">
+            <button
+              v-for="proton in allProtonPaths"
+              :key="proton.path"
+              :ref="(el: any) => registerContent(el, { onSelect: () => setDefaultProton(proton.path) })"
+              class="w-full flex items-center justify-between bg-zinc-800/50 rounded-lg px-3 py-2.5 text-left transition-colors"
+              :class="[
+                proton.path === selectedProtonDefault
+                  ? 'ring-1 ring-blue-500/50 bg-blue-600/10'
+                  : 'hover:bg-zinc-700/50',
+              ]"
+              @click="setDefaultProton(proton.path)"
+            >
+              <div class="min-w-0">
+                <span class="text-xs font-medium text-zinc-200 block truncate">{{ proton.name }}</span>
+                <span class="text-[10px] text-zinc-500 block truncate">{{ proton.path }}</span>
+              </div>
+              <div
+                v-if="proton.path === selectedProtonDefault"
+                class="size-2 rounded-full bg-blue-500 shrink-0 ml-2"
+              />
+            </button>
+          </div>
+
+          <p v-if="protonSaveError" class="text-red-400/80 text-xs mt-2">
+            {{ protonSaveError }}
+          </p>
+        </div>
+      </div>
+
       <!-- ═══════ About ═══════ -->
       <div
         v-if="activeSection === 'about'"
@@ -339,6 +401,7 @@ const sections = [
   { label: "Steam", value: "steam" },
   { label: "Controller", value: "controller" },
   { label: "Storage", value: "storage" },
+  { label: "Compatibility", value: "compatibility" },
   { label: "About", value: "about" },
 ];
 
@@ -456,6 +519,57 @@ async function addStorageAsInstallDir(path: string) {
     installDirs.value = await invoke("fetch_download_dir_stats");
   } catch (e) {
     console.error("Failed to add storage dir:", e);
+  }
+}
+
+// ── Proton / Compatibility ─────────────────────────────────────────────────
+
+interface ProtonPath {
+  path: string;
+  name: string;
+}
+
+const protonLoading = ref(true);
+const allProtonPaths = ref<ProtonPath[]>([]);
+const selectedProtonDefault = ref<string | null>(null);
+const protonSaveError = ref<string | null>(null);
+
+onMounted(async () => {
+  try {
+    const result = await invoke<{
+      autodiscovered: ProtonPath[];
+      custom: ProtonPath[];
+      default: string | null;
+    }>("fetch_proton_paths");
+
+    allProtonPaths.value = [...result.autodiscovered, ...result.custom];
+    selectedProtonDefault.value = result.default;
+
+    // Auto-set default if one is discovered but none is selected
+    if (!result.default && allProtonPaths.value.length > 0) {
+      const firstPath = allProtonPaths.value[0].path;
+      try {
+        await invoke("set_default", { path: firstPath });
+        selectedProtonDefault.value = firstPath;
+        console.log("[BPM:SETTINGS] Auto-selected Proton default:", firstPath);
+      } catch (e) {
+        console.warn("[BPM:SETTINGS] Failed to auto-set Proton default:", e);
+      }
+    }
+  } catch (e) {
+    console.warn("[BPM:SETTINGS] Proton discovery failed:", e);
+  } finally {
+    protonLoading.value = false;
+  }
+});
+
+async function setDefaultProton(path: string) {
+  protonSaveError.value = null;
+  try {
+    await invoke("set_default", { path });
+    selectedProtonDefault.value = path;
+  } catch (e) {
+    protonSaveError.value = `Failed to set default: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 </script>
