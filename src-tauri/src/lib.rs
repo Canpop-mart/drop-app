@@ -250,6 +250,8 @@ pub fn run() {
             fetch_state,
             quit,
             fetch_system_data,
+            collect_bug_report_diagnostics,
+            collect_bug_report_logs,
             open_fs,
             // User utils
             update_settings,

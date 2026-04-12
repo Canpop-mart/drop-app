@@ -237,13 +237,17 @@
         v-else-if="activeTab === 'gallery'"
         class="grid grid-cols-2 gap-4"
       >
-        <img
+        <div
           v-for="(imgId, idx) in game?.mImageCarouselObjectIds"
           :key="idx"
-          :src="objectUrl(imgId)"
-          class="w-full rounded-lg"
-          loading="lazy"
-        />
+          class="aspect-video rounded-lg overflow-hidden bg-zinc-800"
+        >
+          <img
+            :src="objectUrl(imgId)"
+            class="w-full h-full object-cover"
+            loading="lazy"
+          />
+        </div>
         <p
           v-if="!game?.mImageCarouselObjectIds?.length"
           class="text-zinc-500 col-span-2 text-center py-8 text-sm"

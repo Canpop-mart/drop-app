@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::create_dir_all,
     io::{Error, ErrorKind},
     path::{Path, PathBuf},
@@ -12,6 +13,7 @@ use games::scan::scan_install_dirs;
 use log::error;
 use serde::Serialize;
 use serde_json::Value;
+use sysinfo::System;
 
 // Will, in future, return disk/remaining size
 // Just returns the directories that have been set up
@@ -193,4 +195,77 @@ pub fn fetch_system_data() -> SystemData {
         DATA_ROOT_DIR.to_string_lossy().to_string(),
         std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
     )
+}
+
+/// Collects comprehensive system diagnostics for bug reports.
+/// Includes OS, hardware, memory, disk, and client version info.
+#[tauri::command]
+pub fn collect_bug_report_diagnostics() -> HashMap<String, String> {
+    let mut info = HashMap::new();
+
+    // Client version
+    info.insert("clientVersion".into(), env!("CARGO_PKG_VERSION").into());
+
+    // OS info
+    info.insert("os".into(), System::name().unwrap_or_else(|| "unknown".into()));
+    info.insert("osVersion".into(), System::os_version().unwrap_or_else(|| "unknown".into()));
+    info.insert("kernelVersion".into(), System::kernel_version().unwrap_or_else(|| "unknown".into()));
+    info.insert("hostname".into(), System::host_name().unwrap_or_else(|| "unknown".into()));
+    info.insert("arch".into(), std::env::consts::ARCH.into());
+
+    // CPU & Memory — use new_all() to refresh everything in one shot
+    let sys = System::new_all();
+    let cpus = sys.cpus();
+    if let Some(cpu) = cpus.first() {
+        info.insert("cpu".into(), cpu.brand().to_string());
+    }
+    info.insert("cpuCount".into(), cpus.len().to_string());
+
+    // Memory
+    let total_mem_gb = sys.total_memory() as f64 / 1_073_741_824.0;
+    let used_mem_gb = sys.used_memory() as f64 / 1_073_741_824.0;
+    info.insert("totalMemoryGB".into(), format!("{:.1}", total_mem_gb));
+    info.insert("usedMemoryGB".into(), format!("{:.1}", used_mem_gb));
+
+    // Disk space for install dirs
+    let db_handle = borrow_db_checked();
+    let install_dirs = &db_handle.applications.install_dirs;
+    for (i, dir) in install_dirs.iter().enumerate() {
+        let disks = sysinfo::Disks::new_with_refreshed_list();
+        for disk in disks.list() {
+            if dir.starts_with(disk.mount_point()) {
+                let free_gb = disk.available_space() as f64 / 1_073_741_824.0;
+                info.insert(
+                    format!("installDir{}_freeGB", i),
+                    format!("{:.1}", free_gb),
+                );
+                break;
+            }
+        }
+    }
+
+    // Session type
+    let session_type = ::client::app_state::SessionType::detect();
+    info.insert("sessionType".into(), format!("{:?}", session_type));
+
+    // Data directory
+    info.insert("dataDir".into(), DATA_ROOT_DIR.to_string_lossy().to_string());
+
+    // Server URL
+    info.insert("serverUrl".into(), db_handle.base_url.clone());
+
+    info
+}
+
+/// Reads the last N lines of the client log file for bug report attachment.
+#[tauri::command]
+pub fn collect_bug_report_logs(max_lines: Option<usize>) -> Result<String, String> {
+    let log_path = DATA_ROOT_DIR.join("drop.log");
+    let content = std::fs::read_to_string(&log_path)
+        .map_err(|e| format!("Failed to read log file: {}", e))?;
+
+    let max = max_lines.unwrap_or(200);
+    let lines: Vec<&str> = content.lines().collect();
+    let start = if lines.len() > max { lines.len() - max } else { 0 };
+    Ok(lines[start..].join("\n"))
 }

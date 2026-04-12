@@ -238,13 +238,21 @@ export function useServerApi() {
         ),
 
       /** Search/browse the store. */
+      /** List all libraries (for filter UI). */
+      libraries: () =>
+        apiFetch<Array<{ id: string; name: string }>>(
+          "api/v1/store/libraries",
+        ),
+
+      /** Search/browse the store. */
       browse: (params: {
         skip?: number;
         take?: number;
         q?: string;
         tags?: string;
         platform?: string;
-        sort?: "default" | "newest" | "recent" | "name" | "relevance";
+        library?: string;
+        sort?: "default" | "newest" | "recent" | "name" | "relevance" | "random";
         order?: "asc" | "desc";
       } = {}) => {
         const qs = new URLSearchParams();
@@ -253,6 +261,7 @@ export function useServerApi() {
         if (params.q) qs.set("q", params.q);
         if (params.tags) qs.set("tags", params.tags);
         if (params.platform) qs.set("platform", params.platform);
+        if (params.library) qs.set("library", params.library);
         if (params.sort) qs.set("sort", params.sort);
         if (params.order) qs.set("order", params.order);
         const query = qs.toString();

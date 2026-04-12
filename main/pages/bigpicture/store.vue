@@ -96,12 +96,12 @@
         </div>
       </div>
 
-      <!-- Trending section -->
+      <!-- Trending section (1 row) -->
       <div v-if="trending.length > 0" class="mb-8">
         <h3 class="text-lg font-semibold font-display text-zinc-200 mb-4">
           Most Played This Week
         </h3>
-        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
+        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 bpm-single-row">
           <div
             v-for="game in trending"
             :key="game.id"
@@ -128,12 +128,12 @@
         </div>
       </div>
 
-      <!-- Recently added section -->
+      <!-- Recently added section (1 row) -->
       <div v-if="recentGames.length > 0" class="mb-8">
         <h3 class="text-lg font-semibold font-display text-zinc-200 mb-4">
           Recently Added
         </h3>
-        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
+        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 bpm-single-row">
           <div
             v-for="game in recentGames"
             :key="game.id"
@@ -158,6 +158,49 @@
           </div>
         </div>
       </div>
+
+      <!-- Random picks section (2 rows) -->
+      <div v-if="randomGames.length > 0" class="mb-8">
+        <h3 class="text-lg font-semibold font-display text-zinc-200 mb-4">
+          Random Picks
+        </h3>
+        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 bpm-two-rows">
+          <div
+            v-for="game in randomGames"
+            :key="game.id"
+            :ref="(el: any) => registerGrid(el, {
+              onSelect: () => goToGame(game.id),
+            })"
+            class="group relative flex flex-col rounded-xl overflow-hidden transition-all duration-200 cursor-pointer ring-2 ring-transparent"
+          >
+            <div class="relative aspect-[3/4] bg-zinc-800">
+              <img
+                v-if="game.mCoverObjectId"
+                :src="objectUrl(game.mCoverObjectId)"
+                :alt="game.mName"
+                class="w-full h-full object-cover"
+                loading="lazy"
+              />
+              <div v-if="!game.mCoverObjectId" class="w-full h-full flex items-center justify-center">
+                <span class="text-2xl font-bold text-zinc-500">{{ game.mName[0] }}</span>
+              </div>
+              <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent" />
+            </div>
+            <div class="px-2 py-2 bg-zinc-900/80">
+              <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
+              <div v-if="game.tags?.length" class="flex gap-1 mt-1 overflow-hidden">
+                <span
+                  v-for="tag in game.tags.slice(0, 2)"
+                  :key="tag.id"
+                  class="px-1.5 py-0.5 rounded-full bg-zinc-800/60 text-[10px] text-zinc-500 truncate"
+                >
+                  {{ tag.name }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ═══ Browse tab ═══ -->
@@ -170,20 +213,52 @@
           Sort: {{ browseSortLabel }}
         </div>
 
+        <div class="w-px h-5 bg-zinc-700" />
+
+        <!-- Filters label -->
+        <div class="flex items-center gap-1.5 px-1 text-sm font-medium text-zinc-500">
+          <FunnelIcon class="size-4" />
+          Filters:
+        </div>
+
+        <!-- Library filter -->
+        <select
+          v-model="browseLibraryFilter"
+          class="px-3 py-1.5 text-sm rounded-lg bg-zinc-800 text-zinc-300 border border-zinc-700 outline-none focus:border-blue-500"
+        >
+          <option value="">All Libraries</option>
+          <option v-for="lib in libraries" :key="lib.id" :value="lib.id">
+            {{ lib.name }}
+          </option>
+        </select>
+
+        <!-- Achievements filter -->
+        <select
+          v-model="browseAchievementFilter"
+          class="px-3 py-1.5 text-sm rounded-lg bg-zinc-800 text-zinc-300 border border-zinc-700 outline-none focus:border-blue-500"
+        >
+          <option value="">All Games</option>
+          <option value="has_achievements">Has Achievements</option>
+        </select>
+
         <!-- Clear filters -->
         <button
-          v-if="searchQuery"
+          v-if="searchQuery || browseLibraryFilter || browseAchievementFilter"
           class="flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
-          @click="searchQuery = ''; loadBrowse(true)"
+          @click="clearBrowseFilters"
         >
           <XMarkIcon class="size-3.5" />
-          "{{ searchQuery }}"
+          Clear{{ searchQuery ? ` "${searchQuery}"` : '' }}
         </button>
       </div>
 
-      <div v-if="browseResults.length > 0" class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
+      <div
+        v-if="browseResults.length > 0"
+        ref="browseGridEl"
+        class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 bpm-four-rows"
+      >
         <div
-          v-for="game in browseResults"
+          v-for="game in browsePageResults"
           :key="game.id"
           :ref="(el: any) => registerGrid(el, {
             onSelect: () => goToGame(game.id),
@@ -218,14 +293,26 @@
         </div>
       </div>
 
-      <!-- Load more -->
-      <div v-if="browseHasMore" class="flex justify-center py-6">
+      <!-- Pagination -->
+      <div v-if="browseTotalPages > 1" class="flex items-center justify-center gap-4 py-6">
         <button
-          :ref="(el: any) => registerTab(el, { onSelect: loadMoreBrowse })"
-          class="px-6 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm font-medium hover:bg-zinc-700 transition-colors"
-          @click="loadMoreBrowse"
+          :ref="(el: any) => registerTab(el, { onSelect: browsePrevPage })"
+          :disabled="browsePage === 0"
+          class="px-4 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm font-medium hover:bg-zinc-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          @click="browsePrevPage"
         >
-          Load More
+          Previous
+        </button>
+        <span class="text-sm text-zinc-500">
+          Page {{ browsePage + 1 }} of {{ browseTotalPages }}
+        </span>
+        <button
+          :ref="(el: any) => registerTab(el, { onSelect: browseNextPage })"
+          :disabled="browsePage >= browseTotalPages - 1"
+          class="px-4 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm font-medium hover:bg-zinc-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          @click="browseNextPage"
+        >
+          Next
         </button>
       </div>
 
@@ -243,7 +330,7 @@
 </template>
 
 <script setup lang="ts">
-import { MagnifyingGlassIcon, XMarkIcon, ArrowsUpDownIcon } from "@heroicons/vue/24/outline";
+import { MagnifyingGlassIcon, XMarkIcon, ArrowsUpDownIcon, FunnelIcon } from "@heroicons/vue/24/outline";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
 import { useServerApi, type StoreGame, type TrendingGame } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
@@ -288,14 +375,20 @@ function cycleBrowseSort() {
   browseSort.value = modes[(idx + 1) % modes.length];
 }
 
+// Browse filters & pagination
+const browseLibraryFilter = ref("");
+const browseAchievementFilter = ref("");
+const libraries = ref<Array<{ id: string; name: string }>>([]);
+const browsePage = ref(0);
+const browseGridEl = ref<HTMLElement | null>(null);
+
 // Data
 const featured = ref<StoreGame[]>([]);
 const trending = ref<TrendingGame[]>([]);
 const recentGames = ref<StoreGame[]>([]);
+const randomGames = ref<StoreGame[]>([]);
 const browseResults = ref<StoreGame[]>([]);
 const browseTotal = ref(0);
-
-const browseHasMore = computed(() => browseResults.value.length < browseTotal.value);
 
 function objectUrl(id: string): string {
   return serverUrl(`api/v1/object/${id}`);
@@ -330,24 +423,70 @@ function stopHeroTimer() {
   }
 }
 
+// Pagination: compute how many items per page based on grid columns × 4 rows
+// We fetch a generous batch and paginate client-side so column-count changes
+// don't cause jank. Fall back to 28 (7 cols × 4 rows) when we can't measure.
+const itemsPerPage = computed(() => {
+  const el = browseGridEl.value;
+  if (!el) return 28;
+  const style = getComputedStyle(el);
+  const cols = style.getPropertyValue("grid-template-columns").split(" ").length;
+  return cols * 4;
+});
+
+const browsePageResults = computed(() => {
+  const start = browsePage.value * itemsPerPage.value;
+  return browseResults.value.slice(start, start + itemsPerPage.value);
+});
+
+const browseTotalPages = computed(() => {
+  if (browseResults.value.length === 0) return 0;
+  return Math.ceil(browseTotal.value / itemsPerPage.value);
+});
+
+function browseNextPage() {
+  if (browsePage.value < browseTotalPages.value - 1) {
+    browsePage.value++;
+    // If we're near the end of loaded results but server has more, fetch next batch
+    const nextStart = browsePage.value * itemsPerPage.value;
+    if (nextStart + itemsPerPage.value > browseResults.value.length && browseResults.value.length < browseTotal.value) {
+      loadBrowseMore();
+    }
+  }
+}
+
+function browsePrevPage() {
+  if (browsePage.value > 0) {
+    browsePage.value--;
+  }
+}
+
+function clearBrowseFilters() {
+  searchQuery.value = "";
+  browseLibraryFilter.value = "";
+  browseAchievementFilter.value = "";
+  browsePage.value = 0;
+  loadBrowse(true);
+}
+
 // Browse functionality
 async function loadBrowse(reset = false) {
-  if (reset) browseResults.value = [];
+  if (reset) {
+    browseResults.value = [];
+    browsePage.value = 0;
+  }
   browseLoading.value = true;
   try {
     const data = await api.store.browse({
-      skip: reset ? 0 : browseResults.value.length,
-      take: 20,
+      skip: 0,
+      take: 55,
       q: searchQuery.value || undefined,
+      library: browseLibraryFilter.value || undefined,
       sort: searchQuery.value
         ? "relevance"
         : (browseSort.value as any) || "default",
     });
-    if (reset) {
-      browseResults.value = data.results;
-    } else {
-      browseResults.value.push(...data.results);
-    }
+    browseResults.value = data.results;
     browseTotal.value = data.count;
   } catch (e) {
     console.error("Failed to load browse:", e);
@@ -356,8 +495,25 @@ async function loadBrowse(reset = false) {
   }
 }
 
-function loadMoreBrowse() {
-  loadBrowse(false);
+async function loadBrowseMore() {
+  browseLoading.value = true;
+  try {
+    const data = await api.store.browse({
+      skip: browseResults.value.length,
+      take: 55,
+      q: searchQuery.value || undefined,
+      library: browseLibraryFilter.value || undefined,
+      sort: searchQuery.value
+        ? "relevance"
+        : (browseSort.value as any) || "default",
+    });
+    browseResults.value.push(...data.results);
+    browseTotal.value = data.count;
+  } catch (e) {
+    console.error("Failed to load more browse:", e);
+  } finally {
+    browseLoading.value = false;
+  }
 }
 
 // Reload browse when tab switches to browse
@@ -367,8 +523,14 @@ watch(activeTab, (tab) => {
   }
 });
 
-// Reload browse when sort changes
+// Reload browse when sort or filters change
 watch(browseSort, () => {
+  if (activeTab.value === "browse") {
+    loadBrowse(true);
+  }
+});
+
+watch([browseLibraryFilter, browseAchievementFilter], () => {
   if (activeTab.value === "browse") {
     loadBrowse(true);
   }
@@ -409,15 +571,19 @@ _unsubs.push(
 // Initial data load
 onMounted(async () => {
   try {
-    const [featuredData, trendingData, recentData] = await Promise.all([
+    const [featuredData, trendingData, recentData, randomData, librariesData] = await Promise.all([
       api.store.featured().catch(() => [] as StoreGame[]),
       api.store.trending(10, 7).catch(() => ({ results: [] as TrendingGame[] })),
       api.store.browse({ take: 10, sort: "recent" }).catch(() => ({ results: [] as StoreGame[], count: 0 })),
+      api.store.browse({ take: 20, sort: "random" }).catch(() => ({ results: [] as StoreGame[], count: 0 })),
+      api.store.libraries().catch(() => [] as Array<{ id: string; name: string }>),
     ]);
 
     featured.value = featuredData;
     trending.value = trendingData.results;
     recentGames.value = recentData.results;
+    randomGames.value = randomData.results;
+    libraries.value = librariesData;
 
     startHeroTimer();
   } catch (e) {
@@ -444,3 +610,27 @@ const tabs = [
   { label: "Browse", value: "browse" },
 ];
 </script>
+
+<style scoped>
+/*
+ * Row-limiting for BPM grids.
+ * Because column count varies by resolution (2–7), we can't hardcode
+ * a specific item count. Instead, we use grid-template-rows + overflow
+ * to visually limit the number of visible rows.
+ */
+.bpm-single-row {
+  grid-template-rows: 1fr;
+  grid-auto-rows: 0;
+  overflow: hidden;
+}
+.bpm-two-rows {
+  grid-template-rows: 1fr 1fr;
+  grid-auto-rows: 0;
+  overflow: hidden;
+}
+.bpm-four-rows {
+  grid-template-rows: 1fr 1fr 1fr 1fr;
+  grid-auto-rows: 0;
+  overflow: hidden;
+}
+</style>

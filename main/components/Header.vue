@@ -54,7 +54,7 @@
 </template>
 
 <script setup lang="ts">
-import { BellIcon, UserGroupIcon } from "@heroicons/vue/16/solid";
+import { BellIcon, UserGroupIcon, BugAntIcon } from "@heroicons/vue/16/solid";
 import { ArrowsPointingOutIcon } from "@heroicons/vue/24/outline";
 import { AppStatus, type NavigationItem, type QuickActionNav } from "../types";
 import HeaderWidget from "./HeaderWidget.vue";
@@ -89,6 +89,7 @@ const navigation: Array<NavigationItem> = [
 
 const { currentNavigation } = useCurrentNavigationIndex(navigation);
 
+const router = useRouter();
 const quickActions: Array<QuickActionNav> = [
   {
     icon: UserGroupIcon,
@@ -97,6 +98,12 @@ const quickActions: Array<QuickActionNav> = [
   {
     icon: BellIcon,
     action: async () => {},
+  },
+  {
+    icon: BugAntIcon,
+    action: async () => {
+      await router.push("/bugreport");
+    },
   },
 ];
 
