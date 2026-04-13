@@ -274,10 +274,24 @@ function _restoreFocusSnapshot(routePath: string): boolean {
 // ── CSS class applied to focused element ─────────────────────────────────────
 
 const FOCUS_CLASS = "bp-focused";
+const RING_FOCUS_CLASS = "bp-ring-focused";
 
 /**
- * Check if an element is at least partially visible within its scrollable
- * ancestor.  Returns true when scrolling is NOT needed.
+ * When the focused wrapper has .bp-focus-delegate, find and mark the
+ * first .bp-focus-ring descendant so the glow hugs the art, not the wrapper.
+ */
+function applyRingFocus(el: HTMLElement) {
+  const ring = el.querySelector(".bp-focus-ring");
+  if (ring) ring.classList.add(RING_FOCUS_CLASS);
+}
+function removeRingFocus(el: HTMLElement) {
+  const ring = el.querySelector("." + RING_FOCUS_CLASS);
+  if (ring) ring.classList.remove(RING_FOCUS_CLASS);
+}
+
+/**
+ * Check if an element is fully visible within its scrollable ancestor.
+ * Returns true when scrolling is NOT needed.
  */
 function isVisibleInScrollParent(el: HTMLElement): boolean {
   const rect = el.getBoundingClientRect();
@@ -285,11 +299,11 @@ function isVisibleInScrollParent(el: HTMLElement): boolean {
   while (parent) {
     if (parent.scrollHeight > parent.clientHeight) {
       const parentRect = parent.getBoundingClientRect();
-      // Element is visible if it overlaps the parent's viewport with margin
-      const margin = 40; // px of margin before we trigger scroll
+      // Element is fully visible if its entire rect is within the parent viewport
+      const margin = 20; // px of padding from edges
       return (
-        rect.bottom > parentRect.top + margin &&
-        rect.top < parentRect.bottom - margin
+        rect.top >= parentRect.top + margin &&
+        rect.bottom <= parentRect.bottom - margin
       );
     }
     parent = parent.parentElement;
@@ -301,6 +315,7 @@ function isVisibleInScrollParent(el: HTMLElement): boolean {
 function applyFocus(element: FocusableElement | null, fromGroupCycle = false) {
   // Remove from previous
   if (currentFocused.value) {
+    removeRingFocus(currentFocused.value.el);
     currentFocused.value.el.classList.remove(FOCUS_CLASS);
   }
 
@@ -308,6 +323,10 @@ function applyFocus(element: FocusableElement | null, fromGroupCycle = false) {
 
   if (element) {
     element.el.classList.add(FOCUS_CLASS);
+    // If this wrapper delegates glow, mark the inner ring element
+    if (element.el.classList.contains("bp-focus-delegate")) {
+      applyRingFocus(element.el);
+    }
     // Play focus feedback sound
     useBpAudio().play("focus");
 

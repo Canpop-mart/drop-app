@@ -25,6 +25,199 @@
 
     <!-- Settings content -->
     <div class="flex-1 overflow-y-auto px-8 py-6">
+      <!-- ═══════ Theme ═══════ -->
+      <div
+        v-if="activeSection === 'theme'"
+        class="space-y-5"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          Theme
+        </h3>
+
+        <!-- Three-column horizontal layout -->
+        <div class="grid grid-cols-3 gap-6 items-start">
+
+          <!-- ── Column 1: Visual Theme ── -->
+          <div class="space-y-2">
+            <h4 class="text-sm font-medium text-zinc-300 mb-2">Visual Theme</h4>
+            <p class="text-zinc-500 text-xs mb-3">
+              Colors and home layout for Big Picture Mode.
+            </p>
+            <div class="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+              <button
+                v-for="t in themes"
+                :key="t.id"
+                :ref="
+                  (el: any) =>
+                    registerContent(el, {
+                      onSelect: () => (activeThemeId = t.id),
+                    })
+                "
+                class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all"
+                :class="
+                  activeThemeId === t.id
+                    ? 'bg-blue-600/20 ring-2 ring-blue-500/60'
+                    : 'bg-zinc-900/50 hover:bg-zinc-800/50'
+                "
+                @click="activeThemeId = t.id"
+              >
+                <div
+                  class="size-4 rounded-full shrink-0 ring-2 ring-white/20"
+                  :style="{ backgroundColor: themePreviewColors[t.id] }"
+                />
+                <div class="flex-1 min-w-0">
+                  <p class="font-medium text-zinc-200 text-sm truncate">{{ t.label }}</p>
+                  <p class="text-zinc-500 text-xs mt-0.5 truncate">{{ t.description }}</p>
+                </div>
+                <span v-if="activeThemeId === t.id" class="text-xs font-medium text-blue-400 shrink-0">Active</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- ── Column 2: Sound Profile ── -->
+          <div class="space-y-2">
+            <h4 class="text-sm font-medium text-zinc-300 mb-2">Sound Profile</h4>
+            <p class="text-zinc-500 text-xs mb-3">
+              Audio feedback style, independent from visual theme.
+            </p>
+            <div class="space-y-2 max-h-[52vh] overflow-y-auto pr-1">
+              <button
+                v-for="sp in soundProfiles"
+                :key="sp.id"
+                :ref="
+                  (el: any) =>
+                    registerContent(el, {
+                      onSelect: () => { activeSoundProfile = sp.id; audio.setProfile(sp.id); audio.preview(sp.id, 'select'); },
+                    })
+                "
+                class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all"
+                :class="
+                  activeSoundProfile === sp.id
+                    ? 'bg-blue-600/20 ring-2 ring-blue-500/60'
+                    : 'bg-zinc-900/50 hover:bg-zinc-800/50'
+                "
+                @click="activeSoundProfile = sp.id; audio.setProfile(sp.id); audio.preview(sp.id, 'select')"
+              >
+                <div
+                  class="size-4 rounded-full shrink-0 ring-2 ring-white/20 flex items-center justify-center bg-zinc-800"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-2.5 text-zinc-400">
+                    <path d="M10 3.75a.75.75 0 0 0-1.264-.546L4.703 7H3.167a.75.75 0 0 0-.7.48A6.985 6.985 0 0 0 2 10c0 .887.165 1.737.468 2.52.111.29.39.48.7.48h1.535l4.033 3.796A.75.75 0 0 0 10 16.25V3.75ZM15.95 5.05a.75.75 0 0 0-1.06 1.061 5.5 5.5 0 0 1 0 7.778.75.75 0 0 0 1.06 1.06 7 7 0 0 0 0-9.899Z" />
+                    <path d="M13.829 7.172a.75.75 0 0 0-1.061 1.06 2.5 2.5 0 0 1 0 3.536.75.75 0 0 0 1.06 1.06 4 4 0 0 0 0-5.656Z" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <p class="font-medium text-zinc-200 text-sm truncate">{{ sp.label }}</p>
+                  <p class="text-zinc-500 text-xs mt-0.5 truncate">{{ sp.description }}</p>
+                </div>
+                <span v-if="activeSoundProfile === sp.id" class="text-xs font-medium text-blue-400 shrink-0">Active</span>
+              </button>
+            </div>
+
+            <!-- Audio toggle -->
+            <div class="pt-2">
+              <div
+                :ref="
+                  (el: any) =>
+                    registerContent(el, {
+                      onSelect: () => (audioEnabled = !audioEnabled),
+                    })
+                "
+                class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-3"
+              >
+                <div>
+                  <p class="font-medium text-zinc-200 text-sm">Enable Sounds</p>
+                  <p class="text-zinc-500 text-xs mt-0.5">Audio feedback on navigation</p>
+                </div>
+                <button
+                  class="w-11 h-6 rounded-full transition-colors relative shrink-0 ml-3"
+                  :class="audioEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+                  @click.stop="audioEnabled = !audioEnabled"
+                >
+                  <div
+                    class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+                    :class="audioEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+                  />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Column 3: Effects ── -->
+          <div class="space-y-2">
+            <h4 class="text-sm font-medium text-zinc-300 mb-2">Effects</h4>
+            <p class="text-zinc-500 text-xs mb-3">
+              Visual effects and overlays.
+            </p>
+            <div class="space-y-2">
+              <!-- Animated Backgrounds -->
+              <div
+                :ref="(el: any) => registerContent(el, { onSelect: () => toggleEffect('bpm:animBg') })"
+                class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-3"
+              >
+                <div>
+                  <p class="font-medium text-zinc-200 text-sm">Animated BGs</p>
+                  <p class="text-zinc-500 text-xs mt-0.5">Animated theme backgrounds</p>
+                </div>
+                <button
+                  class="w-11 h-6 rounded-full transition-colors relative shrink-0 ml-3"
+                  :class="animBgEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+                  @click.stop="toggleEffect('bpm:animBg')"
+                >
+                  <div
+                    class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+                    :class="animBgEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+                  />
+                </button>
+              </div>
+
+              <!-- CRT Filter -->
+              <div
+                :ref="(el: any) => registerContent(el, { onSelect: () => toggleEffect('bpm:crtFilter') })"
+                class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-3"
+              >
+                <div>
+                  <p class="font-medium text-zinc-200 text-sm">CRT Filter</p>
+                  <p class="text-zinc-500 text-xs mt-0.5">Retro scanline overlay</p>
+                </div>
+                <button
+                  class="w-11 h-6 rounded-full transition-colors relative shrink-0 ml-3"
+                  :class="crtEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+                  @click.stop="toggleEffect('bpm:crtFilter')"
+                >
+                  <div
+                    class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+                    :class="crtEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+                  />
+                </button>
+              </div>
+
+              <!-- Screensaver -->
+              <div
+                :ref="(el: any) => registerContent(el, { onSelect: () => toggleEffect('bpm:screensaver') })"
+                class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-3"
+              >
+                <div>
+                  <p class="font-medium text-zinc-200 text-sm">Screensaver</p>
+                  <p class="text-zinc-500 text-xs mt-0.5">After 5 minutes idle</p>
+                </div>
+                <button
+                  class="w-11 h-6 rounded-full transition-colors relative shrink-0 ml-3"
+                  :class="screensaverEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+                  @click.stop="toggleEffect('bpm:screensaver')"
+                >
+                  <div
+                    class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+                    :class="screensaverEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+                  />
+                </button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
       <!-- ═══════ Interface ═══════ -->
       <div
         v-if="activeSection === 'interface'"
@@ -57,6 +250,33 @@
             <div
               class="absolute top-0.5 size-6 rounded-full bg-white shadow transition-transform"
               :class="startInBP ? 'translate-x-5' : 'translate-x-0.5'"
+            />
+          </button>
+        </div>
+
+        <!-- Hide Game Titles toggle -->
+        <div
+          :ref="
+            (el: any) => registerContent(el, { onSelect: () => toggleHideTitles() })
+          "
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4"
+        >
+          <div>
+            <p class="font-medium text-zinc-200 text-sm">
+              Hide Game Titles
+            </p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Hide text labels under game tiles for a cleaner look
+            </p>
+          </div>
+          <button
+            class="w-12 h-7 rounded-full transition-colors relative shrink-0 ml-4"
+            :class="hideTitles ? 'bg-blue-600' : 'bg-zinc-700'"
+            @click.stop="toggleHideTitles()"
+          >
+            <div
+              class="absolute top-0.5 size-6 rounded-full bg-white shadow transition-transform"
+              :class="hideTitles ? 'translate-x-5' : 'translate-x-0.5'"
             />
           </button>
         </div>
@@ -209,34 +429,6 @@
             <div
               class="absolute top-0.5 size-6 rounded-full bg-white shadow transition-transform"
               :class="hapticEnabled ? 'translate-x-5' : 'translate-x-0.5'"
-            />
-          </button>
-        </div>
-
-        <!-- Audio feedback toggle -->
-        <div
-          :ref="
-            (el: any) =>
-              registerContent(el, {
-                onSelect: () => (audioEnabled = !audioEnabled),
-              })
-          "
-          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4"
-        >
-          <div>
-            <p class="font-medium text-zinc-200 text-sm">Audio Feedback</p>
-            <p class="text-zinc-500 text-xs mt-0.5">
-              Sound effects on navigation and selection
-            </p>
-          </div>
-          <button
-            class="w-12 h-7 rounded-full transition-colors relative shrink-0 ml-4"
-            :class="audioEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
-            @click.stop="audioEnabled = !audioEnabled"
-          >
-            <div
-              class="absolute top-0.5 size-6 rounded-full bg-white shadow transition-transform"
-              :class="audioEnabled ? 'translate-x-5' : 'translate-x-0.5'"
             />
           </button>
         </div>
@@ -415,12 +607,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useGamepad } from "~/composables/gamepad";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
-import { useBpAudio } from "~/composables/bp-audio";
+import { useBpAudio, soundProfiles, type SoundProfileId } from "~/composables/bp-audio";
+import { useBpmTheme, themes, type ThemeId } from "~/composables/bp-theme";
+import { type Ref } from "vue";
 
 definePageMeta({ layout: "bigpicture" });
 
 const gamepad = useGamepad();
-const activeSection = ref("interface");
+const activeSection = ref("theme");
 
 // C7 fix: persist BPM settings in localStorage
 const startInBP = ref(
@@ -438,10 +632,26 @@ function toggleStartInBP() {
   startInBP.value = !startInBP.value;
 }
 
+const hideTitles = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("drop:hideTitles") === "true"
+    : false,
+);
+watch(hideTitles, (val) => {
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem("drop:hideTitles", String(val));
+  }
+});
+
+function toggleHideTitles() {
+  hideTitles.value = !hideTitles.value;
+}
+
 const registerSidebar = useBpFocusableGroup("content");
 const registerContent = useBpFocusableGroup("content");
 
 const sections = [
+  { label: "Theme", value: "theme" },
   { label: "Interface", value: "interface" },
   { label: "Performance", value: "performance" },
   { label: "Steam", value: "steam" },
@@ -499,12 +709,85 @@ watch(hapticEnabled, (val) => {
   }
 });
 
+// ── Effects ─────────────────────────────────────────────────────────────────
+
+const animBgEnabled = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("bpm:animBg") !== "false"
+    : true,
+);
+
+const crtEnabled = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("bpm:crtFilter") === "true"
+    : false,
+);
+
+
+const screensaverEnabled = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("bpm:screensaver") !== "false"
+    : true,
+);
+
+// Map keys to their refs so we can look them up by string
+// (Vue auto-unwraps refs in templates, so we can't pass Ref objects through template bindings)
+const effectRefs: Record<string, Ref<boolean>> = {
+  "bpm:animBg": animBgEnabled,
+  "bpm:crtFilter": crtEnabled,
+  "bpm:screensaver": screensaverEnabled,
+};
+
+function toggleEffect(key: string) {
+  const toggleRef = effectRefs[key];
+  if (!toggleRef) {
+    console.error("[BPM:SETTINGS] Unknown effect key:", key);
+    return;
+  }
+  const newVal = !toggleRef.value;
+  console.log("[BPM:SETTINGS] toggleEffect:", key, "->", newVal);
+  toggleRef.value = newVal;
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(key, String(newVal));
+    }
+  } catch (e) {
+    console.warn("[BPM:SETTINGS] localStorage.setItem failed for", key, e);
+  }
+}
+
 // ── Audio feedback ──────────────────────────────────────────────────────────
 
 const audio = useBpAudio();
 const audioEnabled = ref(audio.enabled);
+const activeSoundProfile = ref<SoundProfileId>(audio.profile);
 watch(audioEnabled, (val) => {
   audio.setEnabled(val);
+});
+
+// ── Theme ──────────────────────────────────────────────────────────────────
+
+const bpmTheme = useBpmTheme();
+const activeThemeId = ref<ThemeId>(bpmTheme.theme);
+
+const themePreviewColors: Record<ThemeId, string> = {
+  steam: "#66c0f4",
+  switch: "#e60012",
+  xbox: "#107c10",
+  wii: "#34beed",
+  ps2: "#2040c0",
+  ds: "#d05028",
+  dreamcast: "#d05010",
+  gamecube: "#524EAA",
+  psp: "#3C5078",
+  gameboy: "#9BBC0F",
+  snes: "#6464B4",
+};
+
+watch(activeThemeId, (id) => {
+  bpmTheme.setTheme(id);
+  // Preview the select sound on theme change
+  audio.preview(id as SoundProfileId, "select");
 });
 
 // ── Steam shortcut ──────────────────────────────────────────────────────────

@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Console theme fonts from Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Nunito+Sans:wght@400;600;700&family=Press+Start+2P&family=Raleway:wght@400;600;700;800&display=swap');
+
+@import "./bpm-themes.scss";
+
 html,
 body {
   -ms-overflow-style: none; /* IE and Edge /
@@ -63,41 +68,64 @@ $helvetica: (
 }
 
 /* ===== Big Picture Focus ===== */
+/*
+ * Uses CSS outline (not box-shadow) for the focus ring because:
+ *   1. outline is NOT clipped by overflow:auto/hidden on parent containers
+ *   2. outline follows border-radius in modern Chromium/WebKit
+ *   3. outline can't be overridden by inline boxShadow styles
+ */
 .bp-focused {
-  outline: none;
-  box-shadow:
-    0 0 0 3px rgba(59, 130, 246, 0.8),
-    0 0 20px rgba(59, 130, 246, 0.3);
-  transform: scale(1.02);
-  transition:
-    box-shadow 0.15s ease,
-    transform 0.15s ease;
+  outline: 3px solid rgba(var(--bpm-accent, 59 130 246) / 0.8);
+  outline-offset: 0px;
   z-index: 10;
   position: relative;
+  transition: outline 0.15s ease;
 }
 
 .bp-focused.bp-tile {
-  transform: scale(1.05);
+  /* No scale — selection matches box art size */
+}
+
+/*
+ * When a focusable wrapper has .bp-focus-delegate, focus-navigation.ts
+ * adds .bp-ring-focused directly to the first .bp-focus-ring descendant.
+ * The wrapper's own outline is hidden; the inner ring shows it instead.
+ */
+.bp-focused.bp-focus-delegate {
+  outline: none !important;
+  box-shadow: none !important;
+}
+.bp-ring-focused {
+  outline: 3px solid rgba(var(--bpm-accent, 59 130 246) / 0.8) !important;
+  outline-offset: 0px !important;
+  z-index: 10;
+  position: relative;
+  transition: outline 0.15s ease;
+}
+
+/* Prevent scale transform on large areas like hero banners */
+.bp-focused[data-bp-no-scale] {
+  transform: none !important;
 }
 
 /* Ensure non-focused elements have base transition for smooth focus changes */
 [data-focusable] {
   transition:
-    box-shadow 0.15s ease,
+    outline 0.15s ease,
     transform 0.15s ease;
 }
 
 /* ===== Steam Deck / Handheld mode ===== */
 .deck-mode {
   /* Larger touch targets */
-  -webkit-tap-highlight-color: rgba(59, 130, 246, 0.2);
+  -webkit-tap-highlight-color: rgba(var(--bpm-accent, 59 130 246) / 0.2);
   touch-action: manipulation;
 
   /* Slightly larger focus glow on small screens */
   .bp-focused {
     box-shadow:
-      0 0 0 3px rgba(59, 130, 246, 0.9),
-      0 0 24px rgba(59, 130, 246, 0.4);
+      0 0 0 3px rgba(var(--bpm-accent, 59 130 246) / 0.9),
+      0 0 24px rgba(var(--bpm-accent, 59 130 246) / 0.4);
   }
 
   /* Bigger minimum hit areas for interactive elements */
@@ -134,4 +162,85 @@ $helvetica: (
   background-color: #52525b;
   border-radius: 10px;
   border: 3px solid #52525b;
+}
+
+/* ===== BPM Page Transitions ===== */
+/* Slide (Steam, Switch, PSP, SNES) */
+.bpm-slide-enter-active,
+.bpm-slide-leave-active {
+  transition: transform 0.25s ease, opacity 0.25s ease;
+}
+.bpm-slide-enter-from { transform: translateX(5%); opacity: 0; }
+.bpm-slide-leave-to   { transform: translateX(-5%); opacity: 0; }
+
+/* Zoom (Xbox, N64) */
+.bpm-zoom-enter-active,
+.bpm-zoom-leave-active {
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+.bpm-zoom-enter-from { transform: scale(1.05); opacity: 0; }
+.bpm-zoom-leave-to   { transform: scale(0.95); opacity: 0; }
+
+/* Fade (PS1, Custom) */
+.bpm-fade-enter-active,
+.bpm-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.bpm-fade-enter-from,
+.bpm-fade-leave-to { opacity: 0; }
+
+/* Fade Blue (PS2) */
+.bpm-fade-blue-enter-active,
+.bpm-fade-blue-leave-active {
+  transition: opacity 0.3s ease, filter 0.3s ease;
+}
+.bpm-fade-blue-enter-from { opacity: 0; filter: brightness(1.5) saturate(2) hue-rotate(-20deg); }
+.bpm-fade-blue-leave-to   { opacity: 0; filter: brightness(0.5); }
+
+/* Swirl (Dreamcast) */
+.bpm-swirl-enter-active,
+.bpm-swirl-leave-active {
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+.bpm-swirl-enter-from { transform: rotate(5deg) scale(0.95); opacity: 0; }
+.bpm-swirl-leave-to   { transform: rotate(-5deg) scale(0.95); opacity: 0; }
+
+/* Float (Wii) */
+.bpm-float-enter-active,
+.bpm-float-leave-active {
+  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.35s ease;
+}
+.bpm-float-enter-from { transform: translateY(8%); opacity: 0; }
+.bpm-float-leave-to   { transform: translateY(-5%); opacity: 0; }
+
+/* Split (DS) */
+.bpm-split-enter-active,
+.bpm-split-leave-active {
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+.bpm-split-enter-from { transform: scaleY(0.9); opacity: 0; }
+.bpm-split-leave-to   { transform: scaleY(0.9); opacity: 0; }
+
+/* Spin (GameCube) */
+.bpm-spin-enter-active,
+.bpm-spin-leave-active {
+  transition: transform 0.35s ease, opacity 0.35s ease;
+}
+.bpm-spin-enter-from { transform: rotate(-10deg) scale(0.9); opacity: 0; }
+.bpm-spin-leave-to   { transform: rotate(10deg) scale(0.9); opacity: 0; }
+
+/* Pixel (Game Boy) */
+.bpm-pixel-enter-active {
+  animation: bpm-pixel-in 0.3s ease forwards;
+}
+.bpm-pixel-leave-active {
+  animation: bpm-pixel-out 0.3s ease forwards;
+}
+@keyframes bpm-pixel-in {
+  0%   { opacity: 0; image-rendering: pixelated; transform: scale(0.95); filter: contrast(2); }
+  100% { opacity: 1; image-rendering: auto; transform: scale(1); filter: contrast(1); }
+}
+@keyframes bpm-pixel-out {
+  0%   { opacity: 1; }
+  100% { opacity: 0; filter: contrast(2) brightness(1.5); }
 }

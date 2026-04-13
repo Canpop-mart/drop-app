@@ -30,7 +30,7 @@ export function useBigPictureMode() {
     }
 
     // Navigate to Big Picture library (main landing page)
-    await router.push("/bigpicture/library");
+    await router.push("/bigpicture");
   }
 
   async function exit() {

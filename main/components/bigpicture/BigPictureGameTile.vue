@@ -1,25 +1,24 @@
 <template>
   <NuxtLink
     :to="`/bigpicture/library/${game.id}`"
-    class="group relative flex flex-col rounded-xl overflow-hidden transition-all duration-200 outline-none"
+    class="group relative flex flex-col rounded-xl transition-all duration-200 outline-none"
     :class="[
       'ring-2 ring-transparent',
-      'focus-visible:ring-blue-500 focus-visible:scale-105 focus-visible:shadow-xl focus-visible:shadow-blue-500/20',
-      'bp-focused:ring-blue-500 bp-focused:scale-105 bp-focused:shadow-xl bp-focused:shadow-blue-500/20',
+      'focus-visible:ring-blue-500 focus-visible:shadow-xl focus-visible:shadow-blue-500/20',
     ]"
   >
-    <!-- Cover image -->
-    <div class="relative aspect-[3/4] bg-zinc-800">
+    <!-- Cover image — natural aspect ratio, no forced 3:4 -->
+    <div class="bp-focus-ring relative bg-zinc-800 rounded-xl overflow-hidden">
       <img
         v-if="imageObjectId"
         :src="objectUrl(imageObjectId)"
         :alt="game.mName"
-        class="w-full h-full object-cover"
+        class="w-full block"
         loading="lazy"
       />
       <div
         v-if="!imageObjectId"
-        class="w-full h-full flex items-center justify-center"
+        class="w-full aspect-[3/4] flex items-center justify-center"
       >
         <span class="text-2xl font-bold text-zinc-500">
           {{ game.mName[0] }}
@@ -45,7 +44,7 @@
     </div>
 
     <!-- Title -->
-    <div class="px-2 py-2 bg-zinc-900/80">
+    <div v-if="!hideTitles" class="px-2 py-1.5">
       <p class="text-sm font-medium text-zinc-200 truncate">
         {{ game.mName }}
       </p>
@@ -65,6 +64,7 @@ function objectUrl(id: string): string {
 const props = defineProps<{
   game: Game;
   status: GameStatus;
+  hideTitles?: boolean;
 }>();
 
 // Prefer cover art, fall back to icon if cover is empty
@@ -78,16 +78,5 @@ const isRunning = computed(() => props.status.type === "Running");
 </script>
 
 <style scoped>
-/* Scoped style for the bp-focused class applied by focus-navigation */
-:deep(.bp-focused) {
-  --tw-ring-color: rgb(59 130 246);
-  --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0
-    var(--tw-ring-offset-width) var(--tw-ring-offset-color);
-  --tw-ring-shadow: var(--tw-ring-inset) 0 0 0
-    calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);
-  box-shadow:
-    var(--tw-ring-offset-shadow), var(--tw-ring-shadow),
-    var(--tw-shadow, 0 0 #0000);
-  transform: scale(1.05);
-}
+/* Focus glow is now handled by bp-focus-delegate / bp-focus-ring in main.scss */
 </style>

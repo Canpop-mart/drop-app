@@ -119,8 +119,8 @@ router.onError((error, to, from) => {
   console.error(`[BPM:ROUTER] Navigation error from ${from?.fullPath} to ${to?.fullPath}:`, error);
   // If in BPM, try to recover by navigating to library
   if (to?.fullPath?.startsWith("/bigpicture") || from?.fullPath?.startsWith("/bigpicture")) {
-    console.error("[BPM:ROUTER] Attempting recovery — redirecting to /bigpicture/library");
-    router.push("/bigpicture/library").catch(() => {});
+    console.error("[BPM:ROUTER] Attempting recovery — redirecting to /bigpicture");
+    router.push("/bigpicture").catch(() => {});
   }
 });
 

@@ -1,5 +1,5 @@
 <template>
-  <div class="flex h-screen w-screen bg-zinc-950 overflow-hidden">
+  <div :class="['flex h-screen w-screen bg-zinc-950 overflow-hidden', themeClass]">
     <!-- Navigation Rail (left edge) -->
     <BigPictureNavRail />
 
@@ -48,8 +48,11 @@ import BigPictureContextBar from "~/components/bigpicture/BigPictureContextBar.v
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useDeckMode } from "~/composables/deck-mode";
+import { useBpmTheme } from "~/composables/bp-theme";
 
 const focusNav = useFocusNavigation();
+const bpmTheme = useBpmTheme();
+const themeClass = computed(() => bpmTheme.themeData.value.cssClass);
 const { isGamescope } = useDeckMode();
 
 // ── On-screen debug overlay ─────────────────────────────────────────────
@@ -199,7 +202,7 @@ onUnmounted(() => {
 <style>
 /* Focus indicator ring — applied by focus-navigation.ts */
 [data-focusable].bp-focused {
-  outline: 3px solid rgba(59, 130, 246, 0.8);
+  outline: 3px solid rgba(var(--bpm-accent, 59 130 246) / 0.8);
   outline-offset: 2px;
   border-radius: 0.75rem;
   transition:

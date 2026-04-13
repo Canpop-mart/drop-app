@@ -180,6 +180,7 @@
             "
             :game="entry.game"
             :status="entry.status"
+            :hide-titles="hideTitles"
           />
         </div>
       </div>
@@ -301,6 +302,11 @@ const showKeyboard = ref(false);
 const showFilterMenu = ref(false);
 const loading = ref(true);
 const tilesReady = ref(false);
+const hideTitles = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("drop:hideTitles") === "true"
+    : false,
+);
 const scrollContainer = ref<HTMLElement | null>(null);
 const focusNav = useFocusNavigation();
 const registerTile = useBpFocusableGroup("content");

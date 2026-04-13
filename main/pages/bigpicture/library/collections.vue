@@ -38,17 +38,8 @@
       class="flex-1 overflow-y-auto px-8 py-6"
       data-bp-scroll
     >
-      <!-- Empty state -->
-      <div v-if="collections.length === 0" class="flex items-center justify-center py-24">
-        <div class="text-center">
-          <FolderIcon class="size-16 mx-auto mb-4 text-zinc-600" />
-          <h3 class="text-2xl font-semibold text-zinc-400 mb-2">No collections yet</h3>
-          <p class="text-zinc-600">Create one to organize your games.</p>
-        </div>
-      </div>
-
       <!-- Collections and new collection card -->
-      <div v-else class="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+      <div class="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
         <div
           v-for="collection in collections"
           :key="collection.id"
@@ -110,6 +101,18 @@
         >
           <PlusIcon class="size-6 text-zinc-500" />
           <span class="text-sm font-medium text-zinc-400">New Collection</span>
+        </div>
+
+        <!-- Empty state fallback - shown only when no collections -->
+        <div
+          v-if="collections.length === 0"
+          class="col-span-full flex items-center justify-center py-24"
+        >
+          <div class="text-center">
+            <FolderIcon class="size-16 mx-auto mb-4 text-zinc-600" />
+            <h3 class="text-2xl font-semibold text-zinc-400 mb-2">No collections yet</h3>
+            <p class="text-zinc-600">Create one to organize your games.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -193,16 +196,24 @@ async function createCollection() {
     );
 
     if (!response.ok) {
-      throw new Error(`Failed to create collection: ${response.status}`);
+      const errorData = await response.text();
+      throw new Error(
+        `Failed to create collection: ${response.status} ${errorData}`
+      );
+    }
+
+    const newCollection = await response.json();
+
+    // Optimistically add the new collection to the list
+    if (newCollection && newCollection.id) {
+      collections.value.push(newCollection);
     }
 
     showKeyboard.value = false;
     keyboardInput.value = "";
-
-    // Reload collections to show the new one
-    await loadCollections();
   } catch (e) {
     console.error("Failed to create collection:", e);
+    showKeyboard.value = false;
   }
 }
 

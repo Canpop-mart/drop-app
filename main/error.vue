@@ -128,11 +128,11 @@ onMounted(() => {
 });
 
 function goBack() {
-  clearError({ redirect: "/bigpicture/library" });
+  clearError({ redirect: "/bigpicture" });
 }
 
 function goLibrary() {
-  clearError({ redirect: "/bigpicture/library" });
+  clearError({ redirect: "/bigpicture" });
 }
 
 console.error("[ERROR PAGE]", props.error);
