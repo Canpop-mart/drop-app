@@ -51,7 +51,7 @@
     </div>
 
     <!-- ═══ Featured tab ═══ -->
-    <div v-else-if="activeTab === 'featured'" class="flex-1 overflow-y-auto px-8 py-6">
+    <div v-else-if="activeTab === 'featured'" class="flex-1 overflow-y-auto px-8 py-6" data-bp-scroll>
       <!-- Hero carousel -->
       <div v-if="featured.length > 0" class="mb-8">
         <div
@@ -119,20 +119,10 @@
                 loading="lazy"
               />
               <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
-              <span v-if="game.isEmulated" class="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-600/80 text-[10px] font-bold text-white uppercase tracking-wide backdrop-blur-sm">
-                {{ platformBadge(game.launchPlatform) }}
-              </span>
-              <!-- Controller support badge (emulated games always support controllers) -->
-              <span v-if="game.isEmulated" class="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-zinc-900/70 backdrop-blur-sm flex items-center gap-1" title="Controller supported">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3 text-blue-400">
-                  <path fill-rule="evenodd" d="M6 4.75A2.75 2.75 0 0 0 3.25 7.5v1.5a4.75 4.75 0 0 0 1.576 3.535l-.72 3.243A1.75 1.75 0 0 0 5.815 17.8l.93-1.394a.75.75 0 0 1 .624-.335h5.262a.75.75 0 0 1 .624.335l.93 1.394a1.75 1.75 0 0 0 1.709.722l-.72-3.243A4.75 4.75 0 0 0 16.75 9V7.5A2.75 2.75 0 0 0 14 4.75H6ZM8 9a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm5 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clip-rule="evenodd" />
-                </svg>
-              </span>
               <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
             </div>
             <div class="px-2 py-2 bg-zinc-900/80">
               <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
-              <p class="text-xs text-zinc-500">{{ game.recentPlayers }} {{ game.recentPlayers === 1 ? 'session' : 'sessions' }} this week</p>
             </div>
           </div>
         </div>
@@ -161,15 +151,6 @@
                 loading="lazy"
               />
               <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
-              <span v-if="game.isEmulated" class="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-600/80 text-[10px] font-bold text-white uppercase tracking-wide backdrop-blur-sm">
-                {{ platformBadge(game.launchPlatform) }}
-              </span>
-              <!-- Controller support badge (emulated games always support controllers) -->
-              <span v-if="game.isEmulated" class="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-zinc-900/70 backdrop-blur-sm flex items-center gap-1" title="Controller supported">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3 text-blue-400">
-                  <path fill-rule="evenodd" d="M6 4.75A2.75 2.75 0 0 0 3.25 7.5v1.5a4.75 4.75 0 0 0 1.576 3.535l-.72 3.243A1.75 1.75 0 0 0 5.815 17.8l.93-1.394a.75.75 0 0 1 .624-.335h5.262a.75.75 0 0 1 .624.335l.93 1.394a1.75 1.75 0 0 0 1.709.722l-.72-3.243A4.75 4.75 0 0 0 16.75 9V7.5A2.75 2.75 0 0 0 14 4.75H6ZM8 9a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm5 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clip-rule="evenodd" />
-                </svg>
-              </span>
               <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
             </div>
             <div class="px-2 py-2 bg-zinc-900/80">
@@ -205,28 +186,10 @@
                 <span class="text-2xl font-bold text-zinc-500">{{ game.mName[0] }}</span>
               </div>
               <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
-              <span v-if="game.isEmulated" class="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-600/80 text-[10px] font-bold text-white uppercase tracking-wide backdrop-blur-sm">
-                {{ platformBadge(game.launchPlatform) }}
-              </span>
-              <!-- Controller support badge (emulated games always support controllers) -->
-              <span v-if="game.isEmulated" class="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-zinc-900/70 backdrop-blur-sm flex items-center gap-1" title="Controller supported">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3 text-blue-400">
-                  <path fill-rule="evenodd" d="M6 4.75A2.75 2.75 0 0 0 3.25 7.5v1.5a4.75 4.75 0 0 0 1.576 3.535l-.72 3.243A1.75 1.75 0 0 0 5.815 17.8l.93-1.394a.75.75 0 0 1 .624-.335h5.262a.75.75 0 0 1 .624.335l.93 1.394a1.75 1.75 0 0 0 1.709.722l-.72-3.243A4.75 4.75 0 0 0 16.75 9V7.5A2.75 2.75 0 0 0 14 4.75H6ZM8 9a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm5 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clip-rule="evenodd" />
-                </svg>
-              </span>
               <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
             </div>
             <div class="px-2 py-2 bg-zinc-900/80">
               <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
-              <div class="flex gap-1 mt-1 overflow-hidden min-h-[1.25rem]">
-                <span
-                  v-for="tag in (game.tags ?? []).slice(0, 2)"
-                  :key="tag.id"
-                  class="px-1.5 py-0.5 rounded-full bg-zinc-800/60 text-[10px] text-zinc-500 truncate"
-                >
-                  {{ tag.name }}
-                </span>
-              </div>
             </div>
           </div>
         </div>
@@ -234,7 +197,7 @@
     </div>
 
     <!-- ═══ Browse tab ═══ -->
-    <div v-else-if="activeTab === 'browse'" class="flex-1 overflow-y-auto px-8 py-6">
+    <div v-else-if="activeTab === 'browse'" class="flex-1 overflow-y-auto px-8 py-6" data-bp-scroll>
       <!-- Filter summary bar -->
       <div class="flex items-center gap-3 mb-4">
         <div class="flex items-center gap-2 text-sm text-zinc-400">
@@ -378,28 +341,10 @@
               <span class="text-2xl font-bold text-zinc-500">{{ game.mName[0] }}</span>
             </div>
             <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
-            <span v-if="game.isEmulated" class="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-600/80 text-[10px] font-bold text-white uppercase tracking-wide backdrop-blur-sm">
-              {{ platformBadge(game.launchPlatform) }}
-            </span>
-            <!-- Controller support badge (emulated games always support controllers) -->
-            <span v-if="game.isEmulated" class="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-zinc-900/70 backdrop-blur-sm flex items-center gap-1" title="Controller supported">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3 text-blue-400">
-                <path fill-rule="evenodd" d="M6 4.75A2.75 2.75 0 0 0 3.25 7.5v1.5a4.75 4.75 0 0 0 1.576 3.535l-.72 3.243A1.75 1.75 0 0 0 5.815 17.8l.93-1.394a.75.75 0 0 1 .624-.335h5.262a.75.75 0 0 1 .624.335l.93 1.394a1.75 1.75 0 0 0 1.709.722l-.72-3.243A4.75 4.75 0 0 0 16.75 9V7.5A2.75 2.75 0 0 0 14 4.75H6ZM8 9a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm5 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clip-rule="evenodd" />
-              </svg>
-            </span>
             <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
           </div>
           <div class="px-2 py-2 bg-zinc-900/80">
             <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
-            <div v-if="game.tags?.length" class="flex gap-1 mt-1 overflow-hidden">
-              <span
-                v-for="tag in game.tags.slice(0, 2)"
-                :key="tag.id"
-                class="px-1.5 py-0.5 rounded-full bg-zinc-800/60 text-[10px] text-zinc-500 truncate"
-              >
-                {{ tag.name }}
-              </span>
-            </div>
           </div>
         </div>
       </div>
@@ -526,16 +471,6 @@ function objectUrl(id: string): string {
   return serverUrl(`api/v1/object/${id}`);
 }
 
-/** Map launch platform strings to short badge labels for ROM covers. */
-function platformBadge(platform: string | null | undefined): string {
-  if (!platform) return "ROM";
-  // The platform field from LaunchConfiguration uses the Platform enum
-  // values: "Windows", "Linux", "macOS" — but for ROMs the platform
-  // represents the target system the emulator runs, which is typically
-  // set to the host platform. We can't distinguish N64 vs GBA from this
-  // alone, so we just show "ROM" as a generic badge for now.
-  return "ROM";
-}
 
 function goToGame(gameId?: string) {
   if (!gameId) return;
@@ -739,15 +674,6 @@ _unsubs.push(
     }
   }),
 );
-// LB — also opens Sort & Filter overlay
-_unsubs.push(
-  gamepad.onButton(GamepadButton.LeftBumper, () => {
-    if (showSearch.value) return;
-    if (activeTab.value === "browse") {
-      showFilterMenu.value = !showFilterMenu.value;
-    }
-  }),
-);
 // B / East — close filter menu when open
 _unsubs.push(
   gamepad.onButton(GamepadButton.East, () => {
@@ -819,4 +745,5 @@ const tabs = [
   /* Vignette effect */
   box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.15);
 }
+
 </style>

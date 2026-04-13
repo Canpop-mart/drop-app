@@ -1,4 +1,5 @@
 import { GamepadButton, useGamepad, type ButtonCallback } from "./gamepad";
+import { useBpAudio } from "./bp-audio";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -307,6 +308,8 @@ function applyFocus(element: FocusableElement | null, fromGroupCycle = false) {
 
   if (element) {
     element.el.classList.add(FOCUS_CLASS);
+    // Play focus feedback sound
+    useBpAudio().play("focus");
 
     // Only scroll if the element is not already visible — avoids the
     // jarring "scroll fight" reported in issue G.
@@ -809,6 +812,7 @@ function wireGamepad() {
 
       if (currentFocused.value?.onSelect) {
         console.log("[FOCUS] A pressed — calling onSelect for:", el?.tagName, el?.textContent?.slice(0, 30));
+        useBpAudio().play("select");
         gamepad.vibrate("medium");
         try {
           currentFocused.value.onSelect();
@@ -817,6 +821,7 @@ function wireGamepad() {
         }
       } else if (el) {
         console.log("[FOCUS] A pressed — clicking element:", el.tagName, el.textContent?.slice(0, 30));
+        useBpAudio().play("select");
         gamepad.vibrate("medium");
         el.click();
       }
@@ -836,6 +841,7 @@ function wireGamepad() {
           const target =
             navGroup.lastFocused || (navGroup.elements.values().next().value ?? null);
           applyFocus(target);
+          useBpAudio().play("back");
           return;
         }
       }
@@ -857,7 +863,11 @@ function wireGamepad() {
           segments[0] === "profile"
             ? "/bigpicture/community"
             : "/bigpicture/" + segments[0];
+        useBpAudio().play("back");
         router.push(parentPath);
+      } else {
+        // At the root level with nowhere to go back — play error sound
+        useBpAudio().play("error");
       }
     }),
   );
@@ -900,8 +910,16 @@ function wireGamepad() {
         parent = parent.parentElement;
       }
     }
-    // Fallback: the layout's designated scroll container
-    return document.querySelector("[data-bp-scroll]") as HTMLElement | null;
+    // Fallback: find the best [data-bp-scroll] container — prefer one that
+    // actually has overflow (inner page scroll) over the layout wrapper.
+    const candidates = document.querySelectorAll<HTMLElement>("[data-bp-scroll]");
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      if (candidates[i].scrollHeight > candidates[i].clientHeight) {
+        return candidates[i];
+      }
+    }
+    // If none are scrollable, return the last one (deepest in DOM)
+    return candidates.length > 0 ? candidates[candidates.length - 1] : null;
   }
 
   gamepadUnsubs.push(

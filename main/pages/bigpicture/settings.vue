@@ -212,6 +212,34 @@
             />
           </button>
         </div>
+
+        <!-- Audio feedback toggle -->
+        <div
+          :ref="
+            (el: any) =>
+              registerContent(el, {
+                onSelect: () => (audioEnabled = !audioEnabled),
+              })
+          "
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4"
+        >
+          <div>
+            <p class="font-medium text-zinc-200 text-sm">Audio Feedback</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Sound effects on navigation and selection
+            </p>
+          </div>
+          <button
+            class="w-12 h-7 rounded-full transition-colors relative shrink-0 ml-4"
+            :class="audioEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+            @click.stop="audioEnabled = !audioEnabled"
+          >
+            <div
+              class="absolute top-0.5 size-6 rounded-full bg-white shadow transition-transform"
+              :class="audioEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+            />
+          </button>
+        </div>
       </div>
 
       <!-- ═══════ Storage ═══════ -->
@@ -387,6 +415,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useGamepad } from "~/composables/gamepad";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
+import { useBpAudio } from "~/composables/bp-audio";
 
 definePageMeta({ layout: "bigpicture" });
 
@@ -468,6 +497,14 @@ watch(hapticEnabled, (val) => {
   if (typeof localStorage !== "undefined") {
     localStorage.setItem("drop:haptic", String(val));
   }
+});
+
+// ── Audio feedback ──────────────────────────────────────────────────────────
+
+const audio = useBpAudio();
+const audioEnabled = ref(audio.enabled);
+watch(audioEnabled, (val) => {
+  audio.setEnabled(val);
 });
 
 // ── Steam shortcut ──────────────────────────────────────────────────────────

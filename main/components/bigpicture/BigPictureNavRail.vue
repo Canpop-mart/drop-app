@@ -97,6 +97,7 @@ async function selectNavItem(path: string) {
 }
 
 const navItems = [
+  { route: "/bigpicture", icon: HomeIcon, label: "Home" },
   {
     route: "/bigpicture/library",
     icon: Square3Stack3DIcon,

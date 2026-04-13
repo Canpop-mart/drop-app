@@ -2,11 +2,17 @@
   <div
     class="flex items-center justify-between px-8 h-14 bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-800/30 shrink-0"
   >
-    <!-- Left: page title -->
-    <div class="flex items-center gap-3">
-      <h2 class="text-lg font-semibold text-zinc-200 font-display">
-        {{ pageTitle }}
-      </h2>
+    <!-- Left: breadcrumbs -->
+    <div class="flex items-center gap-1.5">
+      <template v-for="(crumb, idx) in breadcrumbs" :key="idx">
+        <ChevronRightIcon v-if="idx > 0" class="size-3 text-zinc-600 flex-shrink-0" />
+        <span
+          class="text-lg font-semibold font-display"
+          :class="idx === breadcrumbs.length - 1 ? 'text-zinc-200' : 'text-zinc-500'"
+        >
+          {{ crumb.label }}
+        </span>
+      </template>
     </div>
 
     <!-- Right: status indicators -->
@@ -46,9 +52,11 @@
 </template>
 
 <script setup lang="ts">
+import { ChevronRightIcon } from "@heroicons/vue/20/solid";
 import { useGamepad } from "~/composables/gamepad";
 import { useAppState } from "~/composables/app-state";
 import { useObject } from "~/composables/use-object";
+import { serverUrl } from "~/composables/use-server-fetch";
 
 const route = useRoute();
 const gamepad = useGamepad();
@@ -67,15 +75,60 @@ updateClock();
 const clockInterval = setInterval(updateClock, 30_000);
 onUnmounted(() => clearInterval(clockInterval));
 
-// Page title from route
-const pageTitle = computed(() => {
+// Game name from API
+const gameName = ref("");
+
+watch(
+  () => route.path,
+  async (path) => {
+    const match = path.match(/^\/bigpicture\/library\/([^/]+)$/);
+    if (match && match[1] !== "collections") {
+      try {
+        const response = await fetch(serverUrl(`api/v1/client/game/${match[1]}`));
+        if (response.ok) {
+          const data = await response.json();
+          gameName.value = data.mName || data.name || "Game";
+        }
+      } catch {
+        gameName.value = "Game";
+      }
+    } else {
+      gameName.value = "";
+    }
+  },
+  { immediate: true }
+);
+
+// Breadcrumbs from route
+const breadcrumbs = computed(() => {
   const path = route.path;
-  if (path.startsWith("/bigpicture/library")) return "Library";
-  if (path.startsWith("/bigpicture/store")) return "Store";
-  if (path.startsWith("/bigpicture/community")) return "Community";
-  if (path.startsWith("/bigpicture/news")) return "News";
-  if (path.startsWith("/bigpicture/downloads")) return "Downloads";
-  if (path.startsWith("/bigpicture/settings")) return "Settings";
-  return "Drop";
+  const crumbs: { label: string }[] = [{ label: "Home" }];
+
+  if (path === "/bigpicture") return crumbs;
+
+  if (path.startsWith("/bigpicture/library")) {
+    crumbs.push({ label: "Library" });
+    // If on a game detail page, add the game name
+    if (path !== "/bigpicture/library" && path !== "/bigpicture/library/collections") {
+      crumbs.push({ label: gameName.value || "Game" });
+    }
+    if (path === "/bigpicture/library/collections") {
+      crumbs.push({ label: "Collections" });
+    }
+  } else if (path.startsWith("/bigpicture/store")) {
+    crumbs.push({ label: "Store" });
+  } else if (path.startsWith("/bigpicture/community")) {
+    crumbs.push({ label: "Community" });
+  } else if (path.startsWith("/bigpicture/news")) {
+    crumbs.push({ label: "News" });
+  } else if (path.startsWith("/bigpicture/downloads")) {
+    crumbs.push({ label: "Downloads" });
+  } else if (path.startsWith("/bigpicture/settings")) {
+    crumbs.push({ label: "Settings" });
+  } else if (path.startsWith("/bigpicture/bugreport")) {
+    crumbs.push({ label: "Bug Report" });
+  }
+
+  return crumbs;
 });
 </script>

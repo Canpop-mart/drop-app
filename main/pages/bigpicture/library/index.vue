@@ -27,11 +27,25 @@
 
       <div class="flex-1" />
 
-      <!-- Sort indicator (cycled via X button) -->
-      <div class="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-zinc-500">
+      <!-- Sort/filter summary -->
+      <div class="flex items-center gap-2 px-3 py-2 text-sm text-zinc-500">
         <ArrowsUpDownIcon class="size-4" />
-        {{ sortLabel }}
+        <span>{{ sortLabel }}</span>
       </div>
+
+      <!-- Collections button -->
+      <button
+        :ref="
+          (el: any) =>
+            registerFilter(el, {
+              onSelect: () => $router.push('/bigpicture/library/collections'),
+            })
+        "
+        class="px-4 py-2 text-sm rounded-lg font-medium transition-colors text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 flex items-center gap-2"
+      >
+        <FolderIcon class="size-4" />
+        <span>Collections</span>
+      </button>
 
       <!-- Search -->
       <button
@@ -54,6 +68,74 @@
       @submit="showKeyboard = false"
     />
 
+    <!-- Sort & Filter overlay -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-opacity duration-200"
+        leave-active-class="transition-opacity duration-200"
+        enter-from-class="opacity-0"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="showFilterMenu"
+          class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+        >
+          <div class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4">
+            <h2 class="text-xl font-semibold font-display text-zinc-100 mb-4">Sort & Filter</h2>
+
+            <!-- Sort section -->
+            <div class="mb-4">
+              <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Sort By</p>
+              <div class="space-y-1.5">
+                <button
+                  v-for="(label, key) in sortLabels"
+                  :key="key"
+                  class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
+                  :class="sortMode === key
+                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                    : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                  :ref="(el: any) => registerOverlay(el, { onSelect: () => { sortMode = key as SortMode; } })"
+                  @click="sortMode = key as SortMode"
+                >
+                  <span class="font-medium">{{ label }}</span>
+                  <span v-if="sortMode === key" class="text-xs opacity-75">Active</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Filter section -->
+            <div class="mb-4">
+              <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Show</p>
+              <div class="space-y-1.5">
+                <button
+                  v-for="f in filters"
+                  :key="f.value"
+                  class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
+                  :class="activeFilter === f.value
+                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                    : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                  :ref="(el: any) => registerOverlay(el, { onSelect: () => { activeFilter = f.value; } })"
+                  @click="activeFilter = f.value"
+                >
+                  <span class="font-medium">{{ f.label }}</span>
+                  <span class="text-xs opacity-75">{{ f.count }}</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Close -->
+            <button
+              :ref="(el: any) => registerOverlay(el, { onSelect: () => { showFilterMenu = false; } })"
+              class="w-full px-4 py-3 rounded-xl text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+              @click="showFilterMenu = false"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
     <!-- Loading state with skeleton grid -->
     <div v-if="loading" class="flex-1 overflow-y-auto px-8 py-6">
       <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
@@ -70,6 +152,7 @@
       v-else
       ref="scrollContainer"
       class="flex-1 overflow-y-auto px-8 py-6"
+      data-bp-scroll
     >
       <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
         <div
@@ -160,6 +243,7 @@ import {
   XMarkIcon,
   Square3Stack3DIcon,
   ArrowsUpDownIcon,
+  FolderIcon,
 } from "@heroicons/vue/24/outline";
 import BigPictureGameTile from "~/components/bigpicture/BigPictureGameTile.vue";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
@@ -214,12 +298,14 @@ const library: Ref<LibraryEntry[]> = ref([]);
 const activeFilter = ref("all");
 const searchQuery = ref("");
 const showKeyboard = ref(false);
+const showFilterMenu = ref(false);
 const loading = ref(true);
 const tilesReady = ref(false);
 const scrollContainer = ref<HTMLElement | null>(null);
 const focusNav = useFocusNavigation();
 const registerTile = useBpFocusableGroup("content");
 const registerFilter = useBpFocusableGroup("content");
+const registerOverlay = useBpFocusableGroup("content");
 
 const gamepad = useGamepad();
 const _unsubs: (() => void)[] = [];
@@ -237,7 +323,15 @@ _unsubs.push(
 
 _unsubs.push(
   gamepad.onButton(_sortBtn, () => {
-    cycleSort();
+    if (showKeyboard.value) return;
+    showFilterMenu.value = !showFilterMenu.value;
+  }),
+);
+_unsubs.push(
+  gamepad.onButton(GamepadButton.East, () => {
+    if (showFilterMenu.value) {
+      showFilterMenu.value = false;
+    }
   }),
 );
 

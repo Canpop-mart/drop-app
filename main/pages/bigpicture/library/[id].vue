@@ -177,43 +177,70 @@
     <!-- Tab content -->
     <div class="flex-1 px-8 py-6">
       <!-- Achievements -->
-      <div v-if="activeTab === 'achievements'" class="space-y-2">
-        <div
-          v-for="achievement in achievements"
-          :key="achievement.id"
-          class="flex items-center gap-4 bg-zinc-900/50 rounded-xl p-4"
-          :class="{ 'opacity-50': !achievement.unlocked }"
-        >
-          <img
-            v-if="achievement.iconUrl"
-            :src="achievement.iconUrl"
-            class="size-12 rounded-lg bg-zinc-800"
-            referrerpolicy="no-referrer"
-            loading="lazy"
-            @error="onAchievementIconError"
-          />
+      <div v-if="activeTab === 'achievements'" class="space-y-4">
+        <!-- Achievement summary progress -->
+        <div v-if="achievements.length > 0" class="flex items-center gap-3 px-1">
+          <div class="flex-1 h-2 bg-zinc-800 rounded-full overflow-hidden">
+            <div class="h-full bg-blue-500 rounded-full transition-all" :style="{ width: `${achievementPercent}%` }" />
+          </div>
+          <span class="text-sm font-medium text-zinc-400 flex-shrink-0">
+            {{ unlockedCount }}/{{ achievements.length }}
+          </span>
+        </div>
+
+        <!-- Achievement items -->
+        <div class="space-y-2">
           <div
-            v-if="!achievement.iconUrl"
-            class="size-12 rounded-lg bg-zinc-800 flex items-center justify-center"
+            v-for="achievement in achievements"
+            :key="achievement.id"
+            class="flex items-center gap-4 bg-zinc-900/50 rounded-xl p-4"
+            :class="{ 'opacity-50': !achievement.unlocked }"
           >
+            <img
+              v-if="achievement.iconUrl"
+              :src="achievement.iconUrl"
+              class="size-12 rounded-lg bg-zinc-800"
+              referrerpolicy="no-referrer"
+              loading="lazy"
+              @error="onAchievementIconError"
+            />
+            <div
+              v-if="!achievement.iconUrl"
+              class="size-12 rounded-lg bg-zinc-800 flex items-center justify-center"
+            >
+              <TrophyIcon
+                class="size-6"
+                :class="achievement.unlocked ? 'text-yellow-400' : 'text-zinc-600'"
+              />
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium text-zinc-200">
+                {{ achievement.title }}
+              </p>
+              <p class="text-sm text-zinc-500 truncate">
+                {{ achievement.description }}
+              </p>
+              <!-- Rarity bar -->
+              <div v-if="achievement.rarity != null" class="flex items-center gap-2 mt-1.5">
+                <div class="flex-1 h-1 bg-zinc-800 rounded-full overflow-hidden">
+                  <div
+                    class="h-full rounded-full transition-all"
+                    :class="rarityColor(achievement.rarity)"
+                    :style="{ width: `${Math.max(achievement.rarity, 2)}%` }"
+                  />
+                </div>
+                <span class="text-xs tabular-nums flex-shrink-0" :class="rarityTextColor(achievement.rarity)">
+                  {{ achievement.rarity.toFixed(1) }}%
+                </span>
+              </div>
+            </div>
             <TrophyIcon
-              class="size-6"
-              :class="achievement.unlocked ? 'text-yellow-400' : 'text-zinc-600'"
+              v-if="achievement.unlocked"
+              class="size-4 text-yellow-400"
             />
           </div>
-          <div class="flex-1 min-w-0">
-            <p class="text-sm font-medium text-zinc-200">
-              {{ achievement.title }}
-            </p>
-            <p class="text-sm text-zinc-500 truncate">
-              {{ achievement.description }}
-            </p>
-          </div>
-          <TrophyIcon
-            v-if="achievement.unlocked"
-            class="size-4 text-yellow-400"
-          />
         </div>
+
         <p
           v-if="achievements.length === 0"
           class="text-zinc-500 text-center py-8 text-sm"
@@ -786,6 +813,8 @@ interface AchievementItem {
   description: string;
   iconUrl?: string;
   unlocked: boolean;
+  rarity?: number;
+  unlockCount?: number;
 }
 
 const achievements: Ref<AchievementItem[]> = ref([]);
@@ -812,6 +841,24 @@ function updateTabIndicator() {
 watch(activeTab, () => {
   nextTick(() => updateTabIndicator());
 });
+
+// ── Achievement rarity display ──────────────────────────────────────────
+function rarityColor(rarity: number): string {
+  if (rarity < 5) return "bg-yellow-500";      // Ultra Rare - gold
+  if (rarity < 20) return "bg-purple-500";     // Rare
+  if (rarity < 50) return "bg-blue-500";       // Uncommon
+  return "bg-zinc-500";                         // Common
+}
+
+function rarityTextColor(rarity: number): string {
+  if (rarity < 5) return "text-yellow-400";
+  if (rarity < 20) return "text-purple-400";
+  if (rarity < 50) return "text-blue-400";
+  return "text-zinc-500";
+}
+
+const unlockedCount = computed(() => achievements.value.filter(a => a.unlocked).length);
+const achievementPercent = computed(() => achievements.value.length > 0 ? (unlockedCount.value / achievements.value.length) * 100 : 0);
 
 // Helper: race a promise against a timeout
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
