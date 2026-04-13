@@ -22,6 +22,8 @@ export interface StoreGame {
   publishers?: Array<{ id: string; mName: string }>;
   tags?: Array<{ id: string; name: string }>;
   versions?: Array<{ displayName?: string | null; versionIndex?: number }>;
+  isEmulated?: boolean;
+  launchPlatform?: string | null;
 }
 
 export interface TrendingGame extends StoreGame {

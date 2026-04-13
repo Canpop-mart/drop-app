@@ -379,6 +379,12 @@ pub fn configure_retroarch_for_game(
         if cfg.widescreen {
             info!("[RETROARCH] Widescreen enabled");
         }
+
+        // ── CRT shader toggle ──────────────────────────────────────────
+        if cfg.crt_shader {
+            apply_crt_shader(&mut overrides, &emu_root);
+            info!("[RETROARCH] CRT shader enabled");
+        }
     }
 
     // Keys to DELETE from the config file. These are stale settings from
@@ -868,6 +874,62 @@ fn apply_quality_preset(overrides: &mut HashMap<&str, String>, quality: &Quality
             overrides.insert("video_gpu_screenshot", "true".into());
         }
     }
+}
+
+/// Enables CRT shader in RetroArch by locating a suitable `.slangp` shader preset.
+///
+/// RetroArch ships with CRT shaders in `shaders/shaders_slang/crt/`.
+/// We look for common CRT presets in order of preference:
+/// 1. `crt-royale.slangp` — high-quality, GPU-intensive CRT emulation
+/// 2. `crt-easymode.slangp` — lightweight, good-looking CRT
+/// 3. `crt-lottes.slangp` — classic CRT look
+/// 4. Any `.slangp` file in the crt directory
+///
+/// If no shader preset is found, we fall back to enabling `video_shader_enable`
+/// without specifying a path, which lets RetroArch use its last-used shader.
+fn apply_crt_shader(overrides: &mut HashMap<&str, String>, emu_root: &std::path::Path) {
+    overrides.insert("video_shader_enable", "true".into());
+
+    // Search common shader directories for a CRT preset
+    let shader_dirs = [
+        emu_root.join("shaders/shaders_slang/crt"),
+        emu_root.join("shaders/shaders_glsl/crt"),
+        emu_root.join("shaders_slang/crt"),
+    ];
+
+    let preferred_presets = [
+        "crt-easymode.slangp",
+        "crt-royale.slangp",
+        "crt-lottes.slangp",
+    ];
+
+    for dir in &shader_dirs {
+        if !dir.is_dir() {
+            continue;
+        }
+        // Try preferred presets first
+        for preset in &preferred_presets {
+            let path = dir.join(preset);
+            if path.is_file() {
+                info!("[RETROARCH] Using CRT shader: {}", path.display());
+                overrides.insert("video_shader", path.to_string_lossy().into_owned());
+                return;
+            }
+        }
+        // Fallback: any .slangp in the directory
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().is_some_and(|e| e == "slangp") {
+                    info!("[RETROARCH] Using CRT shader (fallback): {}", p.display());
+                    overrides.insert("video_shader", p.to_string_lossy().into_owned());
+                    return;
+                }
+            }
+        }
+    }
+
+    info!("[RETROARCH] No CRT shader preset found in shader directories — enabling shader pipeline without specific preset");
 }
 
 /// Applies per-core internal resolution options to `retroarch-core-options.cfg`.

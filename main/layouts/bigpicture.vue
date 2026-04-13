@@ -53,8 +53,8 @@ const focusNav = useFocusNavigation();
 const { isGamescope } = useDeckMode();
 
 // ── On-screen debug overlay ─────────────────────────────────────────────
-// Auto-show on Gamescope (Steam Deck) for debugging during development
-const debugVisible = ref(isGamescope.value);
+// Hidden by default — toggle with Select+Start on gamepad
+const debugVisible = ref(false);
 const debugMessages = ref<{ text: string; color: string }[]>([]);
 const MAX_DEBUG = 80;
 

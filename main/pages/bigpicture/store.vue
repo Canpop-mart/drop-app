@@ -101,9 +101,9 @@
         <h3 class="text-lg font-semibold font-display text-zinc-200 mb-4">
           Most Played This Week
         </h3>
-        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 bpm-single-row">
+        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
           <div
-            v-for="game in trending"
+            v-for="game in visibleTrending"
             :key="game.id"
             :ref="(el: any) => registerGrid(el, {
               onSelect: () => goToGame(game.id),
@@ -118,7 +118,17 @@
                 class="w-full h-full object-cover"
                 loading="lazy"
               />
-              <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent" />
+              <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
+              <span v-if="game.isEmulated" class="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-600/80 text-[10px] font-bold text-white uppercase tracking-wide backdrop-blur-sm">
+                {{ platformBadge(game.launchPlatform) }}
+              </span>
+              <!-- Controller support badge (emulated games always support controllers) -->
+              <span v-if="game.isEmulated" class="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-zinc-900/70 backdrop-blur-sm flex items-center gap-1" title="Controller supported">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3 text-blue-400">
+                  <path fill-rule="evenodd" d="M6 4.75A2.75 2.75 0 0 0 3.25 7.5v1.5a4.75 4.75 0 0 0 1.576 3.535l-.72 3.243A1.75 1.75 0 0 0 5.815 17.8l.93-1.394a.75.75 0 0 1 .624-.335h5.262a.75.75 0 0 1 .624.335l.93 1.394a1.75 1.75 0 0 0 1.709.722l-.72-3.243A4.75 4.75 0 0 0 16.75 9V7.5A2.75 2.75 0 0 0 14 4.75H6ZM8 9a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm5 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clip-rule="evenodd" />
+                </svg>
+              </span>
+              <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
             </div>
             <div class="px-2 py-2 bg-zinc-900/80">
               <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
@@ -133,9 +143,9 @@
         <h3 class="text-lg font-semibold font-display text-zinc-200 mb-4">
           Recently Added
         </h3>
-        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 bpm-single-row">
+        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
           <div
-            v-for="game in recentGames"
+            v-for="game in visibleRecentGames"
             :key="game.id"
             :ref="(el: any) => registerGrid(el, {
               onSelect: () => goToGame(game.id),
@@ -150,7 +160,17 @@
                 class="w-full h-full object-cover"
                 loading="lazy"
               />
-              <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent" />
+              <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
+              <span v-if="game.isEmulated" class="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-600/80 text-[10px] font-bold text-white uppercase tracking-wide backdrop-blur-sm">
+                {{ platformBadge(game.launchPlatform) }}
+              </span>
+              <!-- Controller support badge (emulated games always support controllers) -->
+              <span v-if="game.isEmulated" class="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-zinc-900/70 backdrop-blur-sm flex items-center gap-1" title="Controller supported">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3 text-blue-400">
+                  <path fill-rule="evenodd" d="M6 4.75A2.75 2.75 0 0 0 3.25 7.5v1.5a4.75 4.75 0 0 0 1.576 3.535l-.72 3.243A1.75 1.75 0 0 0 5.815 17.8l.93-1.394a.75.75 0 0 1 .624-.335h5.262a.75.75 0 0 1 .624.335l.93 1.394a1.75 1.75 0 0 0 1.709.722l-.72-3.243A4.75 4.75 0 0 0 16.75 9V7.5A2.75 2.75 0 0 0 14 4.75H6ZM8 9a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm5 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clip-rule="evenodd" />
+                </svg>
+              </span>
+              <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
             </div>
             <div class="px-2 py-2 bg-zinc-900/80">
               <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
@@ -164,9 +184,9 @@
         <h3 class="text-lg font-semibold font-display text-zinc-200 mb-4">
           Random Picks
         </h3>
-        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 bpm-two-rows">
+        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
           <div
-            v-for="game in randomGames"
+            v-for="game in visibleRandomGames"
             :key="game.id"
             :ref="(el: any) => registerGrid(el, {
               onSelect: () => goToGame(game.id),
@@ -184,13 +204,23 @@
               <div v-if="!game.mCoverObjectId" class="w-full h-full flex items-center justify-center">
                 <span class="text-2xl font-bold text-zinc-500">{{ game.mName[0] }}</span>
               </div>
-              <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent" />
+              <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
+              <span v-if="game.isEmulated" class="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-600/80 text-[10px] font-bold text-white uppercase tracking-wide backdrop-blur-sm">
+                {{ platformBadge(game.launchPlatform) }}
+              </span>
+              <!-- Controller support badge (emulated games always support controllers) -->
+              <span v-if="game.isEmulated" class="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-zinc-900/70 backdrop-blur-sm flex items-center gap-1" title="Controller supported">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3 text-blue-400">
+                  <path fill-rule="evenodd" d="M6 4.75A2.75 2.75 0 0 0 3.25 7.5v1.5a4.75 4.75 0 0 0 1.576 3.535l-.72 3.243A1.75 1.75 0 0 0 5.815 17.8l.93-1.394a.75.75 0 0 1 .624-.335h5.262a.75.75 0 0 1 .624.335l.93 1.394a1.75 1.75 0 0 0 1.709.722l-.72-3.243A4.75 4.75 0 0 0 16.75 9V7.5A2.75 2.75 0 0 0 14 4.75H6ZM8 9a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm5 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clip-rule="evenodd" />
+                </svg>
+              </span>
+              <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
             </div>
             <div class="px-2 py-2 bg-zinc-900/80">
               <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
-              <div v-if="game.tags?.length" class="flex gap-1 mt-1 overflow-hidden">
+              <div class="flex gap-1 mt-1 overflow-hidden min-h-[1.25rem]">
                 <span
-                  v-for="tag in game.tags.slice(0, 2)"
+                  v-for="tag in (game.tags ?? []).slice(0, 2)"
                   :key="tag.id"
                   class="px-1.5 py-0.5 rounded-full bg-zinc-800/60 text-[10px] text-zinc-500 truncate"
                 >
@@ -205,57 +235,128 @@
 
     <!-- ═══ Browse tab ═══ -->
     <div v-else-if="activeTab === 'browse'" class="flex-1 overflow-y-auto px-8 py-6">
-      <!-- Filter bar -->
-      <div class="flex flex-wrap items-center gap-3 mb-6">
-        <!-- Sort indicator (cycled via X button) -->
-        <div class="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-zinc-500">
+      <!-- Filter summary bar -->
+      <div class="flex items-center gap-3 mb-4">
+        <div class="flex items-center gap-2 text-sm text-zinc-400">
           <ArrowsUpDownIcon class="size-4" />
-          Sort: {{ browseSortLabel }}
+          <span>{{ browseSortLabel }}</span>
+          <template v-if="browseLibraryFilter || browseAchievementFilter">
+            <span class="text-zinc-600">|</span>
+            <FunnelIcon class="size-3.5" />
+            <span v-if="browseLibraryFilter" class="text-blue-400">{{ browseLibraryLabel.replace('Library: ', '') }}</span>
+            <span v-if="browseAchievementFilter" class="text-blue-400">Has Achievements</span>
+          </template>
         </div>
-
-        <div class="w-px h-5 bg-zinc-700" />
-
-        <!-- Filters label -->
-        <div class="flex items-center gap-1.5 px-1 text-sm font-medium text-zinc-500">
-          <FunnelIcon class="size-4" />
-          Filters:
-        </div>
-
-        <!-- Library filter -->
-        <select
-          v-model="browseLibraryFilter"
-          class="px-3 py-1.5 text-sm rounded-lg bg-zinc-800 text-zinc-300 border border-zinc-700 outline-none focus:border-blue-500"
-        >
-          <option value="">All Libraries</option>
-          <option v-for="lib in libraries" :key="lib.id" :value="lib.id">
-            {{ lib.name }}
-          </option>
-        </select>
-
-        <!-- Achievements filter -->
-        <select
-          v-model="browseAchievementFilter"
-          class="px-3 py-1.5 text-sm rounded-lg bg-zinc-800 text-zinc-300 border border-zinc-700 outline-none focus:border-blue-500"
-        >
-          <option value="">All Games</option>
-          <option value="has_achievements">Has Achievements</option>
-        </select>
-
-        <!-- Clear filters -->
-        <button
-          v-if="searchQuery || browseLibraryFilter || browseAchievementFilter"
-          class="flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-colors"
-          @click="clearBrowseFilters"
-        >
-          <XMarkIcon class="size-3.5" />
-          Clear{{ searchQuery ? ` "${searchQuery}"` : '' }}
-        </button>
       </div>
+
+      <!-- Sort & Filter overlay -->
+      <Teleport to="body">
+        <Transition
+          enter-active-class="transition-opacity duration-200"
+          leave-active-class="transition-opacity duration-200"
+          enter-from-class="opacity-0"
+          leave-to-class="opacity-0"
+        >
+          <div
+            v-if="showFilterMenu"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          >
+            <div class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4">
+              <h2 class="text-xl font-semibold font-display text-zinc-100 mb-4">Sort & Filter</h2>
+
+              <!-- Sort section -->
+              <div class="mb-4">
+                <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Sort By</p>
+                <div class="space-y-1.5">
+                  <button
+                    v-for="(label, key) in browseSortLabels"
+                    :key="key"
+                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
+                    :class="browseSort === key
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                      : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                    :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseSort = key; } })"
+                    @click="browseSort = key"
+                  >
+                    <span class="font-medium">{{ label }}</span>
+                    <span v-if="browseSort === key" class="text-xs opacity-75">Active</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Library filter section -->
+              <div v-if="libraries.length > 0" class="mb-4">
+                <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Library</p>
+                <div class="space-y-1.5">
+                  <button
+                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
+                    :class="!browseLibraryFilter
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                      : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                    :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseLibraryFilter = ''; } })"
+                    @click="browseLibraryFilter = ''"
+                  >
+                    <span class="font-medium">All Libraries</span>
+                  </button>
+                  <button
+                    v-for="lib in libraries"
+                    :key="lib.id"
+                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
+                    :class="browseLibraryFilter === lib.id
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                      : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                    :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseLibraryFilter = lib.id; } })"
+                    @click="browseLibraryFilter = lib.id"
+                  >
+                    <span class="font-medium">{{ lib.name }}</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Achievements filter -->
+              <div class="mb-4">
+                <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Achievements</p>
+                <div class="space-y-1.5">
+                  <button
+                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
+                    :class="!browseAchievementFilter
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                      : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                    :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseAchievementFilter = ''; } })"
+                    @click="browseAchievementFilter = ''"
+                  >
+                    <span class="font-medium">All Games</span>
+                  </button>
+                  <button
+                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
+                    :class="browseAchievementFilter === 'has_achievements'
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                      : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                    :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseAchievementFilter = 'has_achievements'; } })"
+                    @click="browseAchievementFilter = 'has_achievements'"
+                  >
+                    <span class="font-medium">Has Achievements</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Close -->
+              <button
+                :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { showFilterMenu = false; } })"
+                class="w-full px-4 py-3 rounded-xl text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+                @click="showFilterMenu = false"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </Transition>
+      </Teleport>
 
       <div
         v-if="browseResults.length > 0"
         ref="browseGridEl"
-        class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 bpm-four-rows"
+        class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7"
       >
         <div
           v-for="game in browsePageResults"
@@ -276,7 +377,17 @@
             <div v-if="!game.mCoverObjectId" class="w-full h-full flex items-center justify-center">
               <span class="text-2xl font-bold text-zinc-500">{{ game.mName[0] }}</span>
             </div>
-            <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent" />
+            <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
+            <span v-if="game.isEmulated" class="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-amber-600/80 text-[10px] font-bold text-white uppercase tracking-wide backdrop-blur-sm">
+              {{ platformBadge(game.launchPlatform) }}
+            </span>
+            <!-- Controller support badge (emulated games always support controllers) -->
+            <span v-if="game.isEmulated" class="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-zinc-900/70 backdrop-blur-sm flex items-center gap-1" title="Controller supported">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3 text-blue-400">
+                <path fill-rule="evenodd" d="M6 4.75A2.75 2.75 0 0 0 3.25 7.5v1.5a4.75 4.75 0 0 0 1.576 3.535l-.72 3.243A1.75 1.75 0 0 0 5.815 17.8l.93-1.394a.75.75 0 0 1 .624-.335h5.262a.75.75 0 0 1 .624.335l.93 1.394a1.75 1.75 0 0 0 1.709.722l-.72-3.243A4.75 4.75 0 0 0 16.75 9V7.5A2.75 2.75 0 0 0 14 4.75H6ZM8 9a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm5 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clip-rule="evenodd" />
+              </svg>
+            </span>
+            <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
           </div>
           <div class="px-2 py-2 bg-zinc-900/80">
             <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
@@ -330,7 +441,7 @@
 </template>
 
 <script setup lang="ts">
-import { MagnifyingGlassIcon, XMarkIcon, ArrowsUpDownIcon, FunnelIcon } from "@heroicons/vue/24/outline";
+import { MagnifyingGlassIcon, ArrowsUpDownIcon, FunnelIcon } from "@heroicons/vue/24/outline";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
 import { useServerApi, type StoreGame, type TrendingGame } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
@@ -351,12 +462,14 @@ const gamepad = useGamepad();
 const registerTab = useBpFocusableGroup("content");
 const registerFeaturedHero = useBpFocusableGroup("content");
 const registerGrid = useBpFocusableGroup("content");
+const registerFilterMenu = useBpFocusableGroup("content");
 
 // State
 const loading = ref(true);
 const browseLoading = ref(false);
 const activeTab = ref("featured");
 const showSearch = ref(false);
+const showFilterMenu = ref(false);
 const searchQuery = ref("");
 const heroIndex = ref(0);
 const browseSort = ref("default");
@@ -390,8 +503,38 @@ const randomGames = ref<StoreGame[]>([]);
 const browseResults = ref<StoreGame[]>([]);
 const browseTotal = ref(0);
 
+// Compute grid column count from window width to match Tailwind breakpoints:
+// grid-cols-2 sm:3 md:4 lg:5 xl:6 2xl:7
+const gridCols = ref(7);
+
+function updateGridCols() {
+  const w = window.innerWidth;
+  if (w >= 1536) gridCols.value = 7;       // 2xl
+  else if (w >= 1280) gridCols.value = 6;  // xl
+  else if (w >= 1024) gridCols.value = 5;  // lg
+  else if (w >= 768) gridCols.value = 4;   // md
+  else if (w >= 640) gridCols.value = 3;   // sm
+  else gridCols.value = 2;
+}
+
+// Slice data to exact row counts so hidden overflow items aren't focusable
+const visibleTrending = computed(() => trending.value.slice(0, gridCols.value));
+const visibleRecentGames = computed(() => recentGames.value.slice(0, gridCols.value));
+const visibleRandomGames = computed(() => randomGames.value.slice(0, gridCols.value * 2));
+
 function objectUrl(id: string): string {
   return serverUrl(`api/v1/object/${id}`);
+}
+
+/** Map launch platform strings to short badge labels for ROM covers. */
+function platformBadge(platform: string | null | undefined): string {
+  if (!platform) return "ROM";
+  // The platform field from LaunchConfiguration uses the Platform enum
+  // values: "Windows", "Linux", "macOS" — but for ROMs the platform
+  // represents the target system the emulator runs, which is typically
+  // set to the host platform. We can't distinguish N64 vs GBA from this
+  // alone, so we just show "ROM" as a generic badge for now.
+  return "ROM";
 }
 
 function goToGame(gameId?: string) {
@@ -436,7 +579,9 @@ const itemsPerPage = computed(() => {
 
 const browsePageResults = computed(() => {
   const start = browsePage.value * itemsPerPage.value;
-  return browseResults.value.slice(start, start + itemsPerPage.value);
+  // Slice to exactly 4 rows worth of items so no overflow items get gamepad focus
+  const maxItems = gridCols.value * 4;
+  return browseResults.value.slice(start, start + Math.min(itemsPerPage.value, maxItems));
 });
 
 const browseTotalPages = computed(() => {
@@ -461,6 +606,24 @@ function browsePrevPage() {
   }
 }
 
+const browseLibraryLabel = computed(() => {
+  if (!browseLibraryFilter.value) return "Library: All";
+  const lib = libraries.value.find((l) => l.id === browseLibraryFilter.value);
+  return `Library: ${lib?.name ?? "All"}`;
+});
+
+function cycleLibraryFilter() {
+  const opts = ["", ...libraries.value.map((l) => l.id)];
+  const idx = opts.indexOf(browseLibraryFilter.value);
+  browseLibraryFilter.value = opts[(idx + 1) % opts.length];
+}
+
+function toggleAchievementFilter() {
+  browseAchievementFilter.value = browseAchievementFilter.value
+    ? ""
+    : "has_achievements";
+}
+
 function clearBrowseFilters() {
   searchQuery.value = "";
   browseLibraryFilter.value = "";
@@ -477,14 +640,16 @@ async function loadBrowse(reset = false) {
   }
   browseLoading.value = true;
   try {
+    const effectiveSort = searchQuery.value
+      ? "relevance"
+      : (browseSort.value as any) || "default";
     const data = await api.store.browse({
       skip: 0,
       take: 55,
       q: searchQuery.value || undefined,
       library: browseLibraryFilter.value || undefined,
-      sort: searchQuery.value
-        ? "relevance"
-        : (browseSort.value as any) || "default",
+      sort: effectiveSort,
+      order: effectiveSort === "name" ? "asc" : undefined,
     });
     browseResults.value = data.results;
     browseTotal.value = data.count;
@@ -498,14 +663,16 @@ async function loadBrowse(reset = false) {
 async function loadBrowseMore() {
   browseLoading.value = true;
   try {
+    const effectiveSort = searchQuery.value
+      ? "relevance"
+      : (browseSort.value as any) || "default";
     const data = await api.store.browse({
       skip: browseResults.value.length,
       take: 55,
       q: searchQuery.value || undefined,
       library: browseLibraryFilter.value || undefined,
-      sort: searchQuery.value
-        ? "relevance"
-        : (browseSort.value as any) || "default",
+      sort: effectiveSort,
+      order: effectiveSort === "name" ? "asc" : undefined,
     });
     browseResults.value.push(...data.results);
     browseTotal.value = data.count;
@@ -558,18 +725,42 @@ const sortButton = isGamescope.value ? GamepadButton.North : GamepadButton.West;
 const _unsubs: (() => void)[] = [];
 _unsubs.push(
   gamepad.onButton(searchButton, () => {
+    if (showFilterMenu.value) return; // ignore while filter menu open
     showSearch.value = !showSearch.value;
     if (showSearch.value) activeTab.value = "browse";
   }),
 );
+// X / West button — open Sort & Filter overlay (only on Browse tab)
 _unsubs.push(
   gamepad.onButton(sortButton, () => {
-    cycleBrowseSort();
+    if (showSearch.value) return;
+    if (activeTab.value === "browse") {
+      showFilterMenu.value = !showFilterMenu.value;
+    }
+  }),
+);
+// LB — also opens Sort & Filter overlay
+_unsubs.push(
+  gamepad.onButton(GamepadButton.LeftBumper, () => {
+    if (showSearch.value) return;
+    if (activeTab.value === "browse") {
+      showFilterMenu.value = !showFilterMenu.value;
+    }
+  }),
+);
+// B / East — close filter menu when open
+_unsubs.push(
+  gamepad.onButton(GamepadButton.East, () => {
+    if (showFilterMenu.value) {
+      showFilterMenu.value = false;
+    }
   }),
 );
 
 // Initial data load
 onMounted(async () => {
+  updateGridCols();
+  window.addEventListener("resize", updateGridCols);
   try {
     const [featuredData, trendingData, recentData, randomData, librariesData] = await Promise.all([
       api.store.featured().catch(() => [] as StoreGame[]),
@@ -600,6 +791,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopHeroTimer();
+  window.removeEventListener("resize", updateGridCols);
   if (searchDebounce) clearTimeout(searchDebounce);
   for (const unsub of _unsubs) unsub();
   _unsubs.length = 0;
@@ -613,24 +805,18 @@ const tabs = [
 
 <style scoped>
 /*
- * Row-limiting for BPM grids.
- * Because column count varies by resolution (2–7), we can't hardcode
- * a specific item count. Instead, we use grid-template-rows + overflow
- * to visually limit the number of visible rows.
+ * CRT scanline overlay for ROM game covers.
+ * Subtle horizontal lines + slight vignette to give a retro feel.
  */
-.bpm-single-row {
-  grid-template-rows: 1fr;
-  grid-auto-rows: 0;
-  overflow: hidden;
-}
-.bpm-two-rows {
-  grid-template-rows: 1fr 1fr;
-  grid-auto-rows: 0;
-  overflow: hidden;
-}
-.bpm-four-rows {
-  grid-template-rows: 1fr 1fr 1fr 1fr;
-  grid-auto-rows: 0;
-  overflow: hidden;
+.rom-scanlines {
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.08) 2px,
+    rgba(0, 0, 0, 0.08) 4px
+  );
+  /* Vignette effect */
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.15);
 }
 </style>

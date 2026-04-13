@@ -361,6 +361,23 @@
             </p>
           </div>
         </div>
+
+        <!-- Bug Report -->
+        <div
+          :ref="(el: any) => registerContent(el, { onSelect: () => navigateTo('/bigpicture/bugreport') })"
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4 hover:bg-zinc-800/50 transition-colors"
+          @click="navigateTo('/bigpicture/bugreport')"
+        >
+          <div>
+            <p class="font-medium text-zinc-200 text-sm">Submit Bug Report</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Report an issue with system diagnostics and logs attached automatically
+            </p>
+          </div>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-5 text-zinc-500">
+            <path fill-rule="evenodd" d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+          </svg>
+        </div>
       </div>
     </div>
   </div>

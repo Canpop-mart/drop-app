@@ -279,6 +279,18 @@
       @cancel="confirmUninstall = false"
     />
 
+    <!-- Remove from library confirmation dialog -->
+    <BigPictureDialog
+      :visible="confirmRemoveFromLibrary"
+      title="Remove from Library"
+      :message="`Are you sure you want to remove ${game?.mName ?? 'this game'} from your library?`"
+      confirm-label="Remove"
+      cancel-label="Cancel"
+      :destructive="true"
+      @confirm="doRemoveFromLibrary"
+      @cancel="confirmRemoveFromLibrary = false"
+    />
+
     <!-- Options menu overlay — fully gamepad-navigable -->
     <Teleport to="body">
       <Transition
@@ -429,6 +441,15 @@ function renderMarkdown(md: string): string {
     // Italic (*text* or _text_)
     .replace(/\*(.+?)\*/g, "<em>$1</em>")
     .replace(/_(.+?)_/g, "<em>$1</em>")
+    // Images ![alt](url) — must come before links to avoid ![...] matching [...]
+    .replace(
+      /!\[([^\]]*)\]\(([^)]+)\)/g,
+      (_m: string, alt: string, url: string) => {
+        // Rewrite relative URLs (starting with /) through the server proxy
+        const src = url.startsWith("/") ? serverUrl(url.slice(1)) : url;
+        return `<img src="${src}" alt="${alt}" class="rounded-lg max-w-full my-2" loading="lazy" />`;
+      },
+    )
     // Links [text](url)
     .replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
@@ -458,6 +479,15 @@ const isEmulatedGame = computed(() => {
   return ver?.launches?.some((l) => l.emulator != null) ?? false;
 });
 const isNativeGame = computed(() => !isEmulatedGame.value);
+const isWindowsGame = computed(() => {
+  // Check launch configs from the loaded version data first
+  const ver = version.value;
+  if (ver?.launches?.some((l) => l.platform?.toLowerCase() === "windows")) {
+    return true;
+  }
+  // Fallback to version options (loaded async for install/launch UI)
+  return versionOptions.value?.some((v) => v.platform?.toLowerCase() === "windows") ?? false;
+});
 
 // ── Controller & Quality presets ─────────────────────────────────────────
 const controllerOptions: { label: string; value: ControllerType | null }[] = [
@@ -476,6 +506,7 @@ const qualityOptions: { label: string; value: QualityPreset | null }[] = [
 const selectedController = ref<ControllerType | null>(null);
 const selectedQuality = ref<QualityPreset | null>(null);
 const widescreenEnabled = ref(false);
+const crtShaderEnabled = ref(false);
 
 async function saveUserConfig() {
   const ver = version.value;
@@ -491,6 +522,7 @@ async function saveUserConfig() {
       controllerType: selectedController.value,
       qualityPreset: selectedQuality.value,
       widescreen: widescreenEnabled.value,
+      crtShader: crtShaderEnabled.value,
     };
     await invoke("update_game_configuration", {
       gameId: gameId,
@@ -540,6 +572,11 @@ function toggleWidescreen() {
   saveUserConfig();
 }
 
+function toggleCrtShader() {
+  crtShaderEnabled.value = !crtShaderEnabled.value;
+  saveUserConfig();
+}
+
 async function applyProfileName() {
   showOptions.value = false;
   try {
@@ -580,9 +617,15 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
       valueLabel: widescreenEnabled.value ? "On" : "Off",
       action: toggleWidescreen,
     });
+    items.push({
+      id: "crt-shader",
+      label: "CRT Shader",
+      valueLabel: crtShaderEnabled.value ? "On" : "Off",
+      action: toggleCrtShader,
+    });
   }
 
-  if (isNativeGame.value) {
+  if (isNativeGame.value && isWindowsGame.value) {
     items.push({
       id: "profile",
       label: "Set Account Name",
@@ -591,26 +634,18 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
   }
 
   items.push({
-    id: "add-to-steam",
-    label: "Add to Steam",
-    valueLabel: addedToSteam.value ? "Added" : undefined,
-    action: addToSteam,
-  });
-  items.push({
-    id: "store",
-    label: "View on Store",
-    action: () => {
-      showOptions.value = false;
-      openStore();
-    },
-  });
-  items.push({
     id: "updates",
     label: "Check for Updates",
     action: () => {
       showOptions.value = false;
       checkForUpdates();
     },
+  });
+
+  items.push({
+    id: "remove-library",
+    label: "Remove from Library",
+    action: removeFromLibrary,
   });
 
   if (status.value?.type === "Installed") {
@@ -699,6 +734,30 @@ async function doUninstall() {
   } catch (e) {
     console.error("[BPM:GAME] Uninstall failed:", e);
     launchError.value = `Uninstall failed: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+// ── Remove from library ─────────────────────────────────────────────────
+
+const confirmRemoveFromLibrary = ref(false);
+
+function removeFromLibrary() {
+  showOptions.value = false;
+  confirmRemoveFromLibrary.value = true;
+}
+
+async function doRemoveFromLibrary() {
+  confirmRemoveFromLibrary.value = false;
+  try {
+    await fetch(serverUrl("api/v1/client/collection/default/entry"), {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: gameId }),
+    });
+    navigateTo("/bigpicture/library");
+  } catch (e) {
+    console.error("[BPM:GAME] Remove from library failed:", e);
+    launchError.value = `Failed to remove: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
@@ -831,6 +890,7 @@ onMounted(async () => {
       selectedController.value = version.value.userConfiguration.controllerType ?? null;
       selectedQuality.value = version.value.userConfiguration.qualityPreset ?? null;
       widescreenEnabled.value = version.value.userConfiguration.widescreen ?? false;
+      crtShaderEnabled.value = version.value.userConfiguration.crtShader ?? false;
     }
   } else {
     console.error("[BPM:GAME] No game data loaded — page will show loading state");

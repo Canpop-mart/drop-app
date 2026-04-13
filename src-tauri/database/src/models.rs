@@ -104,6 +104,7 @@ pub mod data {
                 quality_preset: None,
                 widescreen: false,
                 mangohud: None,
+                crt_shader: false,
             }
         }
 
@@ -153,6 +154,9 @@ pub mod data {
             /// MangoHud performance overlay (Linux only)
             #[serde(default)]
             pub mangohud: Option<MangoHudPreset>,
+            /// Enable CRT shader overlay for emulated games (RetroArch)
+            #[serde(default)]
+            pub crt_shader: bool,
         }
 
         impl Default for UserConfiguration {
