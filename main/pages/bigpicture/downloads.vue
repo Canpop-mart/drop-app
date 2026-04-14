@@ -32,6 +32,13 @@
         >
           {{ isPaused ? "Resume" : "Pause" }}
         </button>
+        <button
+          :ref="(el: any) => registerAction(el, { onSelect: cancelCurrentDownload })"
+          class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-red-900/20 text-red-400 hover:bg-red-900/30"
+          @click="cancelCurrentDownload"
+        >
+          Cancel
+        </button>
       </div>
     </div>
 
@@ -264,6 +271,16 @@ async function togglePause() {
     }
   } catch (e) {
     console.error("Failed to toggle pause:", e);
+  }
+}
+
+async function cancelCurrentDownload() {
+  const current = queue.value[0];
+  if (!current) return;
+  try {
+    await invoke("cancel_game", { meta: current.meta });
+  } catch (e) {
+    console.error("Failed to cancel download:", e);
   }
 }
 

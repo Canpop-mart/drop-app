@@ -262,8 +262,9 @@
             <!-- Xbox-style profile bar -->
             <div class="flex items-center justify-between" style="padding: 1.5vh 2.5vw; border-bottom: 1px solid rgba(255,255,255,0.06)">
               <div class="flex items-center" style="gap: 1vw">
-                <div class="flex items-center justify-center" style="width: 2vw; height: 2vw; border-radius: 50%; background-color: #107c10">
-                  <svg style="width: 1vw; height: 1vw" fill="#fff" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+                <div class="flex items-center justify-center overflow-hidden" style="width: 2vw; height: 2vw; border-radius: 50%; background-color: #107c10">
+                  <img v-if="userProfilePicUrl" :src="userProfilePicUrl" class="w-full h-full object-cover" />
+                  <svg v-else style="width: 1vw; height: 1vw" fill="#fff" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
                 </div>
                 <span class="font-semibold" style="color: #fff; font-size: 0.9vw">Home</span>
               </div>
@@ -338,9 +339,9 @@
               <h3 class="font-bold tracking-widest uppercase" style="color: #b0b0b0; font-size: 0.85vw; margin-bottom: 2vh">
                 Recently Played
               </h3>
-              <div class="grid grid-cols-4 mx-auto" style="gap: 1vw; max-width: 60vw; justify-items: center">
+              <div class="grid grid-cols-5 mx-auto" style="gap: 1vw; max-width: 70vw; justify-items: center">
                 <div
-                  v-for="(entry, idx) in otherGames.slice(4, 12)"
+                  v-for="(entry, idx) in otherGames.slice(4, 14)"
                   :key="entry.game.id"
                   class="flex flex-col items-center cursor-pointer bp-focus-delegate"
                   :ref="(el: any) => registerTile(el, {
@@ -454,7 +455,7 @@
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'wii'">
         <div class="min-h-full flex flex-col relative" style="background: linear-gradient(180deg, #e0effa 0%, #c8ddf0 50%, #b8d0e8 100%)">
-          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" />
+          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <!-- Empty state -->
           <div v-if="recentGames.length === 0 && !loading" class="flex items-center justify-center" style="min-height: 60vh">
             <div class="text-center">
@@ -483,9 +484,9 @@
 
             <!-- Channel Grid — 4 cols, portrait game cases with overlay -->
             <div class="flex-1 flex items-center justify-center" style="padding: 3vh 4vw">
-              <div class="grid grid-cols-4 w-full" style="gap: 1.5vw; max-width: 65vw; justify-items: center">
+              <div class="grid grid-cols-5 w-full" style="gap: 1.5vw; max-width: 78vw; justify-items: center">
                 <div
-                  v-for="(entry, idx) in recentGames.slice(0, 12)"
+                  v-for="(entry, idx) in recentGames.slice(0, 14)"
                   :key="entry.game.id"
                   class="flex flex-col items-center cursor-pointer bp-focus-delegate"
                   :ref="(el: any) => registerTile(el, {
@@ -612,7 +613,7 @@
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'ps2'">
         <div class="relative min-h-full overflow-hidden" style="background: linear-gradient(160deg, #080818 0%, #0c0c28 30%, #101040 60%, #080820 100%)">
-          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" />
+          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <!-- Decorative vertical lines — PS2 towers effect -->
           <div class="absolute inset-0 pointer-events-none" style="opacity: 0.04; background: repeating-linear-gradient(90deg, transparent, transparent 3vw, #4060ff 3vw, #4060ff 3.05vw)" />
 
@@ -659,9 +660,9 @@
 
             <!-- Memory card icon grid — portrait DVD cases (515x732 aspect ratio) -->
             <div class="flex flex-col items-center justify-center" style="padding: 3vh 3vw 8vh 3vw; min-height: 65vh">
-              <div class="grid grid-cols-4 mx-auto" style="gap: 1.5vw; width: 68%; max-width: 62vw">
+              <div class="grid grid-cols-5 mx-auto" style="gap: 1.5vw; width: 80%; max-width: 75vw">
                 <div
-                  v-for="(entry, idx) in recentGames.slice(0, 12)"
+                  v-for="(entry, idx) in recentGames.slice(0, 15)"
                   :key="entry.game.id"
                   class="flex flex-col items-center cursor-pointer bp-focus-delegate"
                   :ref="(el: any) => registerTile(el, {
@@ -768,7 +769,7 @@
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'ds'">
         <div class="min-h-full flex flex-col relative" style="background: linear-gradient(180deg, #e8e8e8 0%, #d0d0d0 100%)">
-          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" />
+          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <!-- Empty state -->
           <div v-if="recentGames.length === 0 && !loading" class="flex items-center justify-center" style="min-height: 70vh">
             <div class="text-center">
@@ -850,9 +851,9 @@
                 </h3>
                 <span class="tracking-wider uppercase" style="color: #aaa; font-size: 0.65vw">Touch Screen</span>
               </div>
-              <div class="grid grid-cols-5 mx-auto" style="gap: 1.2vw; max-width: 68vw; justify-items: center">
+              <div class="grid grid-cols-6 mx-auto" style="gap: 1.2vw; max-width: 80vw; justify-items: center">
                 <div
-                  v-for="(entry, idx) in otherGames.slice(0, 10)"
+                  v-for="(entry, idx) in otherGames.slice(0, 11)"
                   :key="entry.game.id"
                   class="flex flex-col items-center cursor-pointer group bp-focus-delegate"
                   :ref="(el: any) => registerTile(el, {
@@ -973,7 +974,7 @@
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'dreamcast'">
         <div class="min-h-full flex flex-col relative" style="background: linear-gradient(135deg, #1a6070 0%, #0e4858 30%, #0a3848 60%, #062830 100%)">
-          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" />
+          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <!-- Empty state -->
           <div v-if="recentGames.length === 0 && !loading" class="flex items-center justify-center" style="min-height: 70vh">
             <div class="text-center">
@@ -1183,7 +1184,7 @@
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'gamecube'">
         <div class="relative min-h-full" style="background-color: #0e0a1e">
-          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" />
+          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <div class="relative" style="z-index: 1">
           <!-- Empty state -->
           <div v-if="recentGames.length === 0 && !loading" class="flex items-center justify-center" style="min-height: 70vh">
@@ -1304,7 +1305,7 @@
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'psp'">
         <div class="relative min-h-full flex flex-col" style="background-color: #0a0a0e">
-          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" />
+          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <div class="relative flex-1 flex flex-col" style="z-index: 1">
           <!-- Empty state -->
           <div v-if="recentGames.length === 0 && !loading" class="flex items-center justify-center" style="min-height: 70vh">
@@ -1329,9 +1330,9 @@
               </div>
             </div>
 
-            <!-- Game grid — 4 columns, tall UMD cases (462x801 aspect ratio) -->
+            <!-- Game grid — 6 columns, tall UMD cases (462x801 aspect ratio) -->
             <div class="flex-1 flex items-center justify-center" style="padding: 2vh 2vw">
-              <div class="grid grid-cols-4 mx-auto" style="gap: 1vw; max-width: 60vw; justify-items: center">
+              <div class="grid grid-cols-6 mx-auto" style="gap: 1vw; max-width: 82vw; justify-items: center">
                 <div
                   v-for="(entry, idx) in recentGames"
                   :key="entry.game.id"
@@ -1424,7 +1425,7 @@
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'gameboy'">
         <div class="relative min-h-full flex flex-col" style="background-color: #0F380F; color: #9BBC0F">
-          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" />
+          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <div class="relative flex-1 flex flex-col" style="z-index: 1">
           <!-- Empty state -->
           <div v-if="recentGames.length === 0 && !loading" class="flex items-center justify-center" style="min-height: 70vh">
@@ -1444,11 +1445,11 @@
               <span style="color: #9BBC0F; font-size: 0.5vw">{{ recentGames.length }} GAMES</span>
             </div>
 
-            <!-- 4×3 grid with chunky borders — nearly square cartridge boxes (509x494 aspect ratio) -->
+            <!-- 4×4 grid with chunky borders — nearly square cartridge boxes (509x494 aspect ratio) -->
             <div class="flex-1 flex items-center justify-center" style="padding: 2.5vh 3vw">
               <div class="grid grid-cols-4 w-full" style="gap: 0.8vw; max-width: 60vw; justify-items: center">
                 <div
-                  v-for="(entry, idx) in recentGames.slice(0, 12)"
+                  v-for="(entry, idx) in recentGames.slice(0, 16)"
                   :key="entry.game.id"
                   class="flex flex-col items-center cursor-pointer bp-focus-delegate"
                   :ref="(el: any) => registerTile(el, {
@@ -1541,7 +1542,7 @@
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'snes'">
         <div class="relative min-h-full flex flex-col" style="background-color: #e8e8ec">
-          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" />
+          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <div class="relative flex-1 flex flex-col" style="z-index: 1">
           <!-- Empty state -->
           <div v-if="recentGames.length === 0 && !loading" class="flex items-center justify-center" style="min-height: 70vh">
@@ -1599,7 +1600,7 @@
                 <span class="font-bold" style="color: #3a3a4a; font-size: 0.9vw; padding: 0 3vw; display: block; margin-bottom: 1.5vh">All Games</span>
                 <div class="grid grid-cols-3 mx-auto" style="gap: 1.2vw; max-width: 70vw; justify-items: center; padding: 0 3vw 1vh 3vw">
                   <div
-                    v-for="(entry, idx) in recentGames"
+                    v-for="(entry, idx) in recentGames.slice(0, 9)"
                     :key="entry.game.id"
                     class="flex flex-col items-center cursor-pointer bp-focus-delegate"
                     :ref="(el: any) => registerTile(el, {
@@ -1736,6 +1737,13 @@ interface RecentGameResponse {
 const theme = ref<string>("steam");
 const recentGames = ref<RecentGameEntry[]>([]);
 const loading = ref(true);
+
+// User profile for themes that show profile info (Xbox, etc.)
+const appState = useAppState();
+const userProfilePicUrl = computed(() => {
+  const picId = appState.value?.user?.profilePictureObjectId;
+  return picId ? serverUrl(`api/v1/object/${picId}`) : null;
+});
 const scrollContainer = ref<HTMLElement | null>(null);
 const focusNav = useFocusNavigation();
 const registerTile = useBpFocusableGroup("content");
@@ -1771,6 +1779,9 @@ const crtEnabled = ref(
 const animBgEnabled = ref(
   typeof localStorage !== "undefined" ? localStorage.getItem("bpm:animBg") !== "false" : true
 );
+// Reduce animation complexity on low-power devices (Steam Deck / gamescope)
+const { isSteamDeckHardware } = useDeckMode();
+const reducedAnimations = computed(() => isSteamDeckHardware.value);
 const currentAchievement = ref<{ title: string; game: string; icon?: string } | null>(null);
 const launchingGame = ref<{ name: string; coverUrl?: string } | null>(null);
 const screensaverEnabled = ref(
@@ -1858,7 +1869,7 @@ async function loadRecentGames() {
       return;
     }
 
-    const gamesToLoad = recentData.slice(0, 10);
+    const gamesToLoad = recentData.slice(0, 20);
     const entries: RecentGameEntry[] = [];
 
     for (const gameData of gamesToLoad) {

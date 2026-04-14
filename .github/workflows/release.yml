@@ -69,11 +69,10 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
-      # Repack the AppImage without ANY bundled shared libraries so it uses
-      # the host system's versions. The Ubuntu 22.04 CI libs are incompatible
-      # with SteamOS (EGL crash, glib symbol mismatches). Since the .deb binary
-      # works fine on SteamOS using system libs, the AppImage should too — it
-      # just needs to stop overriding them via LD_LIBRARY_PATH.
+      # Repack the AppImage: keep WebKitGTK and its dependencies (needed on
+      # SteamOS which doesn't ship webkit2gtk-4.1), but remove libs that clash
+      # with the host (glib, EGL/mesa — cause crashes due to symbol mismatches
+      # between Ubuntu 22.04 build env and SteamOS runtime).
       - name: Fix AppImage for SteamOS compatibility
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -87,8 +86,21 @@ jobs:
           chmod +x "$APPIMAGE"
           "$APPIMAGE" --appimage-extract
 
-          # Remove ALL bundled shared libraries — the binary will use system libs
-          rm -rf squashfs-root/usr/lib
+          # Remove libs that conflict with SteamOS host, but KEEP WebKitGTK
+          # and its dependencies so the app works without system webkit installed.
+          if [ -d squashfs-root/usr/lib ]; then
+            cd squashfs-root/usr/lib
+            # Remove problematic glib/gio/mesa/EGL libs that cause symbol clashes
+            rm -f libglib-2.0.so* libgio-2.0.so* libgobject-2.0.so* libgmodule-2.0.so*
+            rm -f libEGL*.so* libGL*.so* libGLX*.so* libGLdispatch*.so*
+            rm -f libdrm*.so* libgbm*.so* libwayland*.so*
+            rm -f libffi*.so* libpcre2*.so* libmount*.so* libblkid*.so*
+            # Keep: libwebkit2gtk-4.1, libjavascriptcoregtk-4.1, libsoup-3.0,
+            #        and any other non-conflicting deps Tauri bundled
+            echo "Kept bundled libs:"
+            ls -la *.so* 2>/dev/null || echo "(none remaining)"
+            cd ../../..
+          fi
 
           # Download appimagetool to repack
           curl -Lo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage

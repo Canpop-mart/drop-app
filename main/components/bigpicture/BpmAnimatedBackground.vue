@@ -9,14 +9,16 @@
       <div class="ps2-cube c2"></div>
       <div class="ps2-cube c3"></div>
       <div class="ps2-cube c4"></div>
-      <div class="ps2-cube c5"></div>
-      <div class="ps2-cube c6"></div>
-      <div class="ps2-cube c7"></div>
-      <div class="ps2-cube c8"></div>
-      <div class="ps2-cube c9"></div>
-      <div class="ps2-cube c10"></div>
-      <div class="ps2-cube c11"></div>
-      <div class="ps2-cube c12"></div>
+      <template v-if="!reduced">
+        <div class="ps2-cube c5"></div>
+        <div class="ps2-cube c6"></div>
+        <div class="ps2-cube c7"></div>
+        <div class="ps2-cube c8"></div>
+        <div class="ps2-cube c9"></div>
+        <div class="ps2-cube c10"></div>
+        <div class="ps2-cube c11"></div>
+        <div class="ps2-cube c12"></div>
+      </template>
     </div>
 
     <!-- Dreamcast — pulsing swirl + orbiting particles + color shift -->
@@ -46,11 +48,13 @@
       <div class="bubble"></div>
       <div class="bubble b2"></div>
       <div class="bubble b3"></div>
-      <div class="bubble b4"></div>
-      <div class="bubble b5"></div>
-      <div class="bubble b6"></div>
-      <div class="bubble b7"></div>
-      <div class="bubble b8"></div>
+      <template v-if="!reduced">
+        <div class="bubble b4"></div>
+        <div class="bubble b5"></div>
+        <div class="bubble b6"></div>
+        <div class="bubble b7"></div>
+        <div class="bubble b8"></div>
+      </template>
     </div>
 
     <!-- DS -->
@@ -102,10 +106,13 @@
 interface Props {
   themeId: string
   enabled?: boolean
+  /** Reduce animation complexity for low-power devices (Steam Deck, etc.) */
+  reduced?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   enabled: true,
+  reduced: false,
 })
 </script>
 
@@ -119,6 +126,16 @@ const props = withDefaults(defineProps<Props>(), {
   z-index: 0;
   pointer-events: none;
   overflow: hidden;
+  will-change: contents;
+  contain: strict;
+}
+
+/* Respect system preference for reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .animated-background * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════

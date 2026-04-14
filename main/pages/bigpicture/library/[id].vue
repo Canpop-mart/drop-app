@@ -13,21 +13,22 @@
       </template>
       <div
         v-if="game"
-        class="absolute inset-0 bg-gradient-to-r from-zinc-950/95 via-zinc-950/70 to-transparent"
+        class="absolute inset-0 bg-gradient-to-r from-zinc-950 via-zinc-950/80 to-zinc-950/20"
       />
       <div
         v-if="game"
-        class="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/40 to-transparent"
+        class="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/60 to-transparent"
       />
 
       <!-- Game info overlay -->
       <div v-if="game" class="absolute bottom-0 left-0 right-0 p-8">
-        <h1 class="text-5xl font-bold font-display text-zinc-100 mb-2">
+        <h1 class="text-5xl font-bold font-display text-zinc-100 mb-2" style="text-shadow: 0 2px 8px rgba(0,0,0,0.8), 0 0 2px rgba(0,0,0,0.6)">
           {{ game?.mName }}
         </h1>
         <p
           v-if="game?.mShortDescription"
           class="text-lg text-zinc-400 max-w-2xl mb-6"
+          style="text-shadow: 0 1px 4px rgba(0,0,0,0.8)"
         >
           {{ game.mShortDescription }}
         </p>
