@@ -80,54 +80,56 @@
           v-if="showFilterMenu"
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
         >
-          <div class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4">
-            <h2 class="text-xl font-semibold font-display text-zinc-100 mb-4">Sort & Filter</h2>
+          <div class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-6 max-w-2xl w-full mx-4">
+            <h2 class="text-xl font-semibold font-display text-zinc-100 mb-5">Sort & Filter</h2>
 
-            <!-- Sort section -->
-            <div class="mb-4">
-              <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Sort By</p>
-              <div class="space-y-1.5">
-                <button
-                  v-for="(label, key) in sortLabels"
-                  :key="key"
-                  class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
-                  :class="sortMode === key
-                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
-                    : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
-                  :ref="(el: any) => registerOverlay(el, { onSelect: () => { sortMode = key as SortMode; } })"
-                  @click="sortMode = key as SortMode"
-                >
-                  <span class="font-medium">{{ label }}</span>
-                  <span v-if="sortMode === key" class="text-xs opacity-75">Active</span>
-                </button>
+            <div class="grid grid-cols-2 gap-6">
+              <!-- Sort section -->
+              <div>
+                <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Sort By</p>
+                <div class="space-y-1.5">
+                  <button
+                    v-for="(label, key) in sortLabels"
+                    :key="key"
+                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
+                    :class="sortMode === key
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                      : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                    :ref="(el: any) => registerOverlay(el, { onSelect: () => { sortMode = key as SortMode; } })"
+                    @click="sortMode = key as SortMode"
+                  >
+                    <span class="font-medium">{{ label }}</span>
+                    <span v-if="sortMode === key" class="text-xs opacity-75">Active</span>
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <!-- Filter section -->
-            <div class="mb-4">
-              <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Show</p>
-              <div class="space-y-1.5">
-                <button
-                  v-for="f in filters"
-                  :key="f.value"
-                  class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
-                  :class="activeFilter === f.value
-                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
-                    : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
-                  :ref="(el: any) => registerOverlay(el, { onSelect: () => { activeFilter = f.value; } })"
-                  @click="activeFilter = f.value"
-                >
-                  <span class="font-medium">{{ f.label }}</span>
-                  <span class="text-xs opacity-75">{{ f.count }}</span>
-                </button>
+              <!-- Filter section -->
+              <div>
+                <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Show</p>
+                <div class="space-y-1.5">
+                  <button
+                    v-for="f in filters"
+                    :key="f.value"
+                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
+                    :class="activeFilter === f.value
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                      : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                    :ref="(el: any) => registerOverlay(el, { onSelect: () => { activeFilter = f.value; } })"
+                    @click="activeFilter = f.value"
+                  >
+                    <span class="font-medium">{{ f.label }}</span>
+                    <span class="text-xs opacity-75">{{ f.count }}</span>
+                  </button>
+                </div>
               </div>
             </div>
 
             <!-- Close -->
             <button
-              :ref="(el: any) => registerOverlay(el, { onSelect: () => { showFilterMenu = false; } })"
-              class="w-full px-4 py-3 rounded-xl text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
-              @click="showFilterMenu = false"
+              :ref="(el: any) => registerOverlay(el, { onSelect: () => { showFilterMenu = false; focusNav.unrestrictFocus('content'); } })"
+              class="w-full mt-5 px-4 py-3 rounded-xl text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+              @click="showFilterMenu = false; focusNav.unrestrictFocus('content')"
             >
               Done
             </button>
@@ -311,7 +313,7 @@ const scrollContainer = ref<HTMLElement | null>(null);
 const focusNav = useFocusNavigation();
 const registerTile = useBpFocusableGroup("content");
 const registerFilter = useBpFocusableGroup("content");
-const registerOverlay = useBpFocusableGroup("content");
+const registerOverlay = useBpFocusableGroup("sort-overlay");
 
 const gamepad = useGamepad();
 const _unsubs: (() => void)[] = [];
@@ -330,27 +332,62 @@ _unsubs.push(
 _unsubs.push(
   gamepad.onButton(_sortBtn, () => {
     if (showKeyboard.value) return;
-    showFilterMenu.value = !showFilterMenu.value;
+    if (showFilterMenu.value) {
+      showFilterMenu.value = false;
+      focusNav.unrestrictFocus("content");
+    } else {
+      showFilterMenu.value = true;
+      focusNav.restrictFocus("sort-overlay");
+    }
   }),
 );
 _unsubs.push(
   gamepad.onButton(GamepadButton.East, () => {
     if (showFilterMenu.value) {
       showFilterMenu.value = false;
+      focusNav.unrestrictFocus("content");
     }
   }),
 );
 
 // ── Sort options ────────────────────────────────────────────────────────
-type SortMode = "name" | "recent" | "status";
+type SortMode = "name" | "recent" | "status" | "size";
 const sortMode = ref<SortMode>("name");
 
 const sortLabels: Record<SortMode, string> = {
   name: "Name",
   recent: "Recent",
   status: "Status",
+  size: "Size",
 };
 const sortLabel = computed(() => sortLabels[sortMode.value]);
+
+// ── Size cache for "size" sort ──────────────────────────────────────────────
+const gameSizes = ref<Record<string, number>>({});
+const sizesLoading = ref(false);
+
+async function loadGameSizes() {
+  if (sizesLoading.value) return;
+  sizesLoading.value = true;
+  try {
+    const installed = library.value.filter(e => e.status.type === "Installed");
+    for (const entry of installed) {
+      if (gameSizes.value[entry.game.id] != null) continue;
+      try {
+        const size = await invoke<number>("get_install_size", { gameId: entry.game.id });
+        gameSizes.value[entry.game.id] = size;
+      } catch {
+        gameSizes.value[entry.game.id] = 0;
+      }
+    }
+  } finally {
+    sizesLoading.value = false;
+  }
+}
+
+watch(sortMode, (mode) => {
+  if (mode === "size") loadGameSizes();
+});
 
 function cycleSort() {
   const modes: SortMode[] = ["name", "recent", "status"];
@@ -488,6 +525,14 @@ const filteredGames = computed(() => {
     case "recent":
       // Keep server order (most recently added first)
       games.reverse();
+      break;
+    case "size":
+      // Largest first; uninstalled games (size 0) go to the end
+      games.sort((a, b) => {
+        const sA = gameSizes.value[a.game.id] ?? 0;
+        const sB = gameSizes.value[b.game.id] ?? 0;
+        return sB - sA;
+      });
       break;
   }
 

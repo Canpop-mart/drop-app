@@ -33,20 +33,23 @@ interface Props {
 
 const props = defineProps<Props>();
 
-// Themes that have real PNG front-cover templates
-const templateMap: Record<string, string> = {
-  gamecube: "/img/boxart/templates/gamecube.png",
-  psp: "/img/boxart/templates/psp.png",
-  gameboy: "/img/boxart/templates/gameboy.png",
-  snes: "/img/boxart/templates/snes.png",
-  ps2: "/img/boxart/templates/ps2.png",
-  wii: "/img/boxart/templates/wii.png",
-  ds: "/img/boxart/templates/ds.png",
-  xbox: "/img/boxart/templates/xbxo360.png",
-  dreamcast: "/img/boxart/templates/dreamcast.png",
+// Themes that have real PNG front-cover templates (relative to public/)
+const templateFiles: Record<string, string> = {
+  gamecube: "img/boxart/templates/gamecube.png",
+  psp: "img/boxart/templates/psp.png",
+  gameboy: "img/boxart/templates/gameboy.png",
+  snes: "img/boxart/templates/snes.png",
+  ps2: "img/boxart/templates/ps2.png",
+  wii: "img/boxart/templates/wii.png",
+  ds: "img/boxart/templates/ds.png",
+  xbox: "img/boxart/templates/xbxo360.png",
+  dreamcast: "img/boxart/templates/dreamcast.png",
 };
 
-const templateSrc = computed(() => templateMap[props.themeId] ?? null);
+const templateSrc = computed(() => {
+  const file = templateFiles[props.themeId];
+  return file ? usePublicUrl(file) : null;
+});
 
 // White-bg templates use "multiply" (white disappears, colored elements show)
 // Dark-bg templates use "screen" (black disappears, light elements show)

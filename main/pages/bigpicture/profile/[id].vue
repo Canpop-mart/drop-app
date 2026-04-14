@@ -56,6 +56,15 @@
               {{ profile.bio }}
             </p>
           </div>
+          <!-- Edit Profile button (own profile only) -->
+          <button
+            v-if="isOwnProfile"
+            :ref="(el: any) => registerContent(el, { onSelect: goToEdit })"
+            class="shrink-0 mb-2 px-5 py-2.5 rounded-xl text-sm font-medium bg-zinc-800/80 text-zinc-200 hover:bg-zinc-700 ring-1 ring-white/10 transition-colors backdrop-blur-sm"
+            @click="goToEdit"
+          >
+            Edit Profile
+          </button>
         </div>
       </div>
 
@@ -246,6 +255,7 @@ import {
   type UserShowcase,
   type ShowcaseItem,
 } from "~/composables/use-server-api";
+import { useAppState } from "~/composables/app-state";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 
@@ -290,10 +300,21 @@ function formatDuration(seconds: number): string {
 const route = useRoute();
 const router = useRouter();
 const api = useServerApi();
+const appState = useAppState();
 const registerContent = useBpFocusableGroup("content");
 const focusNav = useFocusNavigation();
 
 const userId = computed(() => route.params.id as string);
+const isOwnProfile = computed(() => {
+  const user = appState.value?.user;
+  if (!user) return false;
+  const id = userId.value;
+  return id === user.id || id === user.username;
+});
+
+function goToEdit() {
+  router.push("/bigpicture/profile/edit");
+}
 const loading = ref(true);
 const profile = ref<UserProfile | null>(null);
 const stats = ref<UserStats | null>(null);

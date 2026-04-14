@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::nonpoison::Mutex;
 
 use bitcode::{Decode, Encode};
@@ -461,4 +462,33 @@ pub fn update_game_configuration(
         .insert(version.to_string(), existing_configuration);
 
     Ok(())
+}
+
+/// Returns the total size (in bytes) of a game's install directory.
+/// Walks the directory tree recursively, summing file sizes.
+#[tauri::command]
+pub fn get_install_size(game_id: String) -> u64 {
+    let db = borrow_db_checked();
+    let install_dir = match db.applications.game_statuses.get(&game_id) {
+        Some(GameDownloadStatus::Installed { install_dir, .. }) => install_dir.clone(),
+        _ => return 0,
+    };
+
+    fn dir_size(path: &Path) -> u64 {
+        let mut total: u64 = 0;
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_dir() {
+                        total += dir_size(&entry.path());
+                    } else {
+                        total += meta.len();
+                    }
+                }
+            }
+        }
+        total
+    }
+
+    dir_size(Path::new(&install_dir))
 }

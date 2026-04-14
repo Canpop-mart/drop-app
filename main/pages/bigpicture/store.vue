@@ -224,89 +224,90 @@
             v-if="showFilterMenu"
             class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
           >
-            <div class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4">
-              <h2 class="text-xl font-semibold font-display text-zinc-100 mb-4">Sort & Filter</h2>
+            <div class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-6 max-w-3xl w-full mx-4">
+              <h2 class="text-xl font-semibold font-display text-zinc-100 mb-5">Sort & Filter</h2>
 
-              <!-- Sort section -->
-              <div class="mb-4">
-                <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Sort By</p>
-                <div class="space-y-1.5">
-                  <button
-                    v-for="(label, key) in browseSortLabels"
-                    :key="key"
-                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
-                    :class="browseSort === key
-                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
-                      : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
-                    :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseSort = key; } })"
-                    @click="browseSort = key"
-                  >
-                    <span class="font-medium">{{ label }}</span>
-                    <span v-if="browseSort === key" class="text-xs opacity-75">Active</span>
-                  </button>
+              <div class="grid grid-cols-3 gap-6">
+                <!-- Sort section -->
+                <div>
+                  <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Sort By</p>
+                  <div class="space-y-1.5">
+                    <button
+                      v-for="(label, key) in browseSortLabels"
+                      :key="key"
+                      class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors"
+                      :class="browseSort === key
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                        : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                      :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseSort = key; } })"
+                      @click="browseSort = key"
+                    >
+                      <span class="font-medium">{{ label }}</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
 
-              <!-- Library filter section -->
-              <div v-if="libraries.length > 0" class="mb-4">
-                <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Library</p>
-                <div class="space-y-1.5">
-                  <button
-                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
-                    :class="!browseLibraryFilter
-                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
-                      : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
-                    :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseLibraryFilter = ''; } })"
-                    @click="browseLibraryFilter = ''"
-                  >
-                    <span class="font-medium">All Libraries</span>
-                  </button>
-                  <button
-                    v-for="lib in libraries"
-                    :key="lib.id"
-                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
-                    :class="browseLibraryFilter === lib.id
-                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
-                      : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
-                    :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseLibraryFilter = lib.id; } })"
-                    @click="browseLibraryFilter = lib.id"
-                  >
-                    <span class="font-medium">{{ lib.name }}</span>
-                  </button>
+                <!-- Library filter section -->
+                <div v-if="libraries.length > 0">
+                  <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Library</p>
+                  <div class="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                    <button
+                      class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors"
+                      :class="!browseLibraryFilter
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                        : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                      :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseLibraryFilter = ''; } })"
+                      @click="browseLibraryFilter = ''"
+                    >
+                      <span class="font-medium">All Libraries</span>
+                    </button>
+                    <button
+                      v-for="lib in libraries"
+                      :key="lib.id"
+                      class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors"
+                      :class="browseLibraryFilter === lib.id
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                        : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                      :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseLibraryFilter = lib.id; } })"
+                      @click="browseLibraryFilter = lib.id"
+                    >
+                      <span class="font-medium">{{ lib.name }}</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
 
-              <!-- Achievements filter -->
-              <div class="mb-4">
-                <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Achievements</p>
-                <div class="space-y-1.5">
-                  <button
-                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
-                    :class="!browseAchievementFilter
-                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
-                      : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
-                    :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseAchievementFilter = ''; } })"
-                    @click="browseAchievementFilter = ''"
-                  >
-                    <span class="font-medium">All Games</span>
-                  </button>
-                  <button
-                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
-                    :class="browseAchievementFilter === 'has_achievements'
-                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
-                      : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
-                    :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseAchievementFilter = 'has_achievements'; } })"
-                    @click="browseAchievementFilter = 'has_achievements'"
-                  >
-                    <span class="font-medium">Has Achievements</span>
-                  </button>
+                <!-- Achievements filter -->
+                <div>
+                  <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Achievements</p>
+                  <div class="space-y-1.5">
+                    <button
+                      class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors"
+                      :class="!browseAchievementFilter
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                        : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                      :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseAchievementFilter = ''; } })"
+                      @click="browseAchievementFilter = ''"
+                    >
+                      <span class="font-medium">All Games</span>
+                    </button>
+                    <button
+                      class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors"
+                      :class="browseAchievementFilter === 'has_achievements'
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                        : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                      :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseAchievementFilter = 'has_achievements'; } })"
+                      @click="browseAchievementFilter = 'has_achievements'"
+                    >
+                      <span class="font-medium">Has Achievements</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
               <!-- Close -->
               <button
                 :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { showFilterMenu = false; } })"
-                class="w-full px-4 py-3 rounded-xl text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+                class="w-full mt-5 px-4 py-3 rounded-xl text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
                 @click="showFilterMenu = false"
               >
                 Done
@@ -407,7 +408,7 @@ const gamepad = useGamepad();
 const registerTab = useBpFocusableGroup("content");
 const registerFeaturedHero = useBpFocusableGroup("content");
 const registerGrid = useBpFocusableGroup("content");
-const registerFilterMenu = useBpFocusableGroup("content");
+const registerFilterMenu = useBpFocusableGroup("filter-menu");
 
 // State
 const loading = ref(true);
@@ -617,6 +618,16 @@ async function loadBrowseMore() {
     browseLoading.value = false;
   }
 }
+
+// Handle focus restriction when filter menu opens/closes via any method
+watch(showFilterMenu, (open) => {
+  if (open) {
+    focusNav.restrictFocus("filter-menu");
+    nextTick(() => focusNav.autoFocusContent("filter-menu"));
+  } else {
+    focusNav.unrestrictFocus("content");
+  }
+});
 
 // Reload browse when tab switches to browse
 watch(activeTab, (tab) => {

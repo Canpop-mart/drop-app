@@ -2,7 +2,7 @@
   <NuxtLink v-if="onLinux" to="/settings/compat">
     <HeaderWidget :problem="protonError">
       <img
-        src="/proton-logo.png"
+        :src="usePublicUrl('proton-logo.png')"
         class="relative z-50 size-5 brightness-[30%]"
       />
     </HeaderWidget>

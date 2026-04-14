@@ -990,7 +990,7 @@
             <div class="flex items-center justify-between" style="padding: 1.5vh 2.5vw; background: linear-gradient(90deg, rgba(15,60,75,0.9) 0%, rgba(20,80,100,0.7) 50%, rgba(15,60,75,0.9) 100%); border-bottom: 2px solid rgba(208,80,16,0.4)">
               <div class="flex items-center" style="gap: 1vw">
                 <!-- Dreamcast logo -->
-                <img src="/img/boxart/logos/dreamcast.png" alt="Dreamcast" style="height: 2.2vw; object-fit: contain; opacity: 0.9; filter: brightness(1.2)" />
+                <img :src="usePublicUrl('img/boxart/logos/dreamcast.png')" alt="Dreamcast" style="height: 2.2vw; object-fit: contain; opacity: 0.9; filter: brightness(1.2)" />
               </div>
               <div class="flex items-center" style="gap: 2vw">
                 <span style="color: #8ab0c0; font-size: 0.8vw">{{ recentGames.length }} game{{ recentGames.length !== 1 ? 's' : '' }}</span>
@@ -1199,7 +1199,7 @@
           <template v-if="recentGames.length > 0">
             <!-- Header with GameCube branding -->
             <div class="flex items-center justify-between" style="padding: 2vh 3vw; background: linear-gradient(90deg, rgba(40,30,80,0.8) 0%, rgba(60,40,120,0.6) 50%, rgba(40,30,80,0.8) 100%); border-bottom: 2px solid rgba(82,78,170,0.4)">
-              <img src="/img/boxart/logos/gamecube.png" alt="GameCube" style="height: 2.2vw; object-fit: contain; opacity: 0.9; filter: brightness(1.2)" />
+              <img :src="usePublicUrl('img/boxart/logos/gamecube.png')" alt="GameCube" style="height: 2.2vw; object-fit: contain; opacity: 0.9; filter: brightness(1.2)" />
               <div class="flex items-center" style="gap: 2vw">
                 <BpmClock :theme-id="theme" :show-date="true" />
                 <span style="color: #7a6aa0; font-size: 0.8vw">{{ recentGames.length }} game{{ recentGames.length !== 1 ? 's' : '' }}</span>
@@ -1440,7 +1440,7 @@
           <template v-if="recentGames.length > 0">
             <!-- Header -->
             <div class="flex items-center justify-between" style="padding: 1.5vh 2vw; border-bottom: 0.4vw solid #9BBC0F; background-color: rgba(9,32,15,0.5)">
-              <img src="/img/boxart/logos/gameboy.png" alt="Game Boy" style="height: 1.8vw; object-fit: contain; opacity: 0.9" />
+              <img :src="usePublicUrl('img/boxart/logos/gameboy.png')" alt="Game Boy" style="height: 1.8vw; object-fit: contain; opacity: 0.9" />
               <span style="color: #9BBC0F; font-size: 0.5vw">{{ recentGames.length }} GAMES</span>
             </div>
 
@@ -1557,7 +1557,7 @@
           <template v-if="recentGames.length > 0">
             <!-- SNES-style header -->
             <div class="flex items-center justify-between" style="padding: 1.5vh 3vw; background: linear-gradient(90deg, rgba(180,180,190,0.5) 0%, rgba(200,200,210,0.3) 50%, rgba(180,180,190,0.5) 100%); border-bottom: 2px solid rgba(100,100,110,0.3)">
-              <img src="/img/boxart/logos/snes.png" alt="SNES" style="height: 2.2vw; object-fit: contain; opacity: 0.85" />
+              <img :src="usePublicUrl('img/boxart/logos/snes.png')" alt="SNES" style="height: 2.2vw; object-fit: contain; opacity: 0.85" />
               <div class="flex items-center" style="gap: 2vw">
                 <BpmClock :theme-id="theme" :show-date="true" />
                 <span style="color: #5a5a6a; font-size: 0.8vw">{{ recentGames.length }} game{{ recentGames.length !== 1 ? 's' : '' }}</span>

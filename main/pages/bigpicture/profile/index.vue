@@ -3,10 +3,19 @@
 </template>
 
 <script setup lang="ts">
-// No standalone /bigpicture/profile page — redirect back to community
+import { useAppState } from "~/composables/app-state";
+
 definePageMeta({ layout: "bigpicture" });
+
 const router = useRouter();
+const state = useAppState();
+
 onMounted(() => {
-  router.replace("/bigpicture/community");
+  const username = state.value?.user?.username;
+  if (username) {
+    router.replace(`/bigpicture/profile/${username}`);
+  } else {
+    router.replace("/bigpicture");
+  }
 });
 </script>

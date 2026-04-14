@@ -216,9 +216,9 @@ export interface NewsArticle {
 
 // ── Fetch helper ────────────────────────────────────────────────────────────
 
-async function apiFetch<T>(path: string): Promise<T> {
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const url = serverUrl(path);
-  const res = await fetch(url);
+  const res = await fetch(url, init);
   if (!res.ok) {
     throw new Error(`API ${path} failed: ${res.status} ${res.statusText}`);
   }
@@ -305,6 +305,45 @@ export function useServerApi() {
       /** Get user showcase items. */
       showcase: (id: string) =>
         apiFetch<UserShowcase>(`api/v1/user/${id}/showcase`),
+
+      /** Update profile fields (display name, bio, theme). */
+      update: (data: { displayName?: string; bio?: string; profileTheme?: string }) =>
+        apiFetch<void>("api/v1/user/profile", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }),
+
+      /** Upload avatar image. Returns new object ID. */
+      uploadAvatar: async (file: File) => {
+        const form = new FormData();
+        form.append("file", file);
+        return apiFetch<{ profilePictureObjectId: string }>("api/v1/user/avatar", {
+          method: "POST",
+          body: form,
+        });
+      },
+
+      /** Upload banner image. Returns new object ID. */
+      uploadBanner: async (file: File) => {
+        const form = new FormData();
+        form.append("file", file);
+        return apiFetch<{ bannerObjectId: string }>("api/v1/user/banner", {
+          method: "POST",
+          body: form,
+        });
+      },
+
+      /** Update showcase items. */
+      updateShowcase: (items: Array<{ type: string; gameId: string | null; itemId: string | null; title: string; data: any }>) =>
+        apiFetch<void>("api/v1/user/showcase", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items }),
+        }),
+
+      /** Get the current user's own profile. */
+      me: () => apiFetch<UserProfile>("api/v1/user"),
     },
 
     news: {

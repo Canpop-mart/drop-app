@@ -277,6 +277,7 @@ pub fn run() {
             fetch_game_version_options,
             update_game_configuration,
             configure_game_emulator,
+            get_install_size,
             // Downloads
             download_game,
             resume_download,

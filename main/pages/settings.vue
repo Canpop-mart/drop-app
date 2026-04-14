@@ -119,7 +119,7 @@ const navigation = computed(() => [
           label: "Proton",
           route: "/settings/compat",
           prefix: "/settings/compat",
-          icon: h("img", { src: "/proton-logo.png" }),
+          icon: h("img", { src: usePublicUrl("proton-logo.png") }),
         },
       ]
     : []),

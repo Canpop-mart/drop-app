@@ -9,7 +9,7 @@
         <div class="flex items-center gap-1.5">
           <ArrowDownTrayIcon class="size-4 text-blue-400" />
           <span class="text-sm font-medium text-zinc-300">
-            {{ formatSpeed(stats.speed) }}/s
+            {{ formatSpeed(stats.speed) }}
           </span>
         </div>
         <div v-if="stats.time > 0" class="flex items-center gap-1.5">
@@ -243,8 +243,9 @@ async function togglePause() {
   }
 }
 
-function formatSpeed(bytesPerSec: number): string {
-  return _formatBytesImpl(bytesPerSec) + "/s";
+/** Speed arrives from the backend in KB/s — convert to bytes then format. */
+function formatSpeed(kbPerSec: number): string {
+  return _formatBytesImpl(kbPerSec * 1000) + "/s";
 }
 
 function formatBytes(bytes: number): string {

@@ -180,6 +180,13 @@ const enabled = ref(false);
 const inputLocked = ref(false);
 
 /**
+ * When set to a group name, the focus system will ONLY navigate within
+ * that group — cross-group fallback is disabled. Used for modal overlays
+ * like the sort/filter menu that need to trap focus.
+ */
+const focusRestriction = ref<string | null>(null);
+
+/**
  * Right stick polling for continuous scrolling.
  * Scrolls the focused element's container when right stick Y is moved.
  */
@@ -395,7 +402,8 @@ function navigate(direction: Direction) {
   // Cross-group fallback: if no candidate found in the current group,
   // search all other groups so focus can naturally flow between sections
   // (e.g. from store tabs down to game tiles, or from content to nav rail).
-  if (!next) {
+  // Skip cross-group search when focus is restricted to a specific group (modal overlays).
+  if (!next && !focusRestriction.value) {
     const allOtherElements: FocusableElement[] = [];
     for (const [name, g] of groups) {
       if (name === groupName) continue;
@@ -756,6 +764,27 @@ export function useFocusNavigation() {
     });
   }
 
+  /**
+   * Restrict focus navigation to a single group (for modal overlays).
+   * While restricted, cross-group fallback is disabled — gamepad can
+   * only move between elements within the specified group.
+   * Also focuses the first element in that group.
+   */
+  function restrictFocus(groupName: string) {
+    focusRestriction.value = groupName;
+    nextTick(() => focusGroup(groupName));
+  }
+
+  /**
+   * Release the focus restriction and optionally refocus a group.
+   */
+  function unrestrictFocus(refocusGroup?: string) {
+    focusRestriction.value = null;
+    if (refocusGroup) {
+      nextTick(() => focusGroup(refocusGroup));
+    }
+  }
+
   return {
     // State
     currentFocused: readonly(currentFocused),
@@ -774,6 +803,8 @@ export function useFocusNavigation() {
     cycleGroup,
     acquireInputLock,
     releaseInputLock,
+    restrictFocus,
+    unrestrictFocus,
     saveFocusSnapshot,
     restoreFocusSnapshot,
     autoFocusContent,

@@ -31,8 +31,13 @@
         {{ clock }}
       </span>
 
-      <!-- User avatar -->
-      <div v-if="state?.user" class="flex items-center gap-2">
+      <!-- User avatar (clickable → profile) -->
+      <button
+        v-if="state?.user"
+        :ref="(el: any) => registerContent(el, { onSelect: () => router.push(`/bigpicture/profile/${state.user.username}`) })"
+        class="flex items-center gap-2 rounded-full transition-all hover:ring-2 hover:ring-blue-500/50 focus:ring-2 focus:ring-blue-500/50"
+        @click="router.push(`/bigpicture/profile/${state.user.username}`)"
+      >
         <img
           v-if="state.user.profilePictureObjectId"
           :src="useObject(state.user.profilePictureObjectId)"
@@ -46,7 +51,7 @@
             {{ state.user.displayName?.[0]?.toUpperCase() }}
           </span>
         </div>
-      </div>
+      </button>
     </div>
   </div>
 </template>
@@ -57,10 +62,13 @@ import { useGamepad } from "~/composables/gamepad";
 import { useAppState } from "~/composables/app-state";
 import { useObject } from "~/composables/use-object";
 import { serverUrl } from "~/composables/use-server-fetch";
+import { useBpFocusableGroup } from "~/composables/bp-focusable";
 
 const route = useRoute();
+const router = useRouter();
 const gamepad = useGamepad();
 const state = useAppState();
+const registerContent = useBpFocusableGroup("content");
 
 // Clock
 const clock = ref("");
@@ -123,6 +131,11 @@ const breadcrumbs = computed(() => {
     crumbs.push({ label: "News" });
   } else if (path.startsWith("/bigpicture/downloads")) {
     crumbs.push({ label: "Downloads" });
+  } else if (path.startsWith("/bigpicture/profile")) {
+    crumbs.push({ label: "Profile" });
+    if (path.endsWith("/edit")) {
+      crumbs.push({ label: "Edit Profile" });
+    }
   } else if (path.startsWith("/bigpicture/settings")) {
     crumbs.push({ label: "Settings" });
   } else if (path.startsWith("/bigpicture/bugreport")) {
