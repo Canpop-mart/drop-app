@@ -125,18 +125,18 @@
               :ref="(el: any) => registerAction(el, { onSelect: toggleWidescreen })"
               class="inline-flex items-center gap-1.5 px-4 py-3 text-sm rounded-xl transition-colors backdrop-blur-sm"
               :class="[
-                widescreenEnabled
+                aspectRatio !== 'Standard'
                   ? 'bg-green-600/80 hover:bg-green-500 text-white'
                   : 'bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300',
               ]"
               @click="toggleWidescreen"
-              :title="`Widescreen: ${widescreenEnabled ? 'On' : 'Off'}`"
+              :title="`Aspect Ratio: ${aspectLabel}`"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="size-4" :class="widescreenEnabled ? 'text-white' : 'text-green-400'">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="size-4" :class="aspectRatio !== 'Standard' ? 'text-white' : 'text-green-400'">
                 <rect x="2" y="5" width="20" height="14" rx="2" />
-                <path v-if="widescreenEnabled" d="M7 9l3 3-3 3M13 9h4M13 15h4" />
+                <path v-if="aspectRatio !== 'Standard'" d="M7 9l3 3-3 3M13 9h4M13 15h4" />
               </svg>
-              <span class="font-medium">{{ widescreenEnabled ? "16:9" : "4:3" }}</span>
+              <span class="font-medium">{{ aspectLabel }}</span>
             </button>
           </template>
         </div>
@@ -377,6 +377,7 @@ import {
 } from "~/composables/game";
 import { serverUrl } from "~/composables/use-server-fetch";
 import type {
+  AspectRatio,
   ControllerType,
   QualityPreset,
   Game,
@@ -532,7 +533,7 @@ const qualityOptions: { label: string; value: QualityPreset | null }[] = [
 
 const selectedController = ref<ControllerType | null>(null);
 const selectedQuality = ref<QualityPreset | null>(null);
-const widescreenEnabled = ref(false);
+const aspectRatio = ref<AspectRatio>("Standard");
 const crtShaderEnabled = ref(false);
 
 async function saveUserConfig() {
@@ -548,7 +549,7 @@ async function saveUserConfig() {
       ...currentConfig,
       controllerType: selectedController.value,
       qualityPreset: selectedQuality.value,
-      widescreen: widescreenEnabled.value,
+      widescreen: aspectRatio.value,
       crtShader: crtShaderEnabled.value,
     };
     await invoke("update_game_configuration", {
@@ -594,8 +595,18 @@ const qualityLabel = computed(() => {
   return match?.label ?? "Auto";
 });
 
+const ASPECT_CYCLE: AspectRatio[] = ["Standard", "Wide16_9", "Wide16_10"];
+const aspectLabel = computed(() => {
+  switch (aspectRatio.value) {
+    case "Wide16_9": return "16:9";
+    case "Wide16_10": return "16:10";
+    default: return "4:3";
+  }
+});
+
 function toggleWidescreen() {
-  widescreenEnabled.value = !widescreenEnabled.value;
+  const idx = ASPECT_CYCLE.indexOf(aspectRatio.value);
+  aspectRatio.value = ASPECT_CYCLE[(idx + 1) % ASPECT_CYCLE.length];
   saveUserConfig();
 }
 
@@ -640,8 +651,8 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
     });
     items.push({
       id: "widescreen",
-      label: "Widescreen (16:9)",
-      valueLabel: widescreenEnabled.value ? "On" : "Off",
+      label: "Aspect Ratio",
+      valueLabel: aspectLabel.value,
       action: toggleWidescreen,
     });
     items.push({
@@ -884,6 +895,10 @@ onMounted(async () => {
   const unlistenLaunchTrace = await listen("launch_trace", (event) => {
     const p = event.payload as any;
     console.log(`[BPM:TRACE:${p.step}]`, JSON.stringify(p, null, 2));
+    // Surface BIOS warnings to the user so they know why a game crashed
+    if (p.step === "7_retroarch_config_result" && p.bios_warnings?.length) {
+      launchError.value = p.bios_warnings.join("\n");
+    }
   });
   _unsubs.push(() => unlistenLaunchTrace());
 
@@ -898,68 +913,67 @@ onMounted(async () => {
 
   console.log("[BPM:GAME] Gamepad wired. Starting data fetch...");
 
-  // Fetch all data in parallel with timeouts to prevent hangs on SteamOS
-  console.time("[BPM:GAME] All data fetched");
-
-  const gamePromise = useGame(gameId)
-    .then((r) => { console.log("[BPM:GAME] useGame resolved:", r?.game?.mName ?? "null"); return r; })
-    .catch((e) => { console.error("[BPM:GAME] useGame FAILED:", e); return null; });
-
-  const versionPromise = invoke<VersionOption[]>("fetch_game_version_options", { gameId })
-    .then((r) => { console.log("[BPM:GAME] version_options resolved:", r?.length ?? 0, "options"); return r; })
-    .catch((e) => { console.warn("[BPM:GAME] version_options failed:", e); return null; });
+  // Fire all fetches in parallel — apply results as each resolves instead
+  // of waiting for all (avoids a slow fetch blocking the entire page).
 
   const achievementsUrl = serverUrl(`api/v1/games/${gameId}/achievements`);
   console.log("[BPM:GAME] Achievements URL:", achievementsUrl);
-  const achievementsPromise = fetch(achievementsUrl)
-    .then((res) => {
+
+  // Game data — needed for the page header, status, and config
+  // useGame is a local Tauri invoke (usually cached) — 5s is generous
+  const gamePromise = withTimeout(useGame(gameId), 5000)
+    .then((r) => {
+      if (!r) { console.warn("[BPM:GAME] useGame TIMED OUT or null"); return; }
+      console.log("[BPM:GAME] useGame resolved:", r.game?.mName ?? "null");
+      game.value = r.game;
+      statusRef.value = r.status;
+      version.value = r.version?.value ?? null;
+      console.log("[BPM:GAME] Game loaded:", r.game.mName, "| Status:", r.status?.value);
+      if (version.value?.userConfiguration) {
+        selectedController.value = version.value.userConfiguration.controllerType ?? null;
+        selectedQuality.value = version.value.userConfiguration.qualityPreset ?? null;
+        const ws = version.value.userConfiguration.widescreen;
+        if (ws === true) aspectRatio.value = "Wide16_9";
+        else if (ws === false || ws == null) aspectRatio.value = "Standard";
+        else aspectRatio.value = ws as AspectRatio;
+        crtShaderEnabled.value = version.value.userConfiguration.crtShader ?? false;
+      }
+    })
+    .catch((e) => console.error("[BPM:GAME] useGame FAILED:", e));
+
+  // Version options — can arrive late without blocking the page
+  const versionPromise = invoke<VersionOption[]>("fetch_game_version_options", { gameId })
+    .then((r) => {
+      console.log("[BPM:GAME] version_options resolved:", r?.length ?? 0, "options");
+      if (r) versionOptions.value = r;
+    })
+    .catch((e) => console.warn("[BPM:GAME] version_options failed:", e));
+
+  // Achievements — server:// proxied fetch, 5s timeout
+  const achievementsPromise = withTimeout(
+    fetch(achievementsUrl).then((res) => {
       console.log("[BPM:GAME] achievements fetch status:", res.status);
       return res.ok ? res.json() : null;
-    })
-    .catch((e) => { console.warn("[BPM:GAME] achievements fetch FAILED:", e); return null; });
-
-  const [gameResult, versionResult, achievementsResult] = await Promise.all([
-    withTimeout(gamePromise, 10000).then((r) => { if (!r) console.warn("[BPM:GAME] useGame TIMED OUT or null"); return r; }),
-    withTimeout(versionPromise, 10000).then((r) => { if (!r) console.warn("[BPM:GAME] version_options timed out or null"); return r; }),
-    withTimeout(achievementsPromise, 10000).then((r) => { if (!r) console.warn("[BPM:GAME] achievements timed out or null"); return r; }),
-  ]);
-
-  console.timeEnd("[BPM:GAME] All data fetched");
-  console.log("[BPM:GAME] Results — game:", !!gameResult, "versions:", !!versionResult, "achievements:", !!achievementsResult);
-
-  if (gameResult) {
-    game.value = gameResult.game;
-    statusRef.value = gameResult.status;
-    version.value = gameResult.version?.value ?? null;
-    console.log("[BPM:GAME] Game loaded:", gameResult.game.mName, "| Status:", gameResult.status?.value);
-
-    if (version.value?.userConfiguration) {
-      selectedController.value = version.value.userConfiguration.controllerType ?? null;
-      selectedQuality.value = version.value.userConfiguration.qualityPreset ?? null;
-      widescreenEnabled.value = version.value.userConfiguration.widescreen ?? false;
-      crtShaderEnabled.value = version.value.userConfiguration.crtShader ?? false;
-    }
-  } else {
-    console.error("[BPM:GAME] No game data loaded — page will show loading state");
-  }
-
-  if (versionResult) {
-    versionOptions.value = versionResult;
-  }
-
-  if (achievementsResult) {
-    achievements.value = Array.isArray(achievementsResult)
-      ? achievementsResult
-      : (achievementsResult.achievements ?? []);
-    console.log("[BPM:GAME] Achievements loaded:", achievements.value.length);
-    // Debug: log first few achievement icon URLs to diagnose blank icons
-    if (achievements.value.length > 0) {
-      const sample = achievements.value.slice(0, 3);
-      for (const a of sample) {
-        console.log(`[BPM:GAME] Achievement "${a.title}" iconUrl: ${a.iconUrl || "(empty)"}`);
+    }),
+    5000,
+  )
+    .then((r) => {
+      if (!r) { console.warn("[BPM:GAME] achievements timed out or null"); return; }
+      achievements.value = Array.isArray(r) ? r : (r.achievements ?? []);
+      console.log("[BPM:GAME] Achievements loaded:", achievements.value.length);
+      if (achievements.value.length > 0) {
+        const sample = achievements.value.slice(0, 3);
+        for (const a of sample) {
+          console.log(`[BPM:GAME] Achievement "${a.title}" iconUrl: ${a.iconUrl || "(empty)"}`);
+        }
       }
-    }
-  }
+    })
+    .catch((e) => console.warn("[BPM:GAME] achievements fetch FAILED:", e));
+
+  // Wait for the critical data (game + achievements) before setting up focus.
+  // version_options is intentionally NOT awaited — it can trickle in.
+  await Promise.all([gamePromise, achievementsPromise]);
+  console.log("[BPM:GAME] Critical data loaded, versions pending:", !versionOptions.value);
 
   console.log("[BPM:GAME] Setting up focus...");
   nextTick(() => updateTabIndicator());

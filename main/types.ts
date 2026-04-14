@@ -59,6 +59,7 @@ export type Collection = {
 export type ControllerType = "Xbox" | "PlayStation" | "Nintendo"; // PlayStation kept for backwards compat, hidden from UI
 export type QualityPreset = "Low" | "Medium" | "High" | "Ultra";
 export type MangoHudPreset = "off" | "minimal" | "standard" | "full";
+export type AspectRatio = "Standard" | "Wide16_9" | "Wide16_10";
 
 export type GameVersion = {
   userConfiguration: {
@@ -67,8 +68,9 @@ export type GameVersion = {
     enableUpdates: boolean;
     controllerType: ControllerType | null;
     qualityPreset: QualityPreset | null;
-    widescreen: boolean;
+    widescreen: AspectRatio;
     mangohud: MangoHudPreset | null;
+    crtShader: boolean;
   };
   setups: Array<{ platform: string }>;
   launches: Array<{

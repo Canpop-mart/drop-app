@@ -544,6 +544,9 @@ impl ProcessManager<'_> {
         // must be the *emulator's* install dir so that relative paths in the
         // emulator command (e.g. `cores/snes9x_libretro.dll`) resolve correctly.
         let mut effective_cwd: Option<String> = None;
+        // ROM path for the game being launched (used later for RetroArch config).
+        // Only set for emulator-based launches.
+        let mut emulator_rom_path: Option<String> = None;
 
         // ── STEP 4: Build launch command ───────────────────────────────────
         let target_launch_string = if let Some(emulator) = emulator {
@@ -607,6 +610,7 @@ impl ProcessManager<'_> {
             } else {
                 target_command.command.clone()
             };
+            emulator_rom_path = Some(rom_path.clone());
 
             let mut has_rom_placeholder = false;
             for arg in &mut exe_command.args {
@@ -1042,6 +1046,7 @@ impl ProcessManager<'_> {
                 &game_id,
                 ra_creds.as_ref(),
                 Some(&user_configuration),
+                emulator_rom_path.as_deref(),
             );
 
             // Dump the written retroarch.cfg to frontend for debugging
@@ -1114,6 +1119,15 @@ impl ProcessManager<'_> {
                 })
                 .unwrap_or_default();
 
+            let bios_warnings: Vec<String> = retroarch_info
+                .as_ref()
+                .map(|info| info.bios_warnings.clone())
+                .unwrap_or_default();
+
+            let crt_shader_path: Option<String> = retroarch_info
+                .as_ref()
+                .and_then(|info| info.crt_shader_path.clone());
+
             let _ = self.app_handle.emit("launch_trace", serde_json::json!({
                 "step": "7_retroarch_config_result",
                 "game_id": &game_id,
@@ -1126,6 +1140,8 @@ impl ProcessManager<'_> {
                 "appimage_home_cfg": appimage_home_cfg.as_ref().map(|p| p.display().to_string()),
                 "appimage_home_cfg_exists": appimage_cfg_exists,
                 "appimage_home_key_settings": appimage_debug_lines,
+                "bios_warnings": bios_warnings,
+                "crt_shader_path": crt_shader_path,
             }));
 
             // ── Inject --appendconfig so RetroArch actually reads our config ──

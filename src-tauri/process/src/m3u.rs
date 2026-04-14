@@ -6,6 +6,27 @@ use crate::error::ProcessError;
 /// Prefix for temporary .m3u files so they can be identified and cleaned up.
 const M3U_PREFIX: &str = ".drop-";
 
+/// Remove shell-style backslash escaping from a string.
+/// Converts `Metal\ Gear\ Solid\ \(Disc\ 1\)` → `Metal Gear Solid (Disc 1)`.
+fn unescape_shell(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            // Backslash followed by another char → emit the next char unescaped.
+            // Backslash at end of string → emit the backslash itself.
+            if let Some(next) = chars.next() {
+                result.push(next);
+            } else {
+                result.push('\\');
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 /// Generate a temporary .m3u playlist file for multi-disc games.
 ///
 /// The file is written to `game_install_dir/.drop-{game_id}.m3u` and contains
@@ -23,7 +44,11 @@ pub fn generate_m3u(
     let contents: Vec<String> = disc_paths
         .iter()
         .map(|p| {
-            let full = game_install_dir.join(p);
+            // Disc paths may contain shell escaping from the server's shescape
+            // (e.g. "Metal\ Gear\ Solid\ \(Disc\ 1\)"). Strip backslash
+            // escapes since m3u files need plain filesystem paths.
+            let unescaped = unescape_shell(p);
+            let full = game_install_dir.join(&unescaped);
             full.to_string_lossy().to_string()
         })
         .collect();

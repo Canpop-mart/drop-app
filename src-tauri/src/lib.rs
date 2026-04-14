@@ -274,6 +274,7 @@ pub fn run() {
             delete_download_dir,
             fetch_download_dir_stats,
             fetch_game_status,
+            fetch_game_statuses,
             fetch_game_version_options,
             update_game_configuration,
             configure_game_emulator,

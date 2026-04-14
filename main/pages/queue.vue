@@ -59,7 +59,7 @@
               >
                 <div
                   class="h-2 bg-blue-600"
-                  :style="{ width: `${element.dl_progress * 100}%` }"
+                  :style="{ width: `${Math.min(element.dl_progress * 100, 100)}%` }"
                 />
               </div>
               <span

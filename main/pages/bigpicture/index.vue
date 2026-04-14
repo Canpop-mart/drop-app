@@ -1,7 +1,7 @@
 <template>
   <div class="flex flex-col h-full">
     <!-- Global BPM overlays -->
-    <BpmScreensaver :theme-id="theme" :active="screensaverEnabled && isIdle" @dismiss="isIdle = false" />
+    <BpmScreensaver :active="screensaverEnabled && isIdle" @dismiss="isIdle = false" />
     <BpmCrtFilter v-if="crtEnabled" :enabled="true" :intensity="0.4" />
     <BpmAchievementToast v-if="currentAchievement" :theme-id="theme" :achievement="currentAchievement" @dismissed="currentAchievement = null" />
     <BpmLaunchScreen v-if="launchingGame" :theme-id="theme" :game="launchingGame" @ready="launchingGame = null" />
@@ -1776,7 +1776,7 @@ const launchingGame = ref<{ name: string; coverUrl?: string } | null>(null);
 const screensaverEnabled = ref(
   typeof localStorage !== "undefined" ? localStorage.getItem("bpm:screensaver") !== "false" : true
 );
-const { isIdle } = useBpmIdle(300000);
+const { isIdle } = useBpmIdle(120000);
 const bpmClock = useBpmClock();
 const ambient = useBpmAmbient();
 const welcome = useBpmWelcome(recentGames as any);

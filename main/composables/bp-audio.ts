@@ -17,18 +17,36 @@
 
 let audioCtx: AudioContext | null = null;
 let masterGain: GainNode | null = null;
+let audioFailed = false;
 let enabled = true;
 let activeProfile: SoundProfileId = "steam";
 
-function ctx(): { ac: AudioContext; out: GainNode } {
-  if (!audioCtx) {
-    audioCtx = new AudioContext();
-    masterGain = audioCtx.createGain();
-    masterGain.gain.value = 0.18;
-    masterGain.connect(audioCtx.destination);
+function ctx(): { ac: AudioContext; out: GainNode } | null {
+  if (audioFailed) return null;
+  try {
+    if (!audioCtx) {
+      audioCtx = new AudioContext();
+      masterGain = audioCtx.createGain();
+      masterGain.gain.value = 0.18;
+      masterGain.connect(audioCtx.destination);
+    }
+    if (audioCtx.state === "suspended") {
+      audioCtx.resume().catch(() => {
+        /* audio device not ready — silently skip */
+      });
+    }
+    if (audioCtx.state === "closed") {
+      // Context was closed; recreate on next call
+      audioCtx = null;
+      masterGain = null;
+      return null;
+    }
+    return { ac: audioCtx, out: masterGain! };
+  } catch {
+    console.warn("[BPM:AUDIO] Audio device unavailable — disabling sound feedback");
+    audioFailed = true;
+    return null;
   }
-  if (audioCtx.state === "suspended") audioCtx.resume();
-  return { ac: audioCtx, out: masterGain! };
 }
 
 // ── Primitive sound generators ──────────────────────────────────────────────
@@ -43,7 +61,9 @@ function tone(
   volume = 1,
 ) {
   if (!enabled) return;
-  const { ac, out } = ctx();
+  const c = ctx();
+  if (!c) return;
+  const { ac, out } = c;
   const t = ac.currentTime;
 
   const osc = ac.createOscillator();
@@ -71,7 +91,9 @@ function sweep(
   volume = 0.7,
 ) {
   if (!enabled) return;
-  const { ac, out } = ctx();
+  const c = ctx();
+  if (!c) return;
+  const { ac, out } = c;
   const t = ac.currentTime;
 
   const osc = ac.createOscillator();
@@ -98,7 +120,9 @@ function noise(
   volume = 0.6,
 ) {
   if (!enabled) return;
-  const { ac, out } = ctx();
+  const c = ctx();
+  if (!c) return;
+  const { ac, out } = c;
   const t = ac.currentTime;
 
   const len = Math.floor(ac.sampleRate * dur);

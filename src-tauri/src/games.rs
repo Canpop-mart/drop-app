@@ -112,10 +112,13 @@ pub async fn fetch_library_logic(
     };
 
     // Add games that are installed but no longer in library
+    // Use a HashSet for O(1) lookups instead of O(n) linear scan per meta
+    let all_game_ids: std::collections::HashSet<&str> =
+        all_games.iter().map(|g| g.id().as_str()).collect();
     let mut other = Vec::new();
     let mut missing = Vec::new();
     for meta in installed_metas {
-        if all_games.iter().any(|e| *e.id() == meta.id) {
+        if all_game_ids.contains(meta.id.as_str()) {
             continue;
         }
         // We should always have a cache of the object
@@ -313,15 +316,27 @@ pub async fn fetch_game_version_options_logic(
 
     let data: Vec<VersionDownloadOption> = response.json().await?;
 
-    let state_lock = state.lock();
-    let process_manager_lock = PROCESS_MANAGER.lock();
+    // Collect unique platforms from the response, then check validity
+    // with locks held briefly, then filter without locks.
+    let unique_platforms: Vec<Platform> = {
+        let mut seen = std::collections::HashSet::new();
+        data.iter()
+            .filter(|v| seen.insert(v.platform.clone()))
+            .map(|v| v.platform.clone())
+            .collect()
+    };
+    let valid_platforms: std::collections::HashSet<Platform> = {
+        let _state_lock = state.lock();
+        let pm = PROCESS_MANAGER.lock();
+        unique_platforms
+            .into_iter()
+            .filter(|p| pm.valid_platform(p))
+            .collect()
+    };
     let data: Vec<VersionDownloadOption> = data
         .into_iter()
-        .filter(|v| process_manager_lock.valid_platform(&v.platform))
+        .filter(|v| valid_platforms.contains(&v.platform))
         .collect();
-    //data.dedup_by_key(|v| v.platform);
-    drop(process_manager_lock);
-    drop(state_lock);
 
     Ok(data)
 }
@@ -368,6 +383,19 @@ pub async fn fetch_game(
 pub fn fetch_game_status(id: String) -> GameStatusWithTransient {
     let db_handle = borrow_db_checked();
     GameStatusManager::fetch_state(&id, &db_handle)
+}
+
+/// Batch-fetch statuses for many games in a single IPC call.
+/// Returns a Vec of (id, status) pairs in the same order as the input.
+#[tauri::command]
+pub fn fetch_game_statuses(ids: Vec<String>) -> Vec<(String, GameStatusWithTransient)> {
+    let db_handle = borrow_db_checked();
+    ids.into_iter()
+        .map(|id| {
+            let status = GameStatusManager::fetch_state(&id, &db_handle);
+            (id, status)
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -466,29 +494,35 @@ pub fn update_game_configuration(
 
 /// Returns the total size (in bytes) of a game's install directory.
 /// Walks the directory tree recursively, summing file sizes.
+/// Runs on a blocking thread to avoid freezing the async runtime.
 #[tauri::command]
-pub fn get_install_size(game_id: String) -> u64 {
-    let db = borrow_db_checked();
-    let install_dir = match db.applications.game_statuses.get(&game_id) {
-        Some(GameDownloadStatus::Installed { install_dir, .. }) => install_dir.clone(),
-        _ => return 0,
-    };
+pub async fn get_install_size(game_id: String) -> u64 {
+    let install_dir = {
+        let db = borrow_db_checked();
+        match db.applications.game_statuses.get(&game_id) {
+            Some(GameDownloadStatus::Installed { install_dir, .. }) => install_dir.clone(),
+            _ => return 0,
+        }
+    }; // db lock released here
 
-    fn dir_size(path: &Path) -> u64 {
-        let mut total: u64 = 0;
-        if let Ok(entries) = std::fs::read_dir(path) {
-            for entry in entries.flatten() {
-                if let Ok(meta) = entry.metadata() {
-                    if meta.is_dir() {
-                        total += dir_size(&entry.path());
-                    } else {
-                        total += meta.len();
+    tokio::task::spawn_blocking(move || {
+        fn dir_size(path: &Path) -> u64 {
+            let mut total: u64 = 0;
+            if let Ok(entries) = std::fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    if let Ok(meta) = entry.metadata() {
+                        if meta.is_dir() {
+                            total += dir_size(&entry.path());
+                        } else {
+                            total += meta.len();
+                        }
                     }
                 }
             }
+            total
         }
-        total
-    }
-
-    dir_size(Path::new(&install_dir))
+        dir_size(Path::new(&install_dir))
+    })
+    .await
+    .unwrap_or(0)
 }

@@ -3,7 +3,7 @@
     <Transition name="kb-slide">
       <div
         v-if="visible"
-        class="fixed inset-x-0 bottom-0 z-50 flex flex-col items-center pb-4 bg-gradient-to-t from-zinc-950 via-zinc-950/95 to-transparent pt-8"
+        class="fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center pb-4 bg-gradient-to-t from-zinc-950 via-zinc-950/95 to-transparent pt-8"
       >
         <!-- Input preview -->
         <div

@@ -83,22 +83,17 @@
                 </div>
               </div>
             </MenuItem>
-            <!-- Widescreen toggle — only for emulated (RetroArch) games -->
+            <!-- Aspect ratio cycle — only for emulated (RetroArch) games -->
             <MenuItem v-if="isEmulatedGame" as="div" disabled>
               <div class="w-full px-4 py-2 text-sm text-zinc-300">
                 <div class="flex justify-between items-center">
-                  <span>Widescreen (16:9)</span>
+                  <span>Aspect Ratio</span>
                   <button
-                    class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
-                    :class="widescreenEnabled ? 'bg-green-600' : 'bg-zinc-700'"
+                    class="px-2.5 py-0.5 rounded-md text-xs font-medium transition-colors"
+                    :class="aspectRatio !== 'Standard' ? 'bg-green-600 text-white' : 'bg-zinc-700 text-zinc-300'"
                     @click.stop="toggleWidescreen"
                   >
-                    <span
-                      class="inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform"
-                      :class="
-                        widescreenEnabled ? 'translate-x-4' : 'translate-x-0.5'
-                      "
-                    />
+                    {{ aspectLabel }}
                   </button>
                 </div>
               </div>
@@ -1049,7 +1044,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { micromark } from "micromark";
 import { InstalledType } from "~/types";
-import type { ControllerType, QualityPreset } from "~/types";
+import type { AspectRatio, ControllerType, QualityPreset } from "~/types";
 import {
   rewriteDescriptionImages,
   serverUrl,
@@ -1094,9 +1089,19 @@ const selectedController = ref<ControllerType | null>(
 const selectedQuality = ref<QualityPreset | null>(
   version.value?.userConfiguration?.qualityPreset ?? null,
 );
-const widescreenEnabled = ref<boolean>(
-  version.value?.userConfiguration?.widescreen ?? false,
+// Backward compat: old databases may still store widescreen as a boolean
+const _ws = version.value?.userConfiguration?.widescreen;
+const aspectRatio = ref<AspectRatio>(
+  _ws === true ? "Wide16_9" : _ws === false || _ws == null ? "Standard" : _ws as AspectRatio,
 );
+const ASPECT_CYCLE: AspectRatio[] = ["Standard", "Wide16_9", "Wide16_10"];
+const aspectLabel = computed(() => {
+  switch (aspectRatio.value) {
+    case "Wide16_9": return "16:9";
+    case "Wide16_10": return "16:10";
+    default: return "4:3";
+  }
+});
 
 async function saveUserConfig() {
   if (!version.value) return;
@@ -1105,7 +1110,7 @@ async function saveUserConfig() {
       ...version.value.userConfiguration,
       controllerType: selectedController.value,
       qualityPreset: selectedQuality.value,
-      widescreen: widescreenEnabled.value,
+      widescreen: aspectRatio.value,
     };
     await invoke("update_game_configuration", {
       gameId: game.id,
@@ -1127,7 +1132,8 @@ function setQuality(value: QualityPreset | null) {
 }
 
 function toggleWidescreen() {
-  widescreenEnabled.value = !widescreenEnabled.value;
+  const idx = ASPECT_CYCLE.indexOf(aspectRatio.value);
+  aspectRatio.value = ASPECT_CYCLE[(idx + 1) % ASPECT_CYCLE.length];
   saveUserConfig();
 }
 

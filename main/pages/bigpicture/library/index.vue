@@ -418,21 +418,31 @@ async function loadLibrary(hardRefresh = false) {
       }
     }
 
-    const statusResults = await pLimit(
-      uniqueGames.map((game) => async () => {
-        try {
-          const statusData: RawGameStatus = await invoke("fetch_game_status", {
-            id: game.id,
-          });
-          return { game, status: parseStatus(statusData) };
-        } catch {
-          return { game, status: { type: "Remote" } as GameStatus };
-        }
-      }),
-      5,
-    );
+    // Batch-fetch all statuses in a single IPC call instead of N individual ones
+    const ids = uniqueGames.map((g) => g.id);
+    const statusMap = new Map<string, GameStatus>();
+    try {
+      const batchResults: [string, RawGameStatus][] = await invoke("fetch_game_statuses", { ids });
+      for (const [id, raw] of batchResults) {
+        try { statusMap.set(id, parseStatus(raw)); } catch { /* skip bad status */ }
+      }
+    } catch {
+      // Fallback: if batch command not available, fetch individually
+      const results = await pLimit(
+        uniqueGames.map((game) => async () => {
+          try {
+            const statusData: RawGameStatus = await invoke("fetch_game_status", { id: game.id });
+            statusMap.set(game.id, parseStatus(statusData));
+          } catch { /* skip */ }
+        }),
+        15,
+      );
+    }
 
-    library.value = statusResults;
+    library.value = uniqueGames.map((game) => ({
+      game,
+      status: statusMap.get(game.id) ?? ({ type: "Remote" } as GameStatus),
+    }));
   } catch (e) {
     console.error("Failed to fetch library:", e);
   } finally {

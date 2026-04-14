@@ -24,6 +24,7 @@ pub mod data {
     pub type MangoHudPreset = v1::MangoHudPreset;
     pub type ControllerType = v1::ControllerType;
     pub type QualityPreset = v1::QualityPreset;
+    pub type AspectRatio = v1::AspectRatio;
 
     use std::collections::HashMap;
 
@@ -102,7 +103,7 @@ pub mod data {
                 enable_updates: false,
                 controller_type: None,
                 quality_preset: None,
-                widescreen: false,
+                widescreen: AspectRatio::Standard,
                 mangohud: None,
                 crt_shader: false,
             }
@@ -114,6 +115,74 @@ pub mod data {
             Xbox,
             PlayStation,
             Nintendo,
+        }
+
+        /// Aspect ratio for emulated games.
+        ///
+        /// Backward-compatible with the old `widescreen: bool` field:
+        /// `false` deserializes to `Standard`, `true` to `Wide16_9`.
+        #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+        pub enum AspectRatio {
+            /// 4:3 — original console ratio (default)
+            Standard,
+            /// 16:9 — widescreen
+            Wide16_9,
+            /// 16:10 — Steam Deck / laptop displays
+            Wide16_10,
+        }
+
+        impl Default for AspectRatio {
+            fn default() -> Self {
+                AspectRatio::Standard
+            }
+        }
+
+        impl std::fmt::Display for AspectRatio {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    AspectRatio::Standard => write!(f, "4:3"),
+                    AspectRatio::Wide16_9 => write!(f, "16:9"),
+                    AspectRatio::Wide16_10 => write!(f, "16:10"),
+                }
+            }
+        }
+
+        // Custom deserialize to handle both old bool values and new enum strings
+        impl<'de> serde::Deserialize<'de> for AspectRatio {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                use serde::de;
+
+                struct AspectRatioVisitor;
+
+                impl<'de> de::Visitor<'de> for AspectRatioVisitor {
+                    type Value = AspectRatio;
+
+                    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                        f.write_str("a boolean or aspect ratio string")
+                    }
+
+                    fn visit_bool<E: de::Error>(self, v: bool) -> Result<AspectRatio, E> {
+                        Ok(if v { AspectRatio::Wide16_9 } else { AspectRatio::Standard })
+                    }
+
+                    fn visit_str<E: de::Error>(self, v: &str) -> Result<AspectRatio, E> {
+                        match v {
+                            "Standard" => Ok(AspectRatio::Standard),
+                            "Wide16_9" => Ok(AspectRatio::Wide16_9),
+                            "Wide16_10" => Ok(AspectRatio::Wide16_10),
+                            other => Err(de::Error::unknown_variant(
+                                other,
+                                &["Standard", "Wide16_9", "Wide16_10"],
+                            )),
+                        }
+                    }
+                }
+
+                deserializer.deserialize_any(AspectRatioVisitor)
+            }
         }
 
         /// Graphics quality preset for RetroArch.
@@ -150,7 +219,7 @@ pub mod data {
             #[serde(default)]
             pub quality_preset: Option<QualityPreset>,
             #[serde(default)]
-            pub widescreen: bool,
+            pub widescreen: AspectRatio,
             /// MangoHud performance overlay (Linux only)
             #[serde(default)]
             pub mangohud: Option<MangoHudPreset>,

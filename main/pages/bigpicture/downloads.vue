@@ -97,11 +97,11 @@
           <div class="h-2 bg-zinc-800 rounded-full overflow-hidden">
             <div
               class="h-full bg-blue-500 rounded-full transition-all duration-300"
-              :style="{ width: `${(item.dl_progress * 100).toFixed(0)}%` }"
+              :style="{ width: `${Math.min(item.dl_progress * 100, 100).toFixed(0)}%` }"
             />
           </div>
           <p class="text-xs text-zinc-500 mt-1 text-right">
-            {{ (item.dl_progress * 100).toFixed(0) }}%
+            {{ Math.min(item.dl_progress * 100, 100).toFixed(0) }}%
           </p>
         </div>
       </div>
@@ -189,21 +189,45 @@ async function loadGameName(id: string) {
       coverUrl: data.game.mCoverObjectId ? objectUrl(data.game.mCoverObjectId) : undefined,
     };
   } catch {
-    // Game data not available — will keep showing ID
+    // useGame failed — game may not be in library cache yet (first download).
+    // Mark as pending so we retry on the next queue update.
   }
+}
+
+// Also retry names that are still showing IDs on each queue update
+function hasMissingNames(): boolean {
+  for (const item of queue.value) {
+    if (!gameNames.value[item.meta.id]) return true;
+  }
+  return false;
 }
 
 async function loadGameNames() {
+  // Collect all unique IDs that we don't already have names for
+  const ids = new Set<string>();
   for (const item of queue.value) {
-    await loadGameName(item.meta.id);
+    if (!gameNames.value[item.meta.id]) ids.add(item.meta.id);
   }
   for (const item of completedDownloads.value) {
-    await loadGameName(item.gameId);
+    if (!gameNames.value[item.gameId]) ids.add(item.gameId);
   }
+  // Fetch all missing names in parallel
+  await Promise.all([...ids].map((id) => loadGameName(id)));
 }
 
-watch(queue, () => loadGameNames(), { immediate: true });
-watch(completedDownloads, () => loadGameNames());
+// Debounce watch to avoid hammering during active downloads.
+// If names are still missing, use a shorter debounce to retry sooner.
+let _loadNamesTimer: ReturnType<typeof setTimeout> | null = null;
+function debouncedLoadGameNames() {
+  if (_loadNamesTimer) clearTimeout(_loadNamesTimer);
+  const delay = hasMissingNames() ? 1000 : 300;
+  _loadNamesTimer = setTimeout(() => loadGameNames(), delay);
+}
+
+// Load names immediately on first render, debounce subsequent updates
+loadGameNames();
+watch(queue, debouncedLoadGameNames);
+watch(completedDownloads, debouncedLoadGameNames);
 
 function formatTimeAgo(timestamp: number): string {
   const diff = Math.floor((Date.now() - timestamp) / 1000);
