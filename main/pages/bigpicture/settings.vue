@@ -1,7 +1,7 @@
 <template>
-  <div class="flex h-full">
+  <div class="flex h-full" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
     <!-- Settings sidebar -->
-    <div class="w-64 bg-zinc-950/50 border-r border-zinc-800/30 py-6">
+    <div class="w-64 border-r py-6" :style="{ backgroundColor: 'var(--bpm-surface)', borderColor: 'var(--bpm-border)' }">
       <button
         v-for="section in sections"
         :key="section.value"
@@ -12,11 +12,11 @@
             })
         "
         class="w-full px-6 py-3 text-left text-sm font-medium transition-colors"
-        :class="[
-          activeSection === section.value
-            ? 'text-blue-400 bg-blue-600/10 border-r-2 border-blue-500'
-            : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/30',
-        ]"
+        :style="{
+          color: activeSection === section.value ? 'var(--bpm-accent)' : 'var(--bpm-muted)',
+          backgroundColor: activeSection === section.value ? 'color-mix(in srgb, var(--bpm-accent) 10%, transparent)' : 'transparent',
+          borderRight: activeSection === section.value ? '2px solid var(--bpm-accent)' : 'none',
+        }"
         @click="activeSection = section.value"
       >
         {{ section.label }}
@@ -30,7 +30,7 @@
         v-if="activeSection === 'theme'"
         class="space-y-5"
       >
-        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+        <h3 class="text-lg font-semibold font-display" style="color: var(--bpm-text)">
           Theme
         </h3>
 
@@ -70,6 +70,35 @@
                   <p class="text-zinc-500 text-xs mt-0.5 truncate">{{ t.description }}</p>
                 </div>
                 <span v-if="activeThemeId === t.id" class="text-xs font-medium text-blue-400 shrink-0">Active</span>
+              </button>
+            </div>
+
+            <!-- Dark / Light Mode toggle — below theme list -->
+            <div
+              :ref="(el: any) => registerContent(el, { onSelect: () => bpmTheme.toggleMode() })"
+              class="flex items-center justify-between rounded-xl cursor-pointer p-3 mt-3"
+              style="background-color: var(--bpm-surface)"
+            >
+              <div class="flex items-center gap-2">
+                <svg v-if="bpmTheme.mode.value === 'dark'" class="size-4" style="color: var(--bpm-muted)" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
+                </svg>
+                <svg v-else class="size-4" style="color: var(--bpm-muted)" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
+                </svg>
+                <span class="text-sm font-medium" style="color: var(--bpm-text)">
+                  {{ bpmTheme.mode.value === 'dark' ? 'Dark' : 'Light' }}
+                </span>
+              </div>
+              <button
+                class="w-10 h-6 rounded-full transition-colors relative shrink-0"
+                :class="bpmTheme.mode.value === 'light' ? 'bg-amber-500' : 'bg-zinc-600'"
+                @click.stop="bpmTheme.toggleMode()"
+              >
+                <div
+                  class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+                  :class="bpmTheme.mode.value === 'light' ? 'translate-x-4' : 'translate-x-0.5'"
+                />
               </button>
             </div>
           </div>
@@ -259,13 +288,14 @@
           :ref="
             (el: any) => registerContent(el, { onSelect: () => toggleHideTitles() })
           "
-          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4"
+          class="flex items-center justify-between rounded-xl cursor-pointer p-4"
+          style="background-color: var(--bpm-surface)"
         >
           <div>
-            <p class="font-medium text-zinc-200 text-sm">
+            <p class="font-medium text-sm" style="color: var(--bpm-text)">
               Hide Game Titles
             </p>
-            <p class="text-zinc-500 text-xs mt-0.5">
+            <p class="text-xs mt-0.5" style="color: var(--bpm-muted)">
               Hide text labels under game tiles for a cleaner look
             </p>
           </div>
@@ -280,6 +310,7 @@
             />
           </button>
         </div>
+
       </div>
 
       <!-- ═══════ Performance ═══════ -->
@@ -772,7 +803,6 @@ const activeThemeId = ref<ThemeId>(bpmTheme.theme);
 
 const themePreviewColors: Record<ThemeId, string> = {
   steam: "#66c0f4",
-  switch: "#e60012",
   xbox: "#107c10",
   wii: "#34beed",
   ps2: "#2040c0",

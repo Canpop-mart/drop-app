@@ -1,5 +1,5 @@
 <template>
-  <div class="flex flex-col h-full overflow-y-auto">
+  <div class="flex flex-col h-full overflow-y-auto" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
     <!-- Hero banner -->
     <div class="relative shrink-0 h-96">
       <div v-if="!game" class="w-full h-full bg-zinc-800/50 animate-pulse" />

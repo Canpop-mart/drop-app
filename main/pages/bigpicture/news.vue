@@ -1,5 +1,5 @@
 <template>
-  <div class="flex flex-col h-full">
+  <div class="flex flex-col h-full" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
     <!-- Loading -->
     <div v-if="loading" class="flex-1 overflow-y-auto px-8 py-6">
       <div class="space-y-4">

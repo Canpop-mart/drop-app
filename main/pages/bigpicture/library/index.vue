@@ -1,7 +1,7 @@
 <template>
-  <div class="flex flex-col h-full">
+  <div class="flex flex-col h-full" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
     <!-- Filter tabs + search -->
-    <div class="flex items-center gap-2 px-8 py-4 border-b border-zinc-800/30">
+    <div class="flex items-center gap-2 px-8 py-4 border-b" :style="{ borderColor: 'var(--bpm-border)' }">
       <button
         v-for="filter in filters"
         :key="filter.value"

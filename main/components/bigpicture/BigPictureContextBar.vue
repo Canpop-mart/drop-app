@@ -1,6 +1,7 @@
 <template>
   <div
-    class="flex items-center justify-between px-8 h-12 bg-zinc-950/90 backdrop-blur-sm border-t border-zinc-800/30 shrink-0"
+    class="flex items-center justify-between px-8 h-12 backdrop-blur-sm border-t shrink-0"
+    :style="{ backgroundColor: 'color-mix(in srgb, var(--bpm-bg) 90%, transparent)', borderColor: 'var(--bpm-border)' }"
   >
     <!-- Left: primary actions -->
     <div class="flex items-center gap-6">

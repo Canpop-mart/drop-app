@@ -19,7 +19,7 @@
            All sizes in vw/vh for resolution independence.
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-if="theme === 'steam'">
-        <div class="min-h-full" style="background-color: #171a21">
+        <div class="min-h-full" style="background-color: var(--bpm-bg)">
           <!-- Empty state -->
           <div v-if="recentGames.length === 0 && !loading" class="flex items-center justify-center" style="min-height: 70vh">
             <div class="text-center">
@@ -133,12 +133,33 @@
       </template>
 
 
-      <!-- ═══════════════════════════════════════════════════════════════════
-           SWITCH — Nintendo Switch Home Screen
-           Centered horizontal icon row, selected name above, minimal.
-           ═══════════════════════════════════════════════════════════════════ -->
-      <template v-else-if="theme === 'switch'">
-        <div class="flex flex-col h-full justify-center" style="min-height: 80vh; background-color: #2d2d2d">
+      <!-- Switch theme removed -->
+      <template v-if="false && theme === 'switch-removed'">
+        <div class="relative flex flex-col h-full" style="min-height: 80vh; background-color: var(--bpm-bg)">
+          <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
+
+          <!-- Joy-Con rail accents -->
+          <div class="absolute left-0 top-0 bottom-0" style="width: 0.35vw; background: linear-gradient(180deg, #00c3e3 0%, #0ab9e0 50%, #009dc7 100%); z-index: 2" />
+          <div class="absolute right-0 top-0 bottom-0" style="width: 0.35vw; background: linear-gradient(180deg, #e60012 0%, #d00010 50%, #b8000e 100%); z-index: 2" />
+
+          <!-- Top nav bar -->
+          <div class="relative flex items-center justify-between" style="padding: 1.5vh 3vw; z-index: 1">
+            <div class="flex items-center" style="gap: 2vw">
+              <div
+                class="flex items-center justify-center cursor-pointer bp-focus-delegate"
+                style="width: 2.5vw; height: 2.5vw; border-radius: 50%; background-color: rgba(255,255,255,0.08)"
+                :ref="(el: any) => registerTile(el, { onSelect: () => router.push('/bigpicture/library') })"
+              >
+                <img v-if="userProfilePicUrl" :src="userProfilePicUrl" class="w-full h-full object-cover rounded-full" />
+                <svg v-else style="width: 1.2vw; height: 1.2vw" fill="#aaa" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+              </div>
+            </div>
+            <div class="flex items-center" style="gap: 1.5vw">
+              <span style="color: #666; font-size: 0.75vw">{{ recentGames.length }} game{{ recentGames.length !== 1 ? 's' : '' }}</span>
+              <span style="color: #888; font-size: 0.75vw">{{ bpmClock.time.value }}</span>
+            </div>
+          </div>
+
           <!-- Empty state -->
           <div v-if="recentGames.length === 0 && !loading" class="flex items-center justify-center flex-1">
             <div class="text-center">
@@ -150,21 +171,31 @@
           </div>
 
           <template v-if="recentGames.length > 0">
-            <!-- Selected game name -->
-            <div class="text-center" style="margin-bottom: 3vh; height: 4vh">
-              <h2
-                v-if="focusedSwitchGame"
-                class="font-semibold transition-opacity duration-200"
-                style="color: #ffffff; font-size: 1.6vw"
-              >
-                {{ focusedSwitchGame.game.mName }}
-              </h2>
+            <!-- Selected game banner area -->
+            <div class="relative flex-shrink-0 mx-auto" style="max-width: 70vw; width: 100%; margin-top: 2vh; margin-bottom: 2vh; height: 22vh">
+              <div v-if="focusedSwitchGame" class="relative h-full w-full overflow-hidden transition-all duration-300" style="border-radius: 1vw">
+                <img
+                  v-if="focusedSwitchGame.game.mBannerObjectId"
+                  :src="useObject(focusedSwitchGame.game.mBannerObjectId)"
+                  class="absolute inset-0 w-full h-full object-cover"
+                />
+                <div v-else class="absolute inset-0" style="background: linear-gradient(135deg, #1a1a2e, #16213e)" />
+                <div class="absolute inset-0" style="background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.3) 50%, transparent 100%)" />
+                <div class="absolute bottom-0 left-0 right-0" style="padding: 2vh 2vw">
+                  <h2 class="font-bold" style="color: #fff; font-size: 1.6vw; text-shadow: 0 2px 6px rgba(0,0,0,0.6)">
+                    {{ focusedSwitchGame.game.mName }}
+                  </h2>
+                  <p v-if="focusedSwitchGame.game.mShortDescription" class="mt-0.5" style="color: rgba(255,255,255,0.6); font-size: 0.8vw; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                    {{ focusedSwitchGame.game.mShortDescription }}
+                  </p>
+                </div>
+              </div>
             </div>
 
-            <!-- Game icon row — all icons same size, selected gets border glow -->
-            <div class="flex justify-center items-center" style="gap: 1.2vw; padding: 0 3vw">
+            <!-- Game icon row -->
+            <div class="flex justify-center items-center" style="gap: 1vw; padding: 0 3vw">
               <div
-                v-for="(entry, idx) in recentGames.slice(0, 10)"
+                v-for="(entry, idx) in recentGames.slice(0, 12)"
                 :key="entry.game.id"
                 class="flex-shrink-0 cursor-pointer transition-all duration-200 bp-focus-delegate"
                 :ref="(el: any) => registerTile(el, {
@@ -175,11 +206,12 @@
                 <div
                   class="overflow-hidden transition-all duration-200"
                   :style="{
-                    width: '8.5vw',
-                    height: '8.5vw',
-                    borderRadius: '1vw',
+                    width: focusedSwitchIdx === idx ? '9vw' : '7.5vw',
+                    height: focusedSwitchIdx === idx ? '9vw' : '7.5vw',
+                    borderRadius: '0.8vw',
+                    transform: focusedSwitchIdx === idx ? 'translateY(-0.5vh)' : 'translateY(0)',
                     boxShadow: focusedSwitchIdx === idx
-                      ? '0 0 0 0.2vw #e60012, 0 0.4vh 1.5vw rgba(0,0,0,0.6)'
+                      ? '0 0 0 0.2vw #e60012, 0 0.6vh 2vw rgba(230,0,18,0.3), 0 0.4vh 1.5vw rgba(0,0,0,0.6)'
                       : '0 0.2vh 0.8vw rgba(0,0,0,0.35)',
                   }"
                 >
@@ -198,19 +230,37 @@
                   </div>
                 </div>
               </div>
+
+              <!-- Library icon -->
+              <div
+                class="flex-shrink-0 cursor-pointer transition-all duration-200 bp-focus-delegate"
+                :ref="(el: any) => registerTile(el, { onSelect: () => router.push('/bigpicture/library') })"
+              >
+                <div
+                  class="flex items-center justify-center overflow-hidden transition-all duration-200"
+                  style="width: 7.5vw; height: 7.5vw; border-radius: 0.8vw; background-color: rgba(255,255,255,0.05); border: 1px dashed rgba(255,255,255,0.15)"
+                >
+                  <svg style="width: 2vw; height: 2vw" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="1.5" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 8.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25a2.25 2.25 0 01-2.25-2.25v-2.25z" />
+                  </svg>
+                </div>
+              </div>
             </div>
 
-            <!-- Bottom bar -->
-            <div class="mx-auto w-full" style="max-width: 55vw; margin-top: 4vh">
-              <div style="height: 1px; width: 100%; background-color: #2d2d2d" />
-              <div class="flex justify-between items-center" style="padding: 1.2vh 1.5vw 0 1.5vw">
-                <span style="color: #555; font-size: 0.85vw">{{ recentGames.length }} game{{ recentGames.length !== 1 ? 's' : '' }}</span>
-                <span style="color: #555; font-size: 0.85vw">All Software</span>
+            <!-- Bottom quick actions bar -->
+            <div class="mx-auto w-full" style="max-width: 70vw; margin-top: 3vh">
+              <div style="height: 1px; width: 100%; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent)" />
+              <div class="flex justify-center items-center" style="padding: 1.5vh 0; gap: 3vw">
+                <span class="cursor-pointer transition-colors" style="color: #666; font-size: 0.8vw; letter-spacing: 0.05em">All Software</span>
+                <span style="color: #333; font-size: 0.8vw">|</span>
+                <span class="cursor-pointer transition-colors" style="color: #666; font-size: 0.8vw; letter-spacing: 0.05em">News</span>
+                <span style="color: #333; font-size: 0.8vw">|</span>
+                <span class="cursor-pointer transition-colors" style="color: #666; font-size: 0.8vw; letter-spacing: 0.05em">eShop</span>
               </div>
             </div>
 
             <!-- Downloads -->
-            <section v-if="activeDownloads.length > 0" class="mx-auto w-full" style="max-width: 50vw; margin-top: 3vh; padding-bottom: 2vh">
+            <section v-if="activeDownloads.length > 0" class="mx-auto w-full" style="max-width: 50vw; margin-top: 1vh; padding-bottom: 2vh">
               <div style="display: flex; flex-direction: column; gap: 0.6vh">
                 <div
                   v-for="item in activeDownloads.slice(0, 2)"
@@ -226,12 +276,12 @@
                       <div
                         class="h-full rounded-full transition-all duration-300"
                         style="background-color: #e60012"
-                        :style="{ width: `${(item.dl_progress * 100).toFixed(0)}%` }"
+                        :style="{ width: `${Math.min(item.dl_progress * 100, 100).toFixed(0)}%` }"
                       />
                     </div>
                   </div>
                   <span class="font-medium flex-shrink-0" style="color: #888; font-size: 0.8vw">
-                    {{ (item.dl_progress * 100).toFixed(0) }}%
+                    {{ Math.min(item.dl_progress * 100, 100).toFixed(0) }}%
                   </span>
                 </div>
               </div>
@@ -246,7 +296,7 @@
            Large spotlight left + 2×2 grid right, recently played row below.
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'xbox'">
-        <div class="min-h-full" style="background-color: #0a0a0a">
+        <div class="min-h-full" style="background-color: var(--bpm-bg)">
           <!-- Empty state -->
           <div v-if="recentGames.length === 0 && !loading" class="flex items-center justify-center" style="min-height: 70vh">
             <div class="text-center">
@@ -335,13 +385,13 @@
             </section>
 
             <!-- Recently Played grid — 4-column portrait boxes (Xbox case style) -->
-            <section v-if="otherGames.length > 4" style="padding: 0 2.5vw 2.5vh 2.5vw">
+            <section v-if="recentGames.length > 1" style="padding: 0 2.5vw 2.5vh 2.5vw">
               <h3 class="font-bold tracking-widest uppercase" style="color: #b0b0b0; font-size: 0.85vw; margin-bottom: 2vh">
                 Recently Played
               </h3>
-              <div class="grid grid-cols-5 mx-auto" style="gap: 1vw; max-width: 70vw; justify-items: center">
+              <div class="grid grid-cols-6 mx-auto" style="gap: 1vw; max-width: 80vw; justify-items: center">
                 <div
-                  v-for="(entry, idx) in otherGames.slice(4, 14)"
+                  v-for="(entry, idx) in otherGames.slice(4, 10)"
                   :key="entry.game.id"
                   class="flex flex-col items-center cursor-pointer bp-focus-delegate"
                   :ref="(el: any) => registerTile(el, {
@@ -454,7 +504,7 @@
            4-column grid of white rounded channel cards, page dots.
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'wii'">
-        <div class="min-h-full flex flex-col relative" style="background: linear-gradient(180deg, #e0effa 0%, #c8ddf0 50%, #b8d0e8 100%)">
+        <div class="min-h-full flex flex-col relative" :style="{ background: gradientBg || 'var(--bpm-bg)' }">
           <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <!-- Empty state -->
           <div v-if="recentGames.length === 0 && !loading" class="flex items-center justify-center" style="min-height: 60vh">
@@ -612,7 +662,7 @@
            Header shows selected game name. Classic dark PS2 blue.
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'ps2'">
-        <div class="relative min-h-full overflow-hidden" style="background: linear-gradient(160deg, #080818 0%, #0c0c28 30%, #101040 60%, #080820 100%)">
+        <div class="relative min-h-full overflow-hidden" :style="{ background: gradientBg || 'var(--bpm-bg)' }">
           <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <!-- Decorative vertical lines — PS2 towers effect -->
           <div class="absolute inset-0 pointer-events-none" style="opacity: 0.04; background: repeating-linear-gradient(90deg, transparent, transparent 3vw, #4060ff 3vw, #4060ff 3.05vw)" />
@@ -768,7 +818,7 @@
            Silver-grey light theme with red-orange accents.
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'ds'">
-        <div class="min-h-full flex flex-col relative" style="background: linear-gradient(180deg, #e8e8e8 0%, #d0d0d0 100%)">
+        <div class="min-h-full flex flex-col relative" :style="{ background: gradientBg || 'var(--bpm-bg)' }">
           <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <!-- Empty state -->
           <div v-if="recentGames.length === 0 && !loading" class="flex items-center justify-center" style="min-height: 70vh">
@@ -973,7 +1023,7 @@
            Sega orange accents, top bar with date/time.
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'dreamcast'">
-        <div class="min-h-full flex flex-col relative" style="background: linear-gradient(135deg, #1a6070 0%, #0e4858 30%, #0a3848 60%, #062830 100%)">
+        <div class="min-h-full flex flex-col relative" :style="{ background: gradientBg || 'var(--bpm-bg)' }">
           <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <!-- Empty state -->
           <div v-if="recentGames.length === 0 && !loading" class="flex items-center justify-center" style="min-height: 70vh">
@@ -1183,7 +1233,7 @@
            Centered cube-inspired layout with 2×2 grid of game zones.
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'gamecube'">
-        <div class="relative min-h-full" style="background-color: #0e0a1e">
+        <div class="relative min-h-full" style="background-color: var(--bpm-bg)">
           <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <div class="relative" style="z-index: 1">
           <!-- Empty state -->
@@ -1304,7 +1354,7 @@
            Black background with blue-grey panels and horizontal scrolling.
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'psp'">
-        <div class="relative min-h-full flex flex-col" style="background-color: #0a0a0e">
+        <div class="relative min-h-full flex flex-col" style="background-color: var(--bpm-bg)">
           <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <div class="relative flex-1 flex flex-col" style="z-index: 1">
           <!-- Empty state -->
@@ -1424,7 +1474,7 @@
            3×3 grid with thick pixelated borders and retro styling.
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'gameboy'">
-        <div class="relative min-h-full flex flex-col" style="background-color: #0F380F; color: #9BBC0F">
+        <div class="relative min-h-full flex flex-col" style="background-color: var(--bpm-bg); color: var(--bpm-text)">
           <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <div class="relative flex-1 flex flex-col" style="z-index: 1">
           <!-- Empty state -->
@@ -1541,7 +1591,7 @@
            2×2 button grid for main categories using SNES controller colors.
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-else-if="theme === 'snes'">
-        <div class="relative min-h-full flex flex-col" style="background-color: #e8e8ec">
+        <div class="relative min-h-full flex flex-col" style="background-color: var(--bpm-bg)">
           <BpmAnimatedBackground :enabled="animBgEnabled" :theme-id="theme" :reduced="reducedAnimations" />
           <div class="relative flex-1 flex flex-col" style="z-index: 1">
           <!-- Empty state -->
@@ -1803,7 +1853,6 @@ const focusedSnesIdx = ref(0);
 const themeComposable = useBpmTheme();
 const themeColors: Record<string, string> = {
   steam: "#66c0f4",
-  switch: "#e60012",
   xbox: "#107c10",
   wii: "#34beed",
   ps2: "#2040c0",
@@ -1814,6 +1863,31 @@ const themeColors: Record<string, string> = {
   gameboy: "#9BBC0F",
   snes: "#6464B4",
 };
+
+// Gradient backgrounds for themes that use them — mode-aware
+const themeGradientBgs: Record<string, { dark: string; light: string }> = {
+  wii: {
+    dark: "linear-gradient(180deg, #1a2a3a 0%, #142430 50%, #0e1c28 100%)",
+    light: "linear-gradient(180deg, #b8d8f0 0%, #a8cce8 50%, #98c0e0 100%)",
+  },
+  ps2: {
+    dark: "linear-gradient(160deg, #080818 0%, #0c0c28 30%, #101040 60%, #080820 100%)",
+    light: "linear-gradient(160deg, #c8c8e0 0%, #b8b8d8 30%, #a8a8d0 60%, #b8b8e0 100%)",
+  },
+  ds: {
+    dark: "linear-gradient(180deg, #1a1a1e 0%, #141418 100%)",
+    light: "linear-gradient(180deg, #d0ccc8 0%, #c0b8b4 100%)",
+  },
+  dreamcast: {
+    dark: "linear-gradient(135deg, #0c1820 0%, #0e3040 30%, #0a2838 60%, #062030 100%)",
+    light: "linear-gradient(135deg, #b8d8d8 0%, #a8d0d0 30%, #98c8c8 60%, #a8d0d0 100%)",
+  },
+};
+const gradientBg = computed(() => {
+  const entry = themeGradientBgs[theme.value];
+  if (!entry) return undefined;
+  return entry[themeComposable.mode.value];
+});
 
 watchEffect(() => {
   theme.value = themeComposable.themeId.value;

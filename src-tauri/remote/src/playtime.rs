@@ -22,6 +22,10 @@ struct PlaytimeStartResponse {
 #[serde(rename_all = "camelCase")]
 struct PlaytimeStopBody {
     session_id: String,
+    /// Client-measured process duration in seconds. More accurate than
+    /// server-side timestamp arithmetic when clock drift or NAS sleep occurs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_duration_secs: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -55,9 +59,14 @@ pub async fn start_playtime(game_id: &str) -> Result<String, RemoteAccessError> 
 
 /// Stop a playtime session. Retries up to 3 times with backoff on failure.
 /// This triggers server-side achievement sync.
-pub async fn stop_playtime(session_id: &str) -> Result<(), RemoteAccessError> {
+///
+/// `client_duration_secs` — if provided, the server uses this measured duration
+/// instead of computing it from timestamps. More accurate when the server clock
+/// is unreliable (NAS sleep, network delays, etc.).
+pub async fn stop_playtime(session_id: &str, client_duration_secs: Option<u32>) -> Result<(), RemoteAccessError> {
     let body = PlaytimeStopBody {
         session_id: session_id.to_string(),
+        client_duration_secs,
     };
 
     let max_retries = 3u32;

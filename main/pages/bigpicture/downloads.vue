@@ -1,5 +1,5 @@
 <template>
-  <div class="px-8 py-6">
+  <div class="px-8 py-6" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)', minHeight: '100%' }">
     <!-- Download stats header (speed + ETA) -->
     <div
       v-if="queue.length > 0 && (stats.speed > 0 || stats.time > 0)"

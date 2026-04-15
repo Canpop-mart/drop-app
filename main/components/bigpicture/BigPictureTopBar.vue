@@ -1,6 +1,7 @@
 <template>
   <div
-    class="flex items-center justify-between px-8 h-14 bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-800/30 shrink-0"
+    class="flex items-center justify-between px-8 h-14 backdrop-blur-sm border-b shrink-0"
+    :style="{ backgroundColor: 'color-mix(in srgb, var(--bpm-bg) 80%, transparent)', borderColor: 'var(--bpm-border)' }"
   >
     <!-- Left: breadcrumbs -->
     <div class="flex items-center gap-1.5">

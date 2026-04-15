@@ -195,10 +195,16 @@ impl ProcessManager<'_> {
         {
             let stop_session_id = process.playtime_session_id.lock().ok().and_then(|s| s.clone());
             let sync_game_id = game_id.clone();
+            // Calculate actual process runtime from the local clock (more accurate
+            // than server-side now() - startedAt, which can drift if NAS sleeps)
+            let actual_duration_secs = process.start
+                .elapsed()
+                .map(|d| d.as_secs() as u32)
+                .unwrap_or(0);
             tauri::async_runtime::spawn(async move {
-                // Stop playtime session
+                // Stop playtime session with measured duration
                 if let Some(session_id) = stop_session_id {
-                    if let Err(e) = remote::playtime::stop_playtime(&session_id).await {
+                    if let Err(e) = remote::playtime::stop_playtime(&session_id, Some(actual_duration_secs)).await {
                         warn!("Failed to report playtime stop: {e}");
                     }
                 }

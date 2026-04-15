@@ -18,6 +18,7 @@
 let audioCtx: AudioContext | null = null;
 let masterGain: GainNode | null = null;
 let audioFailed = false;
+let audioUnlocked = false;
 let enabled = true;
 let activeProfile: SoundProfileId = "steam";
 
@@ -25,10 +26,15 @@ function ctx(): { ac: AudioContext; out: GainNode } | null {
   if (audioFailed) return null;
   try {
     if (!audioCtx) {
-      audioCtx = new AudioContext();
+      // Use interactive latency hint for responsive UI sounds.
+      // In Tauri's webview this helps bypass autoplay restrictions.
+      audioCtx = new AudioContext({ latencyHint: "interactive" });
       masterGain = audioCtx.createGain();
       masterGain.gain.value = 0.18;
       masterGain.connect(audioCtx.destination);
+      // Immediately try to resume — Tauri webviews are more permissive
+      // than regular browsers and may allow this without a gesture.
+      audioCtx.resume().catch(() => {});
     }
     if (audioCtx.state === "suspended") {
       audioCtx.resume().catch(() => {
@@ -39,6 +45,7 @@ function ctx(): { ac: AudioContext; out: GainNode } | null {
       // Context was closed; recreate on next call
       audioCtx = null;
       masterGain = null;
+      audioUnlocked = false;
       return null;
     }
     return { ac: audioCtx, out: masterGain! };
@@ -47,6 +54,51 @@ function ctx(): { ac: AudioContext; out: GainNode } | null {
     audioFailed = true;
     return null;
   }
+}
+
+/**
+ * Unlock the AudioContext on the first user interaction.
+ * Chromium-based webviews (including Tauri on Steam Deck) require a user
+ * gesture before AudioContext.resume() actually takes effect. We attach a
+ * one-shot listener to common interaction events so the first gamepad
+ * button press, mouse click, or key press unlocks audio.
+ */
+function ensureAudioUnlock() {
+  if (audioUnlocked || typeof document === "undefined") return;
+
+  const unlock = () => {
+    if (audioUnlocked) return;
+    const c = ctx();
+    if (c && c.ac.state === "suspended") {
+      c.ac.resume().then(() => {
+        console.log("[BPM:AUDIO] AudioContext resumed after user gesture");
+        audioUnlocked = true;
+      }).catch(() => {});
+    } else if (c) {
+      audioUnlocked = true;
+    }
+    // Also play a silent buffer to fully unlock on some devices
+    if (c) {
+      const buf = c.ac.createBuffer(1, 1, c.ac.sampleRate);
+      const src = c.ac.createBufferSource();
+      src.buffer = buf;
+      src.connect(c.ac.destination);
+      src.start(0);
+    }
+  };
+
+  // Listen for any user interaction
+  const events = ["click", "touchstart", "keydown", "gamepadconnected"];
+  for (const evt of events) {
+    document.addEventListener(evt, unlock, { once: true, passive: true });
+  }
+  // Also try to unlock on gamepad button press (polled, not event-based)
+  // The focus-navigation system calls play() on button press which triggers ctx()
+}
+
+// Auto-setup the unlock listeners
+if (typeof document !== "undefined") {
+  ensureAudioUnlock();
 }
 
 // ── Primitive sound generators ──────────────────────────────────────────────
@@ -168,7 +220,6 @@ export type BpSound =
 
 export type SoundProfileId =
   | "steam"
-  | "switch"
   | "xbox"
   | "playstation"
   | "wii"
@@ -222,50 +273,6 @@ const steamProfile: SoundProfile = {
     "overlay-close": () => {
       tone(523, 0.07, "sine", 0.005, 0.06, 0.4);
       delayed(40, () => tone(392, 0.08, "sine", 0.005, 0.07, 0.4));
-    },
-  },
-};
-
-// ═══════════════════════════════════════════════════════════════════════════
-// NINTENDO SWITCH — Sharp metallic snaps and clicks.
-// The Switch is famous for its distinctive "snap" sound on navigation.
-// Uses high-frequency bandpass-filtered noise for the iconic click,
-// plus quick square wave bursts for confirmations.
-// ═══════════════════════════════════════════════════════════════════════════
-const switchProfile: SoundProfile = {
-  id: "switch",
-  label: "Switch",
-  description: "Sharp snaps and clicks",
-  sounds: {
-    // Focus: the iconic Switch snap — high-freq filtered noise burst
-    focus: () => {
-      noise(0.018, 6000, 4, "bandpass", 0.7);
-      tone(2000, 0.01, "square", 0.001, 0.008, 0.15); // tiny metallic ring
-    },
-    // Select: quick two-tone confirmation with square wave character
-    select: () => {
-      noise(0.012, 5000, 3, "bandpass", 0.4);
-      tone(1047, 0.03, "square", 0.002, 0.025, 0.5); // C6
-      delayed(30, () => tone(1319, 0.025, "square", 0.002, 0.02, 0.45)); // E6
-    },
-    // Back: lower snap
-    back: () => {
-      noise(0.015, 3000, 3, "bandpass", 0.5);
-      tone(784, 0.03, "square", 0.002, 0.025, 0.4); // G5
-    },
-    error: () => {
-      tone(330, 0.04, "square", 0.003, 0.035, 0.5);
-      delayed(50, () => tone(262, 0.06, "square", 0.003, 0.05, 0.5));
-    },
-    "overlay-open": () => {
-      noise(0.01, 5000, 3, "bandpass", 0.3);
-      tone(784, 0.04, "square", 0.002, 0.035, 0.4);
-      delayed(35, () => tone(1047, 0.035, "square", 0.002, 0.03, 0.4));
-    },
-    "overlay-close": () => {
-      noise(0.01, 4000, 3, "bandpass", 0.3);
-      tone(1047, 0.035, "square", 0.002, 0.03, 0.35);
-      delayed(35, () => tone(784, 0.04, "square", 0.002, 0.035, 0.35));
     },
   },
 };
@@ -779,7 +786,6 @@ const snesProfile: SoundProfile = {
 
 export const soundProfiles: SoundProfile[] = [
   steamProfile,
-  switchProfile,
   xboxProfile,
   playstationProfile,
   wiiProfile,

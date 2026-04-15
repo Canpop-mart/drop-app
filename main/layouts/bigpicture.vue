@@ -1,5 +1,5 @@
 <template>
-  <div :class="['flex h-screen w-screen bg-zinc-950 overflow-hidden', themeClass]">
+  <div :class="['flex h-screen w-screen overflow-hidden', themeClass, modeClass]" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
     <!-- Navigation Rail (left edge) -->
     <BigPictureNavRail />
 
@@ -53,6 +53,7 @@ import { useBpmTheme } from "~/composables/bp-theme";
 const focusNav = useFocusNavigation();
 const bpmTheme = useBpmTheme();
 const themeClass = computed(() => bpmTheme.themeData.value.cssClass);
+const modeClass = computed(() => `bpm-${bpmTheme.mode.value}`);
 const { isGamescope } = useDeckMode();
 
 // ── On-screen debug overlay ─────────────────────────────────────────────
@@ -215,4 +216,40 @@ onUnmounted(() => {
   transform: scale(0.97);
   transition: transform 0.08s ease;
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   LIGHT MODE OVERRIDES
+   When .bpm-light is active, remap common Tailwind dark-theme classes
+   to use the theme's light palette via CSS variables. This avoids
+   editing every single component that uses bg-zinc-* or text-zinc-*.
+   ══════════════════════════════════════════════════════════════════════ */
+.bpm-light .bg-zinc-950 { background-color: var(--bpm-bg) !important; }
+.bpm-light .bg-zinc-950\/50 { background-color: var(--bpm-surface) !important; }
+.bpm-light .bg-zinc-950\/80 { background-color: var(--bpm-surface) !important; }
+.bpm-light .bg-zinc-950\/90 { background-color: var(--bpm-surface) !important; }
+.bpm-light .bg-zinc-900 { background-color: var(--bpm-surface) !important; }
+.bpm-light .bg-zinc-900\/50 { background-color: var(--bpm-surface) !important; }
+.bpm-light .bg-zinc-800 { background-color: var(--bpm-surface-hover) !important; }
+.bpm-light .bg-zinc-800\/50 { background-color: var(--bpm-surface) !important; }
+.bpm-light .bg-zinc-800\/80 { background-color: var(--bpm-surface) !important; }
+.bpm-light .bg-zinc-800\/30 { background-color: transparent !important; }
+.bpm-light .bg-zinc-700 { background-color: var(--bpm-surface-hover) !important; }
+
+/* Text overrides */
+.bpm-light .text-zinc-100 { color: var(--bpm-text) !important; }
+.bpm-light .text-zinc-200 { color: var(--bpm-text) !important; }
+.bpm-light .text-zinc-300 { color: var(--bpm-muted) !important; }
+.bpm-light .text-zinc-400 { color: var(--bpm-muted) !important; }
+.bpm-light .text-zinc-500 { color: var(--bpm-muted) !important; }
+.bpm-light .text-zinc-600 { color: var(--bpm-muted) !important; }
+.bpm-light .text-white { color: var(--bpm-text) !important; }
+
+/* Border overrides */
+.bpm-light .border-zinc-800\/30 { border-color: var(--bpm-border) !important; }
+.bpm-light .border-zinc-800\/50 { border-color: var(--bpm-border) !important; }
+.bpm-light .border-zinc-800 { border-color: var(--bpm-border) !important; }
+.bpm-light .border-zinc-700 { border-color: var(--bpm-border) !important; }
+
+/* Ring overrides for inputs/buttons */
+.bpm-light .ring-zinc-800 { --tw-ring-color: var(--bpm-border) !important; }
 </style>

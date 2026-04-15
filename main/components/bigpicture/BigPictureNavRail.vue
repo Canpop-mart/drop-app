@@ -1,6 +1,7 @@
 <template>
   <nav
-    class="flex flex-col items-center w-20 bg-zinc-950 border-r border-zinc-800/50 py-6 gap-2 shrink-0"
+    class="flex flex-col items-center w-20 border-r py-6 gap-2 shrink-0"
+    :style="{ backgroundColor: 'var(--bpm-bg)', borderColor: 'var(--bpm-border)' }"
   >
     <!-- Logo -->
     <div class="mb-6">
