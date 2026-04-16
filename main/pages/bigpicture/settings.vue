@@ -13,9 +13,9 @@
         "
         class="w-full px-6 py-3 text-left text-sm font-medium transition-colors"
         :style="{
-          color: activeSection === section.value ? 'var(--bpm-accent)' : 'var(--bpm-muted)',
-          backgroundColor: activeSection === section.value ? 'color-mix(in srgb, var(--bpm-accent) 10%, transparent)' : 'transparent',
-          borderRight: activeSection === section.value ? '2px solid var(--bpm-accent)' : 'none',
+          color: activeSection === section.value ? 'var(--bpm-accent-hex)' : 'var(--bpm-muted)',
+          backgroundColor: activeSection === section.value ? 'color-mix(in srgb, var(--bpm-accent-hex) 10%, transparent)' : 'transparent',
+          borderRight: activeSection === section.value ? '2px solid var(--bpm-accent-hex)' : 'none',
         }"
         @click="activeSection = section.value"
       >

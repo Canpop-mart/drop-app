@@ -77,7 +77,8 @@
               <span
                 v-for="tag in featured[heroIndex].tags!.slice(0, 4)"
                 :key="tag.id"
-                class="px-2 py-0.5 rounded-full bg-zinc-800/60 text-xs text-zinc-400"
+                class="px-2 py-0.5 rounded-full text-xs font-medium"
+                style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
               >
                 {{ tag.name }}
               </span>
@@ -108,9 +109,9 @@
             :ref="(el: any) => registerGrid(el, {
               onSelect: () => goToGame(game.id),
             })"
-            class="group relative flex flex-col rounded-xl overflow-hidden transition-all duration-200 cursor-pointer ring-2 ring-transparent"
+            class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
           >
-            <div class="relative aspect-[3/4] bg-zinc-800">
+            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl">
               <img
                 v-if="game.mCoverObjectId"
                 :src="objectUrl(game.mCoverObjectId)"
@@ -119,6 +120,13 @@
                 loading="lazy"
               />
               <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
+              <div
+                v-if="game.updateAvailable"
+                class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
+                style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
+              >
+                Outdated
+              </div>
               <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
             </div>
             <div class="px-2 py-2 bg-zinc-900/80">
@@ -140,9 +148,9 @@
             :ref="(el: any) => registerGrid(el, {
               onSelect: () => goToGame(game.id),
             })"
-            class="group relative flex flex-col rounded-xl overflow-hidden transition-all duration-200 cursor-pointer ring-2 ring-transparent"
+            class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
           >
-            <div class="relative aspect-[3/4] bg-zinc-800">
+            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl">
               <img
                 v-if="game.mCoverObjectId"
                 :src="objectUrl(game.mCoverObjectId)"
@@ -151,6 +159,13 @@
                 loading="lazy"
               />
               <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
+              <div
+                v-if="game.updateAvailable"
+                class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
+                style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
+              >
+                Outdated
+              </div>
               <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
             </div>
             <div class="px-2 py-2 bg-zinc-900/80">
@@ -172,9 +187,9 @@
             :ref="(el: any) => registerGrid(el, {
               onSelect: () => goToGame(game.id),
             })"
-            class="group relative flex flex-col rounded-xl overflow-hidden transition-all duration-200 cursor-pointer ring-2 ring-transparent"
+            class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
           >
-            <div class="relative aspect-[3/4] bg-zinc-800">
+            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl">
               <img
                 v-if="game.mCoverObjectId"
                 :src="objectUrl(game.mCoverObjectId)"
@@ -186,6 +201,13 @@
                 <span class="text-2xl font-bold text-zinc-500">{{ game.mName[0] }}</span>
               </div>
               <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
+              <div
+                v-if="game.updateAvailable"
+                class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
+                style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
+              >
+                Outdated
+              </div>
               <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
             </div>
             <div class="px-2 py-2 bg-zinc-900/80">
@@ -328,9 +350,9 @@
           :ref="(el: any) => registerGrid(el, {
             onSelect: () => goToGame(game.id),
           })"
-          class="group relative flex flex-col rounded-xl overflow-hidden transition-all duration-200 cursor-pointer ring-2 ring-transparent"
+          class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
         >
-          <div class="relative aspect-[3/4] bg-zinc-800">
+          <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl">
             <img
               v-if="game.mCoverObjectId"
               :src="objectUrl(game.mCoverObjectId)"
@@ -342,6 +364,13 @@
               <span class="text-2xl font-bold text-zinc-500">{{ game.mName[0] }}</span>
             </div>
             <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
+            <div
+              v-if="game.updateAvailable"
+              class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
+              style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
+            >
+              Outdated
+            </div>
             <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
           </div>
           <div class="px-2 py-2 bg-zinc-900/80">

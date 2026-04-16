@@ -211,6 +211,16 @@ onUnmounted(() => {
     transform 0.08s ease;
 }
 
+/* When the wrapper has .bp-focus-delegate, the focus system hides the
+   parent outline and shows it on the .bp-focus-ring child instead. */
+.bp-focus-delegate[data-focusable].bp-focused {
+  outline: none !important;
+}
+.bp-ring-focused {
+  box-shadow: 0 0 0 3px rgba(var(--bpm-accent, 59 130 246) / 0.8);
+  border-radius: 0.75rem;
+}
+
 /* Press feedback — brief scale-down on A button */
 [data-focusable].bp-pressed {
   transform: scale(0.97);
@@ -252,4 +262,34 @@ onUnmounted(() => {
 
 /* Ring overrides for inputs/buttons */
 .bpm-light .ring-zinc-800 { --tw-ring-color: var(--bpm-border) !important; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   DARK MODE OVERRIDES
+   Ensure text is bright/white in dark mode across all pages.
+   The default Tailwind greys (zinc-400, zinc-500) are too dim on
+   themed dark backgrounds. Remap them to the theme's text/muted vars.
+   ══════════════════════════════════════════════════════════════════════ */
+.bpm-dark .text-zinc-100 { color: var(--bpm-text) !important; }
+.bpm-dark .text-zinc-200 { color: var(--bpm-text) !important; }
+.bpm-dark .text-zinc-300 { color: var(--bpm-text) !important; }
+.bpm-dark .text-zinc-400 { color: var(--bpm-muted) !important; }
+.bpm-dark .text-zinc-500 { color: var(--bpm-muted) !important; }
+.bpm-dark .text-zinc-600 { color: var(--bpm-muted) !important; }
+
+/* Dark mode backgrounds use theme vars */
+.bpm-dark .bg-zinc-950 { background-color: var(--bpm-bg) !important; }
+.bpm-dark .bg-zinc-950\/50 { background-color: var(--bpm-bg) !important; }
+.bpm-dark .bg-zinc-900 { background-color: var(--bpm-surface) !important; }
+.bpm-dark .bg-zinc-900\/50 { background-color: var(--bpm-surface) !important; }
+.bpm-dark .bg-zinc-900\/40 { background-color: var(--bpm-surface) !important; }
+.bpm-dark .bg-zinc-900\/80 { background-color: var(--bpm-surface) !important; }
+.bpm-dark .bg-zinc-900\/90 { background-color: var(--bpm-surface) !important; }
+.bpm-dark .bg-zinc-800 { background-color: var(--bpm-surface-hover) !important; }
+.bpm-dark .bg-zinc-800\/50 { background-color: var(--bpm-surface) !important; }
+.bpm-dark .bg-zinc-800\/80 { background-color: var(--bpm-surface) !important; }
+
+/* Dark mode borders */
+.bpm-dark .border-zinc-800\/30 { border-color: var(--bpm-border) !important; }
+.bpm-dark .border-zinc-800 { border-color: var(--bpm-border) !important; }
+.bpm-dark .border-zinc-700 { border-color: var(--bpm-border) !important; }
 </style>

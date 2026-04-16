@@ -905,15 +905,15 @@
                 <div
                   v-for="(entry, idx) in otherGames.slice(0, 11)"
                   :key="entry.game.id"
-                  class="flex flex-col items-center cursor-pointer group bp-focus-delegate"
-                  :ref="(el: any) => registerTile(el, {
-                    onSelect: () => navigateToGame(entry.game.id),
-                    onFocus: () => { prefetchGame(entry.game.id); focusedDsIdx = idx; },
-                  })"
+                  class="flex flex-col items-center cursor-pointer group"
                 >
                   <!-- DS cartridge — nearly square (571x600), cover sits inside cart frame -->
                   <div
-                    class="relative overflow-hidden transition-all duration-150"
+                    class="relative overflow-hidden transition-all duration-150 bp-focus-delegate"
+                    :ref="(el: any) => registerTile(el, {
+                      onSelect: () => navigateToGame(entry.game.id),
+                      onFocus: () => { prefetchGame(entry.game.id); focusedDsIdx = idx; },
+                    })"
                     :style="{
                       aspectRatio: '571/600',
                       height: '22vh',

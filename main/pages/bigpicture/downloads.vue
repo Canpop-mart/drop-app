@@ -62,7 +62,7 @@
     <!-- Active downloads -->
     <div v-if="queue.length > 0" class="space-y-3">
       <div
-        v-for="item in queue"
+        v-for="(item, qIdx) in queue"
         :key="item.meta.id"
         :ref="
           (el: any) =>
@@ -70,6 +70,23 @@
         "
         class="flex items-center gap-6 bg-zinc-900/50 rounded-xl p-6"
       >
+        <!-- Reorder buttons -->
+        <div v-if="queue.length > 1" class="flex flex-col gap-1 flex-shrink-0">
+          <button
+            v-if="qIdx > 0"
+            class="px-1.5 py-0.5 rounded text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            @click.stop="reorderDownload(qIdx, qIdx - 1)"
+          >
+            <svg class="size-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" /></svg>
+          </button>
+          <button
+            v-if="qIdx < queue.length - 1"
+            class="px-1.5 py-0.5 rounded text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            @click.stop="reorderDownload(qIdx, qIdx + 1)"
+          >
+            <svg class="size-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" /></svg>
+          </button>
+        </div>
         <!-- Cover art -->
         <div class="size-16 rounded-lg overflow-hidden bg-zinc-800 flex-shrink-0">
           <img
@@ -271,6 +288,14 @@ async function togglePause() {
     }
   } catch (e) {
     console.error("Failed to toggle pause:", e);
+  }
+}
+
+async function reorderDownload(oldIndex: number, newIndex: number) {
+  try {
+    await invoke("move_download_in_queue", { oldIndex, newIndex });
+  } catch (e) {
+    console.error("Failed to reorder download:", e);
   }
 }
 

@@ -62,7 +62,7 @@ export const themes: BpmTheme[] = [
   {
     id: "wii", label: "Wii", description: "Blue-grey with sky blue accents", cssClass: "bpm-theme-wii",
     colors: {
-      dark:  { bg: "#1a2a3a", surface: "#243848", surfaceHover: "#2e4858", text: "#e8f0f8", muted: "#8aa0b8", accent: "#34beed", accentText: "#ffffff", border: "rgba(255,255,255,0.08)" },
+      dark:  { bg: "#142028", surface: "#1e3248", surfaceHover: "#284860", text: "#e8f0f8", muted: "#8aa0b8", accent: "#34beed", accentText: "#ffffff", border: "rgba(255,255,255,0.1)" },
       light: { bg: "#d0e4f2", surface: "#deedf8", surfaceHover: "#d5e7f4", text: "#1a2a3a", muted: "#4a6a88", accent: "#0098d0", accentText: "#ffffff", border: "rgba(0,152,208,0.12)" },
     },
   },
@@ -83,7 +83,7 @@ export const themes: BpmTheme[] = [
   {
     id: "dreamcast", label: "Dreamcast", description: "Teal-blue with Sega orange accents", cssClass: "bpm-theme-dreamcast",
     colors: {
-      dark:  { bg: "#0c1820", surface: "#162430", surfaceHover: "#203040", text: "#e0f0f0", muted: "#688898", accent: "#d05010", accentText: "#ffffff", border: "rgba(255,255,255,0.08)" },
+      dark:  { bg: "#081418", surface: "#142830", surfaceHover: "#1e3a48", text: "#e0f0f0", muted: "#688898", accent: "#d05010", accentText: "#ffffff", border: "rgba(255,255,255,0.1)" },
       light: { bg: "#cee0e0", surface: "#dceaea", surfaceHover: "#d4e4e4", text: "#0c1820", muted: "#406068", accent: "#d05010", accentText: "#ffffff", border: "rgba(208,80,16,0.12)" },
     },
   },
@@ -146,6 +146,15 @@ const activeColors = computed(() => activeThemeData.value.colors[activeMode.valu
  * Inject CSS custom properties into the document root whenever theme or mode changes.
  * Templates use `var(--bpm-bg)`, `var(--bpm-text)`, etc.
  */
+/** Convert a hex color like "#66c0f4" to an RGB triplet like "102 192 244" */
+function hexToRgbTriplet(hex: string): string {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `${r} ${g} ${b}`;
+}
+
 function applyCssVariables() {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
@@ -155,7 +164,9 @@ function applyCssVariables() {
   root.style.setProperty("--bpm-surface-hover", c.surfaceHover);
   root.style.setProperty("--bpm-text", c.text);
   root.style.setProperty("--bpm-muted", c.muted);
-  root.style.setProperty("--bpm-accent", c.accent);
+  // Set accent as RGB triplet so rgba(var(--bpm-accent) / 0.8) works
+  root.style.setProperty("--bpm-accent", hexToRgbTriplet(c.accent));
+  root.style.setProperty("--bpm-accent-hex", c.accent); // hex version for style="" bindings
   root.style.setProperty("--bpm-accent-text", c.accentText);
   root.style.setProperty("--bpm-border", c.border);
 }

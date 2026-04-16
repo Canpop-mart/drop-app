@@ -526,3 +526,837 @@ pub async fn get_install_size(game_id: String) -> u64 {
     .await
     .unwrap_or(0)
 }
+
+// ── Save state management ─────────────────────────────────────────────────
+
+/// Information about a save file or save state.
+#[derive(Serialize)]
+pub struct SaveFileInfo {
+    pub filename: String,
+    pub size: u64,
+    /// Unix timestamp in seconds
+    pub modified: u64,
+    /// "save" for battery saves (.srm), "state" for save states (.state)
+    pub save_type: String,
+}
+
+/// Find the emulator install directory for a game by checking if it has
+/// an emulator association via its launch config.
+fn find_emulator_saves_dir(game_id: &str) -> Option<std::path::PathBuf> {
+    let db = borrow_db_checked();
+
+    // Check all installed game versions for one that has this game's saves
+    for (emu_id, status) in db.applications.game_statuses.iter() {
+        if let GameDownloadStatus::Installed { install_dir, .. } = status {
+            let saves_path = Path::new(install_dir)
+                .join("drop-saves")
+                .join(game_id);
+            if saves_path.exists() {
+                return Some(saves_path);
+            }
+        }
+    }
+
+    // Also check if game_id IS the emulator (native game with saves)
+    if let Some(GameDownloadStatus::Installed { install_dir, .. }) =
+        db.applications.game_statuses.get(game_id)
+    {
+        let saves_path = Path::new(install_dir).join("drop-saves").join(game_id);
+        if saves_path.exists() {
+            return Some(saves_path);
+        }
+    }
+
+    None
+}
+
+/// List all save files and save states for a game.
+#[tauri::command]
+pub fn list_game_saves(game_id: String) -> Vec<SaveFileInfo> {
+    let saves_dir = match find_emulator_saves_dir(&game_id) {
+        Some(dir) => dir,
+        None => return vec![],
+    };
+
+    let mut results = Vec::new();
+
+    // List battery saves
+    let saves_path = saves_dir.join("saves");
+    if let Ok(entries) = std::fs::read_dir(&saves_path) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    results.push(SaveFileInfo {
+                        filename: entry.file_name().to_string_lossy().to_string(),
+                        size: meta.len(),
+                        modified: meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0),
+                        save_type: "save".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    // List save states
+    let states_path = saves_dir.join("states");
+    if let Ok(entries) = std::fs::read_dir(&states_path) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    results.push(SaveFileInfo {
+                        filename: entry.file_name().to_string_lossy().to_string(),
+                        size: meta.len(),
+                        modified: meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0),
+                        save_type: "state".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    // Sort by modification time, newest first
+    results.sort_by(|a, b| b.modified.cmp(&a.modified));
+    results
+}
+
+/// Read a save file's content as base64 for cloud upload.
+#[tauri::command]
+pub fn read_save_file(
+    game_id: String,
+    filename: String,
+    save_type: String,
+) -> Result<String, String> {
+    let saves_dir = find_emulator_saves_dir(&game_id)
+        .ok_or_else(|| "Save directory not found".to_string())?;
+
+    let subdir = match save_type.as_str() {
+        "save" => "saves",
+        "state" => "states",
+        _ => return Err("Invalid save type".to_string()),
+    };
+
+    let file_path = saves_dir.join(subdir).join(&filename);
+    let canonical = file_path
+        .canonicalize()
+        .map_err(|e| format!("File not found: {e}"))?;
+    let base = saves_dir
+        .join(subdir)
+        .canonicalize()
+        .map_err(|e| format!("Directory error: {e}"))?;
+    if !canonical.starts_with(&base) {
+        return Err("Invalid file path".to_string());
+    }
+
+    let data = std::fs::read(&canonical).map_err(|e| format!("Failed to read: {e}"))?;
+    use base64::Engine;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&data))
+}
+
+/// Write base64-encoded save data to a local save file (for cloud download).
+#[tauri::command]
+pub fn write_save_file(
+    game_id: String,
+    filename: String,
+    save_type: String,
+    data: String,
+) -> Result<(), String> {
+    let saves_dir = find_emulator_saves_dir(&game_id)
+        .ok_or_else(|| "Save directory not found".to_string())?;
+
+    let subdir = match save_type.as_str() {
+        "save" => "saves",
+        "state" => "states",
+        _ => return Err("Invalid save type".to_string()),
+    };
+
+    let dir = saves_dir.join(subdir);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create dir: {e}"))?;
+
+    let file_path = dir.join(&filename);
+
+    // Security check
+    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+        return Err("Invalid filename".to_string());
+    }
+
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&data)
+        .map_err(|e| format!("Invalid base64: {e}"))?;
+
+    std::fs::write(&file_path, &bytes).map_err(|e| format!("Failed to write: {e}"))?;
+    Ok(())
+}
+
+// ── PC save file I/O (arbitrary paths from Ludusavi) ─────────────────────
+
+/// Read a PC save file by its full path (as returned by Ludusavi) as base64.
+/// Security: rejects paths containing ".." to prevent traversal.
+#[tauri::command]
+pub fn read_pc_save_file(file_path: String) -> Result<String, String> {
+    // Basic traversal protection
+    if file_path.contains("..") {
+        return Err("Invalid file path".to_string());
+    }
+    let path = std::path::Path::new(&file_path);
+    if !path.exists() {
+        return Err("File not found".to_string());
+    }
+    let data = std::fs::read(path).map_err(|e| format!("Failed to read: {e}"))?;
+    use base64::Engine;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&data))
+}
+
+/// Write base64-encoded data to a PC save file at its full path.
+/// Used for restoring individual cloud saves to their original location.
+#[tauri::command]
+pub fn write_pc_save_file(file_path: String, data: String) -> Result<(), String> {
+    if file_path.contains("..") {
+        return Err("Invalid file path".to_string());
+    }
+    let path = std::path::Path::new(&file_path);
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create dir: {e}"))?;
+    }
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&data)
+        .map_err(|e| format!("Invalid base64: {e}"))?;
+    // If file exists, create a backup first
+    if path.exists() {
+        let backup = format!("{}.bak", file_path);
+        let _ = std::fs::copy(path, &backup); // best-effort backup
+    }
+    std::fs::write(path, &bytes).map_err(|e| format!("Failed to write: {e}"))?;
+    Ok(())
+}
+
+// ── Ludusavi integration for PC game saves ────────────────────────────────
+
+/// Result from Ludusavi backup/find operation.
+#[derive(Serialize)]
+pub struct LudusaviSaveInfo {
+    pub files: Vec<LudusaviFile>,
+    pub game_name: String,
+}
+
+#[derive(Serialize)]
+pub struct LudusaviFile {
+    pub path: String,
+    pub size: u64,
+    pub modified: u64,
+}
+
+/// Ludusavi release info for auto-download.
+const LUDUSAVI_VERSION: &str = "0.27.0";
+#[cfg(target_os = "windows")]
+const LUDUSAVI_ARCHIVE: &str = "ludusavi-v0.27.0-win64.zip";
+#[cfg(target_os = "linux")]
+const LUDUSAVI_ARCHIVE: &str = "ludusavi-v0.27.0-linux.zip";
+#[cfg(target_os = "macos")]
+const LUDUSAVI_ARCHIVE: &str = "ludusavi-v0.27.0-mac.zip";
+
+/// Get the directory where Drop stores bundled tools.
+fn tools_dir() -> std::path::PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("drop")
+        .join("tools")
+}
+
+/// Find Ludusavi binary — check Drop's tools dir, then PATH, then common locations.
+fn find_ludusavi() -> Option<std::path::PathBuf> {
+    // Check Drop's bundled tools directory first
+    let tools = tools_dir();
+    #[cfg(target_os = "windows")]
+    let bundled = tools.join("ludusavi").join("ludusavi.exe");
+    #[cfg(not(target_os = "windows"))]
+    let bundled = tools.join("ludusavi").join("ludusavi");
+
+    if bundled.exists() {
+        return Some(bundled);
+    }
+
+    // Check PATH
+    if let Ok(output) = std::process::Command::new("ludusavi").arg("--version").output() {
+        if output.status.success() {
+            return Some(std::path::PathBuf::from("ludusavi"));
+        }
+    }
+
+    // Check common install locations
+    #[cfg(target_os = "windows")]
+    {
+        let paths = [
+            dirs::data_local_dir().map(|d| d.join("Programs").join("ludusavi").join("ludusavi.exe")),
+            dirs::home_dir().map(|d| d.join("scoop").join("apps").join("ludusavi").join("current").join("ludusavi.exe")),
+        ];
+        for path in paths.into_iter().flatten() {
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let paths = [
+            Some(std::path::PathBuf::from("/usr/bin/ludusavi")),
+            dirs::home_dir().map(|d| d.join(".local").join("bin").join("ludusavi")),
+        ];
+        for path in paths.into_iter().flatten() {
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+/// Download and install Ludusavi to Drop's tools directory.
+/// Returns the path to the installed binary.
+#[tauri::command]
+pub async fn install_ludusavi() -> Result<String, String> {
+    use log::info;
+
+    let download_url = format!(
+        "https://github.com/mtkennerly/ludusavi/releases/download/v{}/{}",
+        LUDUSAVI_VERSION, LUDUSAVI_ARCHIVE
+    );
+
+    let tools = tools_dir();
+    let ludusavi_dir = tools.join("ludusavi");
+    std::fs::create_dir_all(&ludusavi_dir)
+        .map_err(|e| format!("Failed to create tools dir: {e}"))?;
+
+    info!("[LUDUSAVI] Downloading from {}", download_url);
+
+    // Download the archive
+    let response = reqwest::get(&download_url)
+        .await
+        .map_err(|e| format!("Download failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Download failed: HTTP {}", response.status()));
+    }
+
+    let bytes = response.bytes().await.map_err(|e| format!("Download failed: {e}"))?;
+    info!("[LUDUSAVI] Downloaded {} bytes", bytes.len());
+
+    // Extract the zip
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| format!("Failed to open archive: {e}"))?;
+
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| format!("Archive error: {e}"))?;
+        let name = file.name().to_string();
+
+        // Only extract the ludusavi binary
+        if name.contains("ludusavi") && !name.ends_with('/') {
+            let out_name = if name.ends_with(".exe") { "ludusavi.exe" } else { "ludusavi" };
+            let out_path = ludusavi_dir.join(out_name);
+            let mut out_file = std::fs::File::create(&out_path)
+                .map_err(|e| format!("Failed to create file: {e}"))?;
+            std::io::copy(&mut file, &mut out_file)
+                .map_err(|e| format!("Failed to extract: {e}"))?;
+
+            // Make executable on Unix
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(0o755))
+                    .map_err(|e| format!("Failed to set permissions: {e}"))?;
+            }
+
+            info!("[LUDUSAVI] Installed to {}", out_path.display());
+            return Ok(out_path.to_string_lossy().to_string());
+        }
+    }
+
+    Err("Ludusavi binary not found in archive".to_string())
+}
+
+/// Try to find the Steam App ID for a game from its install directory.
+fn find_steam_app_id(game_id: &str) -> Option<String> {
+    let db = borrow_db_checked();
+    let install_dir = match db.applications.game_statuses.get(game_id) {
+        Some(GameDownloadStatus::Installed { install_dir, .. }) => install_dir.clone(),
+        _ => return None,
+    };
+    drop(db);
+
+    // Check steam_appid.txt in the install directory
+    let appid_path = Path::new(&install_dir).join("steam_appid.txt");
+    if let Ok(contents) = std::fs::read_to_string(&appid_path) {
+        let trimmed = contents.trim();
+        if !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit()) {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    // Check inside drop-goldberg subdirectories (in install dir)
+    let goldberg_dir = Path::new(&install_dir).join("drop-goldberg");
+    if let Ok(entries) = std::fs::read_dir(&goldberg_dir) {
+        for entry in entries.flatten() {
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.chars().all(|c| c.is_ascii_digit()) {
+                    return Some(name);
+                }
+            }
+        }
+    }
+
+    // Check %AppData%/drop-goldberg/ (shared Goldberg save location)
+    if let Some(appdata) = dirs::data_dir() {
+        let shared_goldberg = appdata.join("drop-goldberg");
+        if let Ok(entries) = std::fs::read_dir(&shared_goldberg) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.chars().all(|c| c.is_ascii_digit()) {
+                        // Verify this AppID belongs to our game by checking
+                        // if the achievements.json references exist
+                        let ach_path = entry.path().join("achievements.json");
+                        if ach_path.exists() || entry.path().join("stats.json").exists() {
+                            // Can't be 100% sure it's this game, but if there's
+                            // only one or the ID matches steam_appid.txt elsewhere,
+                            // it's a good match.
+                            log::info!("[LUDUSAVI] Found potential AppID {} in shared goldberg dir", name);
+                            return Some(name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// List PC game save locations using Ludusavi.
+/// Returns the files Ludusavi finds for this game.
+#[tauri::command]
+pub fn list_pc_game_saves(game_id: String, game_name: String) -> Result<LudusaviSaveInfo, String> {
+    let ludusavi = find_ludusavi().ok_or("Ludusavi not installed")?;
+
+    // Try Steam App ID first (more accurate), fall back to game name
+    let app_id = find_steam_app_id(&game_id);
+
+    // Step 1: Use "find" to resolve the game's canonical name from Steam ID
+    // Step 2: Use "backup --preview --api <name>" to scan for actual files
+    let resolved_name = if let Some(ref id) = app_id {
+        let find_output = std::process::Command::new(&ludusavi)
+            .args(["find", "--api", "--steam-id", id])
+            .output()
+            .ok();
+        find_output.and_then(|o| {
+            let s = String::from_utf8_lossy(&o.stdout);
+            // Parse the game name from find output (first key in "games" object)
+            serde_json::from_str::<serde_json::Value>(&s).ok()
+                .and_then(|v| v.get("games")?.as_object()?.keys().next().map(|k| k.to_string()))
+        })
+    } else {
+        None
+    };
+
+    let search_name = resolved_name.as_deref().unwrap_or(&game_name);
+    log::info!("[LUDUSAVI] Resolved game name: '{}' (from Steam ID {:?})", search_name, app_id);
+
+    // Use "backup --preview --api" which actually scans the filesystem.
+    // Try the resolved name first, then the original name, then subtitle-stripped.
+    let mut output = std::process::Command::new(&ludusavi)
+        .args(["backup", "--preview", "--api", search_name])
+        .output();
+
+    // If the resolved name failed or found nothing, try name variants
+    let needs_retry = output.as_ref()
+        .map(|o| !o.status.success() || o.stdout.len() < 50)
+        .unwrap_or(true);
+
+    if needs_retry && search_name != game_name {
+        log::info!("[LUDUSAVI] Retrying with original name: '{}'", game_name);
+        output = std::process::Command::new(&ludusavi)
+            .args(["backup", "--preview", "--api", &game_name])
+            .output();
+    }
+
+    // Try subtitle-stripped version
+    let short_name = game_name.split(" - ").next().unwrap_or(&game_name).trim();
+    let needs_retry2 = output.as_ref()
+        .map(|o| !o.status.success() || o.stdout.len() < 50)
+        .unwrap_or(true);
+
+    if needs_retry2 && short_name != game_name && short_name != search_name {
+        log::info!("[LUDUSAVI] Retrying with short name: '{}'", short_name);
+        output = std::process::Command::new(&ludusavi)
+            .args(["backup", "--preview", "--api", short_name])
+            .output();
+    }
+
+    let output = output.map_err(|e| format!("Failed to run Ludusavi: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    log::info!(
+        "[LUDUSAVI] find command for '{}' (app_id: {:?}) — status: {}, stdout: [{}], stderr: {}",
+        game_name,
+        app_id,
+        output.status,
+        stdout.trim(),
+        if stderr.is_empty() { "(empty)" } else { &stderr }
+    );
+
+    if !output.status.success() {
+        // "No matching games" is not an error, just means no saves found
+        if stderr.contains("No matching") || stdout.is_empty() {
+            return Ok(LudusaviSaveInfo {
+                files: vec![],
+                game_name: game_name.clone(),
+            });
+        }
+        return Err(format!("Ludusavi error: {}", stderr));
+    }
+
+    // Parse Ludusavi JSON API output
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|e| format!("Failed to parse Ludusavi output: {e}"))?;
+
+    let mut files = Vec::new();
+    let mut resolved_name = game_name.clone();
+
+    if let Some(games) = json.get("games").and_then(|g| g.as_object()) {
+        for (name, game_data) in games {
+            resolved_name = name.clone();
+            if let Some(game_files) = game_data.get("files").and_then(|f| f.as_object()) {
+                for (path, file_data) in game_files {
+                    let size = file_data.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+                    files.push(LudusaviFile {
+                        path: path.clone(),
+                        size,
+                        modified: 0, // Ludusavi doesn't always provide this
+                    });
+                }
+            }
+        }
+    }
+
+    // If Ludusavi found nothing, try common save locations as a fallback
+    if files.is_empty() {
+        log::info!("[LUDUSAVI] No files found via Ludusavi, scanning common save locations for '{}'", game_name);
+        let common_saves = scan_common_save_locations(&game_name, app_id.as_deref());
+        if !common_saves.is_empty() {
+            log::info!("[LUDUSAVI] Found {} files in common locations", common_saves.len());
+            return Ok(LudusaviSaveInfo {
+                files: common_saves,
+                game_name: game_name.clone(),
+            });
+        }
+    }
+
+    Ok(LudusaviSaveInfo {
+        files,
+        game_name: resolved_name,
+    })
+}
+
+/// Scan common Windows/Linux save locations for a game that Ludusavi doesn't know about.
+fn scan_common_save_locations(game_name: &str, app_id: Option<&str>) -> Vec<LudusaviFile> {
+    let mut results = Vec::new();
+
+    // Build name variations to search
+    let mut name_variants: Vec<String> = vec![game_name.to_string()];
+    // Without subtitle (e.g., "Retro Rewind - Video Store Simulator" → "Retro Rewind")
+    if let Some(idx) = game_name.find(" - ") {
+        name_variants.push(game_name[..idx].to_string());
+    }
+    if let Some(idx) = game_name.find(": ") {
+        name_variants.push(game_name[..idx].to_string());
+    }
+    // Without special characters
+    let clean = game_name.replace([':', '-', '\'', '!', '.', ','], "").replace("  ", " ").trim().to_string();
+    if clean != game_name { name_variants.push(clean.clone()); }
+    // No spaces (from full name and from each variant)
+    let no_spaces = game_name.replace(' ', "");
+    if no_spaces != game_name { name_variants.push(no_spaces); }
+    // No spaces from subtitle-stripped version
+    for variant in name_variants.clone() {
+        let ns = variant.replace(' ', "");
+        if ns != variant { name_variants.push(ns); }
+    }
+
+    // Deduplicate
+    name_variants.sort();
+    name_variants.dedup();
+
+    log::info!("[LUDUSAVI:FALLBACK] Name variants: {:?}", name_variants);
+
+    // Build a list of directories to check
+    let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        for name in &name_variants {
+            if let Some(appdata) = dirs::data_local_dir() {
+                search_dirs.push(appdata.join(name));
+            }
+            if let Some(appdata_roaming) = dirs::data_dir() {
+                search_dirs.push(appdata_roaming.join(name));
+            }
+            // %AppData%/../LocalLow/ — check both direct and under company subfolders
+            if let Some(appdata) = dirs::data_dir() {
+                if let Some(parent) = appdata.parent() {
+                    let local_low = parent.join("LocalLow");
+                    search_dirs.push(local_low.join(name));
+
+                    // Unity games: LocalLow/<CompanyName>/<GameName>/
+                    // Scan all subdirs of LocalLow for a folder matching the game name
+                    if let Ok(entries) = std::fs::read_dir(&local_low) {
+                        for entry in entries.flatten() {
+                            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                                let sub = entry.path().join(name);
+                                if sub.exists() {
+                                    search_dirs.push(sub);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Also search Documents/My Games/
+        for name in &name_variants {
+            if let Some(docs) = dirs::document_dir() {
+                search_dirs.push(docs.join("My Games").join(name));
+            }
+        }
+        if let Some(docs) = dirs::document_dir() {
+            search_dirs.push(docs.join("My Games").join(game_name));
+        }
+        // Steam userdata saves: %ProgramFiles(x86)%/Steam/userdata/*/
+        if let Some(id) = app_id {
+            if let Ok(program_files) = std::env::var("ProgramFiles(x86)") {
+                let userdata = Path::new(&program_files).join("Steam").join("userdata");
+                if let Ok(entries) = std::fs::read_dir(&userdata) {
+                    for entry in entries.flatten() {
+                        search_dirs.push(entry.path().join(id).join("remote"));
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(home) = dirs::home_dir() {
+            // ~/.local/share/<GameName>/
+            search_dirs.push(home.join(".local").join("share").join(game_name));
+            // ~/.config/unity3d/<GameName>/
+            search_dirs.push(home.join(".config").join("unity3d").join(game_name));
+        }
+    }
+
+    // Scan each directory for save-like files
+    let save_extensions = ["sav", "save", "dat", "json", "xml", "db", "sqlite", "bin", "cfg"];
+
+    for dir in &search_dirs {
+        if !dir.is_dir() {
+            continue;
+        }
+        log::info!("[LUDUSAVI:FALLBACK] Scanning: {}", dir.display());
+        scan_dir_for_saves(dir, &save_extensions, &mut results, 2); // max depth 2
+    }
+
+    results
+}
+
+/// Recursively scan a directory for save files up to max_depth.
+fn scan_dir_for_saves(
+    dir: &Path,
+    extensions: &[&str],
+    results: &mut Vec<LudusaviFile>,
+    max_depth: u32,
+) {
+    if max_depth == 0 { return; }
+    let Ok(entries) = std::fs::read_dir(dir) else { return; };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            scan_dir_for_saves(&path, extensions, results, max_depth - 1);
+        } else if path.is_file() {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            if extensions.contains(&ext.as_str()) {
+                if let Ok(meta) = entry.metadata() {
+                    results.push(LudusaviFile {
+                        path: path.to_string_lossy().to_string(),
+                        size: meta.len(),
+                        modified: meta.modified().ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0),
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Backup PC game saves using Ludusavi to a temporary directory.
+/// Returns the backup path for upload.
+#[tauri::command]
+pub fn backup_pc_game_saves(game_id: String, game_name: String) -> Result<String, String> {
+    let ludusavi = find_ludusavi().ok_or("Ludusavi not installed")?;
+
+    let backup_dir = std::env::temp_dir().join(format!("drop-ludusavi-{game_id}"));
+    let _ = std::fs::remove_dir_all(&backup_dir); // Clean previous
+    std::fs::create_dir_all(&backup_dir).map_err(|e| format!("Failed to create backup dir: {e}"))?;
+
+    let app_id = find_steam_app_id(&game_id);
+
+    // Resolve canonical name from Steam ID (backup doesn't accept --steam-id)
+    let resolved_name = if let Some(ref id) = app_id {
+        std::process::Command::new(&ludusavi)
+            .args(["find", "--api", "--steam-id", id])
+            .output()
+            .ok()
+            .and_then(|o| {
+                let s = String::from_utf8_lossy(&o.stdout);
+                serde_json::from_str::<serde_json::Value>(&s).ok()
+                    .and_then(|v| v.get("games")?.as_object()?.keys().next().map(|k| k.to_string()))
+            })
+    } else {
+        None
+    };
+    let search_name = resolved_name.as_deref().unwrap_or(&game_name);
+
+    let mut cmd = std::process::Command::new(&ludusavi);
+    cmd.args([
+        "backup",
+        "--api",
+        "--force",
+        "--path",
+        &backup_dir.to_string_lossy(),
+        search_name,
+    ]);
+
+    let output = cmd.output().map_err(|e| format!("Failed to run Ludusavi: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Ludusavi backup failed: {}", stderr));
+    }
+
+    Ok(backup_dir.to_string_lossy().to_string())
+}
+
+/// Restore PC game saves from a Ludusavi backup directory.
+#[tauri::command]
+pub fn restore_pc_game_saves(backup_path: String) -> Result<(), String> {
+    let ludusavi = find_ludusavi().ok_or("Ludusavi not installed")?;
+
+    let output = std::process::Command::new(&ludusavi)
+        .args(["restore", "--api", "--force", "--path", &backup_path])
+        .output()
+        .map_err(|e| format!("Failed to run Ludusavi: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Ludusavi restore failed: {}", stderr));
+    }
+
+    Ok(())
+}
+
+/// Check if Ludusavi is available on the system.
+/// Also updates its manifest (PCGamingWiki data) if it hasn't been updated recently.
+#[tauri::command]
+pub async fn check_ludusavi() -> bool {
+    let ludusavi = match find_ludusavi() {
+        Some(path) => path,
+        None => return false,
+    };
+
+    // Update Ludusavi's game database from PCGamingWiki (runs in background)
+    // This ensures newly added games are recognized.
+    let marker = tools_dir().join("ludusavi").join(".last-update");
+    let should_update = if let Ok(meta) = std::fs::metadata(&marker) {
+        // Update at most once per day
+        meta.modified().ok()
+            .and_then(|t| t.elapsed().ok())
+            .map(|d| d.as_secs() > 86400)
+            .unwrap_or(true)
+    } else {
+        true
+    };
+
+    if should_update {
+        let lud = ludusavi.clone();
+        tokio::task::spawn_blocking(move || {
+            log::info!("[LUDUSAVI] Updating manifest from PCGamingWiki...");
+            let output = std::process::Command::new(&lud)
+                .arg("manifest")
+                .arg("update")
+                .output();
+            match output {
+                Ok(o) if o.status.success() => {
+                    log::info!("[LUDUSAVI] Manifest updated successfully");
+                    let _ = std::fs::write(&marker, b"updated");
+                }
+                Ok(o) => {
+                    log::warn!("[LUDUSAVI] Manifest update failed: {}", String::from_utf8_lossy(&o.stderr));
+                }
+                Err(e) => log::warn!("[LUDUSAVI] Manifest update error: {e}"),
+            }
+        }).await.ok();
+    }
+
+    true
+}
+
+/// Delete a specific save file or save state.
+#[tauri::command]
+pub fn delete_game_save(
+    game_id: String,
+    filename: String,
+    save_type: String,
+) -> Result<(), String> {
+    let saves_dir = find_emulator_saves_dir(&game_id)
+        .ok_or_else(|| "Save directory not found".to_string())?;
+
+    let subdir = match save_type.as_str() {
+        "save" => "saves",
+        "state" => "states",
+        _ => return Err("Invalid save type".to_string()),
+    };
+
+    let file_path = saves_dir.join(subdir).join(&filename);
+
+    // Security: ensure the resolved path is still inside the saves directory
+    let canonical = file_path
+        .canonicalize()
+        .map_err(|e| format!("File not found: {e}"))?;
+    let base = saves_dir
+        .join(subdir)
+        .canonicalize()
+        .map_err(|e| format!("Directory error: {e}"))?;
+    if !canonical.starts_with(&base) {
+        return Err("Invalid file path".to_string());
+    }
+
+    std::fs::remove_file(&canonical).map_err(|e| format!("Failed to delete: {e}"))
+}

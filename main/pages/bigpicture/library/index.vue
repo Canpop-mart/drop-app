@@ -33,20 +33,6 @@
         <span>{{ sortLabel }}</span>
       </div>
 
-      <!-- Collections button -->
-      <button
-        :ref="
-          (el: any) =>
-            registerFilter(el, {
-              onSelect: () => $router.push('/bigpicture/library/collections'),
-            })
-        "
-        class="px-4 py-2 text-sm rounded-lg font-medium transition-colors text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 flex items-center gap-2"
-      >
-        <FolderIcon class="size-4" />
-        <span>Collections</span>
-      </button>
-
       <!-- Search -->
       <button
         class="flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 transition-colors"
@@ -150,6 +136,138 @@
     </div>
 
     <!-- Game grid -->
+    <!-- ═══ Shelves view ═══ -->
+    <div
+      v-if="activeFilter === 'shelves'"
+      class="flex-1 overflow-y-auto px-8 py-6"
+      data-bp-scroll
+    >
+      <!-- Create shelf button -->
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-lg font-semibold font-display" style="color: var(--bpm-text)">Your Shelves</h2>
+        <button
+          v-if="!showNewShelfInput"
+          :ref="(el: any) => registerTile(el, { onSelect: () => (showNewShelfInput = true) })"
+          class="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
+          style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
+          @click="showNewShelfInput = true"
+        >
+          + New Shelf
+        </button>
+      </div>
+
+      <!-- New shelf name input with on-screen keyboard -->
+      <BigPictureKeyboard
+        :visible="showNewShelfInput"
+        :model-value="newShelfName"
+        placeholder="Enter shelf name..."
+        @update:model-value="newShelfName = $event"
+        @close="showNewShelfInput = false"
+        @submit="createNewShelf"
+      />
+      <div v-if="showNewShelfInput && newShelfName" class="flex items-center gap-3 mb-6">
+        <span class="text-sm" style="color: var(--bpm-text)">Creating shelf: <strong>{{ newShelfName }}</strong></span>
+      </div>
+
+      <!-- Shelf rows -->
+      <div v-if="shelvesData.shelves.value.length > 0" class="space-y-8">
+        <div v-for="shelf in shelvesData.shelves.value" :key="shelf.id">
+          <!-- Shelf header -->
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-base font-semibold" style="color: var(--bpm-text)">
+              {{ shelf.name }}
+              <span class="text-xs font-normal ml-2" style="color: var(--bpm-muted)">
+                {{ shelf.entries.length }} game{{ shelf.entries.length !== 1 ? 's' : '' }}
+              </span>
+            </h3>
+            <div class="flex items-center gap-2">
+              <button
+                :ref="(el: any) => registerTile(el, { onSelect: () => shelvesData.toggleShelfVisibility(shelf.id, !shelf.isPublic) })"
+                class="px-3 py-1 text-xs rounded-lg transition-colors"
+                :style="{ color: shelf.isPublic ? 'var(--bpm-accent-hex)' : 'var(--bpm-muted)' }"
+                @click="shelvesData.toggleShelfVisibility(shelf.id, !shelf.isPublic)"
+              >
+                {{ shelf.isPublic ? 'Public' : 'Private' }}
+              </button>
+              <button
+                :ref="(el: any) => registerTile(el, { onSelect: () => shelvesData.deleteShelf(shelf.id) })"
+                class="px-3 py-1 text-xs rounded-lg transition-colors"
+                style="color: var(--bpm-muted)"
+                @click="shelvesData.deleteShelf(shelf.id)"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+
+          <!-- Horizontal scroll row of games -->
+          <div v-if="shelf.entries.length > 0" class="flex gap-4 overflow-x-auto pb-4 px-1 pt-1" style="scrollbar-width: thin">
+            <div
+              v-for="entry in shelf.entries"
+              :key="entry.gameId"
+              class="flex-shrink-0 group"
+              style="width: 11rem"
+            >
+              <div
+                class="relative cursor-pointer rounded-lg overflow-hidden transition-transform hover:scale-105"
+                style="aspect-ratio: 2/3"
+                :ref="(el: any) => registerTile(el, {
+                  onSelect: () => {
+                    focusNav.saveFocusSnapshot(route.path);
+                    $router.push(`/bigpicture/library/${entry.gameId}`);
+                  },
+                })"
+              >
+                <img
+                  v-if="entry.game.mCoverObjectId"
+                  :src="useObject(entry.game.mCoverObjectId)"
+                  :alt="entry.game.mName"
+                  class="w-full h-full object-cover"
+                />
+                <div
+                  v-else
+                  class="w-full h-full flex items-center justify-center text-2xl font-bold"
+                  style="background-color: var(--bpm-surface); color: var(--bpm-accent-hex)"
+                >
+                  {{ entry.game.mName.charAt(0) }}
+                </div>
+                <!-- Remove button on hover -->
+                <button
+                  class="absolute top-1 right-1 size-6 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  style="background-color: rgba(0,0,0,0.7); color: #fff; font-size: 0.7rem"
+                  @click.stop="shelvesData.removeFromShelf(shelf.id, entry.gameId)"
+                >
+                  ✕
+                </button>
+              </div>
+              <p class="text-xs mt-1.5 truncate" style="color: var(--bpm-text)">
+                {{ entry.game.mName }}
+              </p>
+            </div>
+          </div>
+
+          <!-- Empty shelf -->
+          <div v-else class="py-6 text-center rounded-lg" style="background-color: var(--bpm-surface)">
+            <p class="text-sm" style="color: var(--bpm-muted)">
+              No games on this shelf yet. Add games from their detail page.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- No shelves at all -->
+      <div v-else-if="!shelvesData.loading.value" class="flex items-center justify-center py-24">
+        <div class="text-center">
+          <svg class="size-16 mx-auto mb-4" style="color: var(--bpm-muted)" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 6.878V6a2.25 2.25 0 012.25-2.25h7.5A2.25 2.25 0 0118 6v.878m-12 0c.235-.083.487-.128.75-.128h10.5c.263 0 .515.045.75.128m-12 0A2.25 2.25 0 004.5 9v.878m13.5-3A2.25 2.25 0 0119.5 9v.878m0 0a2.246 2.246 0 00-.75-.128H5.25c-.263 0-.515.045-.75.128m15 0A2.25 2.25 0 0121 12v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6c0-1.011.672-1.866 1.594-2.144" />
+          </svg>
+          <h3 class="text-xl font-semibold mb-2" style="color: var(--bpm-text)">No shelves yet</h3>
+          <p class="text-sm mb-4" style="color: var(--bpm-muted)">Create a shelf to organize your games into categories</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Normal game grid view ═══ -->
     <div
       v-else
       ref="scrollContainer"
@@ -494,7 +612,26 @@ const filters = computed(() => [
     value: "remote",
     count: library.value.length - installedCount.value,
   },
+  { label: "Shelves", value: "shelves", count: shelvesData.shelves.value.length },
 ]);
+
+// ── Shelves ─────────────────────────────────────────────────────────────
+const shelvesData = useShelves();
+const showNewShelfInput = ref(false);
+const newShelfName = ref("");
+
+async function createNewShelf() {
+  const name = newShelfName.value.trim();
+  if (!name) return;
+  await shelvesData.createShelf(name);
+  newShelfName.value = "";
+  showNewShelfInput.value = false;
+}
+
+// Load shelves when the page mounts
+onMounted(() => {
+  shelvesData.fetchShelves();
+});
 
 const filteredGames = computed(() => {
   let games = [...library.value];

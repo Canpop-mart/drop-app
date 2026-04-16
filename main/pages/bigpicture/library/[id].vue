@@ -96,8 +96,8 @@
             In Library
           </span>
 
-          <!-- Controller, Quality & Widescreen cycle buttons — only for emulated games -->
-          <template v-if="isEmulatedGame">
+          <!-- Controller, Quality & Widescreen cycle buttons — only for installed emulated games -->
+          <template v-if="version && isEmulatedGame && status?.type === 'Installed'">
             <button
               :ref="(el: any) => registerAction(el, { onSelect: cycleController })"
               class="inline-flex items-center gap-1.5 px-4 py-3 text-sm bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 rounded-xl transition-colors backdrop-blur-sm"
@@ -141,6 +141,28 @@
             </button>
           </template>
         </div>
+      </div>
+    </div>
+
+    <!-- Playtime & Achievement stats bar -->
+    <div v-if="game && (gamePlaytime || achievements.length > 0)" class="px-8 pt-4 flex items-center gap-6">
+      <!-- Playtime -->
+      <div v-if="gamePlaytime" class="flex items-center gap-4">
+        <div v-if="gamePlaytime.lastPlayedAt" class="flex items-center gap-1.5">
+          <ClockIcon class="size-4 text-zinc-500" />
+          <span class="text-sm text-zinc-400">Last played {{ formatTimeAgo(gamePlaytime.lastPlayedAt) }}</span>
+        </div>
+        <div v-if="gamePlaytime.totalSeconds > 0" class="flex items-center gap-1.5">
+          <PlayIcon class="size-4 text-zinc-500" />
+          <span class="text-sm text-zinc-400">{{ formatPlaytimeDetailed(gamePlaytime.totalSeconds) }} total</span>
+        </div>
+      </div>
+      <div class="flex-1" />
+      <!-- Achievement completion -->
+      <div v-if="achievements.length > 0" class="flex items-center gap-2">
+        <TrophyIcon class="size-4 text-yellow-500" />
+        <span class="text-sm text-zinc-400">{{ unlockedCount }}/{{ achievements.length }}</span>
+        <span class="text-xs text-zinc-600">({{ achievementPercent.toFixed(0) }}%)</span>
       </div>
     </div>
 
@@ -283,6 +305,237 @@
           No screenshots available.
         </p>
       </div>
+      <!-- Saves -->
+      <div v-else-if="activeTab === 'saves'" class="space-y-4">
+        <!-- Unified save list: merges local + cloud saves -->
+        <div v-if="mergedSaves.length > 0" class="space-y-2">
+          <div
+            v-for="item in mergedSaves"
+            :key="item.filename"
+            class="flex items-center gap-4 bg-zinc-900/50 rounded-xl p-4"
+          >
+            <!-- Icon based on file type -->
+            <div class="size-10 rounded-lg flex items-center justify-center flex-shrink-0"
+              :style="{ backgroundColor: saveTypeColor(item.filename).bg }"
+            >
+              <svg class="size-5" :style="{ color: saveTypeColor(item.filename).text }" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path v-if="item.filename.endsWith('.srm')" stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375" />
+                <path v-else-if="item.filename.endsWith('.png')" stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0022.5 18.75V5.25A2.25 2.25 0 0020.25 3H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21z" />
+                <path v-else stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+              </svg>
+            </div>
+
+            <!-- Info -->
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium text-zinc-200 truncate">{{ item.filename }}</p>
+              <p class="text-xs text-zinc-500">
+                {{ saveTypeLabel(item.filename) }}
+                <template v-if="item.local">&middot; {{ formatSaveSize(item.local.size) }} &middot; {{ formatTimeAgo(new Date(item.local.modified * 1000).toISOString()) }}</template>
+              </p>
+              <!-- Sync status badges -->
+              <div class="flex gap-2 mt-1">
+                <span v-if="item.local" class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-green-900/30 text-green-400">
+                  Local
+                </span>
+                <span v-if="item.cloud" class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400">
+                  Cloud &middot; {{ formatSaveSize(item.cloud.size) }}
+                </span>
+                <span v-if="!item.local && item.cloud" class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-yellow-900/30 text-yellow-400">
+                  Cloud only — download to play
+                </span>
+              </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <button
+                v-if="item.local"
+                :ref="(el: any) => registerAction(el, { onSelect: () => requestUpload(item.local!) })"
+                class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-blue-900/20 text-blue-400 hover:bg-blue-900/30"
+                @click="requestUpload(item.local!)"
+              >
+                {{ cloudSyncStatus[item.filename] === 'uploading' ? 'Syncing...' : (item.cloud ? 'Re-sync' : 'Sync to Cloud') }}
+              </button>
+              <button
+                v-if="item.cloud"
+                :ref="(el: any) => registerAction(el, { onSelect: () => requestDownload(item.filename, item.cloud!.saveType) })"
+                class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-green-900/20 text-green-400 hover:bg-green-900/30"
+                @click="requestDownload(item.filename, item.cloud!.saveType)"
+              >
+                {{ cloudSyncStatus[item.filename] === 'downloading' ? 'Downloading...' : 'Download' }}
+              </button>
+              <button
+                v-if="item.local"
+                :ref="(el: any) => registerAction(el, { onSelect: () => deleteSave(item.local!) })"
+                class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-red-900/20 text-red-400 hover:bg-red-900/30"
+                @click="deleteSave(item.local!)"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- PC Game saves via Ludusavi -->
+        <div v-if="pcSaves.length > 0" class="mt-6">
+          <div class="flex items-center justify-between mb-3">
+            <h4 class="text-sm font-semibold" style="color: var(--bpm-muted)">PC GAME SAVES (via Ludusavi)</h4>
+            <div class="flex gap-2">
+              <button
+                :ref="(el: any) => registerAction(el, { onSelect: backupPcSaves })"
+                class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-blue-900/20 text-blue-400 hover:bg-blue-900/30"
+                @click="backupPcSaves"
+              >
+                {{ pcSaveStatus === 'backing-up' ? 'Backing up...' : 'Backup All' }}
+              </button>
+              <button
+                :ref="(el: any) => registerAction(el, { onSelect: restorePcSaves })"
+                class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-green-900/20 text-green-400 hover:bg-green-900/30"
+                @click="restorePcSaves"
+              >
+                {{ pcSaveStatus === 'restoring' ? 'Restoring...' : 'Restore' }}
+              </button>
+            </div>
+          </div>
+          <!-- Grouped save slots -->
+          <div class="space-y-3">
+            <div
+              v-for="group in pcSaveGroups"
+              :key="group.name"
+              class="rounded-xl overflow-hidden"
+              style="background-color: var(--bpm-surface)"
+            >
+              <!-- Primary save row — info area + action buttons laid out as a flex row -->
+              <div class="flex items-center gap-4 p-4">
+                <!-- Save icon + info (focusable for expand toggle) -->
+                <div
+                  class="flex items-center gap-4 flex-1 min-w-0 cursor-pointer"
+                  :ref="(el: any) => registerAction(el, { onSelect: () => { if (group.backups.length > 0) group.expanded = !group.expanded; } })"
+                  @click="() => { if (group.backups.length > 0) group.expanded = !group.expanded; }"
+                >
+                  <div class="size-10 rounded-lg flex items-center justify-center flex-shrink-0"
+                    :style="{ backgroundColor: group.type === 'settings' ? 'rgba(156,163,175,0.15)' : 'rgba(34,197,94,0.15)' }"
+                  >
+                    <svg v-if="group.type === 'settings'" class="size-5 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    <svg v-else class="size-5 text-green-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375" />
+                    </svg>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-zinc-200">{{ group.label }}</p>
+                    <p class="text-xs text-zinc-500">
+                      {{ group.primary ? pcSaveFileName(group.primary.path) : group.name }}
+                      <template v-if="group.primary && group.primary.size > 0"> &middot; {{ formatSaveSize(group.primary.size) }}</template>
+                      <template v-if="group.backups.length > 0"> &middot; {{ group.backups.length }} backup{{ group.backups.length !== 1 ? 's' : '' }}</template>
+                    </p>
+                  </div>
+                </div>
+                <!-- Action buttons — each independently focusable -->
+                <div class="flex items-center gap-2 flex-shrink-0">
+                  <span v-if="pcCloudStatus[group.name]" class="text-xs px-2 py-0.5 rounded-full"
+                    :class="pcCloudStatus[group.name] === 'synced' ? 'bg-green-900/20 text-green-400' : pcCloudStatus[group.name] === 'cloud-only' ? 'bg-blue-900/20 text-blue-400' : 'bg-zinc-800 text-zinc-500'"
+                  >
+                    {{ pcCloudStatus[group.name] === 'synced' ? 'Synced' : pcCloudStatus[group.name] === 'cloud-only' ? 'Cloud' : pcCloudStatus[group.name] === 'cloud-newer' ? 'Cloud newer' : 'Local newer' }}
+                  </span>
+                  <button
+                    v-if="group.primary && pcSyncStatus[group.name] !== 'uploading'"
+                    :ref="(el: any) => registerAction(el, { onSelect: () => uploadPcSave(group) })"
+                    class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-blue-900/20 text-blue-400 hover:bg-blue-900/30"
+                    @click.stop="uploadPcSave(group)"
+                  >
+                    Upload
+                  </button>
+                  <span v-else-if="pcSyncStatus[group.name] === 'uploading'" class="text-xs text-blue-400 animate-pulse">Uploading...</span>
+                  <button
+                    v-if="hasPcCloudSave(group.name) && pcSyncStatus[group.name] !== 'downloading'"
+                    :ref="(el: any) => registerAction(el, { onSelect: () => downloadPcSave(group) })"
+                    class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-green-900/20 text-green-400 hover:bg-green-900/30"
+                    @click.stop="downloadPcSave(group)"
+                  >
+                    Download
+                  </button>
+                  <span v-else-if="pcSyncStatus[group.name] === 'downloading'" class="text-xs text-green-400 animate-pulse">Downloading...</span>
+                </div>
+              </div>
+
+              <!-- Expandable backups -->
+              <div v-if="group.expanded && group.backups.length > 0" class="border-t px-4 pb-3 pt-2 space-y-1" style="border-color: var(--bpm-border)">
+                <div
+                  v-for="backup in group.backups"
+                  :key="backup.path"
+                  class="flex items-center gap-3 py-1.5 pl-14"
+                >
+                  <div class="size-5 rounded flex items-center justify-center flex-shrink-0" style="background-color: rgba(234,179,8,0.1)">
+                    <svg class="size-3 text-yellow-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                    </svg>
+                  </div>
+                  <span class="text-xs text-zinc-400 truncate">{{ pcSaveFileName(backup.path) }}</span>
+                  <span v-if="backup.size > 0" class="text-xs text-zinc-600 flex-shrink-0">{{ formatSaveSize(backup.size) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="!ludusaviAvailable && isNativeGame" class="mt-4 p-4 rounded-xl" style="background-color: var(--bpm-surface)">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-sm font-medium" style="color: var(--bpm-text)">PC Save Management</p>
+              <p class="text-xs mt-0.5" style="color: var(--bpm-muted)">
+                Drop uses Ludusavi to detect and back up PC game saves. Install it to enable save management for this game.
+              </p>
+            </div>
+            <button
+              :ref="(el: any) => registerAction(el, { onSelect: doInstallLudusavi })"
+              class="px-4 py-2 text-sm font-medium rounded-lg flex-shrink-0 ml-4"
+              :style="{ backgroundColor: 'var(--bpm-accent-hex)', color: 'var(--bpm-accent-text)' }"
+              :disabled="ludusaviInstalling"
+              @click="doInstallLudusavi"
+            >
+              {{ ludusaviInstalling ? 'Installing...' : 'Install Ludusavi' }}
+            </button>
+          </div>
+        </div>
+
+        <p v-if="mergedSaves.length === 0 && pcSaves.length === 0 && !savesLoading" class="text-zinc-500 text-center py-8 text-sm">
+          <template v-if="isNativeGame && !ludusaviAvailable">
+            <!-- Ludusavi prompt handles this case above -->
+          </template>
+          <template v-else-if="isNativeGame && ludusaviAvailable">
+            No saves detected by Ludusavi for this game.
+          </template>
+          <template v-else>
+            No save data found for this game. Play the game to create saves.
+          </template>
+        </p>
+        <p v-if="savesLoading" class="text-zinc-500 text-center py-8 text-sm">
+          Loading saves...
+        </p>
+      </div>
+    </div>
+
+    <!-- Recommended games -->
+    <div v-if="recommendedGames.length > 0" class="px-8 pb-6">
+      <h3 class="text-sm font-semibold mb-3" style="color: var(--bpm-muted)">YOU MIGHT ALSO LIKE</h3>
+      <div class="flex gap-4 overflow-x-auto pb-2" style="scrollbar-width: thin">
+        <div
+          v-for="rec in recommendedGames"
+          :key="rec.id"
+          class="flex-shrink-0 cursor-pointer bp-focus-delegate"
+          style="width: 9rem"
+          :ref="(el: any) => registerAction(el, { onSelect: () => $router.push(`/bigpicture/library/${rec.id}`) })"
+        >
+          <div class="bp-focus-ring rounded-lg overflow-hidden transition-transform hover:scale-105" style="aspect-ratio: 3/4">
+            <img v-if="rec.mCoverObjectId" :src="objectUrl(rec.mCoverObjectId)" class="w-full h-full object-cover" loading="lazy" />
+            <div v-else class="w-full h-full flex items-center justify-center bg-zinc-800 text-zinc-500 text-lg font-bold">{{ rec.mName[0] }}</div>
+          </div>
+          <p class="text-xs mt-1.5 truncate" style="color: var(--bpm-text)">{{ rec.mName }}</p>
+        </div>
+      </div>
     </div>
 
     <!-- Launch error dialog -->
@@ -318,6 +571,106 @@
       @confirm="doRemoveFromLibrary"
       @cancel="confirmRemoveFromLibrary = false"
     />
+
+    <!-- Cloud sync confirmation -->
+    <BigPictureDialog
+      :visible="confirmSyncAction !== null"
+      :title="confirmSyncAction?.type === 'upload' ? 'Replace Cloud Save?' : 'Replace Local Save?'"
+      :message="confirmSyncAction?.type === 'upload'
+        ? `This will replace the cloud version of '${confirmSyncAction?.filename}' with your local copy. A backup of the current cloud version will be saved automatically.`
+        : `This will replace your local copy of '${confirmSyncAction?.filename}' with the cloud version. A backup of your current local save will be created automatically.`"
+      :confirm-label="confirmSyncAction?.type === 'upload' ? 'Replace Cloud Save' : 'Replace Local Save'"
+      cancel-label="Cancel"
+      :destructive="false"
+      @confirm="confirmSync"
+      @cancel="confirmSyncAction = null"
+    />
+
+    <!-- On-screen keyboard for creating new shelf -->
+    <BigPictureKeyboard
+      :visible="showNewShelfKeyboard"
+      :model-value="newShelfNameInPicker"
+      placeholder="Enter shelf name..."
+      @update:model-value="newShelfNameInPicker = $event"
+      @close="showNewShelfKeyboard = false"
+      @submit="showNewShelfKeyboard = false; createShelfAndAdd()"
+    />
+
+    <!-- Shelf picker overlay -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-opacity duration-200"
+        enter-from-class="opacity-0"
+        enter-to-class="opacity-100"
+        leave-active-class="transition-opacity duration-150"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="showShelfPicker"
+          class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          @click.self="showShelfPicker = false"
+        >
+          <div
+            class="rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4"
+            style="background-color: var(--bpm-surface); color: var(--bpm-text)"
+          >
+            <h2 class="text-lg font-semibold font-display mb-4">Add to Shelf</h2>
+
+            <!-- Existing shelves as checkboxes -->
+            <div v-if="shelvesData.shelves.value.length > 0" class="space-y-2 mb-4">
+              <button
+                v-for="(shelf, sIdx) in shelvesData.shelves.value"
+                :key="shelf.id"
+                class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all text-sm"
+                :style="{
+                  backgroundColor: shelfFocusIdx === sIdx ? 'var(--bpm-accent-hex)' : 'var(--bpm-bg)',
+                  color: shelfFocusIdx === sIdx ? 'var(--bpm-accent-text)' : 'var(--bpm-text)',
+                }"
+                @click="toggleGameOnShelf(shelf.id)"
+              >
+                <div
+                  class="size-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors"
+                  :style="{
+                    borderColor: shelf.entries.some(e => e.gameId === gameId) ? 'var(--bpm-accent-hex)' : 'var(--bpm-muted)',
+                    backgroundColor: shelf.entries.some(e => e.gameId === gameId) ? 'var(--bpm-accent-hex)' : 'transparent',
+                  }"
+                >
+                  <svg v-if="shelf.entries.some(e => e.gameId === gameId)" class="size-3 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                  </svg>
+                </div>
+                <span>{{ shelf.name }}</span>
+                <span class="ml-auto text-xs" style="color: var(--bpm-muted)">{{ shelf.entries.length }}</span>
+              </button>
+            </div>
+
+            <!-- Create new shelf -->
+            <button
+              class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-sm mb-4"
+              :style="{
+                backgroundColor: shelfFocusIdx === shelvesData.shelves.value.length ? 'var(--bpm-accent-hex)' : 'var(--bpm-bg)',
+                color: shelfFocusIdx === shelvesData.shelves.value.length ? 'var(--bpm-accent-text)' : 'var(--bpm-muted)',
+              }"
+              @click="showNewShelfKeyboard = true"
+            >
+              <span>+ Create New Shelf</span>
+            </button>
+
+            <button
+              class="w-full py-2.5 text-sm font-medium rounded-xl transition-colors"
+              :style="{
+                backgroundColor: shelfFocusIdx === shelvesData.shelves.value.length + 1 ? 'var(--bpm-accent-hex)' : 'var(--bpm-bg)',
+                color: shelfFocusIdx === shelvesData.shelves.value.length + 1 ? 'var(--bpm-accent-text)' : 'var(--bpm-muted)',
+              }"
+              @click="showShelfPicker = false"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
     <!-- Options menu overlay — fully gamepad-navigable -->
     <Teleport to="body">
@@ -369,8 +722,10 @@ import {
   ArrowDownTrayIcon,
   TrophyIcon,
 } from "@heroicons/vue/24/solid";
+import { ClockIcon } from "@heroicons/vue/24/outline";
 import BigPictureDialog from "~/components/bigpicture/BigPictureDialog.vue";
 import BigPictureButtonPrompt from "~/components/bigpicture/BigPictureButtonPrompt.vue";
+import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
 import {
   useGame,
   type LaunchResult,
@@ -505,7 +860,10 @@ function renderMarkdown(md: string): string {
 // ── Game type detection ─────────────────────────────────────────────────
 const isEmulatedGame = computed(() => {
   const ver = version.value;
-  return ver?.launches?.some((l) => l.emulator != null) ?? false;
+  if (!ver?.launches) return false;
+  // Check if ALL launches use an emulator. If any launch is native (no emulator),
+  // this is a native game — the emulator buttons shouldn't show.
+  return ver.launches.length > 0 && ver.launches.every((l) => l.emulator != null);
 });
 const isNativeGame = computed(() => !isEmulatedGame.value);
 const isWindowsGame = computed(() => {
@@ -664,7 +1022,7 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
     });
   }
 
-  if (isNativeGame.value && isWindowsGame.value) {
+  if (isNativeGame.value && isWindowsGame.value && status.value?.type === "Installed") {
     items.push({
       id: "profile",
       label: "Set Account Name",
@@ -678,6 +1036,15 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
     action: () => {
       showOptions.value = false;
       checkForUpdates();
+    },
+  });
+
+  items.push({
+    id: "add-to-shelf",
+    label: "Add to Shelf",
+    action: () => {
+      showOptions.value = false;
+      showShelfPicker.value = true;
     },
   });
 
@@ -788,15 +1155,98 @@ function removeFromLibrary() {
 async function doRemoveFromLibrary() {
   confirmRemoveFromLibrary.value = false;
   try {
-    await fetch(serverUrl("api/v1/client/collection/default/entry"), {
+    const resp = await fetch(serverUrl("api/v1/collection/default/entry"), {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: gameId }),
     });
+    if (!resp.ok) {
+      throw new Error(`Server returned ${resp.status}: ${resp.statusText}`);
+    }
     navigateTo("/bigpicture/library");
   } catch (e) {
     console.error("[BPM:GAME] Remove from library failed:", e);
     launchError.value = `Failed to remove: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+// ── Shelf picker ────────────────────────────────────────────────────────
+const showShelfPicker = ref(false);
+const shelvesData = useShelves();
+const newShelfNameInPicker = ref("");
+const showNewShelfKeyboard = ref(false);
+const shelfFocusIdx = ref(0);
+const _shelfSubs: (() => void)[] = [];
+let shelfLockId = "";
+
+function wireShelfGamepad() {
+  unwireShelfGamepad();
+  const totalItems = shelvesData.shelves.value.length + 2; // shelves + Create button + Done button
+  _shelfSubs.push(
+    gamepad.onButton(GamepadButton.DPadUp, () => {
+      if (!showShelfPicker.value) return;
+      shelfFocusIdx.value = Math.max(0, shelfFocusIdx.value - 1);
+    }),
+    gamepad.onButton(GamepadButton.DPadDown, () => {
+      if (!showShelfPicker.value) return;
+      shelfFocusIdx.value = Math.min(totalItems - 1, shelfFocusIdx.value + 1);
+    }),
+    gamepad.onButton(GamepadButton.South, () => {
+      if (!showShelfPicker.value) return;
+      const idx = shelfFocusIdx.value;
+      const shelfCount = shelvesData.shelves.value.length;
+      if (idx < shelfCount) {
+        toggleGameOnShelf(shelvesData.shelves.value[idx].id);
+      } else if (idx === shelfCount) {
+        showNewShelfKeyboard.value = true; // Create New Shelf button
+      } else {
+        showShelfPicker.value = false; // Done button
+      }
+    }),
+    gamepad.onButton(GamepadButton.East, () => {
+      if (!showShelfPicker.value) return;
+      showShelfPicker.value = false;
+    }),
+  );
+}
+
+function unwireShelfGamepad() {
+  for (const unsub of _shelfSubs) unsub();
+  _shelfSubs.length = 0;
+}
+
+watch(showShelfPicker, (v) => {
+  if (v) {
+    shelfFocusIdx.value = 0;
+    shelfLockId = focusNav.acquireInputLock();
+    wireShelfGamepad();
+  } else {
+    unwireShelfGamepad();
+    focusNav.releaseInputLock(shelfLockId);
+  }
+});
+
+// Load shelves when game page mounts
+onMounted(() => { shelvesData.fetchShelves(); });
+
+async function toggleGameOnShelf(shelfId: string) {
+  const shelf = shelvesData.shelves.value.find((s) => s.id === shelfId);
+  if (!shelf) return;
+  const isOnShelf = shelf.entries.some((e) => e.gameId === gameId);
+  if (isOnShelf) {
+    await shelvesData.removeFromShelf(shelfId, gameId);
+  } else {
+    await shelvesData.addToShelf(shelfId, gameId);
+  }
+}
+
+async function createShelfAndAdd() {
+  const name = newShelfNameInPicker.value.trim();
+  if (!name) return;
+  const shelf = await shelvesData.createShelf(name);
+  newShelfNameInPicker.value = "";
+  if (shelf) {
+    await shelvesData.addToShelf(shelf.id, gameId);
   }
 }
 
@@ -817,6 +1267,7 @@ const tabs = [
   { label: "Achievements", value: "achievements" },
   { label: "Details", value: "details" },
   { label: "Gallery", value: "gallery" },
+  { label: "Saves", value: "saves" },
 ];
 
 interface AchievementItem {
@@ -830,6 +1281,648 @@ interface AchievementItem {
 }
 
 const achievements: Ref<AchievementItem[]> = ref([]);
+
+// ── Playtime data ─────────────────────────────────────────────────────────
+const gamePlaytime = ref<{ totalSeconds: number; lastPlayedAt: string | null } | null>(null);
+
+async function fetchPlaytime() {
+  try {
+    const url = serverUrl("api/v1/client/playtime/recent");
+    const resp = await fetch(url);
+    if (!resp.ok) return;
+    const data = await resp.json() as Array<{
+      gameId: string;
+      totalPlaytimeSeconds: number;
+      lastPlayedAt: string;
+    }>;
+    const entry = data.find((d) => d.gameId === gameId);
+    if (entry) {
+      gamePlaytime.value = {
+        totalSeconds: entry.totalPlaytimeSeconds,
+        lastPlayedAt: entry.lastPlayedAt,
+      };
+    }
+  } catch {
+    // Non-critical — just don't show playtime
+  }
+}
+
+function formatTimeAgo(dateStr: string): string {
+  const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+  return `${Math.floor(diff / 604800)}w ago`;
+}
+
+// ── Save state management ─────────────────────────────────────────────────
+interface SaveFile {
+  filename: string;
+  size: number;
+  modified: number;
+  save_type: string;
+}
+const gameSaves = ref<SaveFile[]>([]);
+const savesLoading = ref(false);
+
+async function fetchSaves() {
+  savesLoading.value = true;
+  try {
+    const saves: SaveFile[] = await invoke("list_game_saves", { gameId });
+    gameSaves.value = saves;
+  } catch {
+    gameSaves.value = [];
+  } finally {
+    savesLoading.value = false;
+  }
+}
+
+async function deleteSave(save: SaveFile) {
+  try {
+    await invoke("delete_game_save", {
+      gameId,
+      filename: save.filename,
+      saveType: save.save_type,
+    });
+    gameSaves.value = gameSaves.value.filter((s) => s.filename !== save.filename);
+  } catch (e) {
+    console.error("[BPM:GAME] Failed to delete save:", e);
+    launchError.value = `Failed to delete save: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+// ── Ludusavi PC game saves ─────────────────────────────────────────────────
+interface LudusaviFile { path: string; size: number; modified: number }
+const pcSaves = ref<LudusaviFile[]>([]);
+const pcSaveStatus = ref("");
+const ludusaviAvailable = ref(false);
+const ludusaviInstalling = ref(false);
+
+async function doInstallLudusavi() {
+  ludusaviInstalling.value = true;
+  try {
+    await invoke("install_ludusavi");
+    ludusaviAvailable.value = true;
+    // Now fetch PC saves since Ludusavi is installed
+    await fetchPcSaves();
+  } catch (e) {
+    console.error("[BPM:GAME] Ludusavi install failed:", e);
+    launchError.value = `Ludusavi install failed: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    ludusaviInstalling.value = false;
+  }
+}
+
+async function fetchPcSaves() {
+  try {
+    ludusaviAvailable.value = await invoke("check_ludusavi");
+    if (!ludusaviAvailable.value || !game.value) return;
+
+    const result: { files: LudusaviFile[]; game_name: string } = await invoke("list_pc_game_saves", {
+      gameId,
+      gameName: game.value.mName,
+    });
+    pcSaves.value = result.files;
+  } catch {
+    pcSaves.value = [];
+  }
+}
+
+async function backupPcSaves() {
+  if (!game.value) return;
+  pcSaveStatus.value = "backing-up";
+  try {
+    const backupPath: string = await invoke("backup_pc_game_saves", {
+      gameId,
+      gameName: game.value.mName,
+    });
+    // Upload the backup to cloud
+    // For now, just show success
+    launchError.value = null;
+    console.log("[BPM:GAME] Ludusavi backup at:", backupPath);
+  } catch (e) {
+    launchError.value = `Backup failed: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    pcSaveStatus.value = "";
+  }
+}
+
+async function restorePcSaves() {
+  pcSaveStatus.value = "restoring";
+  try {
+    // Look for existing backup
+    const backupPath = `${await invoke("get_temp_dir")}drop-ludusavi-${gameId}`.replace(/\\/g, "/");
+    await invoke("restore_pc_game_saves", { backupPath });
+  } catch (e) {
+    launchError.value = `Restore failed: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    pcSaveStatus.value = "";
+  }
+}
+
+// Group PC saves into save slots with their backups
+interface PcSaveGroup {
+  name: string;
+  label: string;
+  type: "save" | "settings" | "other";
+  primary: LudusaviFile | null;
+  backups: LudusaviFile[];
+  expanded: boolean;
+}
+
+const pcSaveGroups = ref<PcSaveGroup[]>([]);
+
+watch(pcSaves, (saves) => {
+  const filtered = saves.filter((f) => {
+    const lower = f.path.toLowerCase();
+    if (lower.includes("crashreportclient")) return false;
+    if (lower.includes("uecc-windows-")) return false;
+    if (lower.endsWith(".log") || lower.endsWith(".tmp")) return false;
+    return true;
+  });
+
+  // Group: find primary saves and attach their backups
+  const groups = new Map<string, PcSaveGroup>();
+
+  // Use case-insensitive keys to avoid duplicates on Windows
+  for (const file of filtered) {
+    const filename = pcSaveFileName(file.path);
+    const lower = filename.toLowerCase();
+    const key = lower; // case-insensitive grouping key
+
+    // Determine if this is a backup of another file
+    const backupMatch = lower.match(/^(.+?)_backup\d*\.(\w+)$/);
+    if (backupMatch) {
+      const parentKey = `${backupMatch[1]}.${backupMatch[2]}`;
+      const existing = groups.get(parentKey);
+      if (existing) {
+        existing.backups.push(file);
+      } else {
+        const displayName = filename.replace(/_backup\d*/, "");
+        groups.set(parentKey, {
+          name: displayName,
+          label: displayName.replace(/_/g, " ").replace(/\.\w+$/, ""),
+          type: "save",
+          primary: null,
+          backups: [file],
+          expanded: false,
+        });
+      }
+      continue;
+    }
+
+    // Determine type
+    const isSettings = lower.endsWith(".ini") || lower.endsWith(".cfg");
+    const type = isSettings ? "settings" as const : "save" as const;
+
+    const existing = groups.get(key);
+    if (existing) {
+      // Keep the version with more data (larger file or first seen)
+      if (!existing.primary || file.size > existing.primary.size) {
+        existing.primary = file;
+      }
+      existing.type = type;
+      existing.label = isSettings ? "Settings" : filename.replace(/_/g, " ").replace(/\.\w+$/, "");
+    } else {
+      groups.set(key, {
+        name: filename,
+        label: isSettings ? "Settings" : filename.replace(/_/g, " ").replace(/\.\w+$/, ""),
+        type,
+        primary: file,
+        backups: [],
+        expanded: false,
+      });
+    }
+  }
+
+  // Sort: saves first, then settings
+  pcSaveGroups.value = [...groups.values()].sort((a, b) => {
+    const typeOrder = (t: string) => t === "save" ? 0 : t === "settings" ? 2 : 1;
+    return typeOrder(a.type) - typeOrder(b.type);
+  });
+}, { immediate: true });
+
+// Filter and format PC saves — hide crash reports, show just filenames
+const filteredPcSaves = computed(() => {
+  return pcSaves.value
+    .filter((f) => {
+      const lower = f.path.toLowerCase();
+      // Hide crash report files and temp files
+      if (lower.includes("crashreportclient")) return false;
+      if (lower.includes("uecc-windows-")) return false;
+      if (lower.endsWith(".log")) return false;
+      if (lower.endsWith(".tmp")) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      // Save files first, then config, then others
+      const typeOrder = (p: string) => {
+        const l = p.toLowerCase();
+        if (l.endsWith(".sav") || l.endsWith(".save") || l.includes("savegame")) return 0;
+        if (l.endsWith(".ini") || l.endsWith(".cfg")) return 2;
+        return 1;
+      };
+      const diff = typeOrder(a.path) - typeOrder(b.path);
+      if (diff !== 0) return diff;
+      return b.size - a.size; // Larger files first within same type
+    });
+});
+
+function pcSaveFileName(fullPath: string): string {
+  // Extract just the filename from the full path
+  const parts = fullPath.replace(/\\/g, "/").split("/");
+  return parts[parts.length - 1] || fullPath;
+}
+
+function pcSaveFileType(fullPath: string): string {
+  const lower = fullPath.toLowerCase();
+  if (lower.endsWith(".sav")) return "Game Save";
+  if (lower.includes("backup")) return "Auto Backup";
+  if (lower.endsWith(".ini") || lower.endsWith(".cfg")) return "Settings";
+  if (lower.endsWith(".json")) return "Data";
+  return "Save Data";
+}
+
+function pcSaveFileColor(fullPath: string): { bg: string; text: string } {
+  const lower = fullPath.toLowerCase();
+  if (lower.endsWith(".sav") || lower.endsWith(".save")) {
+    if (lower.includes("backup")) return { bg: "rgba(234,179,8,0.15)", text: "#eab308" }; // yellow for backups
+    return { bg: "rgba(34,197,94,0.15)", text: "#22c55e" }; // green for saves
+  }
+  if (lower.endsWith(".ini") || lower.endsWith(".cfg")) return { bg: "rgba(156,163,175,0.15)", text: "#9ca3af" }; // grey for config
+  return { bg: "rgba(168,85,247,0.15)", text: "#a855f7" }; // purple for other
+}
+
+// ── Cloud saves ───────────────────────────────────────────────────────────
+interface CloudSaveEntry {
+  id: string;
+  filename: string;
+  saveType: string;
+  size: number;
+  clientModifiedAt: string;
+  uploadedAt: string;
+}
+const cloudSaves = ref<CloudSaveEntry[]>([]);
+const cloudSyncStatus = ref<Record<string, string>>({});
+
+async function fetchCloudSaves() {
+  try {
+    const url = serverUrl(`api/v1/client/saves/list?gameId=${gameId}`);
+    const resp = await fetch(url);
+    if (resp.ok) {
+      cloudSaves.value = await resp.json();
+    }
+  } catch { /* non-critical */ }
+}
+
+// Confirmation state for cloud sync
+const confirmSyncAction = ref<{ type: "upload" | "download"; save: SaveFile | null; filename: string; saveType: string } | null>(null);
+
+function requestUpload(save: SaveFile) {
+  // Check if cloud version already exists
+  const hasCloud = cloudSaves.value.some((c) => c.filename === save.filename);
+  if (hasCloud) {
+    confirmSyncAction.value = { type: "upload", save, filename: save.filename, saveType: save.save_type };
+  } else {
+    doUpload(save);
+  }
+}
+
+function requestDownload(filename: string, saveType: string) {
+  // Check if local version already exists
+  const hasLocal = gameSaves.value.some((s) => s.filename === filename);
+  if (hasLocal) {
+    confirmSyncAction.value = { type: "download", save: null, filename, saveType };
+  } else {
+    doDownload(filename, saveType);
+  }
+}
+
+function confirmSync() {
+  if (!confirmSyncAction.value) return;
+  const action = confirmSyncAction.value;
+  confirmSyncAction.value = null;
+  if (action.type === "upload" && action.save) {
+    doUpload(action.save);
+  } else if (action.type === "download") {
+    doDownload(action.filename, action.saveType);
+  }
+}
+
+async function doUpload(save: SaveFile) {
+  cloudSyncStatus.value[save.filename] = "uploading";
+  try {
+    // Before overwriting, create a backup with .bak suffix in cloud
+    const existingCloud = cloudSaves.value.find((c) => c.filename === save.filename);
+    if (existingCloud) {
+      // Download the existing cloud version as a backup
+      const backupUrl = serverUrl(`api/v1/client/saves/download?id=${existingCloud.id}`);
+      const backupResp = await fetch(backupUrl);
+      if (backupResp.ok) {
+        const backupData = await backupResp.json();
+        // Upload backup with .bak suffix
+        await fetch(serverUrl("api/v1/client/saves/upload"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            gameId,
+            filename: save.filename + ".bak",
+            saveType: save.save_type,
+            data: backupData.data,
+            clientModifiedAt: existingCloud.clientModifiedAt,
+          }),
+        });
+      }
+    }
+
+    // Read local file as base64 via Tauri
+    const base64Data: string = await invoke("read_save_file", {
+      gameId,
+      filename: save.filename,
+      saveType: save.save_type,
+    });
+
+    // Upload to server
+    const resp = await fetch(serverUrl("api/v1/client/saves/upload"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        gameId,
+        filename: save.filename,
+        saveType: save.save_type,
+        data: base64Data,
+        clientModifiedAt: new Date(save.modified * 1000).toISOString(),
+      }),
+    });
+    if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
+
+    await fetchCloudSaves();
+  } catch (e) {
+    console.error("[BPM:GAME] Cloud save upload failed:", e);
+    launchError.value = `Upload failed: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    delete cloudSyncStatus.value[save.filename];
+  }
+}
+
+async function doDownload(filename: string, saveType: string) {
+  const cloudEntry = cloudSaves.value.find((c) => c.filename === filename);
+  if (!cloudEntry) return;
+
+  cloudSyncStatus.value[filename] = "downloading";
+  try {
+    // Before overwriting local, create a backup of the local file
+    const localSave = gameSaves.value.find((s) => s.filename === filename);
+    if (localSave) {
+      try {
+        const localData: string = await invoke("read_save_file", {
+          gameId,
+          filename: localSave.filename,
+          saveType: localSave.save_type,
+        });
+        // Write backup locally with .bak suffix
+        await invoke("write_save_file", {
+          gameId,
+          filename: filename + ".bak",
+          saveType,
+          data: localData,
+        });
+      } catch {
+        // Backup failed — continue anyway
+      }
+    }
+
+    // Download from server
+    const url = serverUrl(`api/v1/client/saves/download?id=${cloudEntry.id}`);
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
+    const { data } = await resp.json();
+
+    // Write to local file via Tauri
+    await invoke("write_save_file", {
+      gameId,
+      filename,
+      saveType,
+      data,
+    });
+
+    // Refresh local saves list
+    await fetchSaves();
+  } catch (e) {
+    console.error("[BPM:GAME] Cloud save download failed:", e);
+    launchError.value = `Download failed: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    delete cloudSyncStatus.value[filename];
+  }
+}
+
+// ── Merged save view (local + cloud) ──────────────────────────────────────
+interface MergedSave {
+  filename: string;
+  local: SaveFile | null;
+  cloud: CloudSaveEntry | null;
+}
+
+const mergedSaves = computed((): MergedSave[] => {
+  const map = new Map<string, MergedSave>();
+
+  // Add local saves
+  for (const save of gameSaves.value) {
+    map.set(save.filename, { filename: save.filename, local: save, cloud: null });
+  }
+
+  // Merge cloud saves
+  for (const cloud of cloudSaves.value) {
+    const existing = map.get(cloud.filename);
+    if (existing) {
+      existing.cloud = cloud;
+    } else {
+      map.set(cloud.filename, { filename: cloud.filename, local: null, cloud });
+    }
+  }
+
+  // Sort: .srm first, then .state, then .png. Within each group, newest first.
+  return [...map.values()].sort((a, b) => {
+    const extOrder = (f: string) => f.endsWith('.srm') ? 0 : f.endsWith('.state') ? 1 : 2;
+    const diff = extOrder(a.filename) - extOrder(b.filename);
+    if (diff !== 0) return diff;
+    const aTime = a.local?.modified ?? 0;
+    const bTime = b.local?.modified ?? 0;
+    return bTime - aTime;
+  });
+});
+
+function saveTypeLabel(filename: string): string {
+  if (filename.endsWith('.srm')) return 'Game Progress (Battery Save)';
+  if (filename.endsWith('.state.png')) return 'Save State Screenshot';
+  if (filename.endsWith('.state')) return 'Save State (Exact Position)';
+  if (filename.endsWith('.sav')) return 'Game Save';
+  return 'Save File';
+}
+
+function saveTypeColor(filename: string): { bg: string; text: string } {
+  if (filename.endsWith('.srm')) return { bg: 'rgba(34,197,94,0.15)', text: '#22c55e' };
+  if (filename.endsWith('.state.png')) return { bg: 'rgba(168,85,247,0.15)', text: '#a855f7' };
+  if (filename.endsWith('.state')) return { bg: 'rgba(59,130,246,0.15)', text: '#3b82f6' };
+  return { bg: 'rgba(156,163,175,0.15)', text: '#9ca3af' };
+}
+
+function formatSaveSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// ── Per-save cloud sync for PC saves ─────────────────────────────────────
+const pcSyncStatus = ref<Record<string, string>>({});
+const pcCloudSaves = ref<Record<string, CloudSaveEntry>>({});
+const pcCloudStatus = ref<Record<string, string>>({});
+
+function refreshPcCloudStatus() {
+  const map: Record<string, CloudSaveEntry> = {};
+  for (const cloud of cloudSaves.value) {
+    if (cloud.filename.startsWith("pc:")) {
+      const groupName = cloud.filename.slice(3);
+      map[groupName.toLowerCase()] = cloud;
+    }
+  }
+  pcCloudSaves.value = map;
+
+  const status: Record<string, string> = {};
+  for (const group of pcSaveGroups.value) {
+    const key = group.name.toLowerCase();
+    const cloud = map[key];
+    if (!cloud) continue;
+    if (!group.primary) {
+      status[group.name] = "cloud-only";
+    } else {
+      const localModified = group.primary.modified * 1000;
+      const cloudModified = new Date(cloud.clientModifiedAt).getTime();
+      if (Math.abs(localModified - cloudModified) < 2000) {
+        status[group.name] = "synced";
+      } else if (cloudModified > localModified) {
+        status[group.name] = "cloud-newer";
+      } else {
+        status[group.name] = "local-newer";
+      }
+    }
+  }
+  pcCloudStatus.value = status;
+}
+
+watch(cloudSaves, refreshPcCloudStatus, { immediate: true });
+watch(pcSaveGroups, refreshPcCloudStatus);
+
+// Helper to check if a cloud save exists for a PC save group (avoids Map.has() reactivity issues in templates)
+function hasPcCloudSave(groupName: string): boolean {
+  return groupName.toLowerCase() in pcCloudSaves.value;
+}
+
+async function uploadPcSave(group: PcSaveGroup) {
+  if (!group.primary || !game.value) return;
+  pcSyncStatus.value[group.name] = "uploading";
+  try {
+    const base64Data: string = await invoke("read_pc_save_file", {
+      filePath: group.primary.path,
+    });
+
+    const cloudFilename = `pc:${group.name}`;
+    const resp = await fetch(serverUrl("api/v1/client/saves/upload"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        gameId,
+        filename: cloudFilename,
+        saveType: "save",
+        data: base64Data,
+        clientModifiedAt: new Date(group.primary.modified * 1000).toISOString(),
+      }),
+    });
+    if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
+
+    await fetchCloudSaves();
+    console.log("[BPM:GAME] PC save uploaded:", group.name);
+  } catch (e) {
+    console.error("[BPM:GAME] PC save upload failed:", e);
+    launchError.value = `Upload failed: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    delete pcSyncStatus.value[group.name];
+  }
+}
+
+async function downloadPcSave(group: PcSaveGroup) {
+  const key = group.name.toLowerCase();
+  const cloudEntry = pcCloudSaves.value[key];
+  if (!cloudEntry) return;
+
+  pcSyncStatus.value[group.name] = "downloading";
+  try {
+    const url = serverUrl(`api/v1/client/saves/download?id=${cloudEntry.id}`);
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
+    const { data } = await resp.json();
+
+    if (!group.primary) {
+      launchError.value = "No local path known for this save — cannot restore.";
+      return;
+    }
+
+    await invoke("write_pc_save_file", {
+      filePath: group.primary.path,
+      data,
+    });
+
+    await fetchPcSaves();
+    console.log("[BPM:GAME] PC save downloaded:", group.name);
+  } catch (e) {
+    console.error("[BPM:GAME] PC save download failed:", e);
+    launchError.value = `Download failed: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    delete pcSyncStatus.value[group.name];
+  }
+}
+
+// Load saves when the saves tab is selected
+watch(() => activeTab.value, (tab) => {
+  if (tab === "saves") {
+    if (gameSaves.value.length === 0) fetchSaves();
+    fetchCloudSaves();
+    if (isNativeGame.value) fetchPcSaves();
+  }
+});
+
+// ── Recommended games ──────────────────────────────────────────────────
+interface RecommendedGame {
+  id: string;
+  mName: string;
+  mCoverObjectId: string | null;
+}
+const recommendedGames = ref<RecommendedGame[]>([]);
+
+async function fetchRecommendations() {
+  try {
+    const url = serverUrl("api/v1/store/recommended");
+    const resp = await fetch(url);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    // Filter out the current game and take up to 8
+    const games = (data.games ?? data ?? []) as RecommendedGame[];
+    recommendedGames.value = games
+      .filter((g: RecommendedGame) => g.id !== gameId)
+      .slice(0, 8);
+  } catch {
+    // Non-critical
+  }
+}
+
+function formatPlaytimeDetailed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+}
 
 function registerTabRef(value: string, el: any) {
   if (el) {
@@ -972,7 +2065,9 @@ onMounted(async () => {
     .catch((e) => console.warn("[BPM:GAME] achievements fetch FAILED:", e));
 
   // Wait for the critical data (game + achievements) before setting up focus.
-  // version_options is intentionally NOT awaited — it can trickle in.
+  // version_options, playtime, and recommendations are intentionally NOT awaited.
+  fetchPlaytime();
+  fetchRecommendations();
   await Promise.all([gamePromise, achievementsPromise]);
   console.log("[BPM:GAME] Critical data loaded, versions pending:", !versionOptions.value);
 

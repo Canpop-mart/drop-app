@@ -225,6 +225,45 @@
       </div>
     </div>
 
+    <!-- ═══ Shared Shelves tab ═══ -->
+    <div v-else-if="activeTab === 'shelves'" class="flex-1 overflow-y-auto px-8 py-6">
+      <div v-if="sharedShelves.length > 0" class="space-y-8">
+        <div v-for="shelf in sharedShelves" :key="shelf.id">
+          <div class="flex items-center gap-3 mb-3">
+            <div class="size-8 rounded-full bg-zinc-800 overflow-hidden flex-shrink-0">
+              <img v-if="shelf.user.profilePictureObjectId" :src="objectUrl(shelf.user.profilePictureObjectId)" class="w-full h-full object-cover" />
+              <div v-else class="w-full h-full flex items-center justify-center text-zinc-500 text-sm font-bold">{{ shelf.user.displayName[0] }}</div>
+            </div>
+            <div>
+              <h3 class="text-base font-semibold" style="color: var(--bpm-text)">{{ shelf.name }}</h3>
+              <p class="text-xs" style="color: var(--bpm-muted)">by {{ shelf.user.displayName }} &middot; {{ shelf.entries.length }} game{{ shelf.entries.length !== 1 ? 's' : '' }}</p>
+            </div>
+          </div>
+          <div class="flex gap-4 overflow-x-auto pb-3 px-1" style="scrollbar-width: thin">
+            <div
+              v-for="entry in shelf.entries"
+              :key="entry.gameId"
+              class="flex-shrink-0"
+              style="width: 9rem"
+              :ref="(el: any) => registerContent(el, { onSelect: () => router.push(`/bigpicture/library/${entry.gameId}`) })"
+            >
+              <div class="rounded-lg overflow-hidden cursor-pointer transition-transform hover:scale-105" style="aspect-ratio: 3/4">
+                <img v-if="entry.game.mCoverObjectId" :src="objectUrl(entry.game.mCoverObjectId)" class="w-full h-full object-cover" loading="lazy" />
+                <div v-else class="w-full h-full flex items-center justify-center text-lg font-bold" style="background-color: var(--bpm-surface); color: var(--bpm-accent-hex)">{{ entry.game.mName[0] }}</div>
+              </div>
+              <p class="text-xs mt-1 truncate" style="color: var(--bpm-text)">{{ entry.game.mName }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div v-else class="flex items-center justify-center py-24">
+        <div class="text-center">
+          <h3 class="text-xl font-semibold mb-2" style="color: var(--bpm-text)">No shared shelves yet</h3>
+          <p class="text-sm" style="color: var(--bpm-muted)">Make a shelf public from the Library &rarr; Shelves tab to share it with the community</p>
+        </div>
+      </div>
+    </div>
+
   </div>
 </template>
 
@@ -265,6 +304,7 @@ const tabs = [
   { label: "Activity", value: "activity" },
   { label: "Players", value: "players" },
   { label: "Leaderboard", value: "leaderboard" },
+  { label: "Shared Shelves", value: "shelves" },
 ];
 
 const activityFilters = [
@@ -320,16 +360,27 @@ async function loadMoreActivity() {
   activity.value.push(...more);
 }
 
+// Shared shelves data
+interface SharedShelf {
+  id: string;
+  name: string;
+  user: { id: string; username: string; displayName: string; profilePictureObjectId: string | null };
+  entries: Array<{ gameId: string; game: { id: string; mName: string; mCoverObjectId: string | null; mIconObjectId: string | null } }>;
+}
+const sharedShelves = ref<SharedShelf[]>([]);
+
 onMounted(async () => {
   try {
-    const [statsData, activityData, leaderboardData] = await Promise.all([
+    const [statsData, activityData, leaderboardData, shelvesData] = await Promise.all([
       api.community.stats().catch(() => stats.value),
       api.community.activity().catch(() => []),
       api.community.leaderboard().catch(() => ({ playtime: [] })),
+      fetch(serverUrl("api/v1/community/shelves")).then((r) => r.ok ? r.json() : []).catch(() => []),
     ]);
     stats.value = statsData;
     activity.value = activityData;
     leaderboard.value = leaderboardData.playtime;
+    sharedShelves.value = shelvesData;
   } catch (e) {
     console.error("Failed to load community data:", e);
   } finally {

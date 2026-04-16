@@ -257,7 +257,7 @@ pub fn configure_retroarch_for_game(
         },
         BiosSpec {
             label: "Sega CD",
-            rom_extensions: &["chd", "cue", "bin"],
+            rom_extensions: &["chd"],
             core_subdir: None,
             matches: is_segacd_bios,
             example: "bios_cd_u.bin",
@@ -265,7 +265,7 @@ pub fn configure_retroarch_for_game(
         },
         BiosSpec {
             label: "Saturn",
-            rom_extensions: &["chd", "cue", "bin"],
+            rom_extensions: &["chd"],
             core_subdir: None,
             matches: is_saturn_bios,
             example: "sega_101.bin or mpr-17933.bin",
