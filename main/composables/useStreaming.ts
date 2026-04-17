@@ -223,6 +223,11 @@ export function useStreaming() {
     });
   }
 
+  /** Kill the Moonlight process (receiver side). */
+  async function killMoonlight(): Promise<void> {
+    await invoke("kill_moonlight");
+  }
+
   /** Request a stream from another device (push-based flow). */
   async function requestStream(
     gameId: string,
@@ -280,6 +285,7 @@ export function useStreaming() {
     getConnectionInfo,
     // Push-based streaming
     requestStream,
+    killMoonlight,
     // Device management
     listDevices,
     remoteInstall,

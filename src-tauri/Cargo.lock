@@ -1584,6 +1584,7 @@ dependencies = [
  "walkdir",
  "webbrowser",
  "whoami",
+ "winapi",
  "wry",
  "zip",
  "zstd",

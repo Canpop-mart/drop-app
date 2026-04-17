@@ -18,7 +18,7 @@ use futures_util::StreamExt as _;
 use log::{debug, info};
 use remote::auth::generate_authorization_header;
 use remote::error::{DropServerError, RemoteAccessError};
-use remote::utils::DROP_CLIENT_ASYNC;
+use remote::utils::DROP_CLIENT_DOWNLOAD;
 use sha2::Digest;
 use tauri::Url;
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _, AsyncWriteExt as _};
@@ -60,7 +60,7 @@ pub async fn download_game_chunk(
         .join(&format!("content/{}/{}/{}", game_id, version_id, chunk_id))
         .map_err(|v| ApplicationDownloadError::DownloadError(v.into()))?;
 
-    let response = DROP_CLIENT_ASYNC
+    let response = DROP_CLIENT_DOWNLOAD
         .get(url)
         .header("Authorization", header)
         .send()

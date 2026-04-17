@@ -30,6 +30,8 @@ impl DropHealthcheck {
 static DROP_CERT_BUNDLE: LazyLock<Vec<Certificate>> = LazyLock::new(fetch_certificates);
 pub static DROP_CLIENT_SYNC: LazyLock<reqwest::blocking::Client> = LazyLock::new(get_client_sync);
 pub static DROP_CLIENT_ASYNC: LazyLock<ClientWithMiddleware> = LazyLock::new(get_client_async);
+pub static DROP_CLIENT_DOWNLOAD: LazyLock<ClientWithMiddleware> =
+    LazyLock::new(get_client_download);
 pub static DROP_CLIENT_WS_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(get_client_ws);
 
 pub static DROP_APP_HANDLE: LazyLock<Mutex<Option<AppHandle>>> = LazyLock::new(|| Mutex::new(None));
@@ -181,6 +183,27 @@ pub fn get_client_async() -> ClientWithMiddleware {
         .expect("Failed to build asynchronous client");
 
     ClientBuilder::new(normal_client)
+        .with(AutoOfflineMiddleware)
+        .build()
+}
+/// A dedicated HTTP client for downloading game chunks.
+/// Uses a much longer timeout (5 minutes) to handle large chunks on slow connections,
+/// while the general-purpose client keeps its 15-second timeout for API calls.
+pub fn get_client_download() -> ClientWithMiddleware {
+    let mut client = reqwest::ClientBuilder::new();
+
+    for cert in DROP_CERT_BUNDLE.iter() {
+        client = client.add_root_certificate(cert.clone());
+    }
+    let download_client = client
+        .use_rustls_tls()
+        .user_agent("Drop Desktop Client")
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(300)) // 5 minutes for large chunk downloads
+        .build()
+        .expect("Failed to build download client");
+
+    ClientBuilder::new(download_client)
         .with(AutoOfflineMiddleware)
         .build()
 }

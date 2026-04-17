@@ -65,7 +65,9 @@ impl Display for ApplicationDownloadError {
             ApplicationDownloadError::Checksum => {
                 write!(f, "checksum failed to validate for download")
             }
-            ApplicationDownloadError::IoError(error) => write!(f, "io error: {error}"),
+            ApplicationDownloadError::IoError(error) => {
+                write!(f, "A network or disk error occurred during download: {error}. If this persists, try restarting the download.")
+            }
             ApplicationDownloadError::DownloadError(error) => {
                 write!(f, "Download failed with error {error:?}")
             }

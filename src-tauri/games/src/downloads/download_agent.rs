@@ -27,7 +27,7 @@ use std::fs::{create_dir_all, remove_file};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tokio::sync::mpsc::Sender;
 use utils::{app_emit, lock, send};
@@ -405,9 +405,14 @@ impl GameDownloadAgent {
                                 );*/
 
                                 if i == RETRY_COUNT - 1 || !retry {
-                                    warn!("retry logic failed, not re-attempting.");
+                                    warn!("retry logic failed after {} attempts, not re-attempting.", i + 1);
                                     return Err(e);
                                 }
+
+                                // Exponential backoff: 1s, 2s, 4s, ...
+                                let backoff = Duration::from_secs(1 << i);
+                                warn!("retrying chunk {} in {:?} (attempt {}/{})", chunk_id, backoff, i + 2, RETRY_COUNT);
+                                tokio::time::sleep(backoff).await;
                             }
                         }
                     }

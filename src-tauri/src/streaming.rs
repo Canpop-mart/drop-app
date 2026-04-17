@@ -1023,6 +1023,23 @@ async fn install_moonlight() -> Result<PathBuf, String> {
     }
 }
 
+/// Global handle to the running Moonlight process (receiver side).
+static MOONLIGHT_PROCESS: std::sync::LazyLock<Mutex<Option<std::process::Child>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
+
+/// Kill the running Moonlight process (called when the streaming session ends).
+#[tauri::command]
+pub async fn kill_moonlight() -> Result<(), String> {
+    let mut guard = MOONLIGHT_PROCESS.lock().await;
+    if let Some(mut child) = guard.take() {
+        info!("[MOONLIGHT] Killing Moonlight process (PID {})", child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        info!("[MOONLIGHT] Moonlight killed");
+    }
+    Ok(())
+}
+
 /// Launch Moonlight pointed at a specific host for streaming.
 /// If `pin` is provided, Moonlight will attempt to auto-pair first.
 /// Auto-installs Moonlight if not found.
@@ -1065,15 +1082,30 @@ pub async fn launch_moonlight(
         }
     }
 
+    // Kill any existing Moonlight process before launching a new one
+    {
+        let mut guard = MOONLIGHT_PROCESS.lock().await;
+        if let Some(mut old) = guard.take() {
+            info!("[MOONLIGHT] Killing previous Moonlight instance");
+            let _ = old.kill();
+            let _ = old.wait();
+        }
+    }
+
     // Launch Moonlight in stream mode — stream the desktop
     info!("[MOONLIGHT] Starting stream to {}...", address);
     let mut cmd = moonlight_command(&moonlight_str);
     cmd.args(["stream", &address, "Desktop"]);
 
-    cmd.spawn()
+    let child = cmd.spawn()
         .map_err(|e| format!("Failed to launch Moonlight: {e}"))?;
 
-    info!("[MOONLIGHT] Moonlight launched");
+    info!("[MOONLIGHT] Moonlight launched (PID {})", child.id());
+    {
+        let mut guard = MOONLIGHT_PROCESS.lock().await;
+        *guard = Some(child);
+    }
+
     Ok(())
 }
 

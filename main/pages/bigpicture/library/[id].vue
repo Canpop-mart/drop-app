@@ -1001,6 +1001,7 @@ const {
   getConnectionInfo,
   sendPin,
   requestStream,
+  killMoonlight,
   listDevices,
   remoteInstall,
 } = useStreaming();
@@ -1009,6 +1010,7 @@ import type { ClientDevice } from "~/composables/useStreaming";
 
 let activeStreamSessionId: string | null = null;
 let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+let moonlightWatchInterval: ReturnType<typeof setInterval> | null = null;
 
 // ── Remote stream discovery (client/receiver side) ────────────────────────
 const availableStream = ref<any>(null);
@@ -1042,7 +1044,8 @@ async function pollRemoteSessions() {
 async function connectToRemoteStream() {
   if (!availableStream.value) return;
   try {
-    const info = await getConnectionInfo(availableStream.value.id);
+    const sessionId = availableStream.value.id;
+    const info = await getConnectionInfo(sessionId);
     console.log("[BPM:STREAM] Connection info:", JSON.stringify(info));
     const host = info.hostLocalIp || info.hostExternalIp;
     if (!host) {
@@ -1053,10 +1056,40 @@ async function connectToRemoteStream() {
     const port = info.sunshinePort || 47989;
     console.log(`[BPM:STREAM] Launching Moonlight → ${host}:${port}`);
     await invoke("launch_moonlight", { host, port, pin: info.pairingPin ?? null });
+    activeStreamSessionId = sessionId;
+    isStreaming.value = true;
     streamGuard = false;
+
     // Restore normal poll interval
     if (streamPollInterval) clearInterval(streamPollInterval);
     streamPollInterval = setInterval(pollRemoteSessions, 15_000);
+
+    // Start watching for session end — when the host stops the session, kill Moonlight
+    if (moonlightWatchInterval) clearInterval(moonlightWatchInterval);
+    moonlightWatchInterval = setInterval(async () => {
+      try {
+        const sessions = await listRemoteSessions();
+        const current = sessions.find((s: any) => s.id === sessionId);
+        // If the session is gone or stopped, kill Moonlight and clean up
+        if (!current || current.status === "Stopped") {
+          console.log("[BPM:STREAM] Session ended on host side — killing Moonlight");
+          if (moonlightWatchInterval) {
+            clearInterval(moonlightWatchInterval);
+            moonlightWatchInterval = null;
+          }
+          try {
+            await killMoonlight();
+          } catch (e) {
+            console.warn("[BPM:STREAM] Failed to kill Moonlight:", e);
+          }
+          isStreaming.value = false;
+          activeStreamSessionId = null;
+          availableStream.value = null;
+        }
+      } catch {
+        // Silently ignore poll errors
+      }
+    }, 5_000);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[BPM:STREAM] Failed to connect to stream:", msg);
@@ -1305,10 +1338,23 @@ async function stopStreaming() {
       console.warn("[BPM:STREAM] Failed to clean up server sessions:", e);
     }
 
+    // Kill Moonlight if running (receiver side)
+    try {
+      await killMoonlight();
+    } catch (e) {
+      console.warn("[BPM:STREAM] Failed to kill Moonlight:", e);
+    }
+
     // Clear heartbeat interval
     if (heartbeatInterval) {
       clearInterval(heartbeatInterval);
       heartbeatInterval = null;
+    }
+
+    // Clear Moonlight watch interval
+    if (moonlightWatchInterval) {
+      clearInterval(moonlightWatchInterval);
+      moonlightWatchInterval = null;
     }
 
     // Restore normal poll interval

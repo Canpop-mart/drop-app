@@ -49,6 +49,24 @@ impl Display for RemoteAccessError {
                     );
                 }
 
+                if error.is_timeout() {
+                    return write!(
+                        f,
+                        "Download timed out. This usually means your connection is slow or the server is under heavy load. The download will retry automatically."
+                    );
+                }
+
+                // Check for body/decoding errors (the common "error decoding response body")
+                // These methods are on the inner reqwest::Error
+                if let reqwest_middleware::Error::Reqwest(inner) = error.as_ref() {
+                    if inner.is_body() || inner.is_decode() {
+                        return write!(
+                            f,
+                            "Download interrupted — the connection was lost while receiving data. The download will retry automatically."
+                        );
+                    }
+                }
+
                 write!(
                     f,
                     "{}: {}",
@@ -59,15 +77,38 @@ impl Display for RemoteAccessError {
                         .unwrap_or("Unknown error".to_string())
                 )
             }
-            RemoteAccessError::FetchErrorLegacy(error) => write!(
-                f,
-                "{}: {}",
-                error,
-                error
-                    .source()
-                    .map(|v| v.to_string())
-                    .unwrap_or("Unknown error".to_string())
-            ),
+            RemoteAccessError::FetchErrorLegacy(error) => {
+                if error.is_connect() {
+                    return write!(
+                        f,
+                        "Failed to connect to Drop server. Check if you can access Drop through a browser, and then try again."
+                    );
+                }
+
+                if error.is_timeout() {
+                    return write!(
+                        f,
+                        "Download timed out. This usually means your connection is slow or the server is under heavy load. The download will retry automatically."
+                    );
+                }
+
+                if error.is_body() || error.is_decode() {
+                    return write!(
+                        f,
+                        "Download interrupted — the connection was lost while receiving data. The download will retry automatically."
+                    );
+                }
+
+                write!(
+                    f,
+                    "{}: {}",
+                    error,
+                    error
+                        .source()
+                        .map(|v| v.to_string())
+                        .unwrap_or("Unknown error".to_string())
+                )
+            }
             RemoteAccessError::FetchErrorWS(error) => write!(
                 f,
                 "{}: {}",
