@@ -46,7 +46,6 @@ import {
   CubeIcon,
   HomeIcon,
   RectangleGroupIcon,
-  BugAntIcon,
   TrophyIcon,
   SignalIcon,
 } from "@heroicons/vue/16/solid";
@@ -60,39 +59,9 @@ const systemData = await invoke<{
   clientId: string;
   baseUrl: string;
   dataDir: string;
-  logLevel: string;
 }>("fetch_system_data");
 
-const isDebugMode = ref(systemData.logLevel.toLowerCase() === "debug");
-const debugRevealed = ref(false);
-
 const appState = useAppState();
-
-// Track shift key state and debug reveal
-onMounted(() => {
-  window.addEventListener("keydown", (e) => {
-    if (e.key === "Shift") {
-      isDebugMode.value = true;
-      debugRevealed.value = true;
-    }
-  });
-
-  window.addEventListener("keyup", (e) => {
-    if (e.key === "Shift") {
-      isDebugMode.value =
-        debugRevealed.value || systemData.logLevel.toLowerCase() === "debug";
-    }
-  });
-
-  // Reset debug reveal when leaving the settings page
-  const router = useRouter();
-  router.beforeEach((to) => {
-    if (!to.path.startsWith("/settings")) {
-      debugRevealed.value = false;
-      isDebugMode.value = systemData.logLevel.toLowerCase() === "debug";
-    }
-  });
-});
 
 // Make navigation reactive by wrapping in computed
 const navigation = computed(() => [
@@ -142,16 +111,6 @@ const navigation = computed(() => [
     prefix: "/settings/account",
     icon: UserIcon,
   },
-  ...(isDebugMode.value
-    ? [
-        {
-          label: "Debug Info",
-          route: "/settings/debug",
-          prefix: "/settings/debug",
-          icon: BugAntIcon,
-        },
-      ]
-    : []),
 ]);
 
 const currentPlatform = platform();

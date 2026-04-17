@@ -174,6 +174,11 @@ impl ProcessManager<'_> {
         }
     }
 
+    /// Check if a game process is currently running.
+    pub fn is_game_running(&self, game_id: &str) -> bool {
+        self.processes.contains_key(game_id)
+    }
+
     pub fn get_log_dir(&self, game_id: &str) -> PathBuf {
         self.log_output_dir.join(game_id)
     }
@@ -199,6 +204,9 @@ impl ProcessManager<'_> {
                 return Ok(());
             }
         };
+
+        // Notify listeners that the game process has exited (used by streaming to auto-stop sessions)
+        let _ = self.app_handle.emit("game_process_exited", &game_id);
 
         // Stop achievement polling
         if let Some(cancel) = &process.achievement_poll_cancel {

@@ -266,7 +266,6 @@
           >
             <span class="size-2 rounded-full animate-pulse" :class="pendingRequestSessionId ? 'bg-purple-400' : 'bg-red-400'" />
             {{ pendingRequestSessionId ? 'Waiting for host...' : 'Streaming' }}
-            <span class="ml-1 text-xs opacity-60">(click to stop)</span>
           </button>
         </div>
       </div>
@@ -1286,6 +1285,24 @@ async function stopStreaming() {
       }
     } catch (e) {
       console.warn("[BPM:STREAM] Failed to stop host sessions:", e);
+    }
+
+    // Also stop any active/visible server-side sessions for this game
+    // (catches sessions from before the cancellation code was deployed)
+    try {
+      const sessions = await listRemoteSessions();
+      for (const s of sessions) {
+        if (s.status !== "Stopped") {
+          console.log(`[BPM:STREAM] Stopping server session ${s.id} (status: ${s.status})`);
+          try {
+            await stopStreamingSession(s.id);
+          } catch {
+            // May fail if we're not the host — that's ok
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[BPM:STREAM] Failed to clean up server sessions:", e);
     }
 
     // Clear heartbeat interval

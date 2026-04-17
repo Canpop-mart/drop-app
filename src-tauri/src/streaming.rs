@@ -34,6 +34,77 @@ const SUNSHINE_BASE_PORT: u16 = 47989;
 /// Web UI / API port = base + 1.
 const SUNSHINE_WEB_PORT: u16 = 47990;
 
+// ── Display resolution management (Windows only) ─────────────────────
+
+/// Saved original display resolution for restoration after streaming ends.
+#[cfg(target_os = "windows")]
+struct SavedResolution {
+    width: u32,
+    height: u32,
+}
+
+#[cfg(target_os = "windows")]
+static SAVED_RESOLUTION: std::sync::LazyLock<Mutex<Option<SavedResolution>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
+
+/// Change the primary display resolution (Windows only).
+/// Returns the previous resolution so it can be restored later.
+#[cfg(target_os = "windows")]
+fn set_display_resolution(width: u32, height: u32) -> Result<(u32, u32), String> {
+    use winapi::um::wingdi::{
+        DEVMODEW, ENUM_CURRENT_SETTINGS, DM_PELSWIDTH, DM_PELSHEIGHT,
+    };
+    use winapi::um::winuser::{
+        EnumDisplaySettingsW, ChangeDisplaySettingsW,
+        CDS_FULLSCREEN, DISP_CHANGE_SUCCESSFUL,
+    };
+
+    unsafe {
+        // Get current resolution
+        let mut current: DEVMODEW = std::mem::zeroed();
+        current.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+        if EnumDisplaySettingsW(std::ptr::null(), ENUM_CURRENT_SETTINGS, &mut current) == 0 {
+            return Err("Failed to get current display settings".to_string());
+        }
+        let old_width = current.dmPelsWidth;
+        let old_height = current.dmPelsHeight;
+
+        if old_width == width && old_height == height {
+            info!("[DISPLAY] Resolution already {}x{}, no change needed", width, height);
+            return Ok((old_width, old_height));
+        }
+
+        // Set new resolution
+        let mut new_mode = current;
+        new_mode.dmPelsWidth = width;
+        new_mode.dmPelsHeight = height;
+        new_mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+
+        let result = ChangeDisplaySettingsW(&mut new_mode, CDS_FULLSCREEN);
+        if result == DISP_CHANGE_SUCCESSFUL as i32 {
+            info!("[DISPLAY] Changed resolution from {}x{} to {}x{}", old_width, old_height, width, height);
+            Ok((old_width, old_height))
+        } else {
+            Err(format!("ChangeDisplaySettingsW failed with code {}", result))
+        }
+    }
+}
+
+/// Restore the display resolution to what it was before streaming started.
+#[cfg(target_os = "windows")]
+async fn restore_display_resolution() {
+    let saved = {
+        let mut guard = SAVED_RESOLUTION.lock().await;
+        guard.take()
+    };
+    if let Some(res) = saved {
+        match set_display_resolution(res.width, res.height) {
+            Ok(_) => info!("[DISPLAY] Restored resolution to {}x{}", res.width, res.height),
+            Err(e) => warn!("[DISPLAY] Failed to restore resolution: {e}"),
+        }
+    }
+}
+
 // ── Tool management ───────────────────────────────────────────────────
 
 /// Get Drop's tools directory.
@@ -260,7 +331,9 @@ resolutions = [
   480x360,
   858x480,
   1280x720,
+  1280x800,
   1920x1080,
+  1920x1200,
   2560x1440,
   3840x2160
 ]
@@ -695,6 +768,12 @@ pub async fn stop_all_host_sessions() -> Result<u32, String> {
         info!("[STREAMING] Cancelling host session {}", sid);
         let _ = tx.send(true);
     }
+    // Restore display resolution (Windows only)
+    #[cfg(target_os = "windows")]
+    {
+        restore_display_resolution().await;
+    }
+
     // Also stop Sunshine if running
     {
         let mut guard = SUNSHINE_PROCESS.lock().await;
@@ -1281,7 +1360,21 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
     }
     info!("[STREAM-FULFILL] Session {} marked Ready", session_id);
 
-    // 8. Launch the game (on a blocking thread — launch_game uses block_on internally)
+    // 8. Change resolution for Steam Deck streaming (Windows only)
+    #[cfg(target_os = "windows")]
+    {
+        // Steam Deck native resolution is 1280x800
+        match set_display_resolution(1280, 800) {
+            Ok((old_w, old_h)) => {
+                let mut guard = SAVED_RESOLUTION.lock().await;
+                *guard = Some(SavedResolution { width: old_w, height: old_h });
+                info!("[STREAM-FULFILL] Saved original resolution {}x{}, switched to 1280x800", old_w, old_h);
+            }
+            Err(e) => warn!("[STREAM-FULFILL] Failed to set streaming resolution: {e}"),
+        }
+    }
+
+    // 9. Launch the game (on a blocking thread — launch_game uses block_on internally)
     info!("[STREAM-FULFILL] Launching game {}", game_id);
     {
         use crate::process::launch_game;
@@ -1293,7 +1386,7 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
         }
     }
 
-    // 9. Register this session and start heartbeating in background (cancellable)
+    // 10. Register this session and start heartbeating in background (cancellable)
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
     {
         let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
@@ -1301,6 +1394,7 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
     }
 
     let sid = session_id.clone();
+    let hb_game_id = game_id.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
@@ -1312,6 +1406,17 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
                 break;
             }
 
+            // Check if the game process has exited — auto-stop the session
+            {
+                use process::PROCESS_MANAGER;
+                let pm = PROCESS_MANAGER.lock();
+                if !pm.is_game_running(&hb_game_id) {
+                    info!("[STREAM-FULFILL] Game {} exited, auto-stopping session {}", hb_game_id, sid);
+                    let _ = streaming_sessions::stop_streaming_session(&sid).await;
+                    break;
+                }
+            }
+
             if let Err(e) = streaming_sessions::heartbeat_streaming(&sid, Some("Streaming")).await {
                 warn!("[STREAM-FULFILL] Heartbeat failed for {}: {e}", sid);
                 break;
@@ -1320,5 +1425,18 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
         // Clean up from the active sessions map
         let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
         sessions.remove(&sid);
+
+        // Restore display resolution (Windows only)
+        #[cfg(target_os = "windows")]
+        {
+            restore_display_resolution().await;
+        }
+
+        // Stop Sunshine if no more active sessions
+        if sessions.is_empty() {
+            drop(sessions); // Release lock before stopping Sunshine
+            info!("[STREAM-FULFILL] No more active sessions, stopping Sunshine");
+            let _ = stop_sunshine().await;
+        }
     });
 }
