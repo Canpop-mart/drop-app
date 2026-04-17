@@ -51,11 +51,11 @@ static SAVED_RESOLUTION: std::sync::LazyLock<Mutex<Option<SavedResolution>>> =
 #[cfg(target_os = "windows")]
 fn set_display_resolution(width: u32, height: u32) -> Result<(u32, u32), String> {
     use winapi::um::wingdi::{
-        DEVMODEW, ENUM_CURRENT_SETTINGS, DM_PELSWIDTH, DM_PELSHEIGHT,
+        DEVMODEW, DM_PELSWIDTH, DM_PELSHEIGHT,
     };
     use winapi::um::winuser::{
         EnumDisplaySettingsW, ChangeDisplaySettingsW,
-        CDS_FULLSCREEN, DISP_CHANGE_SUCCESSFUL,
+        CDS_FULLSCREEN, DISP_CHANGE_SUCCESSFUL, ENUM_CURRENT_SETTINGS,
     };
 
     unsafe {
