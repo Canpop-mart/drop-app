@@ -345,7 +345,8 @@ pub fn run() {
             launch_moonlight,
             streaming_request_stream,
             list_devices,
-            request_remote_install
+            request_remote_install,
+            sync_installed_games
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -362,6 +363,14 @@ pub fn run() {
 
                 // Start background poller for incoming stream requests
                 streaming::spawn_stream_request_poller();
+
+                // Sync installed games to server (fire and forget)
+                tokio::spawn(async {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    if let Err(e) = streaming::sync_installed_games().await {
+                        log::warn!("Failed to sync installed games on startup: {e}");
+                    }
+                });
 
                 let is_gamescope = state.session_type == SessionType::Gamescope;
                 app.manage(Mutex::new(state));

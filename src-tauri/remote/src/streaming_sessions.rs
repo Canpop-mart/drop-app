@@ -363,11 +363,18 @@ pub struct ClientDevice {
     pub platform: String,
     pub last_connected: String,
     pub is_self: bool,
+    #[serde(default)]
+    pub has_game: Option<bool>,
 }
 
 /// List all registered client devices for the current user.
-pub async fn list_devices() -> Result<Vec<ClientDevice>, RemoteAccessError> {
-    let url = generate_url(&["/api/v1/client/devices"], &[])?;
+/// If `game_id` is provided, each device includes `has_game` indicating install status.
+pub async fn list_devices(game_id: Option<&str>) -> Result<Vec<ClientDevice>, RemoteAccessError> {
+    let query: Vec<(&str, &str)> = match game_id {
+        Some(gid) => vec![("gameId", gid)],
+        None => vec![],
+    };
+    let url = generate_url(&["/api/v1/client/devices"], &query)?;
     let response = make_authenticated_get(url).await?;
 
     if !response.status().is_success() {
@@ -417,5 +424,33 @@ pub async fn request_remote_install(
     }
 
     info!("Requested remote install for game {}", game_id);
+    Ok(())
+}
+
+// ── Installed games sync ─────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncInstalledBody {
+    game_ids: Vec<String>,
+}
+
+/// Report this client's installed game IDs to the server.
+pub async fn sync_installed_games(game_ids: Vec<String>) -> Result<(), RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/sync-installed"], &[])?;
+    let body = SyncInstalledBody { game_ids };
+
+    let response = make_authenticated_post(url, &body).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        warn!("Failed to sync installed games: {} - {}", status, text);
+        return Err(RemoteAccessError::UnparseableResponse(format!(
+            "Failed to sync installed games: {status} - {text}"
+        )));
+    }
+
+    info!("Synced installed games to server");
     Ok(())
 }

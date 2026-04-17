@@ -227,8 +227,15 @@ export function useStreaming() {
   }
 
   /** List all registered client devices for the current user. */
-  async function listDevices(): Promise<ClientDevice[]> {
-    return invoke<ClientDevice[]>("list_devices");
+  async function listDevices(gameId?: string): Promise<ClientDevice[]> {
+    return invoke<ClientDevice[]>("list_devices", {
+      gameId: gameId ?? null,
+    });
+  }
+
+  /** Sync installed games to server. */
+  async function syncInstalled(): Promise<void> {
+    await invoke("sync_installed_games");
   }
 
   /** Request a remote install of a game on another device. */
@@ -266,6 +273,7 @@ export function useStreaming() {
     // Device management
     listDevices,
     remoteInstall,
+    syncInstalled,
   };
 }
 
@@ -275,4 +283,5 @@ export interface ClientDevice {
   platform: string;
   lastConnected: string;
   isSelf: boolean;
+  hasGame?: boolean;
 }

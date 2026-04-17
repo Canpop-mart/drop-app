@@ -73,8 +73,8 @@
                   <PlayIcon class="size-5" />
                   <span class="font-medium">Play</span>
                 </button>
-                <!-- Stream to other devices -->
-                <template v-for="(device, i) in otherDevices" :key="'stream-' + device.id">
+                <!-- Stream from other devices (only those that have the game) -->
+                <template v-for="(device, i) in streamableDevices" :key="'stream-' + device.id">
                   <button
                     class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
                     :class="playMenuFocus === 1 + i ? 'bg-purple-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
@@ -82,17 +82,17 @@
                     @mouseenter="playMenuFocus = 1 + i"
                   >
                     <SignalIcon class="size-5 text-purple-400" />
-                    <span class="font-medium">Stream to {{ device.name }}</span>
+                    <span class="font-medium">Stream from {{ device.name }}</span>
                     <span class="text-xs opacity-50 ml-auto">{{ device.platform }}</span>
                   </button>
                 </template>
-                <!-- Install on other devices -->
-                <template v-for="(device, i) in otherDevices" :key="'install-' + device.id">
+                <!-- Install on other devices (only those that don't have the game) -->
+                <template v-for="(device, i) in installableDevices" :key="'install-' + device.id">
                   <button
                     class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
-                    :class="playMenuFocus === 1 + otherDevices.length + i ? 'bg-green-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
-                    @click="selectPlayMenuAction(1 + otherDevices.length + i)"
-                    @mouseenter="playMenuFocus = 1 + otherDevices.length + i"
+                    :class="playMenuFocus === 1 + streamableDevices.length + i ? 'bg-green-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
+                    @click="selectPlayMenuAction(1 + streamableDevices.length + i)"
+                    @mouseenter="playMenuFocus = 1 + streamableDevices.length + i"
                   >
                     <ArrowDownTrayIcon class="size-5 text-green-400" />
                     <span class="font-medium">Install on {{ device.name }}</span>
@@ -101,7 +101,7 @@
                 </template>
                 <!-- Divider + message if no other devices -->
                 <div
-                  v-if="otherDevices.length === 0"
+                  v-if="streamableDevices.length === 0 && installableDevices.length === 0"
                   class="px-6 py-3 text-sm text-zinc-500 border-t border-zinc-800/50"
                 >
                   No other devices registered
@@ -136,20 +136,20 @@
           <!-- ── Not installed: Install button with device picker ── -->
           <div v-else class="relative inline-flex">
             <div
-              :ref="(el: any) => registerAction(el, { onSelect: downloadGame, onContext: otherDevices.length > 0 ? togglePlayMenu : undefined })"
+              :ref="(el: any) => registerAction(el, { onSelect: downloadGame, onContext: installableDevices.length > 0 ? togglePlayMenu : undefined })"
               class="bp-focus-delegate inline-flex cursor-pointer"
             >
               <span class="bp-focus-ring inline-flex rounded-xl">
                 <button
                   class="inline-flex items-center pl-8 py-4 text-lg gap-3 bg-green-600 hover:bg-green-500 text-white font-semibold transition-all shadow-lg"
-                  :class="otherDevices.length > 0 ? 'pr-4 rounded-l-xl' : 'pr-8 rounded-xl'"
+                  :class="installableDevices.length > 0 ? 'pr-4 rounded-l-xl' : 'pr-8 rounded-xl'"
                   @click.stop="downloadGame"
                 >
                   <ArrowDownTrayIcon class="size-6" />
                   Install
                 </button>
                 <button
-                  v-if="otherDevices.length > 0"
+                  v-if="installableDevices.length > 0"
                   class="inline-flex items-center px-3 py-4 font-semibold rounded-r-xl transition-all shadow-lg border-l bg-green-600 hover:bg-green-500 text-white border-green-400/30"
                   @click.stop="togglePlayMenu"
                 >
@@ -157,10 +157,10 @@
                 </button>
               </span>
             </div>
-            <!-- Dropdown: install on other devices -->
+            <!-- Dropdown: install on other devices that don't have it -->
             <Transition name="dropdown-fade">
               <div
-                v-if="playMenuOpen && otherDevices.length > 0"
+                v-if="playMenuOpen && installableDevices.length > 0"
                 class="absolute left-0 top-full mt-2 z-50 min-w-[280px] rounded-xl bg-zinc-900 border border-zinc-700/50 shadow-2xl overflow-hidden"
               >
                 <button
@@ -172,7 +172,7 @@
                   <ArrowDownTrayIcon class="size-5" />
                   <span class="font-medium">Install here</span>
                 </button>
-                <template v-for="(device, i) in otherDevices" :key="'ri-' + device.id">
+                <template v-for="(device, i) in installableDevices" :key="'ri-' + device.id">
                   <button
                     class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
                     :class="playMenuFocus === 1 + i ? 'bg-green-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
@@ -1063,11 +1063,27 @@ async function connectToRemoteStream() {
 
 // ── Device list & action menu ────────────────────────────────────────────
 const devices = ref<ClientDevice[]>([]);
-const otherDevices = computed(() => devices.value.filter((d) => !d.isSelf));
+// Deduplicate by name+platform, keeping the most recently connected entry
+const otherDevices = computed(() => {
+  const others = devices.value.filter((d) => !d.isSelf);
+  const byKey = new Map<string, ClientDevice>();
+  for (const d of others) {
+    const key = `${d.name}::${d.platform}`;
+    const existing = byKey.get(key);
+    if (!existing || d.lastConnected > existing.lastConnected) {
+      byKey.set(key, d);
+    }
+  }
+  return [...byKey.values()];
+});
+// Devices that have this game installed (can stream from)
+const streamableDevices = computed(() => otherDevices.value.filter((d) => d.hasGame === true));
+// Devices that do NOT have this game installed (can install on)
+const installableDevices = computed(() => otherDevices.value.filter((d) => d.hasGame !== true));
 
 async function loadDevices() {
   try {
-    devices.value = await listDevices();
+    devices.value = await listDevices(gameId);
   } catch {
     devices.value = [];
   }
@@ -1078,12 +1094,12 @@ const playMenuFocus = ref(0);
 let playMenuLockId = 0;
 
 // Total items in the installed-game dropdown:
-// [0] Play, [1..N] Stream to device, [N+1..2N] Install on device
-const playMenuItemCount = computed(() => 1 + otherDevices.value.length * 2);
+// [0] Play, [1..S] Stream from device, [S+1..S+I] Install on device
+const playMenuItemCount = computed(() => 1 + streamableDevices.value.length + installableDevices.value.length);
 
 // Total items in the not-installed dropdown:
-// [0] Install here, [1..N] Install on device
-const installMenuItemCount = computed(() => 1 + otherDevices.value.length);
+// [0] Install here, [1..I] Install on device
+const installMenuItemCount = computed(() => 1 + installableDevices.value.length);
 
 function openPlayMenu() {
   playMenuOpen.value = true;
@@ -1111,14 +1127,14 @@ function selectPlayMenuAction(index: number) {
   if (index === 0) {
     // Play locally
     launchGame();
-  } else if (index <= otherDevices.value.length) {
-    // Stream to device at index-1
-    const device = otherDevices.value[index - 1];
-    streamToDevice(device);
+  } else if (index <= streamableDevices.value.length) {
+    // Stream from device at index-1
+    const device = streamableDevices.value[index - 1];
+    streamFromDevice(device);
   } else {
     // Install on device
-    const deviceIdx = index - 1 - otherDevices.value.length;
-    const device = otherDevices.value[deviceIdx];
+    const deviceIdx = index - 1 - streamableDevices.value.length;
+    const device = installableDevices.value[deviceIdx];
     installOnDevice(device);
   }
 }
@@ -1128,13 +1144,13 @@ function selectInstallMenuAction(index: number) {
   if (index === 0) {
     downloadGame();
   } else {
-    const device = otherDevices.value[index - 1];
+    const device = installableDevices.value[index - 1];
     installOnDevice(device);
   }
 }
 
-async function streamToDevice(device: ClientDevice) {
-  console.log(`[BPM:STREAM] Stream to device: ${device.name} (${device.id})`);
+async function streamFromDevice(_device: ClientDevice) {
+  // Request a stream — the push-based flow will ask the target device to start streaming
   streamGame();
 }
 

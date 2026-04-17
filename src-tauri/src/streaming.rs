@@ -945,8 +945,8 @@ pub async fn launch_moonlight(
 
 /// List all registered client devices for the current user.
 #[tauri::command]
-pub async fn list_devices() -> Result<Vec<streaming_sessions::ClientDevice>, String> {
-    streaming_sessions::list_devices()
+pub async fn list_devices(game_id: Option<String>) -> Result<Vec<streaming_sessions::ClientDevice>, String> {
+    streaming_sessions::list_devices(game_id.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
@@ -958,6 +958,24 @@ pub async fn request_remote_install(
     target_client_id: Option<String>,
 ) -> Result<(), String> {
     streaming_sessions::request_remote_install(&game_id, target_client_id.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Sync this client's installed game IDs to the server.
+#[tauri::command]
+pub async fn sync_installed_games() -> Result<(), String> {
+    let game_ids: Vec<String> = {
+        let db = borrow_db_checked();
+        db.applications
+            .game_statuses
+            .iter()
+            .filter(|(_, status)| matches!(status, GameDownloadStatus::Installed { .. }))
+            .map(|(id, _)| id.clone())
+            .collect()
+    };
+    info!("[STREAMING] Syncing {} installed games to server", game_ids.len());
+    streaming_sessions::sync_installed_games(game_ids)
         .await
         .map_err(|e| e.to_string())
 }
