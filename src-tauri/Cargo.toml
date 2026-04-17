@@ -102,6 +102,9 @@ whoami = "1.6.0"
 wry = { version = "*", features = [] }
 zstd = "0.13.3"
 base64 = "0.22"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 zip = "2"
 
 [dependencies.log4rs]
