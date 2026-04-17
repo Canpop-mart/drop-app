@@ -426,16 +426,20 @@ pub fn configure_retroarch_for_game(
         // resolution switching (which can fail in a nested compositor).
         overrides.insert("video_fullscreen", "true".into());
         overrides.insert("video_windowed_fullscreen", "true".into());
-        // Do NOT force a specific video_driver — let RetroArch auto-detect
-        // the best driver for the system. The AppImage may bundle its own
-        // mesa/vulkan libraries; forcing "glcore" or "vulkan" can cause
-        // silent failures where audio works but no video surface is created.
-        // RetroArch tries drivers in order: vulkan → gl → glcore → sdl2.
+        // Force Vulkan video driver in Gamescope. The previous approach
+        // of letting RetroArch auto-detect caused black screens on
+        // Steam Deck: the AppImage's bundled Mesa was too old for
+        // RDNA2, so auto-detection silently failed. Now that the
+        // launch code forces system Vulkan via VK_ICD_FILENAMES and
+        // APPIMAGE_EXTRACT_AND_RUN=1, we can safely force Vulkan here.
+        // This is critical for PCSX2/Dolphin which need HW rendering.
+        overrides.insert("video_driver", "vulkan".into());
+        info!("[RETROARCH] Gamescope detected — forcing vulkan video driver");
         //
         // SDL2 joypad driver has built-in Xbox/Steam Deck controller
         // mappings via gamecontrollerdb — no autoconfig profiles needed.
         overrides.insert("input_joypad_driver", "sdl2".into());
-        info!("[RETROARCH] Gamescope detected — borderless fullscreen + auto video driver + SDL2 input");
+        info!("[RETROARCH] Gamescope detected — borderless fullscreen + vulkan driver + SDL2 input");
     } else {
         overrides.insert("video_fullscreen", "true".into());
     }
@@ -1898,6 +1902,15 @@ fn apply_core_quality_options(overrides: &mut HashMap<&str, String>, quality: &Q
     overrides.insert("pcsx2_dithering", format!("\"{}\"", pcsx2_dither));
     overrides.insert("pcsx2_texture_filtering", format!("\"{}\"", pcsx2_texfilter));
     overrides.insert("pcsx2_blending_accuracy", format!("\"{}\"", pcsx2_blend));
+
+    // PCSX2 renderer settings — ensure hardware rendering is used.
+    // Without these, PCSX2 may default to software rendering which
+    // produces a black screen or extremely poor performance.
+    // "Auto" lets the core pick Vulkan/OpenGL based on the RA driver.
+    overrides.insert("pcsx2_renderer", "\"Auto\"".into());
+    // Match the video driver — in Gamescope we force vulkan above
+    overrides.insert("pcsx2_renderer_backend", "\"Auto\"".into());
+    info!("[RETROARCH] PCSX2 core options: renderer=Auto, backend=Auto, upscale={}", pcsx2_res);
 }
 
 // ── Widescreen helpers ─────────────────────────────────────────────────

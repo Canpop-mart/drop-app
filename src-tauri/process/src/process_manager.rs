@@ -1017,6 +1017,46 @@ impl ProcessManager<'_> {
                 // fails and can interfere with video surface creation.
                 command.env_remove("LD_PRELOAD");
 
+                // ── Force system Vulkan/Mesa for AppImage binaries ──
+                // RetroArch AppImages bundle their own Mesa/Vulkan
+                // libraries which are often too old for the Steam Deck's
+                // RDNA2 GPU (AMD radv driver). This causes a black
+                // screen: audio works but no video surface is created.
+                // Clear LD_LIBRARY_PATH so the AppImage's bundled libs
+                // don't shadow the system's working Vulkan/Mesa, and
+                // explicitly point Vulkan to the system ICD.
+                let is_appimage = spawn_executable.to_lowercase().ends_with(".appimage");
+                if is_appimage {
+                    info!("[LAUNCH] AppImage detected in Gamescope — forcing system Vulkan/Mesa");
+                    // Remove any library path overrides that could pull
+                    // in the AppImage's stale bundled mesa
+                    command.env_remove("LD_LIBRARY_PATH");
+                    // Point Vulkan loader at the system's AMD radv ICD
+                    // (standard path on SteamOS / Arch-based distros)
+                    let radv_icd = "/usr/share/vulkan/icd.d/radeon_icd.x86_64.json";
+                    if std::path::Path::new(radv_icd).exists() {
+                        info!("[LAUNCH] Found system Vulkan ICD: {}", radv_icd);
+                        command.env("VK_ICD_FILENAMES", radv_icd);
+                    } else {
+                        // Fallback: try the generic AMD path
+                        let alt_icd = "/usr/share/vulkan/icd.d/radeon_icd.json";
+                        if std::path::Path::new(alt_icd).exists() {
+                            info!("[LAUNCH] Found system Vulkan ICD (alt): {}", alt_icd);
+                            command.env("VK_ICD_FILENAMES", alt_icd);
+                        } else {
+                            warn!(
+                                "[LAUNCH] No system Vulkan ICD found at {} or {} — \
+                                 Vulkan may fail if AppImage bundles stale mesa",
+                                radv_icd, alt_icd
+                            );
+                        }
+                    }
+                    // Also disable the AppImage's internal library
+                    // extraction so it uses the host system's graphics
+                    // stack entirely
+                    command.env("APPIMAGE_EXTRACT_AND_RUN", "1");
+                }
+
                 // Enable Steam Game Mode integration for Proton games
                 // This tells the game/Proton that we're in a "Steam-like" session
                 command.env("SteamGameId", &game_id);

@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
+use database::{borrow_db_checked, GameDownloadStatus};
 use log::{info, warn};
+use rand::Rng;
+use remote::streaming_sessions;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -375,36 +378,46 @@ pub struct SunshineStatus {
 /// Get the current Sunshine status.
 #[tauri::command]
 pub async fn sunshine_status() -> SunshineStatus {
+    info!("[SUNSHINE] sunshine_status() called");
     let binary_path = find_sunshine();
     let installed = binary_path.is_some();
+    info!("[SUNSHINE] installed={}, path={:?}", installed, binary_path.as_ref().map(|p| p.display().to_string()));
 
     let running = {
         let mut guard = SUNSHINE_PROCESS.lock().await;
         if let Some(ref mut child) = *guard {
             // Check if process is still alive
             match child.try_wait() {
-                Ok(None) => true,  // still running
-                Ok(Some(_)) => {
+                Ok(None) => {
+                    info!("[SUNSHINE] Process is still running");
+                    true
+                }
+                Ok(Some(status)) => {
+                    info!("[SUNSHINE] Process exited with status: {}", status);
                     *guard = None; // exited — clean up
                     false
                 }
-                Err(_) => {
+                Err(e) => {
+                    warn!("[SUNSHINE] Failed to check process status: {e}");
                     *guard = None;
                     false
                 }
             }
         } else {
+            info!("[SUNSHINE] No managed Sunshine process");
             false
         }
     };
 
-    SunshineStatus {
+    let status = SunshineStatus {
         installed,
         running,
         binary_path: binary_path.map(|p| p.to_string_lossy().to_string()),
         web_ui_port: SUNSHINE_WEB_PORT,
         version: SUNSHINE_VERSION.to_string(),
-    }
+    };
+    info!("[SUNSHINE] Returning status: installed={}, running={}", status.installed, status.running);
+    status
 }
 
 /// Start the Sunshine process with Drop's config.
@@ -613,7 +626,6 @@ pub async fn sunshine_list_clients(
 // These commands talk to the Drop server (not the local Sunshine instance)
 // using JWT client auth via `make_authenticated_post` / `make_authenticated_get`.
 
-use remote::streaming_sessions;
 
 /// Create a new streaming session on the server.
 #[tauri::command]
@@ -621,12 +633,20 @@ pub async fn streaming_create_session(
     game_id: Option<String>,
     host_local_ip: Option<String>,
 ) -> Result<String, String> {
-    streaming_sessions::start_streaming_session(
+    info!("[STREAMING] streaming_create_session called: game_id={:?}, host_local_ip={:?}", game_id, host_local_ip);
+    let result = streaming_sessions::start_streaming_session(
         game_id.as_deref(),
         host_local_ip.as_deref(),
     )
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| {
+        warn!("[STREAMING] create_session failed: {e}");
+        e.to_string()
+    });
+    if let Ok(ref id) = result {
+        info!("[STREAMING] Session created: {}", id);
+    }
+    result
 }
 
 /// Mark a streaming session as ready on the server.
@@ -635,20 +655,28 @@ pub async fn streaming_mark_ready(
     session_id: String,
     pairing_pin: Option<String>,
 ) -> Result<(), String> {
+    info!("[STREAMING] streaming_mark_ready called: session_id={}, has_pin={}", session_id, pairing_pin.is_some());
     streaming_sessions::mark_session_ready(
         &session_id,
         pairing_pin.as_deref(),
     )
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| {
+        warn!("[STREAMING] mark_ready failed: {e}");
+        e.to_string()
+    })
 }
 
 /// Stop a streaming session on the server.
 #[tauri::command]
 pub async fn streaming_stop_session(session_id: String) -> Result<(), String> {
+    info!("[STREAMING] streaming_stop_session called: session_id={}", session_id);
     streaming_sessions::stop_streaming_session(&session_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| {
+            warn!("[STREAMING] stop_session failed: {e}");
+            e.to_string()
+        })
 }
 
 /// Send a heartbeat for an active streaming session.
@@ -681,4 +709,330 @@ pub async fn streaming_get_connection_info(
     streaming_sessions::get_streaming_connection_info(&session_id)
         .await
         .map_err(|e| e.to_string())
+}
+
+// ── Moonlight client (receiver side) ──────────────────────────────────
+
+/// Find the Moonlight binary — check PATH, then common locations.
+fn find_moonlight() -> Option<PathBuf> {
+    // Check PATH first
+    #[cfg(target_os = "windows")]
+    let names = &["moonlight.exe", "Moonlight.exe"];
+    #[cfg(not(target_os = "windows"))]
+    let names = &["moonlight"];
+
+    for name in names {
+        if let Ok(output) = Command::new(name).arg("--version").output() {
+            if output.status.success() || !output.stdout.is_empty() {
+                return Some(PathBuf::from(name));
+            }
+        }
+    }
+
+    // Check common locations
+    #[cfg(target_os = "windows")]
+    {
+        let program_files = std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string());
+        for path in &[
+            format!("{}\\Moonlight Game Streaming\\Moonlight.exe", program_files),
+            format!("{}\\Moonlight\\Moonlight.exe", program_files),
+        ] {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Check common binary locations
+        for path in &["/usr/bin/moonlight", "/usr/local/bin/moonlight", "/usr/bin/moonlight-qt"] {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+
+        // Check flatpak (common on Steam Deck)
+        if let Ok(output) = Command::new("flatpak")
+            .args(["info", "com.moonlight_stream.Moonlight"])
+            .output()
+        {
+            if output.status.success() {
+                // Return a sentinel — we'll launch via flatpak run
+                return Some(PathBuf::from("flatpak:com.moonlight_stream.Moonlight"));
+            }
+        }
+    }
+
+    None
+}
+
+/// Build a `Command` for Moonlight, handling flatpak sentinel.
+fn moonlight_command(moonlight_str: &str) -> Command {
+    if moonlight_str.starts_with("flatpak:") {
+        let mut cmd = Command::new("flatpak");
+        cmd.arg("run").arg("com.moonlight_stream.Moonlight");
+        cmd
+    } else {
+        Command::new(moonlight_str)
+    }
+}
+
+/// Launch Moonlight pointed at a specific host for streaming.
+/// If `pin` is provided, Moonlight will attempt to auto-pair first.
+#[tauri::command]
+pub async fn launch_moonlight(
+    host: String,
+    port: u16,
+    pin: Option<String>,
+) -> Result<(), String> {
+    let moonlight = find_moonlight()
+        .ok_or_else(|| "Moonlight is not installed. Please install Moonlight Game Streaming to use remote play.".to_string())?;
+
+    let moonlight_str = moonlight.to_string_lossy().to_string();
+    info!("[MOONLIGHT] Found at: {}", moonlight_str);
+    info!("[MOONLIGHT] Connecting to {}:{}, pin={}", host, port, pin.is_some());
+
+    let address = format!("{}:{}", host, port);
+
+    // Try to pair first using the PIN (if provided)
+    if let Some(ref pin_value) = pin {
+        info!("[MOONLIGHT] Attempting to pair with PIN...");
+        let mut pair_cmd = moonlight_command(&moonlight_str);
+        pair_cmd.args(["pair", &address, "--pin", pin_value]);
+
+        match pair_cmd.output() {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.success() {
+                    info!("[MOONLIGHT] Pairing successful: {}", stdout.trim());
+                } else {
+                    warn!("[MOONLIGHT] Pairing returned non-zero (may already be paired): {} {}", stdout.trim(), stderr.trim());
+                }
+            }
+            Err(e) => {
+                warn!("[MOONLIGHT] Pairing command failed: {e}");
+            }
+        }
+    }
+
+    // Launch Moonlight in stream mode — stream the desktop
+    info!("[MOONLIGHT] Starting stream to {}...", address);
+    let mut cmd = moonlight_command(&moonlight_str);
+    cmd.args(["stream", &address, "Desktop"]);
+
+    cmd.spawn()
+        .map_err(|e| format!("Failed to launch Moonlight: {e}"))?;
+
+    info!("[MOONLIGHT] Moonlight launched");
+    Ok(())
+}
+
+// ── Push-based streaming (background poller on host side) ─────────
+
+/// Request a stream from another device (called by the receiving client, e.g. Steam Deck).
+#[tauri::command]
+pub async fn streaming_request_stream(game_id: String) -> Result<String, String> {
+    info!("[STREAMING] streaming_request_stream called: game_id={}", game_id);
+    let session_id = streaming_sessions::request_stream(&game_id)
+        .await
+        .map_err(|e| {
+            warn!("[STREAMING] request_stream failed: {e}");
+            e.to_string()
+        })?;
+    info!("[STREAMING] Stream requested, session_id={}", session_id);
+    Ok(session_id)
+}
+
+/// Background task that polls for incoming stream requests and auto-fulfills them.
+/// Spawned once on app startup. Runs every 10 seconds.
+pub fn spawn_stream_request_poller() {
+    tokio::spawn(async {
+        info!("[STREAM-POLLER] Background stream request poller started");
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
+            // Check if we have auth configured (skip if not logged in)
+            {
+                let db = borrow_db_checked();
+                if db.auth.is_none() {
+                    continue;
+                }
+            }
+
+            match streaming_sessions::poll_pending_requests().await {
+                Ok(requests) => {
+                    if !requests.is_empty() {
+                        info!("[STREAM-POLLER] Found {} pending stream request(s)", requests.len());
+                    }
+                    for req in requests {
+                        if let Some(game_id) = &req.game_id {
+                            // Check if this game is installed locally
+                            let is_installed = {
+                                let db = borrow_db_checked();
+                                matches!(
+                                    db.applications.game_statuses.get(game_id),
+                                    Some(GameDownloadStatus::Installed { .. })
+                                )
+                            };
+
+                            if is_installed {
+                                info!(
+                                    "[STREAM-POLLER] Game {} is installed, accepting request {}",
+                                    game_id, req.session_id
+                                );
+                                let game_name = req.game
+                                    .as_ref()
+                                    .map(|g| g.m_name.clone())
+                                    .unwrap_or_else(|| game_id.clone());
+                                tokio::spawn(fulfill_stream_request(
+                                    req.session_id.clone(),
+                                    game_id.clone(),
+                                    game_name,
+                                ));
+                            } else {
+                                info!(
+                                    "[STREAM-POLLER] Game {} is NOT installed locally, skipping request {}",
+                                    game_id, req.session_id
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Silently ignore poll errors (network issues, not logged in, etc.)
+                    let _ = e;
+                }
+            }
+        }
+    });
+}
+
+/// Fulfill a stream request: accept it, start Sunshine, register the game, launch it.
+async fn fulfill_stream_request(session_id: String, game_id: String, game_name: String) {
+    info!("[STREAM-FULFILL] Fulfilling stream request {} for game {}", session_id, game_id);
+
+    // 1. Read Sunshine credentials from settings
+    let (sun_user, sun_pass) = {
+        let db = borrow_db_checked();
+        let user = if db.settings.sunshine_username.is_empty() {
+            "sunshine".to_string()
+        } else {
+            db.settings.sunshine_username.clone()
+        };
+        let pass = if db.settings.sunshine_password.is_empty() {
+            "sunshine".to_string()
+        } else {
+            db.settings.sunshine_password.clone()
+        };
+        (user, pass)
+    };
+
+    // 2. Generate a pairing PIN
+    let pin = format!("{:04}", rand::rng().random_range(0u16..10000));
+
+    // 3. Accept the request on the server
+    if let Err(e) = streaming_sessions::accept_stream_request(&session_id, Some(&pin)).await {
+        warn!("[STREAM-FULFILL] Failed to accept request: {e}");
+        return;
+    }
+
+    // 4. Make sure Sunshine is running
+    {
+        let mut guard = SUNSHINE_PROCESS.lock().await;
+        let needs_start = match *guard {
+            Some(ref mut child) => child.try_wait().map_or(true, |s| s.is_some()),
+            None => true,
+        };
+        if needs_start {
+            *guard = None;
+            drop(guard);
+
+            let config_dir = sunshine_config_dir();
+            match generate_sunshine_conf(&config_dir, &sun_user, &sun_pass) {
+                Ok(conf_path) => {
+                    let binary = match find_sunshine() {
+                        Some(b) => b,
+                        None => {
+                            warn!("[STREAM-FULFILL] Sunshine not installed, cannot fulfill request");
+                            return;
+                        }
+                    };
+                    info!("[STREAM-FULFILL] Starting Sunshine: {} {}", binary.display(), conf_path.display());
+                    match Command::new(&binary)
+                        .arg(conf_path.to_string_lossy().as_ref())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
+                        .spawn()
+                    {
+                        Ok(child) => {
+                            info!("[STREAM-FULFILL] Sunshine started with PID {}", child.id());
+                            let mut guard = SUNSHINE_PROCESS.lock().await;
+                            *guard = Some(child);
+                        }
+                        Err(e) => {
+                            warn!("[STREAM-FULFILL] Failed to start Sunshine: {e}");
+                            return;
+                        }
+                    }
+                    // Give Sunshine time to initialize
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                Err(e) => {
+                    warn!("[STREAM-FULFILL] Failed to generate Sunshine config: {e}");
+                    return;
+                }
+            }
+        }
+    }
+
+    // 5. Register the game in Sunshine's apps
+    if let Err(e) = register_game_app(&game_id, &game_name, Some("drop-launch"), None) {
+        warn!("[STREAM-FULFILL] Failed to register game: {e}");
+        // Non-fatal
+    }
+
+    // 6. Send the PIN to Sunshine's API for pre-pairing
+    let pin_body = serde_json::json!({ "pin": pin, "name": "Drop Client" });
+    if let Err(e) = sunshine_api_request(
+        reqwest::Method::POST,
+        "/pin",
+        Some(pin_body),
+        &sun_user,
+        &sun_pass,
+    ).await {
+        warn!("[STREAM-FULFILL] Failed to send PIN to Sunshine (may not need pairing): {e}");
+    }
+
+    // 7. Mark the session as Ready
+    if let Err(e) = streaming_sessions::mark_session_ready(&session_id, Some(&pin)).await {
+        warn!("[STREAM-FULFILL] Failed to mark session ready: {e}");
+        return;
+    }
+    info!("[STREAM-FULFILL] Session {} marked Ready", session_id);
+
+    // 8. Launch the game
+    info!("[STREAM-FULFILL] Launching game {}", game_id);
+    {
+        use crate::process::launch_game;
+        match launch_game(game_id.clone(), 0) {
+            Ok(_) => info!("[STREAM-FULFILL] Game launched successfully"),
+            Err(e) => warn!("[STREAM-FULFILL] Failed to launch game: {e:?}"),
+        }
+    }
+
+    // 9. Start heartbeating in background
+    let sid = session_id.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            if let Err(e) = streaming_sessions::heartbeat_streaming(&sid, Some("Streaming")).await {
+                warn!("[STREAM-FULFILL] Heartbeat failed for {}: {e}", sid);
+                break;
+            }
+        }
+    });
 }

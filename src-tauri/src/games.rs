@@ -842,14 +842,17 @@ pub async fn install_ludusavi() -> Result<String, String> {
         .map_err(|e| format!("Failed to create tools dir: {e}"))?;
 
     info!("[LUDUSAVI] Downloading from {}", download_url);
+    info!("[LUDUSAVI] Target dir: {} (exists: {})", ludusavi_dir.display(), ludusavi_dir.exists());
 
     // Download the archive
     let response = reqwest::get(&download_url)
         .await
         .map_err(|e| format!("Download failed: {e}"))?;
 
-    if !response.status().is_success() {
-        return Err(format!("Download failed: HTTP {}", response.status()));
+    let status = response.status();
+    info!("[LUDUSAVI] HTTP response: {}", status);
+    if !status.is_success() {
+        return Err(format!("Download failed: HTTP {}", status));
     }
 
     let bytes = response.bytes().await.map_err(|e| format!("Download failed: {e}"))?;
@@ -860,28 +863,50 @@ pub async fn install_ludusavi() -> Result<String, String> {
     let mut archive = zip::ZipArchive::new(cursor)
         .map_err(|e| format!("Failed to open archive: {e}"))?;
 
+    info!("[LUDUSAVI] Archive contains {} entries", archive.len());
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| format!("Archive error: {e}"))?;
         let name = file.name().to_string();
+        let size = file.size();
+        info!("[LUDUSAVI] Archive entry [{}]: {:?} ({} bytes, is_dir={})", i, name, size, name.ends_with('/'));
 
         // Only extract the ludusavi binary
         if name.contains("ludusavi") && !name.ends_with('/') {
             let out_name = if name.ends_with(".exe") { "ludusavi.exe" } else { "ludusavi" };
             let out_path = ludusavi_dir.join(out_name);
+            info!("[LUDUSAVI] Extracting to: {}", out_path.display());
             let mut out_file = std::fs::File::create(&out_path)
-                .map_err(|e| format!("Failed to create file: {e}"))?;
-            std::io::copy(&mut file, &mut out_file)
-                .map_err(|e| format!("Failed to extract: {e}"))?;
+                .map_err(|e| format!("Failed to create file {}: {e}", out_path.display()))?;
+            let copied = std::io::copy(&mut file, &mut out_file)
+                .map_err(|e| format!("Failed to extract to {}: {e}", out_path.display()))?;
+            info!("[LUDUSAVI] Extracted {} bytes", copied);
 
             // Make executable on Unix
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(0o755))
-                    .map_err(|e| format!("Failed to set permissions: {e}"))?;
+                    .map_err(|e| format!("Failed to set permissions on {}: {e}", out_path.display()))?;
+                info!("[LUDUSAVI] Set executable permissions (0o755)");
             }
 
-            info!("[LUDUSAVI] Installed to {}", out_path.display());
+            // Verify the binary exists and is executable
+            let meta = std::fs::metadata(&out_path);
+            match &meta {
+                Ok(m) => info!("[LUDUSAVI] Installed to {} (size={}, readonly={})", out_path.display(), m.len(), m.permissions().readonly()),
+                Err(e) => log::warn!("[LUDUSAVI] Installed but can't stat: {e}"),
+            }
+
+            // Quick sanity check — try running --version
+            match std::process::Command::new(&out_path).arg("--version").output() {
+                Ok(o) => {
+                    let stdout = String::from_utf8_lossy(&o.stdout);
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    info!("[LUDUSAVI] Version check: status={}, stdout={:?}, stderr={:?}", o.status, stdout.trim(), stderr.trim());
+                }
+                Err(e) => log::warn!("[LUDUSAVI] Version check failed (binary may not run on this platform): {e}"),
+            }
+
             return Ok(out_path.to_string_lossy().to_string());
         }
     }

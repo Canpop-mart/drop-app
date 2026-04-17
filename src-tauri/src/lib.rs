@@ -341,7 +341,9 @@ pub fn run() {
             streaming_stop_session,
             streaming_heartbeat,
             streaming_list_sessions,
-            streaming_get_connection_info
+            streaming_get_connection_info,
+            launch_moonlight,
+            streaming_request_stream
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -355,6 +357,10 @@ pub fn run() {
             tauri::async_runtime::block_on(async move {
                 let state = setup(handle.clone()).await;
                 info!("initialized drop client");
+
+                // Start background poller for incoming stream requests
+                streaming::spawn_stream_request_poller();
+
                 let is_gamescope = state.session_type == SessionType::Gamescope;
                 app.manage(Mutex::new(state));
 

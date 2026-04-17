@@ -207,7 +207,7 @@ async function doStop() {
 
 async function doPair() {
   try {
-    await sendPin(pairingPin.value);
+    await sendPin(pairingPin.value, "Drop Client", adminUsername.value, adminPassword.value);
     pairingPin.value = "";
     // Refresh status to update paired client count
     await checkSunshine();

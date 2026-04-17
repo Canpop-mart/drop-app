@@ -1536,6 +1536,7 @@ dependencies = [
  "http-serde 2.1.1",
  "humansize",
  "known-folders",
+ "libc",
  "log",
  "log4rs",
  "md5 0.7.0",

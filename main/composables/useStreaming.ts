@@ -117,10 +117,20 @@ export function useStreaming() {
     }
   }
 
-  async function sendPin(pin: string): Promise<void> {
+  async function sendPin(
+    pin: string,
+    clientName?: string,
+    username?: string,
+    password?: string,
+  ): Promise<void> {
     error.value = null;
     try {
-      await invoke("sunshine_send_pin", { pin });
+      await invoke("sunshine_send_pin", {
+        pin,
+        clientName: clientName ?? "Drop Client",
+        username: username ?? "sunshine",
+        password: password ?? "sunshine",
+      });
     } catch (e) {
       error.value = String(e);
       throw e;
@@ -131,6 +141,8 @@ export function useStreaming() {
     gameId: string,
     gameName: string,
     launchCommand: string,
+    username?: string,
+    password?: string,
   ): Promise<void> {
     error.value = null;
     try {
@@ -138,6 +150,8 @@ export function useStreaming() {
         gameId,
         gameName,
         launchCommand,
+        username: username ?? "sunshine",
+        password: password ?? "sunshine",
       });
     } catch (e) {
       error.value = String(e);
@@ -151,10 +165,16 @@ export function useStreaming() {
     gameId?: string,
     hostLocalIp?: string,
   ): Promise<{ sessionId: string }> {
-    const sessionId = await invoke<string>("streaming_create_session", {
-      gameId: gameId ?? null,
+    console.log("[STREAMING] startStreamingSession called with gameId:", gameId, "hostLocalIp:", hostLocalIp);
+    const args: Record<string, string | null> = {
       hostLocalIp: hostLocalIp ?? null,
-    });
+    };
+    // Only include gameId if it has a value — avoids Tauri deserializing "" as None
+    if (gameId) {
+      args.gameId = gameId;
+    }
+    console.log("[STREAMING] invoke args:", JSON.stringify(args));
+    const sessionId = await invoke<string>("streaming_create_session", args);
     return { sessionId };
   }
 
@@ -198,6 +218,14 @@ export function useStreaming() {
     });
   }
 
+  /** Request a stream from another device (push-based flow). */
+  async function requestStream(gameId: string): Promise<string> {
+    const sessionId = await invoke<string>("streaming_request_stream", {
+      gameId,
+    });
+    return sessionId;
+  }
+
   return {
     // State
     sunshineStatus,
@@ -217,5 +245,7 @@ export function useStreaming() {
     sendHeartbeat,
     listRemoteSessions,
     getConnectionInfo,
+    // Push-based streaming
+    requestStream,
   };
 }

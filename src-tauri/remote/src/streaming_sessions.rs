@@ -43,6 +43,23 @@ struct HeartbeatBody {
     status: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RequestStreamBody {
+    game_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AcceptRequestBody {
+    session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sunshine_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_local_ip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pairing_pin: Option<String>,
+}
 
 // ── Response types ──────────────────────────────────────────────────
 
@@ -253,4 +270,84 @@ pub async fn get_streaming_connection_info(
     let info: StreamingConnectionInfo = response.json().await?;
     info!("Got connection info for session {}", session_id);
     Ok(info)
+}
+
+// ── Push-based streaming (client requests, host fulfills) ──────────
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingStreamRequest {
+    pub session_id: String,
+    pub game_id: Option<String>,
+    pub game: Option<StreamingSessionGame>,
+    pub requesting_client: Option<StreamingSessionHost>,
+    pub created_at: String,
+}
+
+/// Request a stream from another client (called by the receiving device).
+pub async fn request_stream(game_id: &str) -> Result<String, RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/streaming/request"], &[])?;
+    let body = RequestStreamBody {
+        game_id: game_id.to_string(),
+    };
+
+    let response = make_authenticated_post(url, &body).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        warn!("Failed to request stream: {} - {}", status, text);
+        return Err(RemoteAccessError::UnparseableResponse(format!(
+            "Failed to request stream: {status} - {text}"
+        )));
+    }
+
+    let data: StartSessionResponse = response.json().await?;
+    info!("Requested stream, session {}", data.session_id);
+    Ok(data.session_id)
+}
+
+/// Poll for pending stream requests from other clients.
+pub async fn poll_pending_requests() -> Result<Vec<PendingStreamRequest>, RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/streaming/pending-requests"], &[])?;
+    let response = make_authenticated_get(url).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(RemoteAccessError::UnparseableResponse(format!(
+            "Failed to poll pending requests: {status} - {text}"
+        )));
+    }
+
+    let requests: Vec<PendingStreamRequest> = response.json().await?;
+    Ok(requests)
+}
+
+/// Accept a pending stream request (called by the host).
+pub async fn accept_stream_request(
+    session_id: &str,
+    pairing_pin: Option<&str>,
+) -> Result<(), RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/streaming/accept"], &[])?;
+    let body = AcceptRequestBody {
+        session_id: session_id.to_string(),
+        sunshine_port: None,
+        host_local_ip: None,
+        pairing_pin: pairing_pin.map(|s| s.to_string()),
+    };
+
+    let response = make_authenticated_post(url, &body).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        warn!("Failed to accept stream request: {} - {}", status, text);
+        return Err(RemoteAccessError::UnparseableResponse(format!(
+            "Failed to accept stream request: {status} - {text}"
+        )));
+    }
+
+    info!("Accepted stream request {}", session_id);
+    Ok(())
 }

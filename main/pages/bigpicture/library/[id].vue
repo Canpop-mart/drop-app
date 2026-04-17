@@ -37,28 +37,34 @@
         <div class="flex items-center gap-3">
           <!-- Play / Stream split button (inline for focus-nav compatibility) -->
           <div v-if="status?.type === 'Installed'" class="relative inline-flex">
-            <button
-              :ref="(el: any) => registerAction(el, { onSelect: executePlayAction, onContext: togglePlayMenu })"
-              class="inline-flex items-center pl-8 py-4 text-lg gap-3 font-semibold rounded-l-xl transition-all shadow-lg"
-              :class="playMode === 'play'
-                ? 'bg-blue-600 hover:bg-blue-400 text-white shadow-blue-600/20 hover:shadow-blue-500/30 hover:scale-105'
-                : 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/20 hover:shadow-purple-500/30 hover:scale-105'"
-              @click="playMode === 'play' ? launchGame() : streamGame()"
+            <!-- Single focusable wrapper — gamepad A launches, X opens dropdown, mouse click executes directly -->
+            <div
+              :ref="(el: any) => registerAction(el, { onSelect: () => (playMode === 'play' ? launchGame() : streamGame()), onContext: togglePlayMenu })"
+              class="bp-focus-delegate inline-flex cursor-pointer"
             >
-              <PlayIcon v-if="playMode === 'play'" class="size-6" />
-              <SignalIcon v-else class="size-6" />
-              {{ playMode === 'play' ? 'Play' : 'Stream' }}
-            </button>
-            <button
-              :ref="(el: any) => registerAction(el, { onSelect: togglePlayMenu })"
-              class="inline-flex items-center px-3 py-4 font-semibold rounded-r-xl transition-all shadow-lg border-l"
-              :class="playMode === 'play'
-                ? 'bg-blue-700 hover:bg-blue-500 text-white border-blue-500/30'
-                : 'bg-purple-700 hover:bg-purple-500 text-white border-purple-500/30'"
-              @click.stop="togglePlayMenu"
-            >
-              <ChevronDownIcon class="size-5" :class="{ 'rotate-180': playMenuOpen }" />
-            </button>
+              <span class="bp-focus-ring inline-flex rounded-xl">
+                <button
+                  class="inline-flex items-center pl-8 pr-4 py-4 text-lg gap-3 font-semibold rounded-l-xl transition-all shadow-lg"
+                  :class="playMode === 'play'
+                    ? 'bg-blue-600 hover:bg-blue-400 text-white shadow-blue-600/20 hover:shadow-blue-500/30 hover:scale-105'
+                    : 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/20 hover:shadow-purple-500/30 hover:scale-105'"
+                  @click.stop="playMode === 'play' ? launchGame() : streamGame()"
+                >
+                  <PlayIcon v-if="playMode === 'play'" class="size-6" />
+                  <SignalIcon v-else class="size-6" />
+                  {{ playMode === 'play' ? 'Play' : 'Stream' }}
+                </button>
+                <button
+                  class="inline-flex items-center px-3 py-4 font-semibold rounded-r-xl transition-all shadow-lg border-l"
+                  :class="playMode === 'play'
+                    ? 'bg-blue-600 hover:bg-blue-400 text-white border-blue-400/30'
+                    : 'bg-purple-600 hover:bg-purple-500 text-white border-purple-400/30'"
+                  @click.stop="togglePlayMenu"
+                >
+                  <ChevronDownIcon class="size-5" :class="{ 'rotate-180': playMenuOpen }" />
+                </button>
+              </span>
+            </div>
             <Transition name="dropdown-fade">
               <div
                 v-if="playMenuOpen"
@@ -184,6 +190,17 @@
               <span class="font-medium">{{ aspectLabel }}</span>
             </button>
           </template>
+
+          <!-- Remote stream available — join from another machine -->
+          <button
+            v-if="availableStream && availableStream.status === 'Ready'"
+            :ref="(el: any) => registerAction(el, { onSelect: connectToRemoteStream })"
+            class="inline-flex items-center px-6 py-4 text-lg gap-3 font-semibold rounded-xl transition-all shadow-lg bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/20 hover:shadow-purple-500/30 hover:scale-105"
+            @click="connectToRemoteStream"
+          >
+            <SignalIcon class="size-6" />
+            Stream from {{ availableStream.hostClient?.name || "Remote" }}
+          </button>
 
           <!-- Stream status indicator (when streaming is active) -->
           <span
@@ -913,7 +930,7 @@ const launchError = ref<string | null>(null);
 const diagnosticsRan = ref(false);
 const isStreaming = ref(false);
 
-// ── Streaming (full auto: Sunshine → session → launch) ────────────────────
+// ── Streaming ─────────────────────────────────────────────────────────────
 const {
   checkSunshine,
   startSunshine,
@@ -921,9 +938,70 @@ const {
   markSessionReady,
   registerGame,
   stopStreamingSession,
+  sendHeartbeat,
+  listRemoteSessions,
+  getConnectionInfo,
+  sendPin,
+  requestStream,
 } = useStreaming();
 
 let activeStreamSessionId: string | null = null;
+let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+
+// ── Remote stream discovery (client/receiver side) ────────────────────────
+const availableStream = ref<any>(null);
+let streamPollInterval: ReturnType<typeof setInterval> | null = null;
+// Session ID of a stream we requested (waiting for host to fulfill)
+let pendingRequestSessionId: string | null = null;
+
+async function pollRemoteSessions() {
+  try {
+    const sessions = await listRemoteSessions();
+    // Find an active session for this game (Ready/Starting/Streaming)
+    const found = sessions.find(
+      (s: any) =>
+        s.game?.id === gameId &&
+        (s.status === "Ready" || s.status === "Starting" || s.status === "Streaming"),
+    ) ?? null;
+    availableStream.value = found;
+
+    // If we have a pending request and a session just became Ready, auto-connect
+    if (pendingRequestSessionId && found && found.status === "Ready") {
+      console.log("[BPM:STREAM] Our requested session is now Ready! Auto-connecting...");
+      pendingRequestSessionId = null;
+      isStreaming.value = false;
+      await connectToRemoteStream();
+    }
+  } catch {
+    // Silently ignore poll errors
+  }
+}
+
+async function connectToRemoteStream() {
+  if (!availableStream.value) return;
+  try {
+    const info = await getConnectionInfo(availableStream.value.id);
+    console.log("[BPM:STREAM] Connection info:", JSON.stringify(info));
+    const host = info.hostLocalIp || info.hostExternalIp;
+    if (!host) {
+      launchError.value = "No host IP available for streaming";
+      return;
+    }
+    // Launch Moonlight pointed at the host
+    const port = info.sunshinePort || 47989;
+    console.log(`[BPM:STREAM] Launching Moonlight → ${host}:${port}`);
+    await invoke("launch_moonlight", { host, port, pin: info.pairingPin ?? null });
+    streamGuard = false;
+    // Restore normal poll interval
+    if (streamPollInterval) clearInterval(streamPollInterval);
+    streamPollInterval = setInterval(pollRemoteSessions, 15_000);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[BPM:STREAM] Failed to connect to stream:", msg);
+    launchError.value = `Stream connect failed: ${msg}`;
+    streamGuard = false;
+  }
+}
 
 // ── Play/Stream dropdown state ────────────────────────────────────────────
 type PlayMode = "play" | "stream";
@@ -933,12 +1011,10 @@ const playMenuFocus = ref(0);
 let playMenuLockId = 0;
 
 function executePlayAction() {
-  // A press on the main button always opens the dropdown
-  if (!playMenuOpen.value) {
-    openPlayMenu();
-    return;
+  // Called when the dropdown is already open and A is pressed inside it
+  if (playMenuOpen.value) {
+    selectPlayMode(["play", "stream"][playMenuFocus.value] as PlayMode);
   }
-  selectPlayMode(["play", "stream"][playMenuFocus.value] as PlayMode);
 }
 
 function openPlayMenu() {
@@ -984,38 +1060,49 @@ function unwirePlayMenuGamepad() {
   _playMenuUnsubs.length = 0;
 }
 
+let streamGuard = false;
+
+/**
+ * Request a stream from another device (push-based flow).
+ * 1. Creates a "Requested" session on the server
+ * 2. Polls faster (every 3s) waiting for a host to pick it up
+ * 3. When the session becomes "Ready", auto-launches Moonlight
+ */
 async function streamGame() {
-  if (launchGuard) return;
+  console.log("[BPM:STREAM] streamGame() called — requesting remote stream");
+  if (launchGuard || streamGuard) return;
+  streamGuard = true;
   isStreaming.value = true;
   try {
-    // 1. Make sure Sunshine is running
-    const sunStatus = await checkSunshine();
-    if (!sunStatus.running) {
-      // Read credentials from settings (persisted) — fall back to defaults
-      const settings = await invoke<Record<string, any>>("fetch_settings");
-      const user = settings.sunshineUsername || "sunshine";
-      const pass = settings.sunshinePassword || "sunshine";
-      await startSunshine(user, pass);
-    }
+    // Request a stream from another device
+    console.log("[BPM:STREAM] Sending stream request for gameId:", gameId);
+    const sessionId = await requestStream(gameId);
+    pendingRequestSessionId = sessionId;
+    console.log("[BPM:STREAM] Stream requested, session:", sessionId);
 
-    // 2. Register the game in Sunshine's apps.json
-    const gameName = game.value?.mName ?? "Unknown Game";
-    await registerGame(gameId, gameName, "drop-launch");
+    // Speed up polling while waiting for the host to accept
+    if (streamPollInterval) clearInterval(streamPollInterval);
+    streamPollInterval = setInterval(pollRemoteSessions, 3_000);
 
-    // 3. Create a server-side streaming session
-    const { sessionId } = await startStreamingSession(gameId);
-    activeStreamSessionId = sessionId;
-
-    // 4. Mark session as ready
-    await markSessionReady(sessionId);
-
-    // 5. Launch the game normally
-    await launchGame();
+    // Set a timeout — if no host picks it up within 60 seconds, give up
+    setTimeout(() => {
+      if (pendingRequestSessionId === sessionId) {
+        console.warn("[BPM:STREAM] Stream request timed out — no host responded");
+        pendingRequestSessionId = null;
+        isStreaming.value = false;
+        streamGuard = false;
+        launchError.value = "No host responded to the stream request. Make sure Drop is running on your PC.";
+        // Restore normal poll interval
+        if (streamPollInterval) clearInterval(streamPollInterval);
+        streamPollInterval = setInterval(pollRemoteSessions, 15_000);
+      }
+    }, 60_000);
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
-    console.error("[BPM:STREAM] Stream setup failed:", errMsg);
-    launchError.value = `Stream setup failed: ${errMsg}`;
+    console.error("[BPM:STREAM] Stream request failed:", errMsg);
+    launchError.value = `Stream request failed: ${errMsg}`;
     isStreaming.value = false;
+    streamGuard = false;
   }
 }
 
@@ -2448,6 +2535,9 @@ function _onResize() {
 }
 onMounted(() => {
   window.addEventListener("resize", _onResize);
+  // Start polling for remote streaming sessions (receiver side)
+  pollRemoteSessions();
+  streamPollInterval = setInterval(pollRemoteSessions, 15_000);
 });
 
 onUnmounted(() => {
@@ -2458,6 +2548,9 @@ onUnmounted(() => {
   unlistenConflict?.();
   if (showOptions.value) focusNav.releaseInputLock(optionsLockId);
   window.removeEventListener("resize", _onResize);
+  // Clean up streaming
+  if (streamPollInterval) { clearInterval(streamPollInterval); streamPollInterval = null; }
+  if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
 });
 
 // Guard against re-triggering launch immediately after dismissing error dialog.
@@ -2519,6 +2612,7 @@ async function killGame() {
   try {
     await invoke("kill_game", { id: gameId });
     // If we were streaming, stop the server-side session too
+    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
     if (activeStreamSessionId) {
       try {
         await stopStreamingSession(activeStreamSessionId);
@@ -2527,6 +2621,7 @@ async function killGame() {
       }
       activeStreamSessionId = null;
       isStreaming.value = false;
+      streamGuard = false;
     }
   } catch (e) {
     console.error("Failed to stop game:", e);
