@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 
 use database::{borrow_db_checked, GameDownloadStatus};
 use log::{info, warn};
@@ -1407,14 +1406,11 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
             }
 
             // Check if the game process has exited — auto-stop the session
-            {
-                use process::PROCESS_MANAGER;
-                let pm = PROCESS_MANAGER.lock();
-                if !pm.is_game_running(&hb_game_id) {
-                    info!("[STREAM-FULFILL] Game {} exited, auto-stopping session {}", hb_game_id, sid);
-                    let _ = streaming_sessions::stop_streaming_session(&sid).await;
-                    break;
-                }
+            let game_exited = process::PROCESS_MANAGER.lock().is_game_running(&hb_game_id) == false;
+            if game_exited {
+                info!("[STREAM-FULFILL] Game {} exited, auto-stopping session {}", hb_game_id, sid);
+                let _ = streaming_sessions::stop_streaming_session(&sid).await;
+                break;
             }
 
             if let Err(e) = streaming_sessions::heartbeat_streaming(&sid, Some("Streaming")).await {
