@@ -16,8 +16,7 @@ use log::{info, warn};
 use rand::Rng;
 use remote::streaming_sessions;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
+use tokio::sync::{watch, Mutex};
 
 // ── Constants ─────────────────────────────────────────────────────────
 
@@ -366,9 +365,9 @@ pub fn unregister_game_app(game_name: &str) -> Result<(), String> {
 static SUNSHINE_PROCESS: std::sync::LazyLock<Mutex<Option<std::process::Child>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
 
-/// Tracks active host-side streaming sessions with cancellation tokens.
-/// When a session is stopped, the token is cancelled, breaking the heartbeat loop.
-static ACTIVE_HOST_SESSIONS: std::sync::LazyLock<Mutex<HashMap<String, CancellationToken>>> =
+/// Tracks active host-side streaming sessions with cancellation signals.
+/// Sending `true` on the watch channel signals the heartbeat loop to stop.
+static ACTIVE_HOST_SESSIONS: std::sync::LazyLock<Mutex<HashMap<String, watch::Sender<bool>>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Sunshine process status.
@@ -692,9 +691,9 @@ pub async fn stop_all_host_sessions() -> Result<u32, String> {
     let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
     let count = sessions.len() as u32;
     info!("[STREAMING] Stopping {} active host session(s)", count);
-    for (sid, token) in sessions.drain() {
+    for (sid, tx) in sessions.drain() {
         info!("[STREAMING] Cancelling host session {}", sid);
-        token.cancel();
+        let _ = tx.send(true);
     }
     // Also stop Sunshine if running
     {
@@ -1295,28 +1294,27 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
     }
 
     // 9. Register this session and start heartbeating in background (cancellable)
-    let token = CancellationToken::new();
+    let (cancel_tx, mut cancel_rx) = watch::channel(false);
     {
         let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
-        sessions.insert(session_id.clone(), token.clone());
+        sessions.insert(session_id.clone(), cancel_tx);
     }
 
     let sid = session_id.clone();
     tokio::spawn(async move {
         loop {
-            tokio::select! {
-                _ = token.cancelled() => {
-                    info!("[STREAM-FULFILL] Session {} cancelled, stopping heartbeat", sid);
-                    // Tell the server the session is stopped
-                    let _ = streaming_sessions::stop_streaming_session(&sid).await;
-                    break;
-                }
-                _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
-                    if let Err(e) = streaming_sessions::heartbeat_streaming(&sid, Some("Streaming")).await {
-                        warn!("[STREAM-FULFILL] Heartbeat failed for {}: {e}", sid);
-                        break;
-                    }
-                }
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
+            // Check if cancellation was signalled
+            if *cancel_rx.borrow() {
+                info!("[STREAM-FULFILL] Session {} cancelled, stopping heartbeat", sid);
+                let _ = streaming_sessions::stop_streaming_session(&sid).await;
+                break;
+            }
+
+            if let Err(e) = streaming_sessions::heartbeat_streaming(&sid, Some("Streaming")).await {
+                warn!("[STREAM-FULFILL] Heartbeat failed for {}: {e}", sid);
+                break;
             }
         }
         // Clean up from the active sessions map
