@@ -226,6 +226,22 @@ export function useStreaming() {
     return sessionId;
   }
 
+  /** List all registered client devices for the current user. */
+  async function listDevices(): Promise<ClientDevice[]> {
+    return invoke<ClientDevice[]>("list_devices");
+  }
+
+  /** Request a remote install of a game on another device. */
+  async function remoteInstall(
+    gameId: string,
+    targetClientId?: string,
+  ): Promise<void> {
+    await invoke("request_remote_install", {
+      gameId,
+      targetClientId: targetClientId ?? null,
+    });
+  }
+
   return {
     // State
     sunshineStatus,
@@ -247,5 +263,16 @@ export function useStreaming() {
     getConnectionInfo,
     // Push-based streaming
     requestStream,
+    // Device management
+    listDevices,
+    remoteInstall,
   };
+}
+
+export interface ClientDevice {
+  id: string;
+  name: string;
+  platform: string;
+  lastConnected: string;
+  isSelf: boolean;
 }

@@ -733,7 +733,9 @@ fn find_moonlight() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         let program_files = std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string());
+        let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
         for path in &[
+            format!("{}\\drop\\tools\\moonlight\\Moonlight.exe", appdata),
             format!("{}\\Moonlight Game Streaming\\Moonlight.exe", program_files),
             format!("{}\\Moonlight\\Moonlight.exe", program_files),
         ] {
@@ -780,16 +782,124 @@ fn moonlight_command(moonlight_str: &str) -> Command {
     }
 }
 
+/// Install Moonlight if not already present.
+/// On Linux (including Steam Deck), installs via flatpak from Flathub.
+/// On Windows, downloads the portable installer.
+async fn install_moonlight() -> Result<PathBuf, String> {
+    info!("[MOONLIGHT] Moonlight not found, attempting auto-install...");
+
+    #[cfg(target_os = "linux")]
+    {
+        // Install via flatpak (most reliable on Steam Deck)
+        info!("[MOONLIGHT] Installing via flatpak...");
+
+        // Ensure flathub remote is added
+        let _ = Command::new("flatpak")
+            .args(["remote-add", "--if-not-exists", "--user", "flathub", "https://dl.flathub.org/repo/flathub.flatpakrepo"])
+            .output();
+
+        let output = Command::new("flatpak")
+            .args(["install", "--user", "-y", "flathub", "com.moonlight_stream.Moonlight"])
+            .output()
+            .map_err(|e| format!("Failed to run flatpak install: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Flatpak install failed: {}", stderr.trim()));
+        }
+
+        info!("[MOONLIGHT] Installed via flatpak successfully");
+        Ok(PathBuf::from("flatpak:com.moonlight_stream.Moonlight"))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Download portable Moonlight from GitHub
+        let version = "6.1.0";
+        let url = format!(
+            "https://github.com/moonlight-stream/moonlight-qt/releases/download/v{}/MoonlightPortable-x64-{}.zip",
+            version, version
+        );
+
+        let install_dir = PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string()))
+            .join("drop")
+            .join("tools")
+            .join("moonlight");
+        std::fs::create_dir_all(&install_dir)
+            .map_err(|e| format!("Failed to create moonlight dir: {e}"))?;
+
+        info!("[MOONLIGHT] Downloading from {}", url);
+        let response = reqwest::get(&url)
+            .await
+            .map_err(|e| format!("Download failed: {e}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Download failed: HTTP {}", response.status()));
+        }
+
+        let bytes = response.bytes().await.map_err(|e| format!("Download failed: {e}"))?;
+        info!("[MOONLIGHT] Downloaded {} bytes", bytes.len());
+
+        let cursor = std::io::Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(cursor)
+            .map_err(|e| format!("Failed to open archive: {e}"))?;
+
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i)
+                .map_err(|e| format!("Archive error: {e}"))?;
+            let name = file.name().to_string();
+            if name.ends_with('/') {
+                let _ = std::fs::create_dir_all(install_dir.join(&name));
+                continue;
+            }
+            let out_path = install_dir.join(&name);
+            if let Some(parent) = out_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let mut out_file = std::fs::File::create(&out_path)
+                .map_err(|e| format!("Failed to create file: {e}"))?;
+            std::io::copy(&mut file, &mut out_file)
+                .map_err(|e| format!("Failed to extract: {e}"))?;
+        }
+
+        let exe = install_dir.join("Moonlight.exe");
+        if exe.exists() {
+            info!("[MOONLIGHT] Installed to {}", exe.display());
+            Ok(exe)
+        } else {
+            // Try to find it in a subdirectory
+            for entry in std::fs::read_dir(&install_dir).map_err(|e| format!("{e}"))? {
+                if let Ok(entry) = entry {
+                    let candidate = entry.path().join("Moonlight.exe");
+                    if candidate.exists() {
+                        info!("[MOONLIGHT] Installed to {}", candidate.display());
+                        return Ok(candidate);
+                    }
+                }
+            }
+            Err("Moonlight.exe not found after extraction".to_string())
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Err("Auto-install not supported on macOS. Please install Moonlight manually.".to_string())
+    }
+}
+
 /// Launch Moonlight pointed at a specific host for streaming.
 /// If `pin` is provided, Moonlight will attempt to auto-pair first.
+/// Auto-installs Moonlight if not found.
 #[tauri::command]
 pub async fn launch_moonlight(
     host: String,
     port: u16,
     pin: Option<String>,
 ) -> Result<(), String> {
-    let moonlight = find_moonlight()
-        .ok_or_else(|| "Moonlight is not installed. Please install Moonlight Game Streaming to use remote play.".to_string())?;
+    let moonlight = match find_moonlight() {
+        Some(m) => m,
+        None => install_moonlight().await?,
+    };
 
     let moonlight_str = moonlight.to_string_lossy().to_string();
     info!("[MOONLIGHT] Found at: {}", moonlight_str);
@@ -829,6 +939,27 @@ pub async fn launch_moonlight(
 
     info!("[MOONLIGHT] Moonlight launched");
     Ok(())
+}
+
+// ── Device listing & remote install ──────────────────────────────────
+
+/// List all registered client devices for the current user.
+#[tauri::command]
+pub async fn list_devices() -> Result<Vec<streaming_sessions::ClientDevice>, String> {
+    streaming_sessions::list_devices()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Request a remote install of a game on another device.
+#[tauri::command]
+pub async fn request_remote_install(
+    game_id: String,
+    target_client_id: Option<String>,
+) -> Result<(), String> {
+    streaming_sessions::request_remote_install(&game_id, target_client_id.as_deref())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ── Push-based streaming (background poller on host side) ─────────
@@ -894,10 +1025,40 @@ pub fn spawn_stream_request_poller() {
                                     game_name,
                                 ));
                             } else {
+                                // Game not installed — this might be a remote install request.
+                                // Accept the request (to clear it from pending) and emit an
+                                // event so the frontend can trigger the download.
                                 info!(
-                                    "[STREAM-POLLER] Game {} is NOT installed locally, skipping request {}",
+                                    "[STREAM-POLLER] Game {} is NOT installed locally — treating as remote install request {}",
                                     game_id, req.session_id
                                 );
+                                let sid = req.session_id.clone();
+                                let gid = game_id.clone();
+                                let gname = req.game
+                                    .as_ref()
+                                    .map(|g| g.m_name.clone())
+                                    .unwrap_or_else(|| gid.clone());
+                                tokio::spawn(async move {
+                                    // Accept the request so it doesn't keep showing up
+                                    if let Err(e) = streaming_sessions::accept_stream_request(&sid, None, None).await {
+                                        warn!("[STREAM-POLLER] Failed to accept remote install request: {e}");
+                                        return;
+                                    }
+                                    // Emit event for frontend to handle the download
+                                    {
+                                        use remote::utils::DROP_APP_HANDLE;
+                                        use tauri::Emitter;
+                                        let lock = DROP_APP_HANDLE.lock().await;
+                                        if let Some(app) = &*lock {
+                                            let _ = app.emit("remote-install-request", serde_json::json!({
+                                                "gameId": gid,
+                                                "gameName": gname,
+                                                "sessionId": sid,
+                                            }));
+                                            info!("[STREAM-POLLER] Emitted remote-install-request for game {}", gid);
+                                        }
+                                    }
+                                });
                             }
                         }
                     }
@@ -934,8 +1095,18 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
     // 2. Generate a pairing PIN
     let pin = format!("{:04}", rand::rng().random_range(0u16..10000));
 
+    // 2b. Detect local IP (open a UDP socket to a public IP, check local addr)
+    let local_ip = std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|sock| {
+            sock.connect("8.8.8.8:80")?;
+            sock.local_addr()
+        })
+        .ok()
+        .map(|addr| addr.ip().to_string());
+    info!("[STREAM-FULFILL] Detected local IP: {:?}", local_ip);
+
     // 3. Accept the request on the server
-    if let Err(e) = streaming_sessions::accept_stream_request(&session_id, Some(&pin)).await {
+    if let Err(e) = streaming_sessions::accept_stream_request(&session_id, Some(&pin), local_ip.as_deref()).await {
         warn!("[STREAM-FULFILL] Failed to accept request: {e}");
         return;
     }
@@ -1014,13 +1185,15 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
     }
     info!("[STREAM-FULFILL] Session {} marked Ready", session_id);
 
-    // 8. Launch the game
+    // 8. Launch the game (on a blocking thread — launch_game uses block_on internally)
     info!("[STREAM-FULFILL] Launching game {}", game_id);
     {
         use crate::process::launch_game;
-        match launch_game(game_id.clone(), 0) {
-            Ok(_) => info!("[STREAM-FULFILL] Game launched successfully"),
-            Err(e) => warn!("[STREAM-FULFILL] Failed to launch game: {e:?}"),
+        let gid = game_id.clone();
+        match tokio::task::spawn_blocking(move || launch_game(gid, 0)).await {
+            Ok(Ok(_)) => info!("[STREAM-FULFILL] Game launched successfully"),
+            Ok(Err(e)) => warn!("[STREAM-FULFILL] Failed to launch game: {e:?}"),
+            Err(e) => warn!("[STREAM-FULFILL] Launch task panicked: {e}"),
         }
     }
 

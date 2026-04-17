@@ -343,7 +343,9 @@ pub fn run() {
             streaming_list_sessions,
             streaming_get_connection_info,
             launch_moonlight,
-            streaming_request_stream
+            streaming_request_stream,
+            list_devices,
+            request_remote_install
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

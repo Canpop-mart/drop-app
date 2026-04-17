@@ -328,12 +328,13 @@ pub async fn poll_pending_requests() -> Result<Vec<PendingStreamRequest>, Remote
 pub async fn accept_stream_request(
     session_id: &str,
     pairing_pin: Option<&str>,
+    host_local_ip: Option<&str>,
 ) -> Result<(), RemoteAccessError> {
     let url = generate_url(&["/api/v1/client/streaming/accept"], &[])?;
     let body = AcceptRequestBody {
         session_id: session_id.to_string(),
         sunshine_port: None,
-        host_local_ip: None,
+        host_local_ip: host_local_ip.map(|s| s.to_string()),
         pairing_pin: pairing_pin.map(|s| s.to_string()),
     };
 
@@ -349,5 +350,72 @@ pub async fn accept_stream_request(
     }
 
     info!("Accepted stream request {}", session_id);
+    Ok(())
+}
+
+// ── Device listing ───────────────────────────────────────────────────
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientDevice {
+    pub id: String,
+    pub name: String,
+    pub platform: String,
+    pub last_connected: String,
+    pub is_self: bool,
+}
+
+/// List all registered client devices for the current user.
+pub async fn list_devices() -> Result<Vec<ClientDevice>, RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/devices"], &[])?;
+    let response = make_authenticated_get(url).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        warn!("Failed to list devices: {} - {}", status, text);
+        return Err(RemoteAccessError::UnparseableResponse(format!(
+            "Failed to list devices: {status} - {text}"
+        )));
+    }
+
+    let devices: Vec<ClientDevice> = response.json().await?;
+    info!("Fetched {} devices", devices.len());
+    Ok(devices)
+}
+
+// ── Remote install ───────────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteInstallBody {
+    game_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_client_id: Option<String>,
+}
+
+/// Request a remote install of a game on another device.
+pub async fn request_remote_install(
+    game_id: &str,
+    target_client_id: Option<&str>,
+) -> Result<(), RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/streaming/remote-install"], &[])?;
+    let body = RemoteInstallBody {
+        game_id: game_id.to_string(),
+        target_client_id: target_client_id.map(|s| s.to_string()),
+    };
+
+    let response = make_authenticated_post(url, &body).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        warn!("Failed to request remote install: {} - {}", status, text);
+        return Err(RemoteAccessError::UnparseableResponse(format!(
+            "Failed to request remote install: {status} - {text}"
+        )));
+    }
+
+    info!("Requested remote install for game {}", game_id);
     Ok(())
 }

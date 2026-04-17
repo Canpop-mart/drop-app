@@ -35,65 +35,83 @@
 
         <!-- Action buttons -->
         <div class="flex items-center gap-3">
-          <!-- Play / Stream split button (inline for focus-nav compatibility) -->
+          <!-- ── Installed: Play button with dropdown ── -->
           <div v-if="status?.type === 'Installed'" class="relative inline-flex">
-            <!-- Single focusable wrapper — gamepad A launches, X opens dropdown, mouse click executes directly -->
             <div
-              :ref="(el: any) => registerAction(el, { onSelect: () => (playMode === 'play' ? launchGame() : streamGame()), onContext: togglePlayMenu })"
+              :ref="(el: any) => registerAction(el, { onSelect: launchGame, onContext: togglePlayMenu })"
               class="bp-focus-delegate inline-flex cursor-pointer"
             >
               <span class="bp-focus-ring inline-flex rounded-xl">
                 <button
-                  class="inline-flex items-center pl-8 pr-4 py-4 text-lg gap-3 font-semibold rounded-l-xl transition-all shadow-lg"
-                  :class="playMode === 'play'
-                    ? 'bg-blue-600 hover:bg-blue-400 text-white shadow-blue-600/20 hover:shadow-blue-500/30 hover:scale-105'
-                    : 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/20 hover:shadow-purple-500/30 hover:scale-105'"
-                  @click.stop="playMode === 'play' ? launchGame() : streamGame()"
+                  class="inline-flex items-center pl-8 pr-4 py-4 text-lg gap-3 font-semibold rounded-l-xl transition-all shadow-lg bg-blue-600 hover:bg-blue-400 text-white shadow-blue-600/20 hover:shadow-blue-500/30 hover:scale-105"
+                  @click.stop="launchGame"
                 >
-                  <PlayIcon v-if="playMode === 'play'" class="size-6" />
-                  <SignalIcon v-else class="size-6" />
-                  {{ playMode === 'play' ? 'Play' : 'Stream' }}
+                  <PlayIcon class="size-6" />
+                  Play
                 </button>
                 <button
-                  class="inline-flex items-center px-3 py-4 font-semibold rounded-r-xl transition-all shadow-lg border-l"
-                  :class="playMode === 'play'
-                    ? 'bg-blue-600 hover:bg-blue-400 text-white border-blue-400/30'
-                    : 'bg-purple-600 hover:bg-purple-500 text-white border-purple-400/30'"
+                  class="inline-flex items-center px-3 py-4 font-semibold rounded-r-xl transition-all shadow-lg border-l bg-blue-600 hover:bg-blue-400 text-white border-blue-400/30"
                   @click.stop="togglePlayMenu"
                 >
                   <ChevronDownIcon class="size-5" :class="{ 'rotate-180': playMenuOpen }" />
                 </button>
               </span>
             </div>
+            <!-- Dropdown menu -->
             <Transition name="dropdown-fade">
               <div
                 v-if="playMenuOpen"
-                class="absolute left-0 top-full mt-2 z-50 min-w-full rounded-xl bg-zinc-900 border border-zinc-700/50 shadow-2xl overflow-hidden"
+                class="absolute left-0 top-full mt-2 z-50 min-w-[280px] rounded-xl bg-zinc-900 border border-zinc-700/50 shadow-2xl overflow-hidden"
               >
+                <!-- Play locally -->
                 <button
                   class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
                   :class="playMenuFocus === 0 ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
-                  @click="selectPlayMode('play')"
+                  @click="selectPlayMenuAction(0)"
                   @mouseenter="playMenuFocus = 0"
                 >
                   <PlayIcon class="size-5" />
                   <span class="font-medium">Play</span>
                 </button>
-                <button
-                  class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
-                  :class="playMenuFocus === 1 ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
-                  @click="selectPlayMode('stream')"
-                  @mouseenter="playMenuFocus = 1"
+                <!-- Stream to other devices -->
+                <template v-for="(device, i) in otherDevices" :key="'stream-' + device.id">
+                  <button
+                    class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
+                    :class="playMenuFocus === 1 + i ? 'bg-purple-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
+                    @click="selectPlayMenuAction(1 + i)"
+                    @mouseenter="playMenuFocus = 1 + i"
+                  >
+                    <SignalIcon class="size-5 text-purple-400" />
+                    <span class="font-medium">Stream to {{ device.name }}</span>
+                    <span class="text-xs opacity-50 ml-auto">{{ device.platform }}</span>
+                  </button>
+                </template>
+                <!-- Install on other devices -->
+                <template v-for="(device, i) in otherDevices" :key="'install-' + device.id">
+                  <button
+                    class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
+                    :class="playMenuFocus === 1 + otherDevices.length + i ? 'bg-green-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
+                    @click="selectPlayMenuAction(1 + otherDevices.length + i)"
+                    @mouseenter="playMenuFocus = 1 + otherDevices.length + i"
+                  >
+                    <ArrowDownTrayIcon class="size-5 text-green-400" />
+                    <span class="font-medium">Install on {{ device.name }}</span>
+                    <span class="text-xs opacity-50 ml-auto">{{ device.platform }}</span>
+                  </button>
+                </template>
+                <!-- Divider + message if no other devices -->
+                <div
+                  v-if="otherDevices.length === 0"
+                  class="px-6 py-3 text-sm text-zinc-500 border-t border-zinc-800/50"
                 >
-                  <SignalIcon class="size-5" />
-                  <span class="font-medium">Stream</span>
-                  <span v-if="isStreaming" class="text-sm opacity-60 ml-auto">Active</span>
-                </button>
+                  No other devices registered
+                </div>
               </div>
             </Transition>
             <div v-if="playMenuOpen" class="fixed inset-0 z-40" @click="playMenuOpen = false" />
           </div>
 
+          <!-- ── Running: Stop button ── -->
           <button
             v-else-if="status?.type === 'Running'"
             :ref="(el: any) => registerAction(el, { onSelect: killGame })"
@@ -104,6 +122,7 @@
             Stop
           </button>
 
+          <!-- ── Downloading/Queued: Status ── -->
           <button
             v-else-if="status?.type === 'Downloading' || status?.type === 'Queued'"
             class="inline-flex items-center px-8 py-4 text-lg gap-3 font-semibold rounded-xl cursor-not-allowed"
@@ -114,15 +133,61 @@
             {{ status?.type === "Downloading" ? "Downloading..." : "Queued" }}
           </button>
 
-          <button
-            v-else
-            :ref="(el: any) => registerAction(el, { onSelect: downloadGame })"
-            class="inline-flex items-center px-8 py-4 text-lg gap-3 bg-green-600 hover:bg-green-500 text-white font-semibold rounded-xl transition-colors"
-            @click="downloadGame"
-          >
-            <ArrowDownTrayIcon class="size-6" />
-            Install
-          </button>
+          <!-- ── Not installed: Install button with device picker ── -->
+          <div v-else class="relative inline-flex">
+            <div
+              :ref="(el: any) => registerAction(el, { onSelect: downloadGame, onContext: otherDevices.length > 0 ? togglePlayMenu : undefined })"
+              class="bp-focus-delegate inline-flex cursor-pointer"
+            >
+              <span class="bp-focus-ring inline-flex rounded-xl">
+                <button
+                  class="inline-flex items-center pl-8 py-4 text-lg gap-3 bg-green-600 hover:bg-green-500 text-white font-semibold transition-all shadow-lg"
+                  :class="otherDevices.length > 0 ? 'pr-4 rounded-l-xl' : 'pr-8 rounded-xl'"
+                  @click.stop="downloadGame"
+                >
+                  <ArrowDownTrayIcon class="size-6" />
+                  Install
+                </button>
+                <button
+                  v-if="otherDevices.length > 0"
+                  class="inline-flex items-center px-3 py-4 font-semibold rounded-r-xl transition-all shadow-lg border-l bg-green-600 hover:bg-green-500 text-white border-green-400/30"
+                  @click.stop="togglePlayMenu"
+                >
+                  <ChevronDownIcon class="size-5" :class="{ 'rotate-180': playMenuOpen }" />
+                </button>
+              </span>
+            </div>
+            <!-- Dropdown: install on other devices -->
+            <Transition name="dropdown-fade">
+              <div
+                v-if="playMenuOpen && otherDevices.length > 0"
+                class="absolute left-0 top-full mt-2 z-50 min-w-[280px] rounded-xl bg-zinc-900 border border-zinc-700/50 shadow-2xl overflow-hidden"
+              >
+                <button
+                  class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
+                  :class="playMenuFocus === 0 ? 'bg-green-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
+                  @click="selectInstallMenuAction(0)"
+                  @mouseenter="playMenuFocus = 0"
+                >
+                  <ArrowDownTrayIcon class="size-5" />
+                  <span class="font-medium">Install here</span>
+                </button>
+                <template v-for="(device, i) in otherDevices" :key="'ri-' + device.id">
+                  <button
+                    class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
+                    :class="playMenuFocus === 1 + i ? 'bg-green-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
+                    @click="selectInstallMenuAction(1 + i)"
+                    @mouseenter="playMenuFocus = 1 + i"
+                  >
+                    <ArrowDownTrayIcon class="size-5 text-green-400" />
+                    <span class="font-medium">Install on {{ device.name }}</span>
+                    <span class="text-xs opacity-50 ml-auto">{{ device.platform }}</span>
+                  </button>
+                </template>
+              </div>
+            </Transition>
+            <div v-if="playMenuOpen" class="fixed inset-0 z-40" @click="playMenuOpen = false" />
+          </div>
 
           <!-- Add to Library (without installing) — shows for Remote games not yet in library -->
           <button
@@ -191,24 +256,13 @@
             </button>
           </template>
 
-          <!-- Remote stream available — join from another machine -->
-          <button
-            v-if="availableStream && availableStream.status === 'Ready'"
-            :ref="(el: any) => registerAction(el, { onSelect: connectToRemoteStream })"
-            class="inline-flex items-center px-6 py-4 text-lg gap-3 font-semibold rounded-xl transition-all shadow-lg bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/20 hover:shadow-purple-500/30 hover:scale-105"
-            @click="connectToRemoteStream"
-          >
-            <SignalIcon class="size-6" />
-            Stream from {{ availableStream.hostClient?.name || "Remote" }}
-          </button>
-
           <!-- Stream status indicator (when streaming is active) -->
           <span
             v-if="isStreaming"
             class="inline-flex items-center gap-2 px-4 py-3 text-sm text-purple-400"
           >
             <span class="size-2 rounded-full bg-purple-400 animate-pulse" />
-            Streaming active
+            {{ pendingRequestSessionId ? 'Waiting for host...' : 'Streaming' }}
           </span>
         </div>
       </div>
@@ -943,7 +997,11 @@ const {
   getConnectionInfo,
   sendPin,
   requestStream,
+  listDevices,
+  remoteInstall,
 } = useStreaming();
+
+import type { ClientDevice } from "~/composables/useStreaming";
 
 let activeStreamSessionId: string | null = null;
 let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -952,7 +1010,7 @@ let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 const availableStream = ref<any>(null);
 let streamPollInterval: ReturnType<typeof setInterval> | null = null;
 // Session ID of a stream we requested (waiting for host to fulfill)
-let pendingRequestSessionId: string | null = null;
+const pendingRequestSessionId = ref<string | null>(null);
 
 async function pollRemoteSessions() {
   try {
@@ -966,9 +1024,9 @@ async function pollRemoteSessions() {
     availableStream.value = found;
 
     // If we have a pending request and a session just became Ready, auto-connect
-    if (pendingRequestSessionId && found && found.status === "Ready") {
+    if (pendingRequestSessionId.value && found && found.status === "Ready") {
       console.log("[BPM:STREAM] Our requested session is now Ready! Auto-connecting...");
-      pendingRequestSessionId = null;
+      pendingRequestSessionId.value = null;
       isStreaming.value = false;
       await connectToRemoteStream();
     }
@@ -1003,23 +1061,33 @@ async function connectToRemoteStream() {
   }
 }
 
-// ── Play/Stream dropdown state ────────────────────────────────────────────
-type PlayMode = "play" | "stream";
-const playMode = ref<PlayMode>("play");
+// ── Device list & action menu ────────────────────────────────────────────
+const devices = ref<ClientDevice[]>([]);
+const otherDevices = computed(() => devices.value.filter((d) => !d.isSelf));
+
+async function loadDevices() {
+  try {
+    devices.value = await listDevices();
+  } catch {
+    devices.value = [];
+  }
+}
+
 const playMenuOpen = ref(false);
 const playMenuFocus = ref(0);
 let playMenuLockId = 0;
 
-function executePlayAction() {
-  // Called when the dropdown is already open and A is pressed inside it
-  if (playMenuOpen.value) {
-    selectPlayMode(["play", "stream"][playMenuFocus.value] as PlayMode);
-  }
-}
+// Total items in the installed-game dropdown:
+// [0] Play, [1..N] Stream to device, [N+1..2N] Install on device
+const playMenuItemCount = computed(() => 1 + otherDevices.value.length * 2);
+
+// Total items in the not-installed dropdown:
+// [0] Install here, [1..N] Install on device
+const installMenuItemCount = computed(() => 1 + otherDevices.value.length);
 
 function openPlayMenu() {
   playMenuOpen.value = true;
-  playMenuFocus.value = playMode.value === "stream" ? 1 : 0;
+  playMenuFocus.value = 0;
   playMenuLockId = focusNav.acquireInputLock();
   wirePlayMenuGamepad();
 }
@@ -1038,20 +1106,73 @@ function closePlayMenu() {
   focusNav.releaseInputLock(playMenuLockId);
 }
 
-function selectPlayMode(mode: PlayMode) {
-  playMode.value = mode;
+function selectPlayMenuAction(index: number) {
   closePlayMenu();
-  if (mode === "play") launchGame();
-  else streamGame();
+  if (index === 0) {
+    // Play locally
+    launchGame();
+  } else if (index <= otherDevices.value.length) {
+    // Stream to device at index-1
+    const device = otherDevices.value[index - 1];
+    streamToDevice(device);
+  } else {
+    // Install on device
+    const deviceIdx = index - 1 - otherDevices.value.length;
+    const device = otherDevices.value[deviceIdx];
+    installOnDevice(device);
+  }
+}
+
+function selectInstallMenuAction(index: number) {
+  closePlayMenu();
+  if (index === 0) {
+    downloadGame();
+  } else {
+    const device = otherDevices.value[index - 1];
+    installOnDevice(device);
+  }
+}
+
+async function streamToDevice(device: ClientDevice) {
+  console.log(`[BPM:STREAM] Stream to device: ${device.name} (${device.id})`);
+  streamGame();
+}
+
+async function installOnDevice(device: ClientDevice) {
+  console.log(`[BPM:STREAM] Remote install on device: ${device.name} (${device.id})`);
+  try {
+    await remoteInstall(gameId, device.id);
+    launchError.value = null;
+    // Show brief confirmation
+    console.log(`[BPM:STREAM] Remote install requested on ${device.name}`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    launchError.value = `Remote install failed: ${msg}`;
+  }
 }
 
 const _playMenuUnsubs: (() => void)[] = [];
 function wirePlayMenuGamepad() {
   unwirePlayMenuGamepad();
+  const maxIdx = status.value?.type === "Installed"
+    ? playMenuItemCount.value - 1
+    : installMenuItemCount.value - 1;
   _playMenuUnsubs.push(
-    gamepad.onButton(GamepadButton.DPadUp, () => { if (playMenuOpen.value) playMenuFocus.value = 0; }),
-    gamepad.onButton(GamepadButton.DPadDown, () => { if (playMenuOpen.value) playMenuFocus.value = 1; }),
-    gamepad.onButton(GamepadButton.South, () => { if (playMenuOpen.value) selectPlayMode(["play", "stream"][playMenuFocus.value] as PlayMode); }),
+    gamepad.onButton(GamepadButton.DPadUp, () => {
+      if (playMenuOpen.value) playMenuFocus.value = Math.max(0, playMenuFocus.value - 1);
+    }),
+    gamepad.onButton(GamepadButton.DPadDown, () => {
+      if (playMenuOpen.value) playMenuFocus.value = Math.min(maxIdx, playMenuFocus.value + 1);
+    }),
+    gamepad.onButton(GamepadButton.South, () => {
+      if (playMenuOpen.value) {
+        if (status.value?.type === "Installed") {
+          selectPlayMenuAction(playMenuFocus.value);
+        } else {
+          selectInstallMenuAction(playMenuFocus.value);
+        }
+      }
+    }),
     gamepad.onButton(GamepadButton.East, () => { if (playMenuOpen.value) closePlayMenu(); }),
   );
 }
@@ -1077,7 +1198,7 @@ async function streamGame() {
     // Request a stream from another device
     console.log("[BPM:STREAM] Sending stream request for gameId:", gameId);
     const sessionId = await requestStream(gameId);
-    pendingRequestSessionId = sessionId;
+    pendingRequestSessionId.value = sessionId;
     console.log("[BPM:STREAM] Stream requested, session:", sessionId);
 
     // Speed up polling while waiting for the host to accept
@@ -1086,9 +1207,9 @@ async function streamGame() {
 
     // Set a timeout — if no host picks it up within 60 seconds, give up
     setTimeout(() => {
-      if (pendingRequestSessionId === sessionId) {
+      if (pendingRequestSessionId.value === sessionId) {
         console.warn("[BPM:STREAM] Stream request timed out — no host responded");
-        pendingRequestSessionId = null;
+        pendingRequestSessionId.value = null;
         isStreaming.value = false;
         streamGuard = false;
         launchError.value = "No host responded to the stream request. Make sure Drop is running on your PC.";
@@ -2535,6 +2656,8 @@ function _onResize() {
 }
 onMounted(() => {
   window.addEventListener("resize", _onResize);
+  // Load other devices for the dropdown
+  loadDevices();
   // Start polling for remote streaming sessions (receiver side)
   pollRemoteSessions();
   streamPollInterval = setInterval(pollRemoteSessions, 15_000);
