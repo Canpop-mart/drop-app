@@ -35,15 +35,58 @@
 
         <!-- Action buttons -->
         <div class="flex items-center gap-3">
-          <button
-            v-if="status?.type === 'Installed'"
-            :ref="(el: any) => registerAction(el, { onSelect: launchGame })"
-            class="inline-flex items-center px-8 py-4 text-lg gap-3 bg-blue-600 hover:bg-blue-400 text-white font-semibold rounded-xl transition-all shadow-lg shadow-blue-600/20 hover:shadow-blue-500/30 hover:scale-105"
-            @click="launchGame"
-          >
-            <PlayIcon class="size-6" />
-            Play
-          </button>
+          <!-- Play / Stream split button (inline for focus-nav compatibility) -->
+          <div v-if="status?.type === 'Installed'" class="relative inline-flex">
+            <button
+              :ref="(el: any) => registerAction(el, { onSelect: executePlayAction, onContext: togglePlayMenu })"
+              class="inline-flex items-center pl-8 py-4 text-lg gap-3 font-semibold rounded-l-xl transition-all shadow-lg"
+              :class="playMode === 'play'
+                ? 'bg-blue-600 hover:bg-blue-400 text-white shadow-blue-600/20 hover:shadow-blue-500/30 hover:scale-105'
+                : 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/20 hover:shadow-purple-500/30 hover:scale-105'"
+              @click="playMode === 'play' ? launchGame() : streamGame()"
+            >
+              <PlayIcon v-if="playMode === 'play'" class="size-6" />
+              <SignalIcon v-else class="size-6" />
+              {{ playMode === 'play' ? 'Play' : 'Stream' }}
+            </button>
+            <button
+              :ref="(el: any) => registerAction(el, { onSelect: togglePlayMenu })"
+              class="inline-flex items-center px-3 py-4 font-semibold rounded-r-xl transition-all shadow-lg border-l"
+              :class="playMode === 'play'
+                ? 'bg-blue-700 hover:bg-blue-500 text-white border-blue-500/30'
+                : 'bg-purple-700 hover:bg-purple-500 text-white border-purple-500/30'"
+              @click.stop="togglePlayMenu"
+            >
+              <ChevronDownIcon class="size-5" :class="{ 'rotate-180': playMenuOpen }" />
+            </button>
+            <Transition name="dropdown-fade">
+              <div
+                v-if="playMenuOpen"
+                class="absolute left-0 top-full mt-2 z-50 min-w-full rounded-xl bg-zinc-900 border border-zinc-700/50 shadow-2xl overflow-hidden"
+              >
+                <button
+                  class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
+                  :class="playMenuFocus === 0 ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
+                  @click="selectPlayMode('play')"
+                  @mouseenter="playMenuFocus = 0"
+                >
+                  <PlayIcon class="size-5" />
+                  <span class="font-medium">Play</span>
+                </button>
+                <button
+                  class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
+                  :class="playMenuFocus === 1 ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
+                  @click="selectPlayMode('stream')"
+                  @mouseenter="playMenuFocus = 1"
+                >
+                  <SignalIcon class="size-5" />
+                  <span class="font-medium">Stream</span>
+                  <span v-if="isStreaming" class="text-sm opacity-60 ml-auto">Active</span>
+                </button>
+              </div>
+            </Transition>
+            <div v-if="playMenuOpen" class="fixed inset-0 z-40" @click="playMenuOpen = false" />
+          </div>
 
           <button
             v-else-if="status?.type === 'Running'"
@@ -57,7 +100,8 @@
 
           <button
             v-else-if="status?.type === 'Downloading' || status?.type === 'Queued'"
-            class="inline-flex items-center px-8 py-4 text-lg gap-3 bg-zinc-700 text-zinc-300 font-semibold rounded-xl cursor-not-allowed"
+            class="inline-flex items-center px-8 py-4 text-lg gap-3 font-semibold rounded-xl cursor-not-allowed"
+            style="background-color: rgba(59,130,246,0.2); color: rgb(147,197,253)"
             disabled
           >
             <ArrowDownTrayIcon class="size-6 animate-bounce" />
@@ -140,6 +184,15 @@
               <span class="font-medium">{{ aspectLabel }}</span>
             </button>
           </template>
+
+          <!-- Stream status indicator (when streaming is active) -->
+          <span
+            v-if="isStreaming"
+            class="inline-flex items-center gap-2 px-4 py-3 text-sm text-purple-400"
+          >
+            <span class="size-2 rounded-full bg-purple-400 animate-pulse" />
+            Streaming active
+          </span>
         </div>
       </div>
     </div>
@@ -201,7 +254,7 @@
     <div class="flex-1 px-8 py-6">
       <!-- Achievements -->
       <div v-if="activeTab === 'achievements'" class="space-y-4">
-        <!-- Achievement summary progress -->
+        <!-- Achievement summary progress + Verify ROM -->
         <div v-if="achievements.length > 0" class="flex items-center gap-3 px-1">
           <div class="flex-1 h-2 bg-zinc-800 rounded-full overflow-hidden">
             <div class="h-full bg-blue-500 rounded-full transition-all" :style="{ width: `${achievementPercent}%` }" />
@@ -209,6 +262,54 @@
           <span class="text-sm font-medium text-zinc-400 flex-shrink-0">
             {{ unlockedCount }}/{{ achievements.length }}
           </span>
+        </div>
+
+        <!-- ROM Hash Status Banners -->
+        <div
+          v-if="romHashResult?.status === 'Mismatch'"
+          class="rounded-lg bg-amber-500/10 p-3 outline outline-1 outline-amber-500/20"
+        >
+          <p class="text-sm font-medium text-amber-400 mb-1">
+            ROM not recognised by RetroAchievements
+          </p>
+          <p class="text-xs text-zinc-400 mb-2">
+            Your ROM hash
+            (<code class="text-zinc-300">{{ romHashResult.rom_hash?.slice(0, 12) }}…</code>)
+            doesn't match any known hash. Achievements won't track until the ROM is patched or replaced.
+          </p>
+          <div
+            v-if="romHashResult.expected_hashes?.some((h) => h.patchUrl)"
+            class="flex flex-wrap gap-2"
+          >
+            <a
+              v-for="h in romHashResult.expected_hashes?.filter((h) => h.patchUrl)"
+              :key="h.hash"
+              :href="h.patchUrl"
+              target="_blank"
+              class="inline-flex items-center gap-1 rounded bg-amber-500/20 px-2 py-0.5 text-xs text-amber-300 hover:bg-amber-500/30 transition-colors"
+            >
+              Patch: {{ h.label || h.hash.slice(0, 8) }}
+            </a>
+          </div>
+        </div>
+        <div
+          v-else-if="romHashResult?.status === 'Match'"
+          class="rounded-lg bg-emerald-500/10 p-2 outline outline-1 outline-emerald-500/20"
+        >
+          <p class="text-xs text-emerald-400">
+            ROM verified — matches RetroAchievements
+            <span v-if="romHashResult.matched_label" class="text-zinc-400">
+              ({{ romHashResult.matched_label }})
+            </span>
+          </p>
+        </div>
+        <div
+          v-else-if="romHashResult?.status === 'Error'"
+          class="rounded-lg bg-red-500/10 p-2 outline outline-1 outline-red-500/20"
+        >
+          <p class="text-xs text-red-400">
+            Hash check failed: {{ romHashResult.message }}
+          </p>
         </div>
 
         <!-- Achievement items -->
@@ -515,6 +616,17 @@
         <p v-if="savesLoading" class="text-zinc-500 text-center py-8 text-sm">
           Loading saves...
         </p>
+
+        <!-- Dev: Test Conflict Dialog -->
+        <div class="mt-6 pt-4 border-t border-zinc-800/30">
+          <button
+            :ref="(el: any) => registerAction(el, { onSelect: triggerTestConflict })"
+            class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-amber-900/20 text-amber-400 border border-amber-500/30 hover:bg-amber-900/30"
+            @click="triggerTestConflict"
+          >
+            Test Conflict Dialog
+          </button>
+        </div>
       </div>
     </div>
 
@@ -537,6 +649,23 @@
         </div>
       </div>
     </div>
+
+    <!-- Settings toast -->
+    <Transition
+      enter-active-class="transition-all duration-200"
+      leave-active-class="transition-all duration-300"
+      enter-from-class="opacity-0 translate-y-4"
+      leave-to-class="opacity-0 translate-y-4"
+    >
+      <div
+        v-if="settingsToast"
+        class="fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 rounded-xl text-sm font-medium shadow-lg backdrop-blur-md"
+        style="background-color: rgba(var(--bpm-accent, 59 130 246) / 0.9); color: var(--bpm-accent-text, #fff)"
+      >
+        {{ settingsToast }}
+        <span class="text-xs opacity-70 ml-2">Applied on next launch</span>
+      </div>
+    </Transition>
 
     <!-- Launch error dialog -->
     <BigPictureDialog
@@ -711,17 +840,29 @@
         </div>
       </Transition>
     </Teleport>
+
+    <!-- Cloud Save Conflict Resolution Dialog -->
+    <BpmSaveConflictDialog
+      :visible="saveConflictVisible"
+      :game-id="gameId"
+      :conflicts="saveConflicts"
+      @resolved="saveConflictVisible = false"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
+import BpmSaveConflictDialog from "~/components/bigpicture/BpmSaveConflictDialog.vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   PlayIcon,
   StopIcon,
   ArrowDownTrayIcon,
   TrophyIcon,
+  SignalIcon,
 } from "@heroicons/vue/24/solid";
+import { ChevronDownIcon } from "@heroicons/vue/20/solid";
 import { ClockIcon } from "@heroicons/vue/24/outline";
 import BigPictureDialog from "~/components/bigpicture/BigPictureDialog.vue";
 import BigPictureButtonPrompt from "~/components/bigpicture/BigPictureButtonPrompt.vue";
@@ -748,6 +889,7 @@ function objectUrl(id: string): string {
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
+import { useStreaming } from "~/composables/useStreaming";
 
 definePageMeta({ layout: "bigpicture" });
 
@@ -769,6 +911,113 @@ const tabRefs: Record<string, HTMLElement | null> = {};
 const tabIndicatorStyle = ref({ left: "0", width: "0" });
 const launchError = ref<string | null>(null);
 const diagnosticsRan = ref(false);
+const isStreaming = ref(false);
+
+// ── Streaming (full auto: Sunshine → session → launch) ────────────────────
+const {
+  checkSunshine,
+  startSunshine,
+  startStreamingSession,
+  markSessionReady,
+  registerGame,
+  stopStreamingSession,
+} = useStreaming();
+
+let activeStreamSessionId: string | null = null;
+
+// ── Play/Stream dropdown state ────────────────────────────────────────────
+type PlayMode = "play" | "stream";
+const playMode = ref<PlayMode>("play");
+const playMenuOpen = ref(false);
+const playMenuFocus = ref(0);
+let playMenuLockId = 0;
+
+function executePlayAction() {
+  // A press on the main button always opens the dropdown
+  if (!playMenuOpen.value) {
+    openPlayMenu();
+    return;
+  }
+  selectPlayMode(["play", "stream"][playMenuFocus.value] as PlayMode);
+}
+
+function openPlayMenu() {
+  playMenuOpen.value = true;
+  playMenuFocus.value = playMode.value === "stream" ? 1 : 0;
+  playMenuLockId = focusNav.acquireInputLock();
+  wirePlayMenuGamepad();
+}
+
+function togglePlayMenu() {
+  if (playMenuOpen.value) {
+    closePlayMenu();
+  } else {
+    openPlayMenu();
+  }
+}
+
+function closePlayMenu() {
+  playMenuOpen.value = false;
+  unwirePlayMenuGamepad();
+  focusNav.releaseInputLock(playMenuLockId);
+}
+
+function selectPlayMode(mode: PlayMode) {
+  playMode.value = mode;
+  closePlayMenu();
+  if (mode === "play") launchGame();
+  else streamGame();
+}
+
+const _playMenuUnsubs: (() => void)[] = [];
+function wirePlayMenuGamepad() {
+  unwirePlayMenuGamepad();
+  _playMenuUnsubs.push(
+    gamepad.onButton(GamepadButton.DPadUp, () => { if (playMenuOpen.value) playMenuFocus.value = 0; }),
+    gamepad.onButton(GamepadButton.DPadDown, () => { if (playMenuOpen.value) playMenuFocus.value = 1; }),
+    gamepad.onButton(GamepadButton.South, () => { if (playMenuOpen.value) selectPlayMode(["play", "stream"][playMenuFocus.value] as PlayMode); }),
+    gamepad.onButton(GamepadButton.East, () => { if (playMenuOpen.value) closePlayMenu(); }),
+  );
+}
+function unwirePlayMenuGamepad() {
+  for (const u of _playMenuUnsubs) u();
+  _playMenuUnsubs.length = 0;
+}
+
+async function streamGame() {
+  if (launchGuard) return;
+  isStreaming.value = true;
+  try {
+    // 1. Make sure Sunshine is running
+    const sunStatus = await checkSunshine();
+    if (!sunStatus.running) {
+      // Read credentials from settings (persisted) — fall back to defaults
+      const settings = await invoke<Record<string, any>>("fetch_settings");
+      const user = settings.sunshineUsername || "sunshine";
+      const pass = settings.sunshinePassword || "sunshine";
+      await startSunshine(user, pass);
+    }
+
+    // 2. Register the game in Sunshine's apps.json
+    const gameName = game.value?.mName ?? "Unknown Game";
+    await registerGame(gameId, gameName, "drop-launch");
+
+    // 3. Create a server-side streaming session
+    const { sessionId } = await startStreamingSession(gameId);
+    activeStreamSessionId = sessionId;
+
+    // 4. Mark session as ready
+    await markSessionReady(sessionId);
+
+    // 5. Launch the game normally
+    await launchGame();
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    console.error("[BPM:STREAM] Stream setup failed:", errMsg);
+    launchError.value = `Stream setup failed: ${errMsg}`;
+    isStreaming.value = false;
+  }
+}
 
 /** Run launch diagnostics and log to console for debug capture */
 async function runDiagnostics() {
@@ -879,8 +1128,8 @@ const isWindowsGame = computed(() => {
 // ── Controller & Quality presets ─────────────────────────────────────────
 const controllerOptions: { label: string; value: ControllerType | null }[] = [
   { label: "Auto", value: null },
-  { label: "Xbox", value: "Xbox" },
-  { label: "Nintendo", value: "Nintendo" },
+  { label: "Xbox (A=South)", value: "Xbox" },
+  { label: "Nintendo (A=East)", value: "Nintendo" },
 ];
 const qualityOptions: { label: string; value: QualityPreset | null }[] = [
   { label: "Auto", value: null },
@@ -894,6 +1143,15 @@ const selectedController = ref<ControllerType | null>(null);
 const selectedQuality = ref<QualityPreset | null>(null);
 const aspectRatio = ref<AspectRatio>("Standard");
 const crtShaderEnabled = ref(false);
+
+const settingsToast = ref("");
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showSettingsToast(msg: string) {
+  settingsToast.value = msg;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { settingsToast.value = ""; }, 2000);
+}
 
 async function saveUserConfig() {
   const ver = version.value;
@@ -917,17 +1175,22 @@ async function saveUserConfig() {
     });
   } catch (e) {
     console.error("Failed to save config:", e);
+    launchError.value = `Failed to save settings: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
 function setController(value: ControllerType | null) {
   selectedController.value = value;
   saveUserConfig();
+  const label = controllerOptions.find((o) => o.value === value)?.label ?? "Auto";
+  showSettingsToast(`Controller: ${label}`);
 }
 
 function setQuality(value: QualityPreset | null) {
   selectedQuality.value = value;
   saveUserConfig();
+  const label = qualityOptions.find((o) => o.value === value)?.label ?? "Auto";
+  showSettingsToast(`Quality: ${label}`);
 }
 
 function cycleController() {
@@ -967,11 +1230,13 @@ function toggleWidescreen() {
   const idx = ASPECT_CYCLE.indexOf(aspectRatio.value);
   aspectRatio.value = ASPECT_CYCLE[(idx + 1) % ASPECT_CYCLE.length];
   saveUserConfig();
+  showSettingsToast(`Aspect Ratio: ${aspectLabel.value}`);
 }
 
 function toggleCrtShader() {
   crtShaderEnabled.value = !crtShaderEnabled.value;
   saveUserConfig();
+  showSettingsToast(`CRT Shader: ${crtShaderEnabled.value ? "On" : "Off"}`);
 }
 
 async function applyProfileName() {
@@ -1965,6 +2230,107 @@ function rarityTextColor(rarity: number): string {
 const unlockedCount = computed(() => achievements.value.filter(a => a.unlocked).length);
 const achievementPercent = computed(() => achievements.value.length > 0 ? (unlockedCount.value / achievements.value.length) * 100 : 0);
 
+// ── ROM Hash Verification (RetroAchievements) ──────────────────────────
+type RomHashResult = {
+  status: "Match" | "Mismatch" | "NoHashData" | "Error";
+  rom_hash?: string;
+  matched_label?: string;
+  expected_hashes?: { hash: string; label: string; patchUrl: string }[];
+  message?: string;
+};
+
+const romHashResult = ref<RomHashResult | null>(null);
+const romHashChecking = ref(false);
+
+// Listen for launch-time hash check results
+let unlistenHash: (() => void) | null = null;
+onMounted(async () => {
+  unlistenHash = await listen<RomHashResult>(
+    `ra_hash_check/${gameId}`,
+    (event) => {
+      romHashResult.value = event.payload;
+    },
+  );
+});
+
+// ── Cloud Save Conflict Resolution ──────────────────────────────────────
+import type { SaveConflict } from "~/types/save-sync";
+
+const saveConflictVisible = ref(false);
+const saveConflicts = ref<SaveConflict[]>([]);
+
+let unlistenConflict: (() => void) | null = null;
+onMounted(async () => {
+  unlistenConflict = await listen<{ gameId: string; conflicts: SaveConflict[] }>(
+    `save_sync_conflict/${gameId}`,
+    (event) => {
+      saveConflicts.value = event.payload.conflicts;
+      saveConflictVisible.value = true;
+    },
+  );
+});
+
+function triggerTestConflict() {
+  saveConflicts.value = [
+    {
+      filename: "test-save-01.srm",
+      saveType: "save",
+      localHash: "abc123local",
+      localSize: 32768,
+      localModifiedAt: Math.floor(Date.now() / 1000) - 3600,
+      cloudId: "cloud-save-uuid-1",
+      cloudHash: "def456cloud",
+      cloudSize: 32512,
+      cloudModifiedAt: new Date(Date.now() - 7200_000).toISOString(),
+      cloudUploadedFrom: "Gaming-PC",
+    },
+    {
+      filename: "test-save-02.state",
+      saveType: "state",
+      localHash: "ghi789local",
+      localSize: 1048576,
+      localModifiedAt: Math.floor(Date.now() / 1000) - 600,
+      cloudId: "cloud-save-uuid-2",
+      cloudHash: "jkl012cloud",
+      cloudSize: 1048320,
+      cloudModifiedAt: new Date(Date.now() - 1800_000).toISOString(),
+      cloudUploadedFrom: "Living-Room-PC",
+    },
+    {
+      filename: "pc/AppData/Saves/slot1.sav",
+      saveType: "pc",
+      localHash: "mno345local",
+      localSize: 524288,
+      localModifiedAt: Math.floor(Date.now() / 1000) - 120,
+      cloudId: "cloud-save-uuid-3",
+      cloudHash: "pqr678cloud",
+      cloudSize: 524000,
+      cloudModifiedAt: new Date(Date.now() - 300_000).toISOString(),
+      cloudUploadedFrom: "Laptop",
+    },
+  ] as SaveConflict[];
+  saveConflictVisible.value = true;
+}
+
+// On-demand hash check
+async function checkRomHash() {
+  romHashChecking.value = true;
+  romHashResult.value = null;
+  try {
+    const result = await invoke<RomHashResult>("check_ra_rom_hash", {
+      gameId,
+    });
+    romHashResult.value = result;
+  } catch (e) {
+    romHashResult.value = {
+      status: "Error",
+      message: String(e),
+    };
+  } finally {
+    romHashChecking.value = false;
+  }
+}
+
 // Helper: race a promise against a timeout
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([
@@ -2088,6 +2454,8 @@ onUnmounted(() => {
   for (const unsub of _unsubs) unsub();
   _unsubs.length = 0;
   unwireOptionsGamepad();
+  unlistenHash?.();
+  unlistenConflict?.();
   if (showOptions.value) focusNav.releaseInputLock(optionsLockId);
   window.removeEventListener("resize", _onResize);
 });
@@ -2150,6 +2518,16 @@ async function launchGame() {
 async function killGame() {
   try {
     await invoke("kill_game", { id: gameId });
+    // If we were streaming, stop the server-side session too
+    if (activeStreamSessionId) {
+      try {
+        await stopStreamingSession(activeStreamSessionId);
+      } catch (e) {
+        console.warn("[BPM:STREAM] Failed to stop streaming session:", e);
+      }
+      activeStreamSessionId = null;
+      isStreaming.value = false;
+    }
   } catch (e) {
     console.error("Failed to stop game:", e);
   }
@@ -2282,3 +2660,15 @@ async function checkForUpdates() {
   }
 }
 </script>
+
+<style scoped>
+.dropdown-fade-enter-active,
+.dropdown-fade-leave-active {
+  transition: all 0.15s ease;
+}
+.dropdown-fade-enter-from,
+.dropdown-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
+}
+</style>

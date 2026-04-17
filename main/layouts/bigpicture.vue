@@ -252,7 +252,8 @@ onUnmounted(() => {
 .bpm-light .text-zinc-400 { color: var(--bpm-muted) !important; }
 .bpm-light .text-zinc-500 { color: var(--bpm-muted) !important; }
 .bpm-light .text-zinc-600 { color: var(--bpm-muted) !important; }
-.bpm-light .text-white { color: var(--bpm-text) !important; }
+/* NOTE: .text-white is NOT overridden — it's used on colored action buttons
+   (play, install) where white text must stay white regardless of theme. */
 
 /* Border overrides */
 .bpm-light .border-zinc-800\/30 { border-color: var(--bpm-border) !important; }

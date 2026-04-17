@@ -21,6 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::requests::{generate_url, make_authenticated_get};
+use serde::{Deserialize, Serialize};
 
 /// Directories that RetroArch saves into, relative to its install root.
 /// The cloud save system can look for `<emulator_install>/drop-saves/<game_id>/`
@@ -598,6 +599,11 @@ pub fn configure_retroarch_for_game(
             // No controller type selected ("Auto") — clean up any stale remap files
             // that may override autoconfig when user switches back from Nintendo mode.
             cleanup_nintendo_remaps(&remaps_dir);
+            // Set XInput positional face button fallback (same as Xbox mode).
+            overrides.insert("input_player1_b_btn", "0".into());
+            overrides.insert("input_player1_a_btn", "1".into());
+            overrides.insert("input_player1_y_btn", "2".into());
+            overrides.insert("input_player1_x_btn", "3".into());
         }
 
         // ── Quality preset (retroarch.cfg portion) ──────────────────────
@@ -609,13 +615,24 @@ pub fn configure_retroarch_for_game(
         // ── Aspect ratio ────────────────────────────────────────────────
         apply_widescreen(&mut overrides, &cfg.widescreen);
         if cfg.widescreen != AspectRatio::Standard {
-            info!("[RETROARCH] Aspect ratio: {:?}", cfg.widescreen);
+            // Integer scaling locks the display to the source's native pixel
+            // ratio (usually 4:3), preventing widescreen from taking effect.
+            // Force it off whenever the user wants a non-standard aspect ratio.
+            overrides.insert("video_scale_integer", "false".into());
+            info!("[RETROARCH] Aspect ratio: {:?} (video_scale_integer forced off)", cfg.widescreen);
         }
 
         // ── CRT shader toggle ──────────────────────────────────────────
         if cfg.crt_shader {
             crt_shader_path = apply_crt_shader(&mut overrides, &emu_root);
             info!("[RETROARCH] CRT shader enabled, path: {:?}", crt_shader_path);
+        } else {
+            // Explicitly disable shaders and clear stale path from previous launches
+            overrides.insert("video_shader_enable", "false".into());
+            overrides.insert("video_shader", "\"\"".into());
+            overrides.insert("auto_shaders_enable", "false".into());
+            // Remove auto-shader presets so RA doesn't load them
+            remove_auto_shader_presets(&emu_root);
         }
     }
 
@@ -648,16 +665,25 @@ pub fn configure_retroarch_for_game(
         "input_player1_r_y_minus_axis",
         "input_player1_l2_axis",
         "input_player1_r2_axis",
-        // Old Nintendo mode wrote face button overrides to retroarch.cfg.
-        // Now uses remap files instead. Remove stale cfg entries so
-        // autoconfig runs cleanly.
-        "input_player1_a_btn",
-        "input_player1_b_btn",
-        "input_player1_x_btn",
-        "input_player1_y_btn",
+        // NOTE: input_player1_{a,b,x,y}_btn are NOT deleted — they're now
+        // explicitly set in apply_controller_mappings() as XInput positional
+        // fallbacks for when autoconfig profiles are missing.
         // Old fast-forward was mapped to Back/Select button; now uses RT axis
         "input_toggle_fast_forward_btn",
     ];
+
+    // ── Diagnostic dump of key settings ────────────────────────────────
+    let diagnostic_keys = [
+        "aspect_ratio_index", "video_aspect_ratio_auto",
+        "input_autodetect_enable", "input_player1_a_btn_label",
+        "video_shader_enable", "auto_shaders_enable",
+        "video_fullscreen", "video_driver",
+    ];
+    for dk in &diagnostic_keys {
+        if let Some(val) = overrides.get(dk) {
+            info!("[RETROARCH] config: {} = {}", dk, val);
+        }
+    }
 
     // Write the main config to the emulator directory (used by --appendconfig)
     let cfg_path = emu_root.join("retroarch.cfg");
@@ -692,25 +718,43 @@ pub fn configure_retroarch_for_game(
     // internal resolution is controlled by per-core options stored in a
     // separate file. We patch that for quality presets and widescreen hacks.
     //
-    // Clean up any stale per-core .opt files left from before we set
-    // global_core_options = true. These would take precedence over our
-    // core_options_path and silently ignore quality changes.
+    // Clean up stale per-core override files that would silently take
+    // precedence over our global settings:
+    //   - `.opt` files: per-core option overrides (left from before we set
+    //     global_core_options = true). Override retroarch-core-options.cfg.
+    //   - `.cfg` files in config/<core>/: per-core config overrides.
+    //     RetroArch's "Save Core Overrides" writes these, and they override
+    //     retroarch.cfg for settings like aspect_ratio_index, video_shader, etc.
+    //   - `.cfg` files in config/<core>/<content>.cfg: per-game overrides.
+    //     Same as above but per-ROM. Also override retroarch.cfg settings.
     let per_core_config_dir = emu_root.join("config");
     if per_core_config_dir.is_dir() {
         if let Ok(entries) = fs::read_dir(&per_core_config_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
-                    // Look for <core_name>.opt files inside each core config dir
                     if let Ok(files) = fs::read_dir(&path) {
                         for file in files.flatten() {
                             let fp = file.path();
-                            if fp.extension().and_then(|e| e.to_str()) == Some("opt") {
-                                if let Err(e) = fs::remove_file(&fp) {
-                                    warn!("[RETROARCH] Failed to remove stale .opt file {}: {}", fp.display(), e);
-                                } else {
-                                    info!("[RETROARCH] Removed stale per-core options: {}", fp.display());
+                            let ext = fp.extension().and_then(|e| e.to_str());
+                            match ext {
+                                Some("opt") => {
+                                    if let Err(e) = fs::remove_file(&fp) {
+                                        warn!("[RETROARCH] Failed to remove stale .opt file {}: {}", fp.display(), e);
+                                    } else {
+                                        info!("[RETROARCH] Removed stale per-core options: {}", fp.display());
+                                    }
                                 }
+                                Some("cfg") => {
+                                    // Per-core/per-game config overrides silently
+                                    // override our aspect_ratio_index, video_shader, etc.
+                                    if let Err(e) = fs::remove_file(&fp) {
+                                        warn!("[RETROARCH] Failed to remove stale override {}: {}", fp.display(), e);
+                                    } else {
+                                        info!("[RETROARCH] Removed stale per-core config override: {}", fp.display());
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -755,16 +799,30 @@ pub fn configure_retroarch_for_game(
         }
     }
 
-    // ── Core-specific button remaps ────────────────────────────────────────
+    // ── Core-specific button remaps (Xbox/Auto only) ─────────────────────
     // Nintendo console emulators (Dolphin for GC/Wii, Mupen64Plus for N64)
     // map their console's A button (right-side position) to RetroPad B (east).
-    // This means on an Xbox-layout controller, the physical A button (south)
-    // sends the wrong input when the game says "Press A".
+    // On an Xbox-layout controller, the physical A button (south) sends the
+    // wrong input when the game says "Press A".
     //
-    // Fix: Write core-specific remap files that swap A↔B for these cores.
-    // RetroArch remap indices: 0=B, 1=Y, 2=Select, 3=Start, 4=Up, 5=Down,
-    //   6=Left, 7=Right, 8=A, 9=X, 10=L, 11=R, 12=L2, 13=R2, 14=L3, 15=R3
-    write_nintendo_core_remaps(&emu_root, &appimage_config_dir);
+    // Fix: Write core-specific A↔B remap files for these cores.
+    //
+    // IMPORTANT: Only write these when controller is Xbox/Auto/PlayStation.
+    // When controller is Nintendo, `write_nintendo_remaps` already handles
+    // ALL cores with the full A↔B+X↔Y swap. Running this unconditionally
+    // would overwrite dolphin/mupen/parallel with A↔B-only remaps, losing
+    // the X↔Y swap that Nintendo mode needs.
+    {
+        let is_nintendo_mode = user_config
+            .and_then(|cfg| cfg.controller_type.as_ref())
+            .map_or(false, |ct| matches!(ct, ControllerType::Nintendo));
+
+        if !is_nintendo_mode {
+            write_nintendo_core_remaps(&emu_root, &appimage_config_dir);
+        } else {
+            info!("[RETROARCH] Skipping N64/GC core remaps — Nintendo mode already handles all cores");
+        }
+    }
 
     info!(
         "[RETROARCH] Configured: saves={}, states={}",
@@ -1060,19 +1118,32 @@ fn apply_controller_mappings(
     remaps_dir: &Path,
 ) {
     match controller {
-        ControllerType::Xbox => {
+        ControllerType::Xbox | ControllerType::PlayStation => {
             overrides.insert("input_player1_a_btn_label", "\"A\"".into());
             overrides.insert("input_player1_b_btn_label", "\"B\"".into());
             overrides.insert("input_player1_x_btn_label", "\"X\"".into());
             overrides.insert("input_player1_y_btn_label", "\"Y\"".into());
-            // Remove any Nintendo remaps so autoconfig default (Xbox) applies
-            cleanup_nintendo_remaps(remaps_dir);
-        }
-        ControllerType::PlayStation => {
-            overrides.insert("input_player1_a_btn_label", "\"Cross\"".into());
-            overrides.insert("input_player1_b_btn_label", "\"Circle\"".into());
-            overrides.insert("input_player1_x_btn_label", "\"Square\"".into());
-            overrides.insert("input_player1_y_btn_label", "\"Triangle\"".into());
+            // Set explicit XInput positional face button mapping.
+            //
+            // Drop's portable RetroArch may not include autoconfig profiles,
+            // so autodetect succeeds (sees the hardware) but fails to FIND
+            // a matching profile. Without a profile, RA falls back to a raw
+            // mapping where XInput btn 0 → RetroPad A (nominal: A→A), which
+            // is POSITIONALLY wrong (south → east instead of south → south).
+            //
+            // These config values provide the correct positional fallback:
+            //   Xbox A (south/btn 0) → RetroPad B (south)
+            //   Xbox B (east/btn 1)  → RetroPad A (east)
+            //   Xbox X (west/btn 2)  → RetroPad Y (west)
+            //   Xbox Y (north/btn 3) → RetroPad X (north)
+            //
+            // If autoconfig DOES find a matching profile, these get overridden
+            // at runtime — harmless, autoconfig wins.
+            overrides.insert("input_player1_b_btn", "0".into());
+            overrides.insert("input_player1_a_btn", "1".into());
+            overrides.insert("input_player1_y_btn", "2".into());
+            overrides.insert("input_player1_x_btn", "3".into());
+            // Remove any Nintendo remaps so the positional mapping applies
             cleanup_nintendo_remaps(remaps_dir);
         }
         ControllerType::Nintendo => {
@@ -1080,6 +1151,12 @@ fn apply_controller_mappings(
             overrides.insert("input_player1_b_btn_label", "\"B\"".into());
             overrides.insert("input_player1_x_btn_label", "\"X\"".into());
             overrides.insert("input_player1_y_btn_label", "\"Y\"".into());
+            // Also set the XInput positional mapping as the base, same as Xbox.
+            // The remap files below handle the A↔B/X↔Y swap on top.
+            overrides.insert("input_player1_b_btn", "0".into());
+            overrides.insert("input_player1_a_btn", "1".into());
+            overrides.insert("input_player1_y_btn", "2".into());
+            overrides.insert("input_player1_x_btn", "3".into());
             // Write remap files for all common cores. Remaps swap RetroPad
             // buttons at the core interface level, so the swap happens
             // regardless of which physical controller or autoconfig is active.
@@ -1142,7 +1219,7 @@ fn write_nintendo_remaps(remaps_dir: &Path) {
 }
 
 /// Removes Nintendo remap files for all known cores (used when switching
-/// back to Xbox/PlayStation/Auto layout).
+/// back to Xbox/Auto layout).
 fn cleanup_nintendo_remaps(remaps_dir: &Path) {
     for core_name in REMAP_CORE_NAMES {
         let rmp_path = remaps_dir.join(core_name).join(format!("{}.rmp", core_name));
@@ -1159,47 +1236,262 @@ fn cleanup_nintendo_remaps(remaps_dir: &Path) {
 /// Applies quality settings to the main retroarch.cfg.
 ///
 /// `video_scale` only affects windowed mode, so in fullscreen the main
-/// levers are `video_smooth` (bilinear filtering) and `video_shader_enable`.
+/// levers are `video_smooth` (bilinear filtering) and `video_scale_integer`.
 /// The real internal resolution work is done in `apply_core_quality_options`.
+///
+/// NOTE: Quality presets do NOT touch `video_shader_enable` or `video_shader`.
+/// Shader state is entirely controlled by the CRT shader toggle, which runs
+/// after this function. This prevents quality presets from clobbering the
+/// user's CRT shader preference.
 fn apply_quality_preset(overrides: &mut HashMap<&str, String>, quality: &QualityPreset) {
     match quality {
         QualityPreset::Low => {
             overrides.insert("video_smooth", "false".into());
-            overrides.insert("video_shader_enable", "false".into());
             overrides.insert("video_scale_integer", "false".into());
             overrides.insert("video_gpu_screenshot", "false".into());
+            overrides.insert("video_frame_delay", "0".into());
         }
         QualityPreset::Medium => {
             overrides.insert("video_smooth", "true".into());
-            overrides.insert("video_shader_enable", "false".into());
             overrides.insert("video_scale_integer", "false".into());
             overrides.insert("video_gpu_screenshot", "true".into());
+            overrides.insert("video_frame_delay", "0".into());
         }
-        QualityPreset::High | QualityPreset::Ultra => {
+        QualityPreset::High => {
             overrides.insert("video_smooth", "true".into());
-            overrides.insert("video_shader_enable", "false".into());
-            overrides.insert("video_scale_integer", "false".into());
+            overrides.insert("video_scale_integer", "true".into());
             overrides.insert("video_gpu_screenshot", "true".into());
+            overrides.insert("video_frame_delay", "4".into());
+        }
+        QualityPreset::Ultra => {
+            overrides.insert("video_smooth", "true".into());
+            overrides.insert("video_scale_integer", "true".into());
+            overrides.insert("video_gpu_screenshot", "true".into());
+            // Max frame delay for input lag reduction on powerful hardware
+            overrides.insert("video_frame_delay", "8".into());
         }
     }
 }
 
-/// Enables CRT shader in RetroArch by locating a suitable `.slangp` shader preset.
+/// Enables CRT shader in RetroArch.
 ///
-/// RetroArch ships with CRT shaders in `shaders/shaders_slang/crt/`.
-/// We look for common CRT presets in order of preference:
-/// 1. `crt-easymode.slangp` — lightweight, good-looking CRT
-/// 2. `crt-royale.slangp` — high-quality, GPU-intensive CRT emulation
-/// 3. `crt-lottes.slangp` — classic CRT look
-/// 4. Any `.slangp` file in the crt directory
+/// The `video_shader` config key alone is NOT enough — RetroArch treats it
+/// as a "last used" value and doesn't auto-apply it on content load.
+/// To get reliable auto-apply we use TWO mechanisms:
 ///
-/// If shaders aren't found on disk, we try to extract them from the
-/// RetroArch AppImage (Linux) using `--appimage-extract`. The AppImage
-/// bundles shaders internally in its squashfs, so they're only accessible
-/// at runtime unless explicitly extracted.
+/// 1. **Auto-shader presets** — RetroArch's designated auto-apply system.
+///    We write a global preset to `<shader_dir>/presets/global.slangp` which
+///    RetroArch loads automatically when any content starts.
+/// 2. **`video_shader` config** — Set as a fallback / for the shader menu.
+///
+/// Shader source priority:
+/// - System shaders (crt-easymode, etc.) if found on disk
+/// - Bundled Drop CRT shader (always written to `<emu_root>/shaders/drop-crt/`)
 fn apply_crt_shader(overrides: &mut HashMap<&str, String>, emu_root: &std::path::Path) -> Option<String> {
     overrides.insert("video_shader_enable", "true".into());
 
+    // Enable auto-shader loading and point shader_dir to emu_root/shaders/
+    let shader_dir = emu_root.join("shaders");
+    overrides.insert("auto_shaders_enable", "true".into());
+    overrides.insert("video_shader_dir", path_to_cfg(&shader_dir));
+
+    // ── Step 0: Clean stale per-core/per-content shader presets ─────────
+    // These take priority over our global.slangp and can carry display
+    // overrides (aspect ratio, etc.) that block widescreen and other settings.
+    remove_auto_shader_presets(emu_root);
+
+    // ── Step 1: Always write the bundled shader to disk ─────────────────
+    let bundled_path = write_bundled_crt_shader(emu_root);
+
+    // ── Step 2: Find the best available shader ─────────────────────────
+    let chosen_shader = find_best_crt_shader(emu_root)
+        .or_else(|| {
+            // Try AppImage extraction on Linux
+            #[cfg(target_os = "linux")]
+            {
+                if let Some(appimage_path) = find_appimage_binary(emu_root) {
+                    info!("[RETROARCH] No system shaders found — extracting from AppImage");
+                    extract_appimage_shaders(emu_root, &appimage_path);
+                    return find_best_crt_shader(emu_root);
+                }
+            }
+            None
+        })
+        .or(bundled_path);
+
+    let preset_path = match chosen_shader {
+        Some(p) => p,
+        None => {
+            warn!("[RETROARCH] CRT shader enabled but no shader available");
+            return None;
+        }
+    };
+
+    info!("[RETROARCH] Selected CRT shader: {}", preset_path.display());
+
+    // ── Step 3: Set video_shader in config (fallback / menu display) ────
+    let raw = preset_path.to_string_lossy().into_owned();
+    overrides.insert("video_shader", path_to_cfg(&preset_path));
+
+    // ── Step 4: Write auto-shader preset for reliable auto-apply ────────
+    // RetroArch auto-loads shader presets from:
+    //   <video_shader_dir>/presets/global.slangp  (or .glslp)
+    // on every content launch. This is THE reliable way to auto-apply shaders.
+    write_auto_shader_preset(emu_root, &preset_path);
+
+    Some(raw)
+}
+
+/// Removes ALL auto-shader presets so RetroArch doesn't load stale shaders.
+///
+/// RetroArch's auto-shader priority (highest first):
+///   1. `shaders/presets/<content_dir>/<game>.slangp` — per-game
+///   2. `shaders/presets/<core_name>/<core>.slangp` — per-core
+///   3. `shaders/presets/global.slangp` — global (what Drop writes)
+///
+/// Stale per-core/per-game presets from previous RetroArch sessions
+/// override our global preset and can carry display overrides (including
+/// aspect ratio) that prevent widescreen from working. We clean ALL
+/// presets to ensure Drop's CRT shader (or no-shader) is the only one.
+fn remove_auto_shader_presets(emu_root: &Path) {
+    let presets_dir = emu_root.join("shaders").join("presets");
+    if !presets_dir.is_dir() {
+        return;
+    }
+
+    // Remove global presets
+    for name in &["global.slangp", "global.glslp"] {
+        let p = presets_dir.join(name);
+        if p.exists() {
+            if let Err(e) = fs::remove_file(&p) {
+                warn!("[RETROARCH] Failed to remove auto-shader preset {}: {}", p.display(), e);
+            } else {
+                info!("[RETROARCH] Removed auto-shader preset: {}", p.display());
+            }
+        }
+    }
+
+    // Remove per-core and per-content shader presets (subdirectories)
+    if let Ok(entries) = fs::read_dir(&presets_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Remove all .slangp/.glslp files in each subdirectory
+                if let Ok(files) = fs::read_dir(&path) {
+                    for file in files.flatten() {
+                        let fp = file.path();
+                        let ext = fp.extension().and_then(|e| e.to_str());
+                        if matches!(ext, Some("slangp" | "glslp")) {
+                            if let Err(e) = fs::remove_file(&fp) {
+                                warn!("[RETROARCH] Failed to remove stale shader preset {}: {}", fp.display(), e);
+                            } else {
+                                info!("[RETROARCH] Removed stale per-core shader preset: {}", fp.display());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Writes a global auto-shader preset that references the chosen CRT shader.
+///
+/// The preset is written to `<emu_root>/shaders/presets/global.slangp` (and .glslp).
+/// RetroArch auto-loads this on every content launch when `auto_shaders_enable = true`.
+fn write_auto_shader_preset(emu_root: &Path, shader_preset_path: &Path) {
+    let presets_dir = emu_root.join("shaders").join("presets");
+    if let Err(e) = fs::create_dir_all(&presets_dir) {
+        warn!("[RETROARCH] Failed to create auto-shader presets dir: {}", e);
+        return;
+    }
+
+    // Determine if this is a slang or glsl preset
+    let ext = shader_preset_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let is_slang = ext == "slangp";
+
+    // Write the auto-preset using #reference directive (RA 1.9+)
+    // Also write a manual copy for older RA versions
+    let preset_path_str = shader_preset_path.to_string_lossy().replace('\\', "/");
+
+    // Method 1: #reference directive (modern RetroArch)
+    let reference_content = format!("#reference \"{}\"\n", preset_path_str);
+
+    // Method 2: Copy the actual preset content with absolute shader paths
+    // (fallback for older RetroArch that doesn't support #reference)
+    let bundled_dir = emu_root.join("shaders").join("drop-crt");
+    let bundled_slang = bundled_dir.join("drop-crt.slang");
+    let bundled_glsl = bundled_dir.join("drop-crt.glsl");
+
+    // For our bundled shader, create a self-contained preset with absolute paths
+    let slang_abs_path = bundled_slang.to_string_lossy().replace('\\', "/");
+    let glsl_abs_path = bundled_glsl.to_string_lossy().replace('\\', "/");
+
+    let slangp_absolute = format!(
+        "shaders = \"1\"\n\
+         shader0 = \"{}\"\n\
+         filter_linear0 = \"true\"\n\
+         wrap_mode0 = \"clamp_to_border\"\n\
+         mipmap_input0 = \"false\"\n\
+         alias0 = \"\"\n\
+         float_framebuffer0 = \"false\"\n\
+         srgb_framebuffer0 = \"false\"\n\
+         scale_type0 = \"viewport\"\n\
+         scale0 = \"1.000000\"\n",
+        slang_abs_path
+    );
+
+    let glslp_absolute = format!(
+        "shaders = \"1\"\n\
+         shader0 = \"{}\"\n\
+         filter_linear0 = \"true\"\n\
+         wrap_mode0 = \"clamp_to_border\"\n\
+         scale_type0 = \"viewport\"\n\
+         scale0 = \"1.000000\"\n",
+        glsl_abs_path
+    );
+
+    // For system shaders, use #reference; for bundled, use absolute paths
+    let is_bundled = shader_preset_path.starts_with(&bundled_dir);
+
+    if is_bundled {
+        // Write absolute-path presets (always works, no #reference needed)
+        let slangp_path = presets_dir.join("global.slangp");
+        if let Err(e) = fs::write(&slangp_path, &slangp_absolute) {
+            warn!("[RETROARCH] Failed to write auto-shader slangp preset: {}", e);
+        } else {
+            info!("[RETROARCH] Wrote auto-shader preset (bundled, slangp): {}", slangp_path.display());
+        }
+
+        let glslp_path = presets_dir.join("global.glslp");
+        if let Err(e) = fs::write(&glslp_path, &glslp_absolute) {
+            warn!("[RETROARCH] Failed to write auto-shader glslp preset: {}", e);
+        } else {
+            info!("[RETROARCH] Wrote auto-shader preset (bundled, glslp): {}", glslp_path.display());
+        }
+    } else {
+        // System shader — use #reference
+        let target_name = if is_slang { "global.slangp" } else { "global.glslp" };
+        let target_path = presets_dir.join(target_name);
+        if let Err(e) = fs::write(&target_path, &reference_content) {
+            warn!("[RETROARCH] Failed to write auto-shader reference preset: {}", e);
+        } else {
+            info!("[RETROARCH] Wrote auto-shader preset (#reference): {}", target_path.display());
+        }
+
+        // Also write bundled as the other format for driver compat
+        if is_slang {
+            let glslp_path = presets_dir.join("global.glslp");
+            let _ = fs::write(&glslp_path, &glslp_absolute);
+        } else {
+            let slangp_path = presets_dir.join("global.slangp");
+            let _ = fs::write(&slangp_path, &slangp_absolute);
+        }
+    }
+}
+
+/// Searches all known locations for a high-quality system CRT shader preset.
+fn find_best_crt_shader(emu_root: &Path) -> Option<PathBuf> {
     let preferred_presets = [
         "crt-easymode.slangp",
         "crt-royale.slangp",
@@ -1209,7 +1501,6 @@ fn apply_crt_shader(overrides: &mut HashMap<&str, String>, emu_root: &std::path:
         "crt-lottes.glslp",
     ];
 
-    // Build the list of directories to search (emu_root + AppImage.home)
     let mut shader_dirs: Vec<PathBuf> = vec![
         emu_root.join("shaders").join("shaders_slang").join("crt"),
         emu_root.join("shaders").join("shaders_glsl").join("crt"),
@@ -1217,58 +1508,206 @@ fn apply_crt_shader(overrides: &mut HashMap<&str, String>, emu_root: &std::path:
         emu_root.join("shaders_glsl").join("crt"),
     ];
 
-    // Log which directories we're checking for debugging
-    for dir in &shader_dirs {
-        info!("[RETROARCH] CRT shader search dir: {} (exists: {})", dir.display(), dir.is_dir());
-    }
-
-    // Also check AppImage.home shader paths (RetroArch AppImage creates a
-    // portable HOME at <AppImage>.home/ — shaders may be cached there)
     if let Some(ai_cfg_dir) = find_appimage_config_dir(emu_root) {
-        // ai_cfg_dir = <AppImage>.home/.config/retroarch/
-        // Shaders may be in <AppImage>.home/.config/retroarch/shaders/...
         shader_dirs.push(ai_cfg_dir.join("shaders/shaders_slang/crt"));
         shader_dirs.push(ai_cfg_dir.join("shaders/shaders_glsl/crt"));
     }
 
-    // Also check for shaders extracted from AppImage (squashfs-root/)
     let squashfs_root = emu_root.join("squashfs-root");
     shader_dirs.push(squashfs_root.join("usr/share/libretro/shaders/shaders_slang/crt"));
     shader_dirs.push(squashfs_root.join("usr/share/retroarch/shaders/shaders_slang/crt"));
 
-    // First pass: search existing directories
-    if let Some(path) = find_crt_shader_in_dirs(&shader_dirs, &preferred_presets) {
-        info!("[RETROARCH] Using CRT shader: {}", path.display());
-        let s = path.to_string_lossy().into_owned();
-        overrides.insert("video_shader", s.clone());
-        return Some(s);
+    find_crt_shader_in_dirs(&shader_dirs, &preferred_presets)
+}
+
+// ── Bundled CRT shader ─────────────────────────────────────────────────────
+//
+// A self-contained CRT shader embedded in the Drop binary. Written to disk
+// on every launch so we never depend on RetroArch shipping shader files.
+// Provides visible scanlines + subtle shadow mask for an authentic CRT look.
+
+/// Slang CRT shader source (Vulkan / GLCore drivers).
+const DROP_CRT_SLANG: &str = r#"#version 450
+
+// Drop CRT — scanline + shadow mask shader
+// Written for the Vulkan/GLCore slang pipeline.
+
+layout(push_constant) uniform Push
+{
+    vec4 SourceSize;
+    vec4 OriginalSize;
+    vec4 OutputSize;
+    uint FrameCount;
+} params;
+
+layout(std140, set = 0, binding = 0) uniform UBO
+{
+    mat4 MVP;
+} global;
+
+#pragma stage vertex
+layout(location = 0) in vec4 Position;
+layout(location = 1) in vec2 TexCoord;
+layout(location = 0) out vec2 vTexCoord;
+
+void main()
+{
+    gl_Position = global.MVP * Position;
+    vTexCoord = TexCoord;
+}
+
+#pragma stage fragment
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
+layout(set = 0, binding = 2) uniform sampler2D Source;
+
+void main()
+{
+    vec3 col = texture(Source, vTexCoord).rgb;
+
+    // ── Scanlines ───────────────────────────────────────────────────────
+    // One dark band per source scanline, intensity modulated by output position.
+    float scanY = vTexCoord.y * params.SourceSize.y * 2.0 * 3.14159265;
+    float scanline = 0.5 * sin(scanY) + 0.5;           // 0..1 wave
+    scanline = mix(0.70, 1.0, scanline);                // 30% max darkening
+
+    // ── Shadow mask (RGB triad) ─────────────────────────────────────────
+    // Subtle per-subpixel tint that becomes visible at higher output resolutions.
+    float maskX = mod(floor(vTexCoord.x * params.OutputSize.x), 3.0);
+    vec3 mask = vec3(1.0, 0.85, 0.85);
+    if (maskX > 0.5 && maskX < 1.5) mask = vec3(0.85, 1.0, 0.85);
+    else if (maskX > 1.5)            mask = vec3(0.85, 0.85, 1.0);
+
+    col *= scanline;
+    col *= mask;
+
+    // Brightness bump to compensate for darkening
+    col *= 1.30;
+
+    FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}
+"#;
+
+/// Slang preset file that references the shader source.
+const DROP_CRT_SLANGP: &str = r#"shaders = "1"
+
+shader0 = "drop-crt.slang"
+filter_linear0 = "true"
+wrap_mode0 = "clamp_to_border"
+mipmap_input0 = "false"
+alias0 = ""
+float_framebuffer0 = "false"
+srgb_framebuffer0 = "false"
+scale_type0 = "viewport"
+scale0 = "1.000000"
+"#;
+
+/// GLSL CRT shader source (legacy GL driver fallback).
+/// Uses `#if defined(VERTEX)` / `#elif defined(FRAGMENT)` guards as RetroArch expects.
+const DROP_CRT_GLSL: &str = r#"// Drop CRT — GLSL version for legacy GL driver
+
+#if defined(VERTEX)
+
+attribute vec4 VertexCoord;
+attribute vec2 TexCoord;
+varying vec2 vTexCoord;
+
+uniform mat4 MVPMatrix;
+
+void main()
+{
+    gl_Position = MVPMatrix * VertexCoord;
+    vTexCoord = TexCoord;
+}
+
+#elif defined(FRAGMENT)
+
+#ifdef GL_ES
+precision mediump float;
+#endif
+
+uniform sampler2D Texture;
+uniform vec2 InputSize;
+uniform vec2 OutputSize;
+
+varying vec2 vTexCoord;
+
+void main()
+{
+    vec3 col = texture2D(Texture, vTexCoord).rgb;
+
+    // Scanlines
+    float scanY = vTexCoord.y * InputSize.y * 2.0 * 3.14159265;
+    float scanline = 0.5 * sin(scanY) + 0.5;
+    scanline = mix(0.70, 1.0, scanline);
+
+    // Shadow mask
+    float maskX = mod(floor(vTexCoord.x * OutputSize.x), 3.0);
+    vec3 mask = vec3(1.0, 0.85, 0.85);
+    if (maskX > 0.5 && maskX < 1.5) mask = vec3(0.85, 1.0, 0.85);
+    else if (maskX > 1.5)            mask = vec3(0.85, 0.85, 1.0);
+
+    col *= scanline;
+    col *= mask;
+    col *= 1.30;
+
+    gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}
+
+#endif
+"#;
+
+/// GLSL preset file.
+const DROP_CRT_GLSLP: &str = r#"shaders = "1"
+
+shader0 = "drop-crt.glsl"
+filter_linear0 = "true"
+wrap_mode0 = "clamp_to_border"
+scale_type0 = "viewport"
+scale0 = "1.000000"
+"#;
+
+/// Writes the bundled CRT shader files to `<emu_root>/shaders/drop-crt/`.
+/// Returns the path to the `.slangp` preset (preferred) or `.glslp` fallback.
+fn write_bundled_crt_shader(emu_root: &Path) -> Option<PathBuf> {
+    let shader_dir = emu_root.join("shaders").join("drop-crt");
+
+    if let Err(e) = fs::create_dir_all(&shader_dir) {
+        warn!("[RETROARCH] Failed to create bundled shader dir {}: {}", shader_dir.display(), e);
+        return None;
     }
 
-    // Second pass: try extracting shaders from the RetroArch AppImage
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(appimage_path) = find_appimage_binary(emu_root) {
-            info!("[RETROARCH] No shaders found on disk — extracting from AppImage: {}", appimage_path.display());
-            extract_appimage_shaders(emu_root, &appimage_path);
-
-            // Re-check after extraction
-            let mut retry_dirs = vec![
-                emu_root.join("shaders/shaders_slang/crt"),
-            ];
-            retry_dirs.push(squashfs_root.join("usr/share/libretro/shaders/shaders_slang/crt"));
-            retry_dirs.push(squashfs_root.join("usr/share/retroarch/shaders/shaders_slang/crt"));
-
-            if let Some(path) = find_crt_shader_in_dirs(&retry_dirs, &preferred_presets) {
-                info!("[RETROARCH] Using CRT shader (after extraction): {}", path.display());
-                let s = path.to_string_lossy().into_owned();
-                overrides.insert("video_shader", s.clone());
-                return Some(s);
-            }
-        }
+    // Write slang version (Vulkan / GLCore)
+    let slang_src = shader_dir.join("drop-crt.slang");
+    let slang_preset = shader_dir.join("drop-crt.slangp");
+    if let Err(e) = fs::write(&slang_src, DROP_CRT_SLANG) {
+        warn!("[RETROARCH] Failed to write bundled slang shader: {}", e);
+    }
+    if let Err(e) = fs::write(&slang_preset, DROP_CRT_SLANGP) {
+        warn!("[RETROARCH] Failed to write bundled slangp preset: {}", e);
     }
 
-    warn!("[RETROARCH] No CRT shader preset found in any shader directory — CRT toggle is ON but no shader will be applied. Install shader presets to {}/shaders/shaders_slang/crt/", emu_root.display());
-    None
+    // Write GLSL version (legacy GL driver fallback)
+    // RetroArch GLSL uses a single .glsl file with #if defined(VERTEX) / #elif defined(FRAGMENT) guards
+    let glsl_src = shader_dir.join("drop-crt.glsl");
+    let glsl_preset = shader_dir.join("drop-crt.glslp");
+    if let Err(e) = fs::write(&glsl_src, DROP_CRT_GLSL) {
+        warn!("[RETROARCH] Failed to write bundled glsl shader: {}", e);
+    }
+    if let Err(e) = fs::write(&glsl_preset, DROP_CRT_GLSLP) {
+        warn!("[RETROARCH] Failed to write bundled glslp preset: {}", e);
+    }
+
+    info!("[RETROARCH] Wrote bundled CRT shader to {}", shader_dir.display());
+
+    // Prefer slangp (works with Vulkan + GLCore), fall back to glslp
+    if slang_preset.is_file() {
+        Some(slang_preset)
+    } else if glsl_preset.is_file() {
+        Some(glsl_preset)
+    } else {
+        None
+    }
 }
 
 /// Searches shader directories for a CRT shader preset.
@@ -1316,7 +1755,6 @@ fn find_appimage_binary(emu_root: &Path) -> Option<PathBuf> {
 fn extract_appimage_shaders(emu_root: &Path, appimage_path: &Path) {
     use std::process::Command;
 
-    // Extract only shader-related files to emu_root/squashfs-root/
     let result = Command::new(appimage_path)
         .arg("--appimage-extract")
         .arg("usr/share/libretro/shaders/shaders_slang/crt/*")
@@ -1328,7 +1766,6 @@ fn extract_appimage_shaders(emu_root: &Path, appimage_path: &Path) {
             info!("[RETROARCH] Extracted CRT shaders from AppImage (slang)");
         }
         Ok(output) => {
-            // First pattern didn't match — try alternative path
             info!("[RETROARCH] First shader extract path failed (status {}), trying alternative...", output.status);
             let alt = Command::new(appimage_path)
                 .arg("--appimage-extract")
@@ -1340,7 +1777,7 @@ fn extract_appimage_shaders(emu_root: &Path, appimage_path: &Path) {
                     info!("[RETROARCH] Extracted CRT shaders from AppImage (alt path)");
                 }
                 _ => {
-                    warn!("[RETROARCH] Failed to extract shaders from AppImage — CRT shader unavailable");
+                    warn!("[RETROARCH] Failed to extract shaders from AppImage");
                 }
             }
         }
@@ -1447,6 +1884,20 @@ fn apply_core_quality_options(overrides: &mut HashMap<&str, String>, quality: &Q
         overrides.insert("ppsspp_texture_scaling_type", "\"xBRZ\"".into());
         overrides.insert("ppsspp_texture_scaling_level", "\"3\"".into());
     }
+
+    // PCSX2 / LRPS2 (PS2) — internal resolution upscale multiplier
+    // Values use atoi() internally, but core options file expects the full label string.
+    let (pcsx2_res, pcsx2_aniso, pcsx2_dither, pcsx2_texfilter, pcsx2_blend) = match quality {
+        QualityPreset::Low    => ("1x Native (PS2)",       "disabled", "Unscaled",  "Bilinear (PS2)", "Minimum"),
+        QualityPreset::Medium => ("2x Native (~720p)",     "2x",      "Scaled",    "Bilinear (PS2)", "Basic"),
+        QualityPreset::High   => ("4x Native (~1440p/2K)", "8x",      "Scaled",    "Bilinear (PS2)", "High"),
+        QualityPreset::Ultra  => ("6x Native (~2160p/4K)", "16x",     "disabled",  "Bilinear (PS2)", "Full"),
+    };
+    overrides.insert("pcsx2_upscale_multiplier", format!("\"{}\"", pcsx2_res));
+    overrides.insert("pcsx2_anisotropic_filtering", format!("\"{}\"", pcsx2_aniso));
+    overrides.insert("pcsx2_dithering", format!("\"{}\"", pcsx2_dither));
+    overrides.insert("pcsx2_texture_filtering", format!("\"{}\"", pcsx2_texfilter));
+    overrides.insert("pcsx2_blending_accuracy", format!("\"{}\"", pcsx2_blend));
 }
 
 // ── Widescreen helpers ─────────────────────────────────────────────────
@@ -1513,6 +1964,9 @@ fn apply_core_widescreen_options(overrides: &mut HashMap<&str, String>, ratio: &
 
     // PCSX ReARMed — widescreen
     overrides.insert("pcsx_rearmed_widescreen", format!("\"{}\"", val));
+
+    // PCSX2 / LRPS2 (PS2) — widescreen hint (applies internal widescreen patches)
+    overrides.insert("pcsx2_widescreen_hint", format!("\"{}\"", val));
 
     // Snes9x — widescreen (available in some builds)
     overrides.insert("snes9x_aspect_ratio", format!("\"{}\"",
@@ -1717,4 +2171,245 @@ pub fn resolve_core_for_rom(emu_root: &Path, rom_path: &str) -> Option<PathBuf> 
         cores_dir.display()
     );
     None
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ROM Hash Verification (RetroAchievements)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// A single valid hash entry from the Drop server (originally from RA API).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RAHashEntry {
+    pub hash: String,
+    pub label: String,
+    #[serde(default)]
+    pub patch_url: String,
+}
+
+/// Response from GET /api/v1/client/game/{id}/ra-hashes
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RAHashesResponse {
+    pub console_id: Option<i64>,
+    pub hashes: Vec<RAHashEntry>,
+}
+
+/// Result of comparing a local ROM hash against RA's known hashes.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status")]
+pub enum RomHashStatus {
+    /// ROM hash matches one of RA's known hashes — achievements will work.
+    Match { rom_hash: String, matched_label: String },
+    /// ROM hash does not match any known hash — achievements won't identify the game.
+    Mismatch {
+        rom_hash: String,
+        expected_hashes: Vec<RAHashEntry>,
+    },
+    /// No RA hashes available for this game (not linked, or RA has none).
+    NoHashData,
+    /// Hashing failed (RAHasher not found, process error, etc.).
+    Error { message: String },
+}
+
+/// Locate the RAHasher binary inside (or next to) the RetroArch install.
+///
+/// Search order:
+///   1. `<emu_root>/RAHasher.exe` / `<emu_root>/RAHasher` (bundled alongside RA)
+///   2. `<emu_root>/../RAHasher*` (sibling tool directory)
+fn find_rahasher(emu_root: &Path) -> Option<PathBuf> {
+    let candidates = if cfg!(target_os = "windows") {
+        vec![
+            emu_root.join("RAHasher.exe"),
+            emu_root.parent().map(|p| p.join("RAHasher.exe")).unwrap_or_default(),
+        ]
+    } else {
+        vec![
+            emu_root.join("RAHasher"),
+            emu_root.parent().map(|p| p.join("RAHasher")).unwrap_or_default(),
+        ]
+    };
+
+    for c in &candidates {
+        if c.is_file() {
+            info!("[RA-HASH] Found RAHasher at {}", c.display());
+            return Some(c.clone());
+        }
+    }
+
+    debug!("[RA-HASH] RAHasher not found, searched: {:?}", candidates);
+    None
+}
+
+/// Compute the RetroAchievements hash of a ROM using the RAHasher CLI tool.
+///
+/// `emu_root` — path to the RetroArch install directory (RAHasher is expected
+///              to be bundled here or in a sibling directory).
+/// `rom_path` — absolute path to the ROM/ISO file.
+/// `console_id` — RA console ID (e.g. 21 = PS2). Required by RAHasher.
+///
+/// Returns the hex MD5 hash string, or None if hashing fails.
+pub fn hash_rom(emu_root: &Path, rom_path: &str, console_id: i64) -> Option<String> {
+    let rahasher = find_rahasher(emu_root)?;
+
+    info!(
+        "[RA-HASH] Hashing ROM: {} (console_id={})",
+        rom_path, console_id
+    );
+
+    let output = match std::process::Command::new(&rahasher)
+        .arg(console_id.to_string())
+        .arg(rom_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            warn!("[RA-HASH] Failed to execute RAHasher: {}", e);
+            return None;
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        warn!(
+            "[RA-HASH] RAHasher exited with {}: {}",
+            output.status, stderr
+        );
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // RAHasher outputs the hash on a line, typically just the hex string.
+    // Some versions print "<hash> <filename>" — take the first token.
+    let hash = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .last()
+        .and_then(|l| l.split_whitespace().next())
+        .map(|s| s.trim().to_lowercase());
+
+    if let Some(ref h) = hash {
+        info!("[RA-HASH] ROM hash: {}", h);
+    } else {
+        warn!("[RA-HASH] Could not parse hash from RAHasher output: {:?}", stdout);
+    }
+
+    hash
+}
+
+/// Fetch valid RA hashes for a game from the Drop server.
+pub async fn fetch_ra_hashes(game_id: &str) -> Option<RAHashesResponse> {
+    let url = match generate_url(
+        &[&format!("/api/v1/client/game/{}/ra-hashes", game_id)],
+        &[],
+    ) {
+        Ok(u) => u,
+        Err(e) => {
+            debug!("[RA-HASH] Failed to build ra-hashes URL: {}", e);
+            return None;
+        }
+    };
+
+    let response = match make_authenticated_get(url).await {
+        Ok(r) => r,
+        Err(e) => {
+            debug!("[RA-HASH] Failed to fetch RA hashes: {}", e);
+            return None;
+        }
+    };
+
+    if !response.status().is_success() {
+        debug!(
+            "[RA-HASH] ra-hashes endpoint returned {}",
+            response.status()
+        );
+        return None;
+    }
+
+    match response.json::<RAHashesResponse>().await {
+        Ok(data) => {
+            info!(
+                "[RA-HASH] Got {} hashes for game {} (console_id={:?})",
+                data.hashes.len(),
+                game_id,
+                data.console_id
+            );
+            Some(data)
+        }
+        Err(e) => {
+            warn!("[RA-HASH] Failed to parse ra-hashes response: {}", e);
+            None
+        }
+    }
+}
+
+/// Check whether a local ROM's hash matches any of the known RA hashes.
+///
+/// This is the main entry point called from the process manager at launch time.
+/// It fetches known hashes from the server, computes the local ROM's hash with
+/// RAHasher, and compares.
+pub async fn check_rom_hash(
+    emu_root: &Path,
+    game_id: &str,
+    rom_path: &str,
+) -> RomHashStatus {
+    // 1. Fetch known hashes from server
+    let hash_data = match fetch_ra_hashes(game_id).await {
+        Some(d) if !d.hashes.is_empty() => d,
+        Some(_) => {
+            info!("[RA-HASH] No RA hashes registered for game {}", game_id);
+            return RomHashStatus::NoHashData;
+        }
+        None => {
+            return RomHashStatus::NoHashData;
+        }
+    };
+
+    // 2. We need the console ID for RAHasher
+    let console_id = match hash_data.console_id {
+        Some(id) => id,
+        None => {
+            warn!("[RA-HASH] No console ID for game {} — cannot hash ROM", game_id);
+            return RomHashStatus::Error {
+                message: "No RA console ID available for this game".to_string(),
+            };
+        }
+    };
+
+    // 3. Compute the local ROM hash
+    let rom_hash = match hash_rom(emu_root, rom_path, console_id) {
+        Some(h) => h,
+        None => {
+            return RomHashStatus::Error {
+                message: "Failed to compute ROM hash (RAHasher not found or failed)".to_string(),
+            };
+        }
+    };
+
+    // 4. Compare
+    for entry in &hash_data.hashes {
+        if entry.hash.to_lowercase() == rom_hash {
+            info!(
+                "[RA-HASH] ROM hash MATCH for game {}: {} ({})",
+                game_id, rom_hash, entry.label
+            );
+            return RomHashStatus::Match {
+                rom_hash,
+                matched_label: entry.label.clone(),
+            };
+        }
+    }
+
+    warn!(
+        "[RA-HASH] ROM hash MISMATCH for game {}: local={}, expected={:?}",
+        game_id,
+        rom_hash,
+        hash_data.hashes.iter().map(|h| &h.hash).collect::<Vec<_>>()
+    );
+    RomHashStatus::Mismatch {
+        rom_hash,
+        expected_hashes: hash_data.hashes,
+    }
 }

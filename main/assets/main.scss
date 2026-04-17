@@ -96,11 +96,13 @@ $helvetica: (
   box-shadow: none !important;
 }
 .bp-ring-focused {
-  outline: 3px solid rgba(var(--bpm-accent, 59 130 246) / 0.8) !important;
-  outline-offset: 0px !important;
+  /* Use box-shadow instead of outline — outline doesn't respect border-radius
+     in WebKitGTK (Tauri). Box-shadow + border-radius = properly rounded ring. */
+  outline: none !important;
+  box-shadow: 0 0 0 3px rgba(var(--bpm-accent, 59 130 246) / 0.8) !important;
   z-index: 10;
   position: relative;
-  transition: outline 0.15s ease;
+  transition: box-shadow 0.15s ease;
 }
 
 /* Prevent scale transform on large areas like hero banners */

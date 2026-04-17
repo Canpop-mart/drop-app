@@ -59,9 +59,14 @@ function ctx(): { ac: AudioContext; out: GainNode } | null {
 /**
  * Unlock the AudioContext on the first user interaction.
  * Chromium-based webviews (including Tauri on Steam Deck) require a user
- * gesture before AudioContext.resume() actually takes effect. We attach a
- * one-shot listener to common interaction events so the first gamepad
- * button press, mouse click, or key press unlocks audio.
+ * gesture before AudioContext.resume() actually takes effect.
+ *
+ * Strategy:
+ * 1. Listen for real DOM interaction events (click, touchstart, keydown, pointerdown)
+ * 2. For gamepad-only devices (Steam Deck), dispatch a synthetic click from the
+ *    gamepad polling loop — this creates a trusted user activation in Chromium.
+ * 3. Periodically retry resume() since Tauri webviews can sometimes allow it
+ *    after the webview fully initializes (no gesture needed).
  */
 function ensureAudioUnlock() {
   if (audioUnlocked || typeof document === "undefined") return;
@@ -73,12 +78,14 @@ function ensureAudioUnlock() {
       c.ac.resume().then(() => {
         console.log("[BPM:AUDIO] AudioContext resumed after user gesture");
         audioUnlocked = true;
+        cleanup();
       }).catch(() => {});
     } else if (c) {
       audioUnlocked = true;
+      cleanup();
     }
     // Also play a silent buffer to fully unlock on some devices
-    if (c) {
+    if (c && c.ac.state === "running") {
       const buf = c.ac.createBuffer(1, 1, c.ac.sampleRate);
       const src = c.ac.createBufferSource();
       src.buffer = buf;
@@ -88,12 +95,50 @@ function ensureAudioUnlock() {
   };
 
   // Listen for any user interaction
-  const events = ["click", "touchstart", "keydown", "gamepadconnected"];
+  const events = ["click", "touchstart", "keydown", "pointerdown", "mousedown"];
   for (const evt of events) {
-    document.addEventListener(evt, unlock, { once: true, passive: true });
+    document.addEventListener(evt, unlock, { once: false, passive: true });
   }
-  // Also try to unlock on gamepad button press (polled, not event-based)
-  // The focus-navigation system calls play() on button press which triggers ctx()
+
+  const cleanup = () => {
+    for (const evt of events) {
+      document.removeEventListener(evt, unlock);
+    }
+    if (retryTimer) clearInterval(retryTimer);
+  };
+
+  // Periodic retry — Tauri webviews sometimes allow resume after init
+  let retryCount = 0;
+  const retryTimer = setInterval(() => {
+    if (audioUnlocked || retryCount > 30) {
+      clearInterval(retryTimer);
+      return;
+    }
+    retryCount++;
+    const c = ctx();
+    if (c && c.ac.state === "suspended") {
+      c.ac.resume().then(() => {
+        console.log("[BPM:AUDIO] AudioContext resumed via periodic retry");
+        audioUnlocked = true;
+        cleanup();
+      }).catch(() => {});
+    } else if (c && c.ac.state === "running") {
+      audioUnlocked = true;
+      cleanup();
+    }
+  }, 1000);
+}
+
+/**
+ * Called from the gamepad polling loop (focus-navigation) when a button
+ * is pressed. Dispatches a synthetic click to create a user activation
+ * context, then tries to unlock audio.
+ */
+export function tryGamepadAudioUnlock() {
+  if (audioUnlocked) return;
+  // Dispatch a synthetic click — this creates a trusted user activation
+  // in Chromium and allows AudioContext.resume() to succeed.
+  document.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 }
 
 // Auto-setup the unlock listeners

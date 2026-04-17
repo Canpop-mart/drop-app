@@ -12,7 +12,9 @@ pub mod goldberg;
 pub mod playtime;
 pub mod retroarch;
 pub mod requests;
+pub mod save_sync;
 pub mod server_proto;
+pub mod streaming_sessions;
 pub mod utils;
 
 pub use auth::setup;

@@ -4,6 +4,7 @@
 #![feature(vec_try_remove)]
 
 use std::{
+    collections::HashMap,
     ops::Deref,
     sync::{OnceLock, nonpoison::Mutex},
 };
@@ -13,6 +14,12 @@ use tauri::AppHandle;
 use crate::process_manager::ProcessManager;
 
 pub static PROCESS_MANAGER: ProcessManagerWrapper = ProcessManagerWrapper::new();
+
+/// Global registry of pending conflict resolution channels.
+/// Key: game_id → Sender that unblocks the pre-launch sync.
+pub static CONFLICT_CHANNELS: std::sync::LazyLock<
+    Mutex<HashMap<String, std::sync::mpsc::Sender<Vec<remote::save_sync::ConflictResolution>>>>,
+> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(target_os = "linux")]
 pub mod compat;

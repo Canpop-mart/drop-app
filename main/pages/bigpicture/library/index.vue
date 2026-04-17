@@ -282,26 +282,43 @@
           :class="{ 'tile-visible': tilesReady }"
           :style="{ transitionDelay: `${Math.min(index * 30, 500)}ms` }"
         >
-          <BigPictureGameTile
-            :ref="
-              (el: any) =>
-                registerTile(el, {
-                  onSelect: () => {
-                    console.log(`[BPM:LIB] Selecting game: ${entry.game.id} (${entry.game.mName})`);
-                    focusNav.saveFocusSnapshot(route.path);
-                    $router.push(`/bigpicture/library/${entry.game.id}`).then(() => {
-                      console.log(`[BPM:LIB] Navigation complete for: ${entry.game.id}`);
-                    }).catch((e: any) => {
-                      console.error(`[BPM:LIB] Navigation FAILED for ${entry.game.id}:`, e);
-                    });
-                  },
-                  onFocus: () => prefetchGame(entry.game.id),
-                })
-            "
-            :game="entry.game"
-            :status="entry.status"
-            :hide-titles="hideTitles"
-          />
+          <div class="relative">
+            <BigPictureGameTile
+              :ref="
+                (el: any) =>
+                  registerTile(el, {
+                    onSelect: () => {
+                      if (multiSelectMode) {
+                        toggleSelect(entry.game.id);
+                        return;
+                      }
+                      console.log(`[BPM:LIB] Selecting game: ${entry.game.id} (${entry.game.mName})`);
+                      focusNav.saveFocusSnapshot(route.path);
+                      $router.push(`/bigpicture/library/${entry.game.id}`).then(() => {
+                        console.log(`[BPM:LIB] Navigation complete for: ${entry.game.id}`);
+                      }).catch((e: any) => {
+                        console.error(`[BPM:LIB] Navigation FAILED for ${entry.game.id}:`, e);
+                      });
+                    },
+                    onContext: () => openContextMenu(entry),
+                    onFocus: () => prefetchGame(entry.game.id),
+                  })
+              "
+              :game="entry.game"
+              :status="entry.status"
+              :hide-titles="hideTitles"
+            />
+            <!-- Multi-select checkbox -->
+            <div
+              v-if="multiSelectMode"
+              class="absolute top-2 left-2 z-20 size-6 rounded-md flex items-center justify-center transition-colors"
+              :class="selectedGames.has(entry.game.id) ? 'bg-blue-500' : 'bg-zinc-800/80 ring-1 ring-zinc-600'"
+            >
+              <svg v-if="selectedGames.has(entry.game.id)" class="size-4 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+              </svg>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -351,6 +368,109 @@
             </button>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- ═══ Context menu overlay ═══ -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-opacity duration-150"
+        leave-active-class="transition-opacity duration-100"
+        enter-from-class="opacity-0"
+        leave-to-class="opacity-0"
+      >
+        <div v-if="contextMenuGame" class="fixed inset-0 z-[200] flex items-center justify-center">
+          <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" @click="closeContextMenu" />
+          <div
+            class="relative z-10 rounded-2xl p-6 w-80 max-w-[90vw]"
+            style="background-color: var(--bpm-surface); color: var(--bpm-text)"
+          >
+            <!-- Game info header -->
+            <div class="flex items-center gap-4 mb-5 pb-4 border-b" style="border-color: var(--bpm-border)">
+              <img
+                v-if="contextMenuGame.game.mCoverObjectId"
+                :src="objectUrl(contextMenuGame.game.mCoverObjectId)"
+                class="size-14 rounded-lg object-cover"
+              />
+              <div class="flex-1 min-w-0">
+                <p class="font-semibold text-sm truncate">{{ contextMenuGame.game.mName }}</p>
+                <p class="text-xs mt-0.5" style="color: var(--bpm-muted)">{{ contextMenuGame.status.type }}</p>
+              </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="space-y-1">
+              <button
+                v-for="item in contextMenuActions"
+                :key="item.id"
+                :ref="(el: any) => registerCtxMenu(el, { onSelect: item.action })"
+                class="w-full flex items-center gap-3 px-4 py-3 text-sm rounded-xl transition-colors hover:bg-white/5"
+                @click="item.action"
+              >
+                <component :is="item.icon" class="size-5 flex-shrink-0" :style="{ color: item.color }" />
+                <span>{{ item.label }}</span>
+              </button>
+            </div>
+
+            <!-- Multi-select actions (when in select mode) -->
+            <div v-if="multiSelectMode && selectedGames.size > 0" class="mt-4 pt-4 border-t" style="border-color: var(--bpm-border)">
+              <p class="text-xs mb-3" style="color: var(--bpm-muted)">{{ selectedGames.size }} game{{ selectedGames.size !== 1 ? 's' : '' }} selected</p>
+              <div class="flex gap-2">
+                <button
+                  :ref="(el: any) => registerCtxMenu(el, { onSelect: bulkUninstall })"
+                  class="flex-1 px-3 py-2 text-xs rounded-lg bg-red-900/20 text-red-400 hover:bg-red-900/30 transition-colors"
+                  @click="bulkUninstall"
+                >
+                  Uninstall Selected
+                </button>
+                <button
+                  :ref="(el: any) => registerCtxMenu(el, { onSelect: clearSelection })"
+                  class="flex-1 px-3 py-2 text-xs rounded-lg transition-colors hover:bg-white/5"
+                  style="color: var(--bpm-muted)"
+                  @click="clearSelection"
+                >
+                  Clear Selection
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- Multi-select toolbar -->
+    <div
+      v-if="multiSelectMode"
+      class="fixed bottom-0 left-0 right-0 z-[100] flex items-center justify-between px-8 py-4"
+      style="background: linear-gradient(to top, var(--bpm-bg), transparent)"
+    >
+      <div class="flex items-center gap-3">
+        <span class="text-sm font-medium" style="color: var(--bpm-text)">
+          {{ selectedGames.size }} selected
+        </span>
+        <button
+          class="px-3 py-1.5 text-xs rounded-lg transition-colors hover:bg-white/10"
+          style="color: var(--bpm-muted)"
+          @click="selectAll"
+        >
+          Select All
+        </button>
+      </div>
+      <div class="flex items-center gap-2">
+        <button
+          v-if="selectedGames.size > 0"
+          class="px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors"
+          @click="bulkUninstall"
+        >
+          Uninstall ({{ selectedGames.size }})
+        </button>
+        <button
+          class="px-4 py-2 text-sm rounded-lg transition-colors hover:bg-white/10"
+          style="color: var(--bpm-muted)"
+          @click="exitMultiSelect"
+        >
+          Cancel
+        </button>
       </div>
     </div>
   </div>
@@ -450,6 +570,8 @@ _unsubs.push(
 _unsubs.push(
   gamepad.onButton(_sortBtn, () => {
     if (showKeyboard.value) return;
+    if (contextMenuGame.value) return; // context menu handles its own close
+    if (focusNav.contextHandled.value) return; // tile onContext handled it
     if (showFilterMenu.value) {
       showFilterMenu.value = false;
       focusNav.unrestrictFocus("content");
@@ -685,4 +807,217 @@ const filteredGames = computed(() => {
 
   return games;
 });
+
+// ── Context menu ─────────────────────────────────────────────────────────
+import {
+  PlayIcon,
+  ArrowDownTrayIcon,
+  TrashIcon,
+  QueueListIcon,
+  CheckCircleIcon,
+  StopIcon,
+} from "@heroicons/vue/24/solid";
+
+const contextMenuGame = ref<LibraryEntry | null>(null);
+const registerCtxMenu = useBpFocusableGroup("context-menu");
+
+function objectUrl(id: string): string {
+  return serverUrl(`api/v1/object/${id}`);
+}
+
+import { serverUrl } from "~/composables/use-server-fetch";
+
+function openContextMenu(entry: LibraryEntry) {
+  contextMenuGame.value = entry;
+  nextTick(() => {
+    focusNav.restrictFocus("context-menu");
+  });
+}
+
+function closeContextMenu() {
+  contextMenuGame.value = null;
+  focusNav.unrestrictFocus("content");
+}
+
+// Close context menu on B button
+_unsubs.push(
+  gamepad.onButton(GamepadButton.East, () => {
+    if (contextMenuGame.value) {
+      closeContextMenu();
+    }
+  }),
+);
+
+const contextMenuActions = computed(() => {
+  const entry = contextMenuGame.value;
+  if (!entry) return [];
+
+  const actions: { id: string; label: string; icon: any; color: string; action: () => void }[] = [];
+
+  if (entry.status.type === "Installed") {
+    actions.push({
+      id: "play",
+      label: "Play",
+      icon: PlayIcon,
+      color: "#3b82f6",
+      action: async () => {
+        closeContextMenu();
+        try {
+          await invoke("launch_game", { id: entry.game.id });
+        } catch (e) {
+          console.error("[BPM:LIB] Launch failed:", e);
+        }
+      },
+    });
+  } else if (entry.status.type === "Running") {
+    actions.push({
+      id: "stop",
+      label: "Stop",
+      icon: StopIcon,
+      color: "#ef4444",
+      action: async () => {
+        closeContextMenu();
+        try {
+          await invoke("kill_game", { id: entry.game.id });
+        } catch (e) {
+          console.error("[BPM:LIB] Kill failed:", e);
+        }
+      },
+    });
+  } else if (entry.status.type === "Remote") {
+    actions.push({
+      id: "install",
+      label: "Install",
+      icon: ArrowDownTrayIcon,
+      color: "#22c55e",
+      action: async () => {
+        closeContextMenu();
+        try {
+          await invoke("download_game", { id: entry.game.id });
+        } catch (e) {
+          console.error("[BPM:LIB] Download failed:", e);
+        }
+      },
+    });
+  }
+
+  // View details — always available
+  actions.push({
+    id: "details",
+    label: "View Details",
+    icon: Square3Stack3DIcon,
+    color: "var(--bpm-muted)",
+    action: () => {
+      closeContextMenu();
+      focusNav.saveFocusSnapshot(route.path);
+      $router.push(`/bigpicture/library/${entry.game.id}`);
+    },
+  });
+
+  // Add to shelf
+  actions.push({
+    id: "shelf",
+    label: "Add to Shelf...",
+    icon: FolderIcon,
+    color: "var(--bpm-muted)",
+    action: () => {
+      closeContextMenu();
+      focusNav.saveFocusSnapshot(route.path);
+      $router.push(`/bigpicture/library/${entry.game.id}`);
+    },
+  });
+
+  // Multi-select
+  actions.push({
+    id: "select",
+    label: multiSelectMode.value ? "Toggle Selection" : "Select Multiple",
+    icon: CheckCircleIcon,
+    color: "#3b82f6",
+    action: () => {
+      if (!multiSelectMode.value) {
+        multiSelectMode.value = true;
+        selectedGames.value.add(entry.game.id);
+      } else {
+        toggleSelect(entry.game.id);
+      }
+      closeContextMenu();
+    },
+  });
+
+  // Uninstall — only for installed
+  if (entry.status.type === "Installed") {
+    actions.push({
+      id: "uninstall",
+      label: "Uninstall",
+      icon: TrashIcon,
+      color: "#ef4444",
+      action: async () => {
+        closeContextMenu();
+        try {
+          await invoke("uninstall_game", { id: entry.game.id });
+          loadLibrary(true);
+        } catch (e) {
+          console.error("[BPM:LIB] Uninstall failed:", e);
+        }
+      },
+    });
+  }
+
+  return actions;
+});
+
+const $router = useRouter();
+
+// ── Multi-select ─────────────────────────────────────────────────────────
+const multiSelectMode = ref(false);
+const selectedGames = ref<Set<string>>(new Set());
+
+function toggleSelect(gameId: string) {
+  const set = new Set(selectedGames.value);
+  if (set.has(gameId)) {
+    set.delete(gameId);
+  } else {
+    set.add(gameId);
+  }
+  selectedGames.value = set;
+  // Auto-exit if nothing selected
+  if (set.size === 0) multiSelectMode.value = false;
+}
+
+function selectAll() {
+  const set = new Set<string>();
+  for (const entry of filteredGames.value) {
+    set.add(entry.game.id);
+  }
+  selectedGames.value = set;
+}
+
+function clearSelection() {
+  selectedGames.value = new Set();
+  multiSelectMode.value = false;
+  closeContextMenu();
+}
+
+function exitMultiSelect() {
+  selectedGames.value = new Set();
+  multiSelectMode.value = false;
+}
+
+async function bulkUninstall() {
+  closeContextMenu();
+  const ids = [...selectedGames.value];
+  const installed = ids.filter((id) =>
+    library.value.find((e) => e.game.id === id && e.status.type === "Installed"),
+  );
+  for (const id of installed) {
+    try {
+      await invoke("uninstall_game", { id });
+    } catch (e) {
+      console.error(`[BPM:LIB] Bulk uninstall failed for ${id}:`, e);
+    }
+  }
+  selectedGames.value = new Set();
+  multiSelectMode.value = false;
+  loadLibrary(true);
+}
 </script>

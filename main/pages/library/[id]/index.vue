@@ -188,6 +188,11 @@
             @resume="() => resumeDownload()"
             :status="status"
           />
+          <StreamButton
+            :game-id="game.id"
+            :game-name="game.mName"
+            :is-installed="status.type === 'Installed'"
+          />
           <button
             v-if="status.type === 'Installed' && status.update_available"
             class="transition-transform duration-300 hover:scale-105 active:scale-95 inline-flex gap-x-2 items-center rounded-md bg-blue-600 px-6 font-semibold text-white shadow-xl backdrop-blur-sm hover:bg-blue-700 uppercase font-display"
@@ -400,9 +405,68 @@
 
             <!-- Achievements -->
             <div class="bg-zinc-800/50 rounded-xl p-6 backdrop-blur-sm">
-              <h2 class="text-xl font-display font-semibold text-zinc-100 mb-4">
-                Achievements
-              </h2>
+              <div class="flex items-center justify-between mb-4">
+                <h2
+                  class="text-xl font-display font-semibold text-zinc-100"
+                >
+                  Achievements
+                </h2>
+              </div>
+
+              <!-- ROM Hash Status Banner -->
+              <div
+                v-if="romHashResult?.status === 'Mismatch'"
+                class="mb-4 rounded-lg bg-amber-500/10 p-3 outline outline-1 outline-amber-500/20"
+              >
+                <p class="text-sm font-medium text-amber-400 mb-1">
+                  ROM not recognised by RetroAchievements
+                </p>
+                <p class="text-xs text-zinc-400 mb-2">
+                  Your ROM hash
+                  (<code class="text-zinc-300">{{
+                    romHashResult.rom_hash?.slice(0, 12)
+                  }}…</code>) doesn't match any known hash. Achievements won't
+                  track until the ROM is patched or replaced.
+                </p>
+                <div
+                  v-if="
+                    romHashResult.expected_hashes?.some((h) => h.patchUrl)
+                  "
+                  class="flex flex-wrap gap-2"
+                >
+                  <a
+                    v-for="h in romHashResult.expected_hashes?.filter(
+                      (h) => h.patchUrl,
+                    )"
+                    :key="h.hash"
+                    :href="h.patchUrl"
+                    target="_blank"
+                    class="inline-flex items-center gap-1 rounded bg-amber-500/20 px-2 py-0.5 text-xs text-amber-300 hover:bg-amber-500/30 transition-colors"
+                  >
+                    Patch: {{ h.label || h.hash.slice(0, 8) }}
+                  </a>
+                </div>
+              </div>
+              <div
+                v-else-if="romHashResult?.status === 'Match'"
+                class="mb-4 rounded-lg bg-emerald-500/10 p-2 outline outline-1 outline-emerald-500/20"
+              >
+                <p class="text-xs text-emerald-400">
+                  ROM verified — matches RetroAchievements
+                  <span v-if="romHashResult.matched_label" class="text-zinc-400">
+                    ({{ romHashResult.matched_label }})
+                  </span>
+                </p>
+              </div>
+              <div
+                v-else-if="romHashResult?.status === 'Error'"
+                class="mb-4 rounded-lg bg-red-500/10 p-2 outline outline-1 outline-red-500/20"
+              >
+                <p class="text-xs text-red-400">
+                  Hash check failed: {{ romHashResult.message }}
+                </p>
+              </div>
+
               <div v-if="achievementsLoading" class="flex justify-center py-4">
                 <div
                   class="w-5 h-5 border-2 border-zinc-600 border-t-zinc-100 rounded-full animate-spin"
@@ -994,6 +1058,13 @@
       </div>
     </div>
   </Transition>
+
+  <!-- Cloud Save Conflict Resolution Dialog -->
+  <SaveConflictDialog
+    v-model="saveConflictOpen"
+    :game-id="game.id"
+    :conflicts="saveConflicts"
+  />
 </template>
 
 <script setup lang="ts">
@@ -1072,8 +1143,8 @@ const isNativeGame = computed(() => !isEmulatedGame.value);
 // ── Controller & Quality presets ─────────────────────────────────────────
 const controllerOptions: { label: string; value: ControllerType | null }[] = [
   { label: "Auto", value: null },
-  { label: "Xbox", value: "Xbox" },
-  { label: "Nintendo", value: "Nintendo" },
+  { label: "Xbox (A=South)", value: "Xbox" },
+  { label: "Nintendo (A=East)", value: "Nintendo" },
 ];
 const qualityOptions: { label: string; value: QualityPreset | null }[] = [
   { label: "Auto", value: null },
@@ -1221,6 +1292,71 @@ onMounted(async () => {
   } finally {
     achievementsLoading.value = false;
   }
+});
+
+// ── ROM Hash Verification (RetroAchievements) ──────────────────────────
+type RomHashResult = {
+  status: "Match" | "Mismatch" | "NoHashData" | "Error";
+  rom_hash?: string;
+  matched_label?: string;
+  expected_hashes?: { hash: string; label: string; patchUrl: string }[];
+  message?: string;
+};
+
+const romHashResult = ref<RomHashResult | null>(null);
+const romHashChecking = ref(false);
+
+// Listen for launch-time hash check results
+let unlistenHash: (() => void) | null = null;
+onMounted(async () => {
+  unlistenHash = await listen<RomHashResult>(
+    `ra_hash_check/${game.id}`,
+    (event) => {
+      romHashResult.value = event.payload;
+    },
+  );
+});
+onUnmounted(() => {
+  unlistenHash?.();
+});
+
+// On-demand hash check (Phase 3)
+async function checkRomHash() {
+  romHashChecking.value = true;
+  romHashResult.value = null;
+  try {
+    const result = await invoke<RomHashResult>("check_ra_rom_hash", {
+      gameId: game.id,
+    });
+    romHashResult.value = result;
+  } catch (e) {
+    romHashResult.value = {
+      status: "Error",
+      message: String(e),
+    };
+  } finally {
+    romHashChecking.value = false;
+  }
+}
+
+// ── Cloud Save Conflict Resolution ──────────────────────────────────────
+import type { SaveConflict } from "~/types/save-sync";
+
+const saveConflictOpen = ref(false);
+const saveConflicts = ref<SaveConflict[]>([]);
+
+let unlistenConflict: (() => void) | null = null;
+onMounted(async () => {
+  unlistenConflict = await listen<{ gameId: string; conflicts: SaveConflict[] }>(
+    `save_sync_conflict/${game.id}`,
+    (event) => {
+      saveConflicts.value = event.payload.conflicts;
+      saveConflictOpen.value = true;
+    },
+  );
+});
+onUnmounted(() => {
+  unlistenConflict?.();
 });
 
 const installFlowOpen = ref(false);

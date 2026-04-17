@@ -1360,3 +1360,91 @@ pub fn delete_game_save(
 
     std::fs::remove_file(&canonical).map_err(|e| format!("Failed to delete: {e}"))
 }
+
+/// Check whether a game's ROM hash matches RetroAchievements' known hashes.
+///
+/// This is the on-demand version callable from the UI — separate from the
+/// automatic check that runs at launch time. Returns a JSON-serialisable
+/// status enum.
+#[tauri::command]
+pub async fn check_ra_rom_hash(
+    game_id: String,
+) -> Result<serde_json::Value, String> {
+    use database::{borrow_db_checked, GameDownloadStatus, models::data::InstalledGameType};
+
+    // 1. Find the installed game version and its emulator
+    let (install_dir, game_version) = {
+        let db = borrow_db_checked();
+        let status = db
+            .applications
+            .game_statuses
+            .get(&game_id)
+            .ok_or("Game not found")?
+            .clone();
+
+        let install_dir = match &status {
+            GameDownloadStatus::Installed { install_dir, .. } => install_dir.clone(),
+            _ => return Err("Game not installed".to_string()),
+        };
+
+        let gv = db
+            .applications
+            .game_versions
+            .get(&game_id)
+            .ok_or("Game version not found")?
+            .clone();
+
+        (install_dir, gv)
+    };
+
+    // 2. Find the first launch config with an emulator (RetroArch)
+    let launch_config = game_version
+        .launches
+        .iter()
+        .find(|l| l.emulator.is_some())
+        .ok_or("No emulator launch config")?;
+
+    let emulator_ref = launch_config.emulator.as_ref().unwrap();
+
+    // 3. Resolve emulator install directory
+    let emu_install_dir = {
+        let db = borrow_db_checked();
+        let emu_status = db
+            .applications
+            .game_statuses
+            .get(&emulator_ref.game_id)
+            .ok_or("Emulator not installed")?
+            .clone();
+
+        match emu_status {
+            GameDownloadStatus::Installed { install_dir, .. } => install_dir,
+            _ => return Err("Emulator not installed".to_string()),
+        }
+    };
+
+    // 4. Resolve ROM path (same logic as process_manager)
+    let rom_path = if launch_config.disc_paths.len() > 1 {
+        // Multi-disc: use the first disc for hashing
+        let game_dir = std::path::Path::new(&install_dir);
+        game_dir
+            .join(&launch_config.disc_paths[0])
+            .to_string_lossy()
+            .to_string()
+    } else {
+        // Single ROM: the launch command is the ROM filename (relative to install_dir).
+        // Strip any surrounding quotes and use it directly.
+        let cmd = launch_config.command.trim().trim_matches('"').trim_matches('\'');
+        let rom = std::path::Path::new(&install_dir).join(cmd);
+        rom.to_string_lossy().to_string()
+    };
+
+    // 5. Run the async hash check
+    let result = remote::retroarch::check_rom_hash(
+        std::path::Path::new(&emu_install_dir),
+        &game_id,
+        &rom_path,
+    )
+    .await;
+
+    serde_json::to_value(&result).map_err(|e| format!("Serialization error: {e}"))
+}

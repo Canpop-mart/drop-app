@@ -59,6 +59,7 @@ mod process;
 mod remote;
 mod scheduler;
 mod settings;
+mod streaming;
 mod updates;
 
 use client::*;
@@ -68,6 +69,7 @@ use games::*;
 use process::*;
 use remote::*;
 use settings::*;
+use streaming::*;
 
 use crate::scheduler::scheduler_task;
 
@@ -290,6 +292,7 @@ pub fn run() {
             restore_pc_game_saves,
             check_ludusavi,
             install_ludusavi,
+            check_ra_rom_hash,
             // Downloads
             download_game,
             resume_download,
@@ -301,6 +304,7 @@ pub fn run() {
             // Processes
             launch_game,
             kill_game,
+            resolve_save_conflicts,
             toggle_autostart,
             get_autostart_enabled,
             open_process_logs,
@@ -320,7 +324,24 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             register_steam_shortcut,
             #[cfg(target_os = "linux")]
-            add_game_to_steam
+            add_game_to_steam,
+            // Streaming (Sunshine)
+            check_sunshine,
+            install_sunshine,
+            sunshine_status,
+            start_sunshine,
+            stop_sunshine,
+            sunshine_send_pin,
+            sunshine_list_apps,
+            sunshine_register_game,
+            sunshine_list_clients,
+            // Streaming sessions (server-side, JWT auth)
+            streaming_create_session,
+            streaming_mark_ready,
+            streaming_stop_session,
+            streaming_heartbeat,
+            streaming_list_sessions,
+            streaming_get_connection_info
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

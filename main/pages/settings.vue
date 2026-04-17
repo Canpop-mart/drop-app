@@ -48,6 +48,7 @@ import {
   RectangleGroupIcon,
   BugAntIcon,
   TrophyIcon,
+  SignalIcon,
 } from "@heroicons/vue/16/solid";
 import type { Component } from "vue";
 import type { NavigationItem } from "~/types";
@@ -128,6 +129,12 @@ const navigation = computed(() => [
     route: "/settings/achievements",
     prefix: "/settings/achievements",
     icon: TrophyIcon,
+  },
+  {
+    label: "Streaming",
+    route: "/settings/streaming",
+    prefix: "/settings/streaming",
+    icon: SignalIcon,
   },
   {
     label: "Account",

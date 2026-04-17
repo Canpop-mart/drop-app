@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use process::{
-    PROCESS_MANAGER,
+    CONFLICT_CHANNELS, PROCESS_MANAGER,
     error::ProcessError,
     process_manager::{LaunchOption, ProcessManager},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 
@@ -59,4 +59,46 @@ pub fn open_process_logs(game_id: String, app_handle: AppHandle) -> Result<(), P
         .opener()
         .open_path(dir.display().to_string(), None::<&str>)
         .map_err(|v| ProcessError::OpenerError(Arc::new(v)))
+}
+
+/// Frontend sends this after the user resolves save conflicts.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictResolutionPayload {
+    pub game_id: String,
+    pub resolutions: Vec<ConflictResolutionEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictResolutionEntry {
+    pub filename: String,
+    pub choice: String, // "keep_local" | "keep_cloud"
+}
+
+#[tauri::command]
+pub fn resolve_save_conflicts(payload: ConflictResolutionPayload) -> Result<(), String> {
+    let sender = {
+        let mut channels = CONFLICT_CHANNELS.lock();
+        channels.remove(&payload.game_id)
+    };
+
+    match sender {
+        Some(tx) => {
+            let resolutions: Vec<remote::save_sync::ConflictResolution> = payload
+                .resolutions
+                .into_iter()
+                .map(|r| remote::save_sync::ConflictResolution {
+                    filename: r.filename,
+                    choice: r.choice,
+                })
+                .collect();
+            tx.send(resolutions)
+                .map_err(|_| "Conflict resolution channel closed (launch may have timed out)".to_string())
+        }
+        None => Err(format!(
+            "No pending conflict resolution for game {}",
+            payload.game_id
+        )),
+    }
 }

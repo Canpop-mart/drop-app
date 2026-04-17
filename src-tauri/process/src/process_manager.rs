@@ -41,6 +41,20 @@ pub struct RunningProcess {
     manually_killed: bool,
     playtime_session_id: Arc<std::sync::Mutex<Option<String>>>,
     achievement_poll_cancel: Option<Arc<Notify>>,
+    /// Pre-launch save file hashes — used to detect which saves changed during the session.
+    save_snapshot: Option<SaveSyncSnapshot>,
+}
+
+/// Snapshot of save state taken before game launch, used for post-exit sync.
+pub struct SaveSyncSnapshot {
+    /// RetroArch emulator root (None for PC-only games).
+    pub emu_root: Option<PathBuf>,
+    pub game_id: String,
+    /// Game display name (needed for Ludusavi re-scan on exit).
+    pub game_name: Option<String>,
+    pub pre_hashes: HashMap<String, String>,
+    /// Map of filename → original disk path (for PC saves from Ludusavi).
+    pub pc_save_paths: HashMap<String, PathBuf>,
 }
 
 pub struct ProcessManager<'a> {
@@ -191,10 +205,11 @@ impl ProcessManager<'_> {
             cancel.notify_one();
         }
 
-        // Report playtime stop and trigger server-side achievement sync
+        // Report playtime stop, trigger achievement sync, and upload changed saves
         {
             let stop_session_id = process.playtime_session_id.lock().ok().and_then(|s| s.clone());
             let sync_game_id = game_id.clone();
+            let snapshot = process.save_snapshot;
             // Calculate actual process runtime from the local clock (more accurate
             // than server-side now() - startedAt, which can drift if NAS sleeps)
             let actual_duration_secs = process.start
@@ -214,6 +229,51 @@ impl ProcessManager<'_> {
                     remote::achievements::notify_session_end(&sync_game_id).await
                 {
                     warn!("Failed to notify session end for {}: {e}", sync_game_id);
+                }
+
+                // Upload saves that changed during the session (non-blocking)
+                if let Some(snap) = snapshot {
+                    let mut current_saves = Vec::new();
+                    // Scan emulator saves if emu_root is set
+                    if let Some(ref emu_root) = snap.emu_root {
+                        current_saves.extend(remote::save_sync::scan_emu_saves(
+                            emu_root, &snap.game_id,
+                        ));
+                    }
+                    // Scan PC saves if game_name is set
+                    if let Some(ref name) = snap.game_name {
+                        current_saves.extend(remote::save_sync::scan_pc_saves(name, None));
+                    }
+                    match remote::save_sync::upload_changed_saves(
+                        &snap.game_id, &snap.pre_hashes, &current_saves,
+                    ).await {
+                        Ok((count, errors)) => {
+                            if count > 0 {
+                                info!("[SAVE-SYNC] Uploaded {} saves for game {}", count, snap.game_id);
+                            }
+                            for err in &errors {
+                                warn!("[SAVE-SYNC] Upload error: {}", err);
+                            }
+                            // Update manifest with final state
+                            let mut manifest = remote::save_sync::load_manifest(&snap.game_id);
+                            for file in &current_saves {
+                                manifest.files.insert(
+                                    file.filename.clone(),
+                                    remote::save_sync::SyncFileEntry {
+                                        save_type: file.save_type.clone(),
+                                        synced_hash: file.data_hash.clone(),
+                                        cloud_id: None,
+                                        synced_at: chrono::Utc::now().to_rfc3339(),
+                                    },
+                                );
+                            }
+                            manifest.last_synced_at = Some(chrono::Utc::now().to_rfc3339());
+                            if let Err(e) = remote::save_sync::save_manifest(&manifest) {
+                                warn!("[SAVE-SYNC] Failed to save manifest: {e}");
+                            }
+                        }
+                        Err(e) => warn!("[SAVE-SYNC] Post-exit sync failed: {e}"),
+                    }
                 }
             });
         }
@@ -1179,6 +1239,387 @@ impl ProcessManager<'_> {
             }));
         }
 
+        // ── STEP 7b: ROM hash verification (non-blocking) ───────────────
+        // If this is a RetroArch game with RA linked, verify the ROM hash
+        // against known RetroAchievements hashes in the background. The
+        // result is emitted as an event for the UI to display — it does
+        // NOT block game launch.
+        if let (Some(emu_dir), Some(rom)) = (&effective_cwd, &emulator_rom_path) {
+            let app_for_hash = self.app_handle.clone();
+            let emu_dir_hash = emu_dir.to_string();
+            let rom_hash = rom.clone();
+            let gid_hash = game_id.clone();
+            std::thread::spawn(move || {
+                let result = tauri::async_runtime::block_on(async {
+                    remote::retroarch::check_rom_hash(
+                        std::path::Path::new(&emu_dir_hash),
+                        &gid_hash,
+                        &rom_hash,
+                    )
+                    .await
+                });
+
+                let _ = app_for_hash.emit("launch_trace", serde_json::json!({
+                    "step": "7b_rom_hash_result",
+                    "game_id": &gid_hash,
+                    "result": serde_json::to_value(&result).unwrap_or_default(),
+                }));
+
+                // Emit a dedicated event for the game page UI
+                let _ = app_for_hash.emit(
+                    &format!("ra_hash_check/{}", gid_hash),
+                    serde_json::to_value(&result).unwrap_or_default(),
+                );
+            });
+        }
+
+        // ── STEP 7c: Pre-launch cloud save sync (blocking) ─────────────────
+        // Download any cloud saves that are newer than local copies before the
+        // game starts. If conflicts are detected, emit an event and wait for
+        // the user to resolve them via the UI.
+        let mut save_snapshot: Option<SaveSyncSnapshot> = None;
+        if let Some(emu_dir) = &effective_cwd {
+            let emu_path = std::path::Path::new(emu_dir);
+            let sync_game_id = game_id.clone();
+            let app_for_sync = self.app_handle.clone();
+
+            let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                "step": "7c_save_sync_start",
+                "game_id": &game_id,
+            }));
+
+            // Scan local saves and compute hashes
+            let local_saves = remote::save_sync::scan_emu_saves(emu_path, &sync_game_id);
+
+            if !local_saves.is_empty() || true {
+                // Always check — there might be cloud-only saves to download
+                let pre_hashes = remote::save_sync::snapshot_hashes(&local_saves);
+
+                // Run the sync check (async call, blocked here)
+                match tauri::async_runtime::block_on(
+                    remote::save_sync::check_sync(&sync_game_id, &local_saves)
+                ) {
+                    Ok(sync_result) => {
+                        let _ = app_for_sync.emit("launch_trace", serde_json::json!({
+                            "step": "7c_save_sync_check_result",
+                            "game_id": &sync_game_id,
+                            "actions": sync_result.actions.len(),
+                            "cloud_only": sync_result.cloud_only.len(),
+                            "conflicts": sync_result.actions.iter()
+                                .filter(|a| a.action == "conflict").count(),
+                        }));
+
+                        // Check for conflicts
+                        let conflicts = remote::save_sync::extract_conflicts(&sync_result, &local_saves);
+                        let mut conflict_extra_downloads: Vec<String> = Vec::new();
+
+                        if !conflicts.is_empty() {
+                            info!("[SAVE-SYNC] {} conflicts detected for game {}", conflicts.len(), sync_game_id);
+
+                            // Emit conflict event for the UI to show a dialog
+                            let conflict_event = remote::save_sync::SaveConflictEvent {
+                                game_id: sync_game_id.clone(),
+                                conflicts: conflicts.clone(),
+                            };
+                            let _ = app_for_sync.emit(
+                                &format!("save_sync_conflict/{}", sync_game_id),
+                                serde_json::to_value(&conflict_event).unwrap_or_default(),
+                            );
+
+                            // Block and wait for resolution from the UI.
+                            // Create a channel, store the sender in the global registry,
+                            // and block on the receiver until the frontend resolves.
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            {
+                                let mut channels = crate::CONFLICT_CHANNELS.lock();
+                                channels.insert(sync_game_id.clone(), tx);
+                            }
+                            info!("[SAVE-SYNC] Waiting for conflict resolution from UI...");
+
+                            // Block until the user resolves conflicts (with a 5-minute timeout)
+                            let resolutions = match rx.recv_timeout(std::time::Duration::from_secs(300)) {
+                                Ok(res) => res,
+                                Err(_) => {
+                                    warn!("[SAVE-SYNC] Conflict resolution timed out, defaulting to keep_local");
+                                    conflicts.iter().map(|c| remote::save_sync::ConflictResolution {
+                                        filename: c.filename.clone(),
+                                        choice: "keep_local".to_string(),
+                                    }).collect()
+                                }
+                            };
+
+                            // Clean up the channel entry
+                            {
+                                let mut channels = crate::CONFLICT_CHANNELS.lock();
+                                channels.remove(&sync_game_id);
+                            }
+
+                            // Apply the user's choices
+                            let (extra_download_ids, extra_upload_filenames) =
+                                remote::save_sync::apply_conflict_resolutions(&conflicts, &resolutions);
+
+                            // Queue the extra downloads from conflict resolution
+                            for id in extra_download_ids {
+                                conflict_extra_downloads.push(id);
+                            }
+
+                            // Upload local files the user chose to keep
+                            if !extra_upload_filenames.is_empty() {
+                                let files_to_upload: Vec<remote::save_sync::LocalSaveFile> = local_saves
+                                    .iter()
+                                    .filter(|f| extra_upload_filenames.contains(&f.filename))
+                                    .cloned()
+                                    .collect();
+                                if !files_to_upload.is_empty() {
+                                    // Use an empty pre_hashes map so all are treated as "changed"
+                                    let empty_hashes = HashMap::new();
+                                    match tauri::async_runtime::block_on(
+                                        remote::save_sync::upload_changed_saves(
+                                            &sync_game_id, &empty_hashes, &files_to_upload,
+                                        )
+                                    ) {
+                                        Ok((count, errs)) => {
+                                            info!("[SAVE-SYNC] Conflict: uploaded {} local saves", count);
+                                            for err in &errs {
+                                                warn!("[SAVE-SYNC] Conflict upload error: {}", err);
+                                            }
+                                        }
+                                        Err(e) => warn!("[SAVE-SYNC] Conflict upload failed: {e}"),
+                                    }
+                                }
+                            }
+
+                            info!("[SAVE-SYNC] Conflict resolution applied: {} resolutions", resolutions.len());
+                        }
+
+                        // Collect saves to download (cloud-only + "download" actions)
+                        let mut download_ids: Vec<String> = sync_result.cloud_only
+                            .iter()
+                            .map(|s| s.id.clone())
+                            .collect();
+                        for action in &sync_result.actions {
+                            if action.action == "download" {
+                                if let Some(cloud) = &action.cloud_save {
+                                    download_ids.push(cloud.id.clone());
+                                }
+                            }
+                        }
+
+                        // Add any downloads from conflict resolution (user chose "keep_cloud")
+                        download_ids.extend(conflict_extra_downloads);
+
+                        // Download cloud saves
+                        if !download_ids.is_empty() {
+                            info!("[SAVE-SYNC] Downloading {} cloud saves for game {}", download_ids.len(), sync_game_id);
+                            match tauri::async_runtime::block_on(
+                                remote::save_sync::bulk_download(&download_ids)
+                            ) {
+                                Ok(downloaded) => {
+                                    for (filename, save_type, _hash, data) in &downloaded {
+                                        match remote::save_sync::write_downloaded_save(
+                                            emu_path, &sync_game_id, filename, save_type, data,
+                                        ) {
+                                            Ok(path) => info!("[SAVE-SYNC] Downloaded save: {}", path.display()),
+                                            Err(e) => warn!("[SAVE-SYNC] Failed to write save {}: {}", filename, e),
+                                        }
+                                    }
+                                    info!("[SAVE-SYNC] Downloaded {} saves", downloaded.len());
+                                }
+                                Err(e) => warn!("[SAVE-SYNC] Bulk download failed: {e}"),
+                            }
+                        }
+
+                        // Update manifest
+                        let mut manifest = remote::save_sync::load_manifest(&sync_game_id);
+                        // Re-scan after downloads to get updated hashes
+                        let updated_saves = remote::save_sync::scan_emu_saves(emu_path, &sync_game_id);
+                        remote::save_sync::update_manifest_after_sync(
+                            &mut manifest, &updated_saves, &sync_result,
+                        );
+                        if let Err(e) = remote::save_sync::save_manifest(&manifest) {
+                            warn!("[SAVE-SYNC] Failed to save manifest: {e}");
+                        }
+
+                        // Snapshot the post-download state for exit comparison
+                        let final_hashes = remote::save_sync::snapshot_hashes(&updated_saves);
+                        save_snapshot = Some(SaveSyncSnapshot {
+                            emu_root: Some(emu_path.to_path_buf()),
+                            game_id: sync_game_id.clone(),
+                            game_name: None,
+                            pre_hashes: final_hashes,
+                            pc_save_paths: HashMap::new(),
+                        });
+                    }
+                    Err(e) => {
+                        warn!("[SAVE-SYNC] Sync check failed (continuing without sync): {e}");
+                        // Still snapshot local hashes so we can upload on exit
+                        save_snapshot = Some(SaveSyncSnapshot {
+                            emu_root: Some(emu_path.to_path_buf()),
+                            game_id: sync_game_id.clone(),
+                            game_name: None,
+                            pre_hashes: pre_hashes,
+                            pc_save_paths: HashMap::new(),
+                        });
+                    }
+                }
+            }
+
+            let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                "step": "7c_save_sync_done",
+                "game_id": &game_id,
+                "has_snapshot": save_snapshot.is_some(),
+            }));
+        }
+
+        // ── STEP 7d: PC save sync via Ludusavi (non-emulator games) ────────
+        // For native/PC games, use Ludusavi to discover and sync save files.
+        if save_snapshot.is_none() && effective_cwd.is_none() {
+            // Try to get the game name from the local cache
+            let game_name: Option<String> = remote::cache::get_cached_object::<games::library::Game>(
+                &format!("game/{}", game_id)
+            ).ok().map(|g| g.m_name);
+
+            if let Some(ref name) = game_name {
+                let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                    "step": "7d_pc_save_sync_start",
+                    "game_id": &game_id,
+                    "game_name": name,
+                }));
+
+                let pc_saves = remote::save_sync::scan_pc_saves(name, None);
+
+                if !pc_saves.is_empty() {
+                    let pre_hashes = remote::save_sync::snapshot_hashes(&pc_saves);
+                    let pc_paths: HashMap<String, PathBuf> = pc_saves.iter()
+                        .map(|f| (f.filename.clone(), f.path.clone()))
+                        .collect();
+
+                    // Run the sync check
+                    match tauri::async_runtime::block_on(
+                        remote::save_sync::check_sync(&game_id, &pc_saves)
+                    ) {
+                        Ok(sync_result) => {
+                            // Handle conflicts (same pattern as emu saves)
+                            let conflicts = remote::save_sync::extract_conflicts(&sync_result, &pc_saves);
+                            let mut conflict_extra_downloads: Vec<String> = Vec::new();
+
+                            if !conflicts.is_empty() {
+                                info!("[SAVE-SYNC] {} PC save conflicts for game {}", conflicts.len(), game_id);
+                                let conflict_event = remote::save_sync::SaveConflictEvent {
+                                    game_id: game_id.clone(),
+                                    conflicts: conflicts.clone(),
+                                };
+                                let _ = self.app_handle.emit(
+                                    &format!("save_sync_conflict/{}", game_id),
+                                    serde_json::to_value(&conflict_event).unwrap_or_default(),
+                                );
+
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                {
+                                    let mut channels = crate::CONFLICT_CHANNELS.lock();
+                                    channels.insert(game_id.clone(), tx);
+                                }
+                                let resolutions = match rx.recv_timeout(std::time::Duration::from_secs(300)) {
+                                    Ok(res) => res,
+                                    Err(_) => {
+                                        warn!("[SAVE-SYNC] PC conflict resolution timed out");
+                                        conflicts.iter().map(|c| remote::save_sync::ConflictResolution {
+                                            filename: c.filename.clone(),
+                                            choice: "keep_local".to_string(),
+                                        }).collect()
+                                    }
+                                };
+                                {
+                                    let mut channels = crate::CONFLICT_CHANNELS.lock();
+                                    channels.remove(&game_id);
+                                }
+                                let (extra_dl, extra_ul) =
+                                    remote::save_sync::apply_conflict_resolutions(&conflicts, &resolutions);
+                                conflict_extra_downloads = extra_dl;
+
+                                if !extra_ul.is_empty() {
+                                    let files_to_upload: Vec<remote::save_sync::LocalSaveFile> = pc_saves
+                                        .iter()
+                                        .filter(|f| extra_ul.contains(&f.filename))
+                                        .cloned()
+                                        .collect();
+                                    if !files_to_upload.is_empty() {
+                                        let empty = HashMap::new();
+                                        let _ = tauri::async_runtime::block_on(
+                                            remote::save_sync::upload_changed_saves(&game_id, &empty, &files_to_upload)
+                                        );
+                                    }
+                                }
+                            }
+
+                            // Downloads
+                            let mut download_ids: Vec<String> = sync_result.cloud_only
+                                .iter().map(|s| s.id.clone()).collect();
+                            for action in &sync_result.actions {
+                                if action.action == "download" {
+                                    if let Some(cloud) = &action.cloud_save {
+                                        download_ids.push(cloud.id.clone());
+                                    }
+                                }
+                            }
+                            download_ids.extend(conflict_extra_downloads);
+
+                            if !download_ids.is_empty() {
+                                match tauri::async_runtime::block_on(
+                                    remote::save_sync::bulk_download(&download_ids)
+                                ) {
+                                    Ok(downloaded) => {
+                                        for (filename, _save_type, _hash, data) in &downloaded {
+                                            let orig = pc_paths.get(filename.as_str()).map(|p| p.as_path());
+                                            match remote::save_sync::write_downloaded_pc_save(filename, data, orig) {
+                                                Ok(p) => info!("[SAVE-SYNC] Downloaded PC save: {}", p.display()),
+                                                Err(e) => warn!("[SAVE-SYNC] Failed to write PC save {}: {}", filename, e),
+                                            }
+                                        }
+                                    }
+                                    Err(e) => warn!("[SAVE-SYNC] PC bulk download failed: {e}"),
+                                }
+                            }
+
+                            // Manifest
+                            let mut manifest = remote::save_sync::load_manifest(&game_id);
+                            let updated = remote::save_sync::scan_pc_saves(name, None);
+                            remote::save_sync::update_manifest_after_sync(&mut manifest, &updated, &sync_result);
+                            let _ = remote::save_sync::save_manifest(&manifest);
+
+                            let final_hashes = remote::save_sync::snapshot_hashes(&updated);
+                            let final_pc_paths: HashMap<String, PathBuf> = updated.iter()
+                                .map(|f| (f.filename.clone(), f.path.clone()))
+                                .collect();
+                            save_snapshot = Some(SaveSyncSnapshot {
+                                emu_root: None,
+                                game_id: game_id.clone(),
+                                game_name: Some(name.clone()),
+                                pre_hashes: final_hashes,
+                                pc_save_paths: final_pc_paths,
+                            });
+                        }
+                        Err(e) => {
+                            warn!("[SAVE-SYNC] PC sync check failed: {e}");
+                            save_snapshot = Some(SaveSyncSnapshot {
+                                emu_root: None,
+                                game_id: game_id.clone(),
+                                game_name: Some(name.clone()),
+                                pre_hashes: pre_hashes,
+                                pc_save_paths: pc_paths,
+                            });
+                        }
+                    }
+                }
+
+                let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                    "step": "7d_pc_save_sync_done",
+                    "game_id": &game_id,
+                    "has_snapshot": save_snapshot.is_some(),
+                }));
+            }
+        }
+
         // ── STEP 8: Spawn process ──────────────────────────────────────────
         let _ = self.app_handle.emit("launch_trace", serde_json::json!({
             "step": "8_spawning",
@@ -1414,6 +1855,7 @@ impl ProcessManager<'_> {
                 manually_killed: false,
                 playtime_session_id,
                 achievement_poll_cancel: Some(achievement_cancel),
+                save_snapshot,
             },
         );
         spawn(move || {

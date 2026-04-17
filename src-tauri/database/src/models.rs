@@ -110,9 +110,17 @@ pub mod data {
         }
 
         /// Controller layout type for RetroArch input mapping.
+        ///
+        /// Two real modes:
+        ///   - **Xbox** — A=South, B=East, X=West, Y=North (RetroArch default)
+        ///   - **Nintendo** — A=East, B=South, X=North, Y=West (A↔B, X↔Y swap via .rmp)
+        ///
+        /// `PlayStation` is kept only for backward-compatible deserialization of
+        /// existing user databases; at runtime it behaves identically to `Xbox`.
         #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
         pub enum ControllerType {
             Xbox,
+            /// Legacy variant — treated as Xbox at runtime.
             PlayStation,
             Nintendo,
         }
@@ -161,11 +169,45 @@ pub mod data {
                     type Value = AspectRatio;
 
                     fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                        f.write_str("a boolean or aspect ratio string")
+                        f.write_str("a boolean, unit, integer, map, or aspect ratio string")
                     }
 
                     fn visit_bool<E: de::Error>(self, v: bool) -> Result<AspectRatio, E> {
                         Ok(if v { AspectRatio::Wide16_9 } else { AspectRatio::Standard })
+                    }
+
+                    // Old database/dropdata files may store `widescreen: ()` (unit)
+                    fn visit_unit<E: de::Error>(self) -> Result<AspectRatio, E> {
+                        Ok(AspectRatio::Standard)
+                    }
+
+                    // Binary formats (pot) may encode enum variants as maps
+                    fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<AspectRatio, A::Error> {
+                        // Try to read the variant name from the map key
+                        let result = if let Some(key) = map.next_key::<String>()? {
+                            let _: de::IgnoredAny = map.next_value()?;
+                            match key.as_str() {
+                                "Standard" => AspectRatio::Standard,
+                                "Wide16_9" => AspectRatio::Wide16_9,
+                                "Wide16_10" => AspectRatio::Wide16_10,
+                                _ => AspectRatio::Standard,
+                            }
+                        } else {
+                            AspectRatio::Standard
+                        };
+                        // Drain remaining entries
+                        while let Some((_, _)) = map.next_entry::<de::IgnoredAny, de::IgnoredAny>()? {}
+                        Ok(result)
+                    }
+
+                    // Binary formats may encode enum variant index as integer
+                    fn visit_u64<E: de::Error>(self, v: u64) -> Result<AspectRatio, E> {
+                        match v {
+                            0 => Ok(AspectRatio::Standard),
+                            1 => Ok(AspectRatio::Wide16_9),
+                            2 => Ok(AspectRatio::Wide16_10),
+                            _ => Ok(AspectRatio::Standard),
+                        }
                     }
 
                     fn visit_str<E: de::Error>(self, v: &str) -> Result<AspectRatio, E> {
@@ -301,7 +343,18 @@ pub mod data {
             /// Global MangoHud preset applied when a game has no per-game override.
             #[serde(default)]
             pub global_mangohud: Option<MangoHudPreset>,
+            /// Sunshine admin username for streaming (defaults to "sunshine").
+            #[serde(default = "default_sunshine_username")]
+            pub sunshine_username: String,
+            /// Sunshine admin password for streaming.
+            #[serde(default)]
+            pub sunshine_password: String,
         }
+
+        fn default_sunshine_username() -> String {
+            "sunshine".to_string()
+        }
+
         impl Default for Settings {
             fn default() -> Self {
                 Self {
@@ -309,6 +362,8 @@ pub mod data {
                     max_download_threads: 4,
                     force_offline: false,
                     global_mangohud: None,
+                    sunshine_username: default_sunshine_username(),
+                    sunshine_password: String::new(),
                 }
             }
         }

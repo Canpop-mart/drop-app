@@ -111,7 +111,7 @@
             })"
             class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
           >
-            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl">
+            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl overflow-hidden">
               <img
                 v-if="game.mCoverObjectId"
                 :src="objectUrl(game.mCoverObjectId)"
@@ -150,7 +150,7 @@
             })"
             class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
           >
-            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl">
+            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl overflow-hidden">
               <img
                 v-if="game.mCoverObjectId"
                 :src="objectUrl(game.mCoverObjectId)"
@@ -189,7 +189,7 @@
             })"
             class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
           >
-            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl">
+            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl overflow-hidden">
               <img
                 v-if="game.mCoverObjectId"
                 :src="objectUrl(game.mCoverObjectId)"
@@ -352,7 +352,7 @@
           })"
           class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
         >
-          <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl">
+          <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl overflow-hidden">
             <img
               v-if="game.mCoverObjectId"
               :src="objectUrl(game.mCoverObjectId)"

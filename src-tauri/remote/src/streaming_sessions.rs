@@ -1,0 +1,256 @@
+use log::{info, warn};
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    error::RemoteAccessError,
+    requests::{generate_url, make_authenticated_get, make_authenticated_post},
+};
+
+// ── Request bodies ──────────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartSessionBody {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    game_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sunshine_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_local_ip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_external_ip: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadyBody {
+    session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pairing_pin: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionIdBody {
+    session_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HeartbeatBody {
+    session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+}
+
+
+// ── Response types ──────────────────────────────────────────────────
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StartSessionResponse {
+    pub session_id: String,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamingSessionHost {
+    pub id: String,
+    pub name: String,
+    pub platform: String,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamingSessionGame {
+    pub id: String,
+    #[serde(rename = "mName")]
+    pub m_name: String,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamingSession {
+    pub id: String,
+    pub status: String,
+    pub host_client: StreamingSessionHost,
+    pub game: Option<StreamingSessionGame>,
+    pub sunshine_port: u16,
+    pub host_local_ip: Option<String>,
+    pub host_external_ip: Option<String>,
+    pub has_pairing_pin: bool,
+    pub created_at: String,
+    pub last_heartbeat: String,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamingConnectionInfo {
+    pub id: String,
+    pub status: String,
+    pub host_client: StreamingSessionHost,
+    pub game: Option<StreamingSessionGame>,
+    pub sunshine_port: u16,
+    pub host_local_ip: Option<String>,
+    pub host_external_ip: Option<String>,
+    pub pairing_pin: Option<String>,
+}
+
+// ── API functions ───────────────────────────────────────────────────
+
+/// Register a new streaming session on the server.
+pub async fn start_streaming_session(
+    game_id: Option<&str>,
+    host_local_ip: Option<&str>,
+) -> Result<String, RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/streaming/start"], &[])?;
+    let body = StartSessionBody {
+        game_id: game_id.map(|s| s.to_string()),
+        sunshine_port: None,
+        host_local_ip: host_local_ip.map(|s| s.to_string()),
+        host_external_ip: None,
+    };
+
+    let response = make_authenticated_post(url, &body).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        warn!("Failed to start streaming session: {} - {}", status, text);
+        return Err(RemoteAccessError::UnparseableResponse(format!(
+            "Failed to start streaming session: {status} - {text}"
+        )));
+    }
+
+    let data: StartSessionResponse = response.json().await?;
+    info!("Started streaming session {}", data.session_id);
+    Ok(data.session_id)
+}
+
+/// Mark a streaming session as ready (Sunshine is up and accepting connections).
+pub async fn mark_session_ready(
+    session_id: &str,
+    pairing_pin: Option<&str>,
+) -> Result<(), RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/streaming/ready"], &[])?;
+    let body = ReadyBody {
+        session_id: session_id.to_string(),
+        pairing_pin: pairing_pin.map(|s| s.to_string()),
+    };
+
+    let response = make_authenticated_post(url, &body).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        warn!("Failed to mark session ready: {} - {}", status, text);
+        return Err(RemoteAccessError::UnparseableResponse(format!(
+            "Failed to mark session ready: {status} - {text}"
+        )));
+    }
+
+    info!("Marked streaming session {} as ready", session_id);
+    Ok(())
+}
+
+/// Stop a streaming session.
+pub async fn stop_streaming_session(session_id: &str) -> Result<(), RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/streaming/stop"], &[])?;
+    let body = SessionIdBody {
+        session_id: session_id.to_string(),
+    };
+
+    let response = make_authenticated_post(url, &body).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        warn!("Failed to stop streaming session: {} - {}", status, text);
+        return Err(RemoteAccessError::UnparseableResponse(format!(
+            "Failed to stop streaming session: {status} - {text}"
+        )));
+    }
+
+    info!("Stopped streaming session {}", session_id);
+    Ok(())
+}
+
+/// Send a heartbeat for an active streaming session.
+pub async fn heartbeat_streaming(
+    session_id: &str,
+    status: Option<&str>,
+) -> Result<(), RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/streaming/heartbeat"], &[])?;
+    let body = HeartbeatBody {
+        session_id: session_id.to_string(),
+        status: status.map(|s| s.to_string()),
+    };
+
+    match make_authenticated_post(url, &body).await {
+        Ok(response) => {
+            if response.status().is_success() {
+                info!("Heartbeat sent for streaming session {}", session_id);
+            } else {
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+                warn!(
+                    "Heartbeat failed for streaming session {}: {} - {}",
+                    session_id, status, text
+                );
+            }
+        }
+        Err(e) => {
+            warn!(
+                "Network error sending heartbeat for streaming session {}: {}",
+                session_id, e
+            );
+        }
+    }
+
+    // Heartbeat failures are non-fatal
+    Ok(())
+}
+
+/// List all active streaming sessions for this user.
+pub async fn list_streaming_sessions() -> Result<Vec<StreamingSession>, RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/streaming/sessions"], &[])?;
+    let response = make_authenticated_get(url).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        warn!("Failed to list streaming sessions: {} - {}", status, text);
+        return Err(RemoteAccessError::UnparseableResponse(format!(
+            "Failed to list streaming sessions: {status} - {text}"
+        )));
+    }
+
+    let sessions: Vec<StreamingSession> = response.json().await?;
+    info!("Fetched {} streaming sessions", sessions.len());
+    Ok(sessions)
+}
+
+/// Get connection info for joining a streaming session.
+pub async fn get_streaming_connection_info(
+    session_id: &str,
+) -> Result<StreamingConnectionInfo, RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/streaming/connect"], &[])?;
+    let body = SessionIdBody {
+        session_id: session_id.to_string(),
+    };
+
+    let response = make_authenticated_post(url, &body).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        warn!("Failed to get connection info: {} - {}", status, text);
+        return Err(RemoteAccessError::UnparseableResponse(format!(
+            "Failed to get connection info: {status} - {text}"
+        )));
+    }
+
+    let info: StreamingConnectionInfo = response.json().await?;
+    info!("Got connection info for session {}", session_id);
+    Ok(info)
+}

@@ -1,5 +1,5 @@
 import { GamepadButton, useGamepad, type ButtonCallback } from "./gamepad";
-import { useBpAudio } from "./bp-audio";
+import { useBpAudio, tryGamepadAudioUnlock } from "./bp-audio";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -605,6 +605,9 @@ let gamepadWired = false;
 // C5 fix: store all gamepad unsubscribe functions for cleanup
 const gamepadUnsubs: (() => void)[] = [];
 
+// Flag: set briefly when onContext fires, so page-level X handlers can skip
+const contextHandled = ref(false);
+
 export function useFocusNavigation() {
   if (!gamepadWired) {
     gamepadWired = true;
@@ -808,6 +811,7 @@ export function useFocusNavigation() {
     saveFocusSnapshot,
     restoreFocusSnapshot,
     autoFocusContent,
+    contextHandled: readonly(contextHandled),
     destroy,
   };
 }
@@ -852,6 +856,9 @@ function wireGamepad() {
     gamepad.onButton(GamepadButton.South, () => {
       if (!enabled.value || inputLocked.value) return;
       stopRepeat();
+
+      // Try to unlock audio on gamepad button press (Steam Deck fix)
+      tryGamepadAudioUnlock();
 
       const el = currentFocused.value?.el;
       if (el) {
@@ -923,11 +930,15 @@ function wireGamepad() {
   );
 
   // X = Context action
+  // Sets contextHandled flag so page-level X handlers can skip
   gamepadUnsubs.push(
     gamepad.onButton(GamepadButton.West, () => {
       if (!enabled.value || inputLocked.value) return;
       if (currentFocused.value?.onContext) {
         currentFocused.value.onContext();
+        contextHandled.value = true;
+        // Reset after a tick so page-level handlers can check it
+        setTimeout(() => { contextHandled.value = false; }, 0);
       }
     }),
   );
