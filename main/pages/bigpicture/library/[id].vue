@@ -256,14 +256,18 @@
             </button>
           </template>
 
-          <!-- Stream status indicator (when streaming is active) -->
-          <span
+          <!-- Stream status / stop button (when streaming is active) -->
+          <button
             v-if="isStreaming"
-            class="inline-flex items-center gap-2 px-4 py-3 text-sm text-purple-400"
+            :ref="(el: any) => registerAction(el, { onSelect: stopStreaming })"
+            class="inline-flex items-center gap-2 px-4 py-3 text-sm rounded-lg transition-colors"
+            :class="pendingRequestSessionId ? 'text-purple-400 hover:text-purple-300 hover:bg-purple-900/30' : 'text-red-400 hover:text-red-300 hover:bg-red-900/30'"
+            @click="stopStreaming"
           >
-            <span class="size-2 rounded-full bg-purple-400 animate-pulse" />
+            <span class="size-2 rounded-full animate-pulse" :class="pendingRequestSessionId ? 'bg-purple-400' : 'bg-red-400'" />
             {{ pendingRequestSessionId ? 'Waiting for host...' : 'Streaming' }}
-          </span>
+            <span class="ml-1 text-xs opacity-60">(click to stop)</span>
+          </button>
         </div>
       </div>
     </div>
@@ -992,6 +996,7 @@ const {
   markSessionReady,
   registerGame,
   stopStreamingSession,
+  stopAllHostSessions,
   sendHeartbeat,
   listRemoteSessions,
   getConnectionInfo,
@@ -1149,17 +1154,18 @@ function selectInstallMenuAction(index: number) {
   }
 }
 
-async function streamFromDevice(_device: ClientDevice) {
-  // Request a stream — the push-based flow will ask the target device to start streaming
-  streamGame();
+async function streamFromDevice(device: ClientDevice) {
+  // Request a stream from this specific device
+  console.log(`[BPM:STREAM] Requesting stream from device: ${device.name} (${device.id})`);
+  streamGame(device.id);
 }
 
 async function installOnDevice(device: ClientDevice) {
   console.log(`[BPM:STREAM] Remote install on device: ${device.name} (${device.id})`);
   try {
     await remoteInstall(gameId, device.id);
-    launchError.value = null;
-    // Show brief confirmation
+    // Show confirmation using launchError (it's the only toast-like mechanism we have here)
+    launchError.value = `Install requested on ${device.name}. The download will start automatically when that device picks it up.`;
     console.log(`[BPM:STREAM] Remote install requested on ${device.name}`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -1205,15 +1211,15 @@ let streamGuard = false;
  * 2. Polls faster (every 3s) waiting for a host to pick it up
  * 3. When the session becomes "Ready", auto-launches Moonlight
  */
-async function streamGame() {
-  console.log("[BPM:STREAM] streamGame() called — requesting remote stream");
+async function streamGame(targetClientId?: string) {
+  console.log("[BPM:STREAM] streamGame() called — requesting remote stream, target:", targetClientId ?? "any");
   if (launchGuard || streamGuard) return;
   streamGuard = true;
   isStreaming.value = true;
   try {
-    // Request a stream from another device
+    // Request a stream from another device (or a specific one)
     console.log("[BPM:STREAM] Sending stream request for gameId:", gameId);
-    const sessionId = await requestStream(gameId);
+    const sessionId = await requestStream(gameId, targetClientId);
     pendingRequestSessionId.value = sessionId;
     console.log("[BPM:STREAM] Stream requested, session:", sessionId);
 
@@ -1240,6 +1246,61 @@ async function streamGame() {
     launchError.value = `Stream request failed: ${errMsg}`;
     isStreaming.value = false;
     streamGuard = false;
+  }
+}
+
+/**
+ * Stop the current streaming session — works for both requester and host sides.
+ * - If we have a pending request (we're the Deck), cancel the server session.
+ * - Also stops all host-side sessions (if we're the PC).
+ */
+async function stopStreaming() {
+  console.log("[BPM:STREAM] stopStreaming() called");
+  try {
+    // Cancel pending request session if we were waiting
+    if (pendingRequestSessionId.value) {
+      console.log("[BPM:STREAM] Cancelling pending request:", pendingRequestSessionId.value);
+      try {
+        await stopStreamingSession(pendingRequestSessionId.value);
+      } catch (e) {
+        console.warn("[BPM:STREAM] Failed to stop requested session:", e);
+      }
+      pendingRequestSessionId.value = null;
+    }
+
+    // If we have an active host session ID, stop it
+    if (activeStreamSessionId) {
+      try {
+        await stopStreamingSession(activeStreamSessionId);
+      } catch (e) {
+        console.warn("[BPM:STREAM] Failed to stop active session:", e);
+      }
+      activeStreamSessionId = null;
+    }
+
+    // Stop all host-side sessions (heartbeats + Sunshine)
+    try {
+      const stopped = await stopAllHostSessions();
+      if (stopped > 0) {
+        console.log(`[BPM:STREAM] Stopped ${stopped} host session(s)`);
+      }
+    } catch (e) {
+      console.warn("[BPM:STREAM] Failed to stop host sessions:", e);
+    }
+
+    // Clear heartbeat interval
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+    }
+
+    // Restore normal poll interval
+    if (streamPollInterval) clearInterval(streamPollInterval);
+    streamPollInterval = setInterval(pollRemoteSessions, 15_000);
+  } finally {
+    isStreaming.value = false;
+    streamGuard = false;
+    availableStream.value = null;
   }
 }
 
@@ -2595,6 +2656,9 @@ onMounted(async () => {
   });
   _unsubs.push(() => unlistenLaunchError());
 
+  // Remote install requests are handled globally in state-navigation.ts
+  // to avoid duplicate downloads. No page-level listener needed.
+
   console.log("[BPM:GAME] Gamepad wired. Starting data fetch...");
 
   // Fire all fetches in parallel — apply results as each resolves instead
@@ -2750,18 +2814,11 @@ async function launchGame() {
 async function killGame() {
   try {
     await invoke("kill_game", { id: gameId });
-    // If we were streaming, stop the server-side session too
-    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
-    if (activeStreamSessionId) {
-      try {
-        await stopStreamingSession(activeStreamSessionId);
-      } catch (e) {
-        console.warn("[BPM:STREAM] Failed to stop streaming session:", e);
-      }
-      activeStreamSessionId = null;
-      isStreaming.value = false;
-      streamGuard = false;
+    // If we were streaming, stop everything (heartbeats, Sunshine, server sessions)
+    if (isStreaming.value || activeStreamSessionId) {
+      await stopStreaming();
     }
+    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
   } catch (e) {
     console.error("Failed to stop game:", e);
   }

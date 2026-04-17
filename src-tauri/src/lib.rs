@@ -339,6 +339,7 @@ pub fn run() {
             streaming_create_session,
             streaming_mark_ready,
             streaming_stop_session,
+            stop_all_host_sessions,
             streaming_heartbeat,
             streaming_list_sessions,
             streaming_get_connection_info,

@@ -6,6 +6,7 @@
 //! Sunshine API: https://localhost:{SUNSHINE_WEB_PORT}/api/*
 //! Protocol: Moonlight/GameStream
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -16,6 +17,7 @@ use rand::Rng;
 use remote::streaming_sessions;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 // ── Constants ─────────────────────────────────────────────────────────
 
@@ -364,6 +366,11 @@ pub fn unregister_game_app(game_name: &str) -> Result<(), String> {
 static SUNSHINE_PROCESS: std::sync::LazyLock<Mutex<Option<std::process::Child>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
 
+/// Tracks active host-side streaming sessions with cancellation tokens.
+/// When a session is stopped, the token is cancelled, breaking the heartbeat loop.
+static ACTIVE_HOST_SESSIONS: std::sync::LazyLock<Mutex<HashMap<String, CancellationToken>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// Sunshine process status.
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -679,6 +686,29 @@ pub async fn streaming_stop_session(session_id: String) -> Result<(), String> {
         })
 }
 
+/// Stop all host-side streaming sessions (cancels heartbeat loops, stops server sessions, kills Sunshine).
+#[tauri::command]
+pub async fn stop_all_host_sessions() -> Result<u32, String> {
+    let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
+    let count = sessions.len() as u32;
+    info!("[STREAMING] Stopping {} active host session(s)", count);
+    for (sid, token) in sessions.drain() {
+        info!("[STREAMING] Cancelling host session {}", sid);
+        token.cancel();
+    }
+    // Also stop Sunshine if running
+    {
+        let mut guard = SUNSHINE_PROCESS.lock().await;
+        if let Some(ref mut child) = *guard {
+            info!("[STREAMING] Killing Sunshine process");
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        *guard = None;
+    }
+    Ok(count)
+}
+
 /// Send a heartbeat for an active streaming session.
 #[tauri::command]
 pub async fn streaming_heartbeat(
@@ -757,7 +787,14 @@ fn find_moonlight() -> Option<PathBuf> {
         }
 
         // Check flatpak (common on Steam Deck)
-        if let Ok(output) = Command::new("flatpak")
+        let flatpak_bin = if Path::new("/usr/bin/flatpak").exists() {
+            "/usr/bin/flatpak"
+        } else {
+            "flatpak"
+        };
+        if let Ok(output) = Command::new(flatpak_bin)
+            .env_remove("LD_LIBRARY_PATH")
+            .env_remove("LD_PRELOAD")
             .args(["info", "com.moonlight_stream.Moonlight"])
             .output()
         {
@@ -772,10 +809,19 @@ fn find_moonlight() -> Option<PathBuf> {
 }
 
 /// Build a `Command` for Moonlight, handling flatpak sentinel.
+/// Clears LD_LIBRARY_PATH for flatpak to avoid AppImage OpenSSL conflicts.
 fn moonlight_command(moonlight_str: &str) -> Command {
     if moonlight_str.starts_with("flatpak:") {
-        let mut cmd = Command::new("flatpak");
-        cmd.arg("run").arg("com.moonlight_stream.Moonlight");
+        let flatpak_bin = if Path::new("/usr/bin/flatpak").exists() {
+            "/usr/bin/flatpak"
+        } else {
+            "flatpak"
+        };
+        let mut cmd = Command::new(flatpak_bin);
+        cmd.env_remove("LD_LIBRARY_PATH")
+            .env_remove("LD_PRELOAD")
+            .arg("run")
+            .arg("com.moonlight_stream.Moonlight");
         cmd
     } else {
         Command::new(moonlight_str)
@@ -790,15 +836,28 @@ async fn install_moonlight() -> Result<PathBuf, String> {
 
     #[cfg(target_os = "linux")]
     {
-        // Install via flatpak (most reliable on Steam Deck)
+        // Install via flatpak (most reliable on Steam Deck).
+        // IMPORTANT: Clear LD_LIBRARY_PATH so the system flatpak binary doesn't
+        // pick up the AppImage's bundled OpenSSL libs (which cause version conflicts).
         info!("[MOONLIGHT] Installing via flatpak...");
 
+        // Use /usr/bin/flatpak explicitly and clear LD_LIBRARY_PATH to escape AppImage sandbox
+        let flatpak = if Path::new("/usr/bin/flatpak").exists() {
+            "/usr/bin/flatpak"
+        } else {
+            "flatpak"
+        };
+
         // Ensure flathub remote is added
-        let _ = Command::new("flatpak")
+        let _ = Command::new(flatpak)
+            .env_remove("LD_LIBRARY_PATH")
+            .env_remove("LD_PRELOAD")
             .args(["remote-add", "--if-not-exists", "--user", "flathub", "https://dl.flathub.org/repo/flathub.flatpakrepo"])
             .output();
 
-        let output = Command::new("flatpak")
+        let output = Command::new(flatpak)
+            .env_remove("LD_LIBRARY_PATH")
+            .env_remove("LD_PRELOAD")
             .args(["install", "--user", "-y", "flathub", "com.moonlight_stream.Moonlight"])
             .output()
             .map_err(|e| format!("Failed to run flatpak install: {e}"))?;
@@ -984,9 +1043,12 @@ pub async fn sync_installed_games() -> Result<(), String> {
 
 /// Request a stream from another device (called by the receiving client, e.g. Steam Deck).
 #[tauri::command]
-pub async fn streaming_request_stream(game_id: String) -> Result<String, String> {
-    info!("[STREAMING] streaming_request_stream called: game_id={}", game_id);
-    let session_id = streaming_sessions::request_stream(&game_id)
+pub async fn streaming_request_stream(
+    game_id: String,
+    target_client_id: Option<String>,
+) -> Result<String, String> {
+    info!("[STREAMING] streaming_request_stream called: game_id={}, target={:?}", game_id, target_client_id);
+    let session_id = streaming_sessions::request_stream(&game_id, target_client_id.as_deref())
         .await
         .map_err(|e| {
             warn!("[STREAMING] request_stream failed: {e}");
@@ -1001,6 +1063,8 @@ pub async fn streaming_request_stream(game_id: String) -> Result<String, String>
 pub fn spawn_stream_request_poller() {
     tokio::spawn(async {
         info!("[STREAM-POLLER] Background stream request poller started");
+        // Track session IDs we've already started processing to avoid duplicate spawns
+        let mut processing: std::collections::HashSet<String> = std::collections::HashSet::new();
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
@@ -1012,12 +1076,24 @@ pub fn spawn_stream_request_poller() {
                 }
             }
 
+            // Prune old entries from processing set (keep it from growing forever)
+            // Active host sessions map tells us which are still alive
+            {
+                let active = ACTIVE_HOST_SESSIONS.lock().await;
+                processing.retain(|sid| active.contains_key(sid));
+            }
+
             match streaming_sessions::poll_pending_requests().await {
                 Ok(requests) => {
                     if !requests.is_empty() {
                         info!("[STREAM-POLLER] Found {} pending stream request(s)", requests.len());
                     }
                     for req in requests {
+                        // Skip if we're already processing this session
+                        if processing.contains(&req.session_id) {
+                            continue;
+                        }
+
                         if let Some(game_id) = &req.game_id {
                             // Check if this game is installed locally
                             let is_installed = {
@@ -1027,6 +1103,9 @@ pub fn spawn_stream_request_poller() {
                                     Some(GameDownloadStatus::Installed { .. })
                                 )
                             };
+
+                            // Mark as processing BEFORE spawning to prevent duplicates
+                            processing.insert(req.session_id.clone());
 
                             if is_installed {
                                 info!(
@@ -1215,15 +1294,33 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
         }
     }
 
-    // 9. Start heartbeating in background
+    // 9. Register this session and start heartbeating in background (cancellable)
+    let token = CancellationToken::new();
+    {
+        let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
+        sessions.insert(session_id.clone(), token.clone());
+    }
+
     let sid = session_id.clone();
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-            if let Err(e) = streaming_sessions::heartbeat_streaming(&sid, Some("Streaming")).await {
-                warn!("[STREAM-FULFILL] Heartbeat failed for {}: {e}", sid);
-                break;
+            tokio::select! {
+                _ = token.cancelled() => {
+                    info!("[STREAM-FULFILL] Session {} cancelled, stopping heartbeat", sid);
+                    // Tell the server the session is stopped
+                    let _ = streaming_sessions::stop_streaming_session(&sid).await;
+                    break;
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
+                    if let Err(e) = streaming_sessions::heartbeat_streaming(&sid, Some("Streaming")).await {
+                        warn!("[STREAM-FULFILL] Heartbeat failed for {}: {e}", sid);
+                        break;
+                    }
+                }
             }
         }
+        // Clean up from the active sessions map
+        let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
+        sessions.remove(&sid);
     });
 }

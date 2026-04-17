@@ -12,7 +12,7 @@ export interface SunshineStatusResult {
 
 export interface StreamingSession {
   id: string;
-  status: "Starting" | "Ready" | "Streaming" | "Stopped";
+  status: "Requested" | "Starting" | "Ready" | "Streaming" | "Stopped";
   hostClient: {
     id: string;
     name: string;
@@ -192,6 +192,11 @@ export function useStreaming() {
     await invoke("streaming_stop_session", { sessionId });
   }
 
+  /** Stop all host-side streaming sessions (heartbeats, Sunshine, etc). */
+  async function stopAllHostSessions(): Promise<number> {
+    return invoke<number>("stop_all_host_sessions");
+  }
+
   async function sendHeartbeat(
     sessionId: string,
     status?: string,
@@ -219,9 +224,13 @@ export function useStreaming() {
   }
 
   /** Request a stream from another device (push-based flow). */
-  async function requestStream(gameId: string): Promise<string> {
+  async function requestStream(
+    gameId: string,
+    targetClientId?: string,
+  ): Promise<string> {
     const sessionId = await invoke<string>("streaming_request_stream", {
       gameId,
+      targetClientId: targetClientId ?? null,
     });
     return sessionId;
   }
@@ -265,6 +274,7 @@ export function useStreaming() {
     startStreamingSession,
     markSessionReady,
     stopStreamingSession,
+    stopAllHostSessions,
     sendHeartbeat,
     listRemoteSessions,
     getConnectionInfo,

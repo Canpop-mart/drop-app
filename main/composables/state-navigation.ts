@@ -45,6 +45,48 @@ export function setupHooks() {
     }),
   );
 
+  // Handle remote install requests from other devices
+  unlistenFns.push(
+    listen("remote-install-request", async (event) => {
+      const payload = event.payload as {
+        gameId: string;
+        gameName: string;
+        sessionId: string;
+      };
+      console.log(
+        "[REMOTE-INSTALL] Received request to install:",
+        payload.gameName,
+        payload.gameId,
+      );
+      try {
+        const versions: any[] = await invoke("fetch_game_version_options", {
+          gameId: payload.gameId,
+        });
+        if (versions && versions.length > 0) {
+          const vo = versions[0];
+          await invoke("download_game", {
+            gameId: payload.gameId,
+            versionId: vo.versionId,
+            installDir: 0,
+            targetPlatform: vo.platform,
+            enableUpdates: true,
+          });
+          console.log(
+            "[REMOTE-INSTALL] Download started for:",
+            payload.gameName,
+          );
+        } else {
+          console.warn(
+            "[REMOTE-INSTALL] No versions available for:",
+            payload.gameId,
+          );
+        }
+      } catch (e) {
+        console.warn("[REMOTE-INSTALL] Failed to start download:", e);
+      }
+    }),
+  );
+
   // This is for errors that (we think) aren't our fault
   unlistenFns.push(
     listen("launch_external_error", (event) => {

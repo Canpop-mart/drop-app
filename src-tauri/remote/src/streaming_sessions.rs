@@ -47,6 +47,8 @@ struct HeartbeatBody {
 #[serde(rename_all = "camelCase")]
 struct RequestStreamBody {
     game_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_client_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -203,29 +205,22 @@ pub async fn heartbeat_streaming(
         status: status.map(|s| s.to_string()),
     };
 
-    match make_authenticated_post(url, &body).await {
-        Ok(response) => {
-            if response.status().is_success() {
-                info!("Heartbeat sent for streaming session {}", session_id);
-            } else {
-                let status = response.status();
-                let text = response.text().await.unwrap_or_default();
-                warn!(
-                    "Heartbeat failed for streaming session {}: {} - {}",
-                    session_id, status, text
-                );
-            }
-        }
-        Err(e) => {
-            warn!(
-                "Network error sending heartbeat for streaming session {}: {}",
-                session_id, e
-            );
-        }
-    }
+    let response = make_authenticated_post(url, &body).await?;
 
-    // Heartbeat failures are non-fatal
-    Ok(())
+    if response.status().is_success() {
+        info!("Heartbeat sent for streaming session {}", session_id);
+        Ok(())
+    } else {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        warn!(
+            "Heartbeat failed for streaming session {}: {} - {}",
+            session_id, status, text
+        );
+        Err(RemoteAccessError::UnparseableResponse(format!(
+            "Heartbeat failed: {status} - {text}"
+        )))
+    }
 }
 
 /// List all active streaming sessions for this user.
@@ -285,10 +280,15 @@ pub struct PendingStreamRequest {
 }
 
 /// Request a stream from another client (called by the receiving device).
-pub async fn request_stream(game_id: &str) -> Result<String, RemoteAccessError> {
+/// If `target_client_id` is provided, only that specific device will see the request.
+pub async fn request_stream(
+    game_id: &str,
+    target_client_id: Option<&str>,
+) -> Result<String, RemoteAccessError> {
     let url = generate_url(&["/api/v1/client/streaming/request"], &[])?;
     let body = RequestStreamBody {
         game_id: game_id.to_string(),
+        target_client_id: target_client_id.map(|s| s.to_string()),
     };
 
     let response = make_authenticated_post(url, &body).await?;
