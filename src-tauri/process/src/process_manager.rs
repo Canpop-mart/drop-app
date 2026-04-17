@@ -1344,9 +1344,16 @@ impl ProcessManager<'_> {
                 let pre_hashes = remote::save_sync::snapshot_hashes(&local_saves);
 
                 // Run the sync check (async call, blocked here)
-                match tauri::async_runtime::block_on(
-                    remote::save_sync::check_sync(&sync_game_id, &local_saves)
-                ) {
+                // Wrap in a timeout so slow/flaky WiFi (e.g. Steam Deck) doesn't
+                // freeze the app — we hold PROCESS_MANAGER lock during this.
+                match tauri::async_runtime::block_on(async {
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        remote::save_sync::check_sync(&sync_game_id, &local_saves),
+                    )
+                    .await
+                    .map_err(|_| remote::error::RemoteAccessError::FailedDownload)?
+                }) {
                     Ok(sync_result) => {
                         let _ = app_for_sync.emit("launch_trace", serde_json::json!({
                             "step": "7c_save_sync_check_result",
@@ -1421,11 +1428,16 @@ impl ProcessManager<'_> {
                                 if !files_to_upload.is_empty() {
                                     // Use an empty pre_hashes map so all are treated as "changed"
                                     let empty_hashes = HashMap::new();
-                                    match tauri::async_runtime::block_on(
-                                        remote::save_sync::upload_changed_saves(
-                                            &sync_game_id, &empty_hashes, &files_to_upload,
+                                    match tauri::async_runtime::block_on(async {
+                                        tokio::time::timeout(
+                                            std::time::Duration::from_secs(10),
+                                            remote::save_sync::upload_changed_saves(
+                                                &sync_game_id, &empty_hashes, &files_to_upload,
+                                            ),
                                         )
-                                    ) {
+                                        .await
+                                        .map_err(|_| remote::error::RemoteAccessError::FailedDownload)?
+                                    }) {
                                         Ok((count, errs)) => {
                                             info!("[SAVE-SYNC] Conflict: uploaded {} local saves", count);
                                             for err in &errs {
@@ -1459,9 +1471,14 @@ impl ProcessManager<'_> {
                         // Download cloud saves
                         if !download_ids.is_empty() {
                             info!("[SAVE-SYNC] Downloading {} cloud saves for game {}", download_ids.len(), sync_game_id);
-                            match tauri::async_runtime::block_on(
-                                remote::save_sync::bulk_download(&download_ids)
-                            ) {
+                            match tauri::async_runtime::block_on(async {
+                                tokio::time::timeout(
+                                    std::time::Duration::from_secs(10),
+                                    remote::save_sync::bulk_download(&download_ids),
+                                )
+                                .await
+                                .map_err(|_| remote::error::RemoteAccessError::FailedDownload)?
+                            }) {
                                 Ok(downloaded) => {
                                     for (filename, save_type, _hash, data) in &downloaded {
                                         match remote::save_sync::write_downloaded_save(
@@ -1542,10 +1559,15 @@ impl ProcessManager<'_> {
                         .map(|f| (f.filename.clone(), f.path.clone()))
                         .collect();
 
-                    // Run the sync check
-                    match tauri::async_runtime::block_on(
-                        remote::save_sync::check_sync(&game_id, &pc_saves)
-                    ) {
+                    // Run the sync check (with timeout to avoid freezing the app)
+                    match tauri::async_runtime::block_on(async {
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(5),
+                            remote::save_sync::check_sync(&game_id, &pc_saves),
+                        )
+                        .await
+                        .map_err(|_| remote::error::RemoteAccessError::FailedDownload)?
+                    }) {
                         Ok(sync_result) => {
                             // Handle conflicts (same pattern as emu saves)
                             let conflicts = remote::save_sync::extract_conflicts(&sync_result, &pc_saves);
@@ -1593,9 +1615,12 @@ impl ProcessManager<'_> {
                                         .collect();
                                     if !files_to_upload.is_empty() {
                                         let empty = HashMap::new();
-                                        let _ = tauri::async_runtime::block_on(
-                                            remote::save_sync::upload_changed_saves(&game_id, &empty, &files_to_upload)
-                                        );
+                                        let _ = tauri::async_runtime::block_on(async {
+                                            tokio::time::timeout(
+                                                std::time::Duration::from_secs(10),
+                                                remote::save_sync::upload_changed_saves(&game_id, &empty, &files_to_upload),
+                                            ).await
+                                        });
                                     }
                                 }
                             }
@@ -1613,9 +1638,14 @@ impl ProcessManager<'_> {
                             download_ids.extend(conflict_extra_downloads);
 
                             if !download_ids.is_empty() {
-                                match tauri::async_runtime::block_on(
-                                    remote::save_sync::bulk_download(&download_ids)
-                                ) {
+                                match tauri::async_runtime::block_on(async {
+                                    tokio::time::timeout(
+                                        std::time::Duration::from_secs(10),
+                                        remote::save_sync::bulk_download(&download_ids),
+                                    )
+                                    .await
+                                    .map_err(|_| remote::error::RemoteAccessError::FailedDownload)?
+                                }) {
                                     Ok(downloaded) => {
                                         for (filename, _save_type, _hash, data) in &downloaded {
                                             let orig = pc_paths.get(filename.as_str()).map(|p| p.as_path());

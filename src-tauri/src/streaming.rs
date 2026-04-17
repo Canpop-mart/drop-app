@@ -1112,11 +1112,35 @@ pub async fn launch_moonlight(
 // ── Device listing & remote install ──────────────────────────────────
 
 /// List all registered client devices for the current user.
+/// Filters out the current device (by `isSelf` from server, plus a hostname
+/// fallback to catch stale client registrations).
 #[tauri::command]
 pub async fn list_devices(game_id: Option<String>) -> Result<Vec<streaming_sessions::ClientDevice>, String> {
-    streaming_sessions::list_devices(game_id.as_deref())
+    let mut devices = streaming_sessions::list_devices(game_id.as_deref())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // The server marks the current client as `isSelf`, but stale registrations
+    // of the same machine (e.g. after re-auth) won't have that flag.  Also
+    // filter out any device whose name matches this machine's hostname pattern.
+    let local_name = format!(
+        "{} (Desktop)",
+        gethostname::gethostname().to_string_lossy()
+    )
+    .to_lowercase();
+    let local_platform = std::env::consts::OS.to_lowercase();
+
+    devices.retain(|d| {
+        if d.is_self {
+            return false;
+        }
+        // Catch stale registrations of the same machine
+        let same_host = d.name.to_lowercase() == local_name
+            && d.platform.to_lowercase() == local_platform;
+        !same_host
+    });
+
+    Ok(devices)
 }
 
 /// Request a remote install of a game on another device.
