@@ -140,8 +140,12 @@ impl DatabaseInterface {
 
     pub fn fetch_base_url(&self) -> Url {
         let handle = borrow_db_checked();
-        Url::parse(&handle.base_url)
-            .unwrap_or_else(|_| panic!("Failed to parse base url {}", handle.base_url))
+        Url::parse(&handle.base_url).unwrap_or_else(|_| {
+            // During setup the base_url may be empty or partially typed.
+            // Return a safe placeholder instead of panicking so callers
+            // receive a network error rather than a crash.
+            Url::parse("http://invalid.localhost").expect("hardcoded URL must parse")
+        })
     }
 
     fn save(&self) -> Result<(), Error> {

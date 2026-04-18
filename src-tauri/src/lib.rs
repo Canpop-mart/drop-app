@@ -366,9 +366,16 @@ pub fn run() {
                 // Start background poller for incoming stream requests
                 streaming::spawn_stream_request_poller();
 
-                // Sync installed games to server (fire and forget)
+                // Sync installed games to server (fire and forget, only if authenticated)
                 tokio::spawn(async {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    // Skip if not logged in (e.g. fresh install / DB cleared)
+                    {
+                        let db = borrow_db_checked();
+                        if db.auth.is_none() || db.base_url.is_empty() {
+                            return;
+                        }
+                    }
                     if let Err(e) = streaming::sync_installed_games().await {
                         log::warn!("Failed to sync installed games on startup: {e}");
                     }
