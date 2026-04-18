@@ -872,6 +872,9 @@ fn find_moonlight() -> Option<PathBuf> {
         if let Ok(output) = Command::new(flatpak_bin)
             .env_remove("LD_LIBRARY_PATH")
             .env_remove("LD_PRELOAD")
+            .env_remove("APPDIR")
+            .env_remove("APPIMAGE")
+            .env("LD_LIBRARY_PATH", "")
             .args(["info", "com.moonlight_stream.Moonlight"])
             .output()
         {
@@ -897,6 +900,9 @@ fn moonlight_command(moonlight_str: &str) -> Command {
         let mut cmd = Command::new(flatpak_bin);
         cmd.env_remove("LD_LIBRARY_PATH")
             .env_remove("LD_PRELOAD")
+            .env_remove("APPDIR")
+            .env_remove("APPIMAGE")
+            .env("LD_LIBRARY_PATH", "")
             .arg("run")
             .arg("com.moonlight_stream.Moonlight");
         cmd
@@ -925,16 +931,24 @@ async fn install_moonlight() -> Result<PathBuf, String> {
             "flatpak"
         };
 
-        // Ensure flathub remote is added
+        // Ensure flathub remote is added.
+        // Clear ALL AppImage env vars so the system flatpak & its deps (libostree)
+        // don't accidentally load the AppImage-bundled OpenSSL.
         let _ = Command::new(flatpak)
             .env_remove("LD_LIBRARY_PATH")
             .env_remove("LD_PRELOAD")
+            .env_remove("APPDIR")
+            .env_remove("APPIMAGE")
+            .env("LD_LIBRARY_PATH", "")
             .args(["remote-add", "--if-not-exists", "--user", "flathub", "https://dl.flathub.org/repo/flathub.flatpakrepo"])
             .output();
 
         let output = Command::new(flatpak)
             .env_remove("LD_LIBRARY_PATH")
             .env_remove("LD_PRELOAD")
+            .env_remove("APPDIR")
+            .env_remove("APPIMAGE")
+            .env("LD_LIBRARY_PATH", "")
             .args(["install", "--user", "-y", "flathub", "com.moonlight_stream.Moonlight"])
             .output()
             .map_err(|e| format!("Failed to run flatpak install: {e}"))?;
@@ -1051,6 +1065,9 @@ pub async fn kill_moonlight() -> Result<(), String> {
         let _ = Command::new(flatpak_bin)
             .env_remove("LD_LIBRARY_PATH")
             .env_remove("LD_PRELOAD")
+            .env_remove("APPDIR")
+            .env_remove("APPIMAGE")
+            .env("LD_LIBRARY_PATH", "")
             .args(["kill", "com.moonlight_stream.Moonlight"])
             .output();
 
