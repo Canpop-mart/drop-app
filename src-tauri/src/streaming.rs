@@ -1035,8 +1035,37 @@ pub async fn kill_moonlight() -> Result<(), String> {
         info!("[MOONLIGHT] Killing Moonlight process (PID {})", child.id());
         let _ = child.kill();
         let _ = child.wait();
-        info!("[MOONLIGHT] Moonlight killed");
     }
+
+    // On Linux, the child handle may only be the flatpak wrapper which exits
+    // immediately while the real Moonlight GUI keeps running.  Use system-level
+    // kill to ensure the actual process is gone.
+    #[cfg(target_os = "linux")]
+    {
+        // Try flatpak kill first (cleanest for flatpak installs)
+        let flatpak_bin = if Path::new("/usr/bin/flatpak").exists() {
+            "/usr/bin/flatpak"
+        } else {
+            "flatpak"
+        };
+        let _ = Command::new(flatpak_bin)
+            .env_remove("LD_LIBRARY_PATH")
+            .env_remove("LD_PRELOAD")
+            .args(["kill", "com.moonlight_stream.Moonlight"])
+            .output();
+
+        // Also pkill as a fallback for non-flatpak installs
+        let _ = Command::new("pkill").args(["-f", "moonlight"]).output();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/IM", "Moonlight.exe"])
+            .output();
+    }
+
+    info!("[MOONLIGHT] Moonlight killed");
     Ok(())
 }
 
@@ -1048,6 +1077,7 @@ pub async fn launch_moonlight(
     host: String,
     port: u16,
     pin: Option<String>,
+    app_name: Option<String>,
 ) -> Result<(), String> {
     let moonlight = match find_moonlight() {
         Some(m) => m,
@@ -1060,24 +1090,41 @@ pub async fn launch_moonlight(
 
     let address = format!("{}:{}", host, port);
 
-    // Try to pair first using the PIN (if provided)
+    // Try to pair using the PIN, but only if not already paired.
+    // `moonlight list <address>` succeeds and shows apps when already paired.
     if let Some(ref pin_value) = pin {
-        info!("[MOONLIGHT] Attempting to pair with PIN...");
-        let mut pair_cmd = moonlight_command(&moonlight_str);
-        pair_cmd.args(["pair", &address, "--pin", pin_value]);
+        let mut already_paired = false;
 
-        match pair_cmd.output() {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if output.status.success() {
-                    info!("[MOONLIGHT] Pairing successful: {}", stdout.trim());
-                } else {
-                    warn!("[MOONLIGHT] Pairing returned non-zero (may already be paired): {} {}", stdout.trim(), stderr.trim());
-                }
+        // Check if we're already paired by listing apps on the host
+        let mut list_cmd = moonlight_command(&moonlight_str);
+        list_cmd.args(["list", &address]);
+        if let Ok(output) = list_cmd.output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // If the list command succeeds and returns app names, we're paired
+            if output.status.success() && !stdout.trim().is_empty() {
+                info!("[MOONLIGHT] Already paired with {} (apps listed), skipping pair step", address);
+                already_paired = true;
             }
-            Err(e) => {
-                warn!("[MOONLIGHT] Pairing command failed: {e}");
+        }
+
+        if !already_paired {
+            info!("[MOONLIGHT] Attempting to pair with PIN...");
+            let mut pair_cmd = moonlight_command(&moonlight_str);
+            pair_cmd.args(["pair", &address, "--pin", pin_value]);
+
+            match pair_cmd.output() {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if output.status.success() {
+                        info!("[MOONLIGHT] Pairing successful: {}", stdout.trim());
+                    } else {
+                        warn!("[MOONLIGHT] Pairing failed: {} {}", stdout.trim(), stderr.trim());
+                    }
+                }
+                Err(e) => {
+                    warn!("[MOONLIGHT] Pairing command failed: {e}");
+                }
             }
         }
     }
@@ -1092,10 +1139,11 @@ pub async fn launch_moonlight(
         }
     }
 
-    // Launch Moonlight in stream mode — stream the desktop
-    info!("[MOONLIGHT] Starting stream to {}...", address);
+    // Launch Moonlight in stream mode — stream the registered game app (or Desktop as fallback)
+    let stream_app = app_name.unwrap_or_else(|| "Desktop".to_string());
+    info!("[MOONLIGHT] Starting stream to {} app '{}'...", address, stream_app);
     let mut cmd = moonlight_command(&moonlight_str);
-    cmd.args(["stream", &address, "Desktop"]);
+    cmd.args(["stream", &address, &stream_app]);
 
     let child = cmd.spawn()
         .map_err(|e| format!("Failed to launch Moonlight: {e}"))?;

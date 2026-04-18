@@ -1055,7 +1055,7 @@ async function connectToRemoteStream() {
     // Launch Moonlight pointed at the host
     const port = info.sunshinePort || 47989;
     console.log(`[BPM:STREAM] Launching Moonlight → ${host}:${port}`);
-    await invoke("launch_moonlight", { host, port, pin: info.pairingPin ?? null });
+    await invoke("launch_moonlight", { host, port, pin: info.pairingPin ?? null, appName: info.game?.mName ?? null });
     activeStreamSessionId = sessionId;
     isStreaming.value = true;
     streamGuard = false;
