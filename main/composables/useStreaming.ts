@@ -228,14 +228,19 @@ export function useStreaming() {
     await invoke("kill_moonlight");
   }
 
-  /** Request a stream from another device (push-based flow). */
+  /** Request a stream from another device (push-based flow).
+   *  `gameConfig` is the JSON-serialized UserConfiguration from this client,
+   *  so the host PC can apply the Deck's widescreen/quality settings during streaming.
+   */
   async function requestStream(
     gameId: string,
     targetClientId?: string,
+    gameConfig?: string,
   ): Promise<string> {
     const sessionId = await invoke<string>("streaming_request_stream", {
       gameId,
       targetClientId: targetClientId ?? null,
+      gameConfig: gameConfig ?? null,
     });
     return sessionId;
   }

@@ -580,6 +580,9 @@ pub fn configure_retroarch_for_game(
         overrides.insert("input_save_state_btn", "10".into());       // R1
         overrides.insert("input_load_state_btn", "9".into());        // L1
         overrides.insert("input_toggle_fast_forward_btn", "5".into()); // R2 (as button)
+        // Steam Deck triggers are analog — some SDL2 configs only fire the
+        // axis event, not the button event. Set both so either path works.
+        overrides.insert("input_toggle_fast_forward_axis", "+5".into()); // RT (analog axis)
         overrides.insert("input_state_slot_increase_btn", "14".into()); // DPad Right
         overrides.insert("input_state_slot_decrease_btn", "13".into()); // DPad Left
     }
@@ -672,8 +675,8 @@ pub fn configure_retroarch_for_game(
         // NOTE: input_player1_{a,b,x,y}_btn are NOT deleted — they're now
         // explicitly set in apply_controller_mappings() as XInput positional
         // fallbacks for when autoconfig profiles are missing.
-        // Old fast-forward was mapped to Back/Select button; now uses RT axis
-        "input_toggle_fast_forward_btn",
+        // NOTE: input_toggle_fast_forward_btn is NOT deleted — it's still
+        // actively set on Linux (SDL2 button variant alongside the axis variant).
     ];
 
     // ── Diagnostic dump of key settings ────────────────────────────────

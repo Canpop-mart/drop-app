@@ -1323,13 +1323,16 @@ pub async fn sync_installed_games() -> Result<(), String> {
 // ── Push-based streaming (background poller on host side) ─────────
 
 /// Request a stream from another device (called by the receiving client, e.g. Steam Deck).
+/// `game_config` is the JSON-serialized UserConfiguration from this client,
+/// so the host PC can apply the Deck's widescreen/quality settings during streaming.
 #[tauri::command]
 pub async fn streaming_request_stream(
     game_id: String,
     target_client_id: Option<String>,
+    game_config: Option<String>,
 ) -> Result<String, String> {
-    info!("[STREAMING] streaming_request_stream called: game_id={}, target={:?}", game_id, target_client_id);
-    let session_id = streaming_sessions::request_stream(&game_id, target_client_id.as_deref())
+    info!("[STREAMING] streaming_request_stream called: game_id={}, target={:?}, has_config={}", game_id, target_client_id, game_config.is_some());
+    let session_id = streaming_sessions::request_stream(&game_id, target_client_id.as_deref(), game_config)
         .await
         .map_err(|e| {
             warn!("[STREAMING] request_stream failed: {e}");
@@ -1397,10 +1400,16 @@ pub fn spawn_stream_request_poller() {
                                     .as_ref()
                                     .map(|g| g.m_name.clone())
                                     .unwrap_or_else(|| game_id.clone());
+                                // Deserialize game config from the stream request if present
+                                let game_cfg: Option<database::models::data::UserConfiguration> =
+                                    req.game_config.as_ref().and_then(|json_str| {
+                                        serde_json::from_str(json_str).ok()
+                                    });
                                 tokio::spawn(fulfill_stream_request(
                                     req.session_id.clone(),
                                     game_id.clone(),
                                     game_name,
+                                    game_cfg,
                                 ));
                             } else {
                                 // Game not installed — this might be a remote install request.
@@ -1450,8 +1459,16 @@ pub fn spawn_stream_request_poller() {
     });
 }
 
-/// Fulfill a stream request: accept it, start Sunshine, register the game, launch it.
-async fn fulfill_stream_request(session_id: String, game_id: String, game_name: String) {
+/// Fulfill a stream request: accept it, start Sunshine, launch the game.
+/// `game_config` is the requesting client's per-game configuration (widescreen,
+/// quality preset, etc.) — applied as an override on the host so the Deck's
+/// settings take effect during streaming.
+async fn fulfill_stream_request(
+    session_id: String,
+    game_id: String,
+    game_name: String,
+    game_config: Option<database::models::data::UserConfiguration>,
+) {
     info!("[STREAM-FULFILL] Fulfilling stream request {} for game {}", session_id, game_id);
 
     // 1. Read Sunshine credentials from settings
@@ -1573,11 +1590,16 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
     }
 
     // 8. Launch the game (on a blocking thread — launch_game uses block_on internally)
-    info!("[STREAM-FULFILL] Launching game {}", game_id);
+    //    Use launch_game_streaming so save sync conflicts are auto-resolved
+    //    (the conflict dialog would appear on the host PC, unreachable from the Deck).
+    //    Also pass the game_config override so the Deck's quality/widescreen settings
+    //    are applied on the host.
+    info!("[STREAM-FULFILL] Launching game {} (streaming mode)", game_id);
     {
-        use crate::process::launch_game;
+        use crate::process::launch_game_streaming;
         let gid = game_id.clone();
-        match tokio::task::spawn_blocking(move || launch_game(gid, 0)).await {
+        let cfg = game_config;
+        match tokio::task::spawn_blocking(move || launch_game_streaming(gid, 0, cfg)).await {
             Ok(Ok(_)) => info!("[STREAM-FULFILL] Game launched successfully"),
             Ok(Err(e)) => warn!("[STREAM-FULFILL] Failed to launch game: {e:?}"),
             Err(e) => warn!("[STREAM-FULFILL] Launch task panicked: {e}"),

@@ -49,6 +49,11 @@ struct RequestStreamBody {
     game_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     target_client_id: Option<String>,
+    /// JSON-serialized UserConfiguration from the requesting client.
+    /// The host applies this as an override so the Deck's widescreen/quality
+    /// settings take effect during streaming.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    game_config: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -277,18 +282,25 @@ pub struct PendingStreamRequest {
     pub game: Option<StreamingSessionGame>,
     pub requesting_client: Option<StreamingSessionHost>,
     pub created_at: String,
+    /// JSON-serialized UserConfiguration from the requesting client.
+    #[serde(default)]
+    pub game_config: Option<String>,
 }
 
 /// Request a stream from another client (called by the receiving device).
 /// If `target_client_id` is provided, only that specific device will see the request.
+/// `game_config` is the JSON-serialized UserConfiguration from this client,
+/// which the host will apply as an override during streaming.
 pub async fn request_stream(
     game_id: &str,
     target_client_id: Option<&str>,
+    game_config: Option<String>,
 ) -> Result<String, RemoteAccessError> {
     let url = generate_url(&["/api/v1/client/streaming/request"], &[])?;
     let body = RequestStreamBody {
         game_id: game_id.to_string(),
         target_client_id: target_client_id.map(|s| s.to_string()),
+        game_config,
     };
 
     let response = make_authenticated_post(url, &body).await?;

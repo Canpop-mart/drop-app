@@ -25,10 +25,33 @@ pub enum LaunchResult {
 
 #[tauri::command]
 pub fn launch_game(id: String, index: usize) -> Result<LaunchResult, ProcessError> {
+    launch_game_inner(id, index, false, None)
+}
+
+/// Launch a game for streaming. Auto-resolves save conflicts and optionally
+/// applies the remote client's user configuration (widescreen, quality, etc.).
+pub fn launch_game_streaming(
+    id: String,
+    index: usize,
+    config_override: Option<database::models::data::UserConfiguration>,
+) -> Result<LaunchResult, ProcessError> {
+    launch_game_inner(id, index, true, config_override)
+}
+
+fn launch_game_inner(
+    id: String,
+    index: usize,
+    streaming: bool,
+    config_override: Option<database::models::data::UserConfiguration>,
+) -> Result<LaunchResult, ProcessError> {
     let result = {
         let mut process_manager_lock = PROCESS_MANAGER.lock();
 
-        process_manager_lock.launch_process(id, index)
+        if streaming {
+            process_manager_lock.launch_process_streaming(id, index, config_override)
+        } else {
+            process_manager_lock.launch_process(id, index)
+        }
     };
 
     if let Err(err) = &result

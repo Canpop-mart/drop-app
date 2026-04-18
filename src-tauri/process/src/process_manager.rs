@@ -419,6 +419,32 @@ impl ProcessManager<'_> {
         game_id: String,
         launch_process_index: usize,
     ) -> Result<(), ProcessError> {
+        self.launch_process_inner(game_id, launch_process_index, false, None)
+    }
+
+    /// Launch a game process for streaming.
+    /// When `streaming` is true, save sync conflicts are auto-resolved to
+    /// `keep_local` instead of showing a UI dialog (which would appear on
+    /// the remote host PC where the user can't interact with it).
+    /// If `config_override` is provided, it temporarily replaces the
+    /// game's local `user_configuration` so the receiver's settings
+    /// (e.g. widescreen, quality) are applied on the host.
+    pub fn launch_process_streaming(
+        &mut self,
+        game_id: String,
+        launch_process_index: usize,
+        config_override: Option<database::models::data::UserConfiguration>,
+    ) -> Result<(), ProcessError> {
+        self.launch_process_inner(game_id, launch_process_index, true, config_override)
+    }
+
+    fn launch_process_inner(
+        &mut self,
+        game_id: String,
+        launch_process_index: usize,
+        streaming: bool,
+        config_override: Option<database::models::data::UserConfiguration>,
+    ) -> Result<(), ProcessError> {
         // Helper macro to emit debug events to the frontend console
         macro_rules! emit_dbg {
             ($step:expr, $($key:expr => $val:expr),+ $(,)?) => {
@@ -873,8 +899,12 @@ impl ProcessManager<'_> {
             "final_launch_string": &target_launch_string,
         }));
 
-        // Clone user config before dropping the DB lock (needed for RetroArch setup below)
-        let user_configuration = game_version.user_configuration.clone();
+        // Clone user config before dropping the DB lock (needed for RetroArch setup below).
+        // If a config override was provided (e.g. from a streaming request),
+        // use it instead of the local user_configuration. This lets the Deck's
+        // widescreen/quality settings apply on the host PC during streaming.
+        let user_configuration = config_override
+            .unwrap_or_else(|| game_version.user_configuration.clone());
 
         drop(db_lock);
 
@@ -1371,45 +1401,59 @@ impl ProcessManager<'_> {
                         if !conflicts.is_empty() {
                             info!("[SAVE-SYNC] {} conflicts detected for game {}", conflicts.len(), sync_game_id);
 
-                            // Emit conflict event for the UI to show a dialog
-                            let conflict_event = remote::save_sync::SaveConflictEvent {
-                                game_id: sync_game_id.clone(),
-                                conflicts: conflicts.clone(),
-                            };
-                            let _ = app_for_sync.emit(
-                                &format!("save_sync_conflict/{}", sync_game_id),
-                                serde_json::to_value(&conflict_event).unwrap_or_default(),
-                            );
+                            let resolutions = if streaming {
+                                // During streaming, the conflict dialog would appear on the
+                                // remote host PC where the user can't interact with it.
+                                // Auto-resolve all conflicts to keep_local so the game
+                                // launches immediately without blocking.
+                                info!("[SAVE-SYNC] Streaming mode — auto-resolving {} conflicts to keep_local", conflicts.len());
+                                conflicts.iter().map(|c| remote::save_sync::ConflictResolution {
+                                    filename: c.filename.clone(),
+                                    choice: "keep_local".to_string(),
+                                }).collect()
+                            } else {
+                                // Emit conflict event for the UI to show a dialog
+                                let conflict_event = remote::save_sync::SaveConflictEvent {
+                                    game_id: sync_game_id.clone(),
+                                    conflicts: conflicts.clone(),
+                                };
+                                let _ = app_for_sync.emit(
+                                    &format!("save_sync_conflict/{}", sync_game_id),
+                                    serde_json::to_value(&conflict_event).unwrap_or_default(),
+                                );
 
-                            // Block and wait for resolution from the UI.
-                            // Create a channel, store the sender in the global registry,
-                            // and block on the receiver until the frontend resolves.
-                            let (tx, rx) = std::sync::mpsc::channel();
-                            {
-                                let mut channels = crate::CONFLICT_CHANNELS.lock();
-                                channels.insert(sync_game_id.clone(), tx);
-                            }
-                            info!("[SAVE-SYNC] Waiting for conflict resolution from UI...");
-
-                            // Block until the user resolves conflicts (with a 5-minute timeout)
-                            let resolutions = match rx.recv_timeout(std::time::Duration::from_secs(300)) {
-                                Ok(res) => res,
-                                Err(_) => {
-                                    warn!("[SAVE-SYNC] Conflict resolution timed out, defaulting to keep_local");
-                                    conflicts.iter().map(|c| remote::save_sync::ConflictResolution {
-                                        filename: c.filename.clone(),
-                                        choice: "keep_local".to_string(),
-                                    }).collect()
+                                // Block and wait for resolution from the UI.
+                                // Create a channel, store the sender in the global registry,
+                                // and block on the receiver until the frontend resolves.
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                {
+                                    let mut channels = crate::CONFLICT_CHANNELS.lock();
+                                    channels.insert(sync_game_id.clone(), tx);
                                 }
+                                info!("[SAVE-SYNC] Waiting for conflict resolution from UI...");
+
+                                // Block until the user resolves conflicts (with a 5-minute timeout)
+                                let resolved = match rx.recv_timeout(std::time::Duration::from_secs(300)) {
+                                    Ok(res) => res,
+                                    Err(_) => {
+                                        warn!("[SAVE-SYNC] Conflict resolution timed out, defaulting to keep_local");
+                                        conflicts.iter().map(|c| remote::save_sync::ConflictResolution {
+                                            filename: c.filename.clone(),
+                                            choice: "keep_local".to_string(),
+                                        }).collect()
+                                    }
+                                };
+
+                                // Clean up the channel entry
+                                {
+                                    let mut channels = crate::CONFLICT_CHANNELS.lock();
+                                    channels.remove(&sync_game_id);
+                                }
+
+                                resolved
                             };
 
-                            // Clean up the channel entry
-                            {
-                                let mut channels = crate::CONFLICT_CHANNELS.lock();
-                                channels.remove(&sync_game_id);
-                            }
-
-                            // Apply the user's choices
+                            // Apply the user's choices (or auto-resolved choices)
                             let (extra_download_ids, extra_upload_filenames) =
                                 remote::save_sync::apply_conflict_resolutions(&conflicts, &resolutions);
 
@@ -1575,34 +1619,45 @@ impl ProcessManager<'_> {
 
                             if !conflicts.is_empty() {
                                 info!("[SAVE-SYNC] {} PC save conflicts for game {}", conflicts.len(), game_id);
-                                let conflict_event = remote::save_sync::SaveConflictEvent {
-                                    game_id: game_id.clone(),
-                                    conflicts: conflicts.clone(),
-                                };
-                                let _ = self.app_handle.emit(
-                                    &format!("save_sync_conflict/{}", game_id),
-                                    serde_json::to_value(&conflict_event).unwrap_or_default(),
-                                );
 
-                                let (tx, rx) = std::sync::mpsc::channel();
-                                {
-                                    let mut channels = crate::CONFLICT_CHANNELS.lock();
-                                    channels.insert(game_id.clone(), tx);
-                                }
-                                let resolutions = match rx.recv_timeout(std::time::Duration::from_secs(300)) {
-                                    Ok(res) => res,
-                                    Err(_) => {
-                                        warn!("[SAVE-SYNC] PC conflict resolution timed out");
-                                        conflicts.iter().map(|c| remote::save_sync::ConflictResolution {
-                                            filename: c.filename.clone(),
-                                            choice: "keep_local".to_string(),
-                                        }).collect()
+                                let resolutions = if streaming {
+                                    info!("[SAVE-SYNC] Streaming mode — auto-resolving {} PC conflicts to keep_local", conflicts.len());
+                                    conflicts.iter().map(|c| remote::save_sync::ConflictResolution {
+                                        filename: c.filename.clone(),
+                                        choice: "keep_local".to_string(),
+                                    }).collect()
+                                } else {
+                                    let conflict_event = remote::save_sync::SaveConflictEvent {
+                                        game_id: game_id.clone(),
+                                        conflicts: conflicts.clone(),
+                                    };
+                                    let _ = self.app_handle.emit(
+                                        &format!("save_sync_conflict/{}", game_id),
+                                        serde_json::to_value(&conflict_event).unwrap_or_default(),
+                                    );
+
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    {
+                                        let mut channels = crate::CONFLICT_CHANNELS.lock();
+                                        channels.insert(game_id.clone(), tx);
                                     }
+                                    let resolved = match rx.recv_timeout(std::time::Duration::from_secs(300)) {
+                                        Ok(res) => res,
+                                        Err(_) => {
+                                            warn!("[SAVE-SYNC] PC conflict resolution timed out");
+                                            conflicts.iter().map(|c| remote::save_sync::ConflictResolution {
+                                                filename: c.filename.clone(),
+                                                choice: "keep_local".to_string(),
+                                            }).collect()
+                                        }
+                                    };
+                                    {
+                                        let mut channels = crate::CONFLICT_CHANNELS.lock();
+                                        channels.remove(&game_id);
+                                    }
+                                    resolved
                                 };
-                                {
-                                    let mut channels = crate::CONFLICT_CHANNELS.lock();
-                                    channels.remove(&game_id);
-                                }
+
                                 let (extra_dl, extra_ul) =
                                     remote::save_sync::apply_conflict_resolutions(&conflicts, &resolutions);
                                 conflict_extra_downloads = extra_dl;

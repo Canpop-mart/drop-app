@@ -261,11 +261,11 @@
             v-if="isStreaming"
             :ref="(el: any) => registerAction(el, { onSelect: stopStreaming })"
             class="inline-flex items-center gap-2 px-4 py-3 text-sm rounded-lg transition-colors"
-            :class="pendingRequestSessionId ? 'text-purple-400 hover:text-purple-300 hover:bg-purple-900/30' : 'text-red-400 hover:text-red-300 hover:bg-red-900/30'"
+            :class="streamingPhase === 'streaming' ? 'text-red-400 hover:text-red-300 hover:bg-red-900/30' : 'text-purple-400 hover:text-purple-300 hover:bg-purple-900/30'"
             @click="stopStreaming"
           >
-            <span class="size-2 rounded-full animate-pulse" :class="pendingRequestSessionId ? 'bg-purple-400' : 'bg-red-400'" />
-            {{ pendingRequestSessionId ? 'Waiting for host...' : 'Streaming' }}
+            <span class="size-2 rounded-full animate-pulse" :class="streamingPhase === 'streaming' ? 'bg-red-400' : 'bg-purple-400'" />
+            {{ streamingPhaseLabel || 'Streaming' }}
           </button>
         </div>
       </div>
@@ -1017,6 +1017,19 @@ const availableStream = ref<any>(null);
 let streamPollInterval: ReturnType<typeof setInterval> | null = null;
 // Session ID of a stream we requested (waiting for host to fulfill)
 const pendingRequestSessionId = ref<string | null>(null);
+// Granular streaming phase for the loading indicator
+type StreamingPhase = "requesting" | "host-preparing" | "connecting" | "streaming" | "ending" | null;
+const streamingPhase = ref<StreamingPhase>(null);
+const streamingPhaseLabel = computed(() => {
+  switch (streamingPhase.value) {
+    case "requesting": return "Waiting for host...";
+    case "host-preparing": return "Host starting Sunshine...";
+    case "connecting": return "Connecting to stream...";
+    case "streaming": return "Streaming";
+    case "ending": return "Ending stream...";
+    default: return "";
+  }
+});
 
 async function pollRemoteSessions() {
   try {
@@ -1029,9 +1042,17 @@ async function pollRemoteSessions() {
     ) ?? null;
     availableStream.value = found;
 
+    // Update streaming phase based on session status
+    if (pendingRequestSessionId.value && found) {
+      if (found.status === "Starting") {
+        streamingPhase.value = "host-preparing";
+      }
+    }
+
     // If we have a pending request and a session just became Ready, auto-connect
     if (pendingRequestSessionId.value && found && found.status === "Ready") {
       console.log("[BPM:STREAM] Our requested session is now Ready! Auto-connecting...");
+      streamingPhase.value = "connecting";
       pendingRequestSessionId.value = null;
       isStreaming.value = false;
       await connectToRemoteStream();
@@ -1058,6 +1079,7 @@ async function connectToRemoteStream() {
     await invoke("launch_moonlight", { host, port, pin: info.pairingPin ?? null, appName: info.game?.mName ?? null });
     activeStreamSessionId = sessionId;
     isStreaming.value = true;
+    streamingPhase.value = "streaming";
     streamGuard = false;
 
     // Start the Rust-side session watcher — this is the authoritative kill
@@ -1089,6 +1111,7 @@ async function connectToRemoteStream() {
             console.warn("[BPM:STREAM] Failed to kill Moonlight:", e);
           }
           isStreaming.value = false;
+          streamingPhase.value = null;
           activeStreamSessionId = null;
           availableStream.value = null;
         }
@@ -1254,10 +1277,16 @@ async function streamGame(targetClientId?: string) {
   if (launchGuard || streamGuard) return;
   streamGuard = true;
   isStreaming.value = true;
+  streamingPhase.value = "requesting";
   try {
-    // Request a stream from another device (or a specific one)
-    console.log("[BPM:STREAM] Sending stream request for gameId:", gameId);
-    const sessionId = await requestStream(gameId, targetClientId);
+    // Request a stream from another device (or a specific one).
+    // Send this device's per-game config (widescreen, quality, etc.) so the
+    // host PC applies the Deck's settings when launching the game.
+    const gameConfigJson = version.value?.userConfiguration
+      ? JSON.stringify(version.value.userConfiguration)
+      : undefined;
+    console.log("[BPM:STREAM] Sending stream request for gameId:", gameId, "config:", gameConfigJson);
+    const sessionId = await requestStream(gameId, targetClientId, gameConfigJson);
     pendingRequestSessionId.value = sessionId;
     console.log("[BPM:STREAM] Stream requested, session:", sessionId);
 
@@ -1271,6 +1300,7 @@ async function streamGame(targetClientId?: string) {
         console.warn("[BPM:STREAM] Stream request timed out — no host responded");
         pendingRequestSessionId.value = null;
         isStreaming.value = false;
+        streamingPhase.value = null;
         streamGuard = false;
         launchError.value = "No host responded to the stream request. Make sure Drop is running on your PC.";
         // Restore normal poll interval
@@ -1283,6 +1313,7 @@ async function streamGame(targetClientId?: string) {
     console.error("[BPM:STREAM] Stream request failed:", errMsg);
     launchError.value = `Stream request failed: ${errMsg}`;
     isStreaming.value = false;
+    streamingPhase.value = null;
     streamGuard = false;
   }
 }
@@ -1294,6 +1325,7 @@ async function streamGame(targetClientId?: string) {
  */
 async function stopStreaming() {
   console.log("[BPM:STREAM] stopStreaming() called");
+  streamingPhase.value = "ending";
   try {
     // Cancel pending request session if we were waiting
     if (pendingRequestSessionId.value) {
@@ -1368,6 +1400,7 @@ async function stopStreaming() {
     streamPollInterval = setInterval(pollRemoteSessions, 15_000);
   } finally {
     isStreaming.value = false;
+    streamingPhase.value = null;
     streamGuard = false;
     availableStream.value = null;
   }
