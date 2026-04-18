@@ -1060,6 +1060,12 @@ async function connectToRemoteStream() {
     isStreaming.value = true;
     streamGuard = false;
 
+    // Start the Rust-side session watcher — this is the authoritative kill
+    // mechanism and keeps running even if the Vue component unmounts.
+    invoke("watch_moonlight_session", { sessionId }).catch((e: any) => {
+      console.warn("[BPM:STREAM] Failed to start Rust-side session watcher:", e);
+    });
+
     // Restore normal poll interval
     if (streamPollInterval) clearInterval(streamPollInterval);
     streamPollInterval = setInterval(pollRemoteSessions, 15_000);

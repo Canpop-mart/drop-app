@@ -1041,6 +1041,13 @@ async fn install_moonlight() -> Result<PathBuf, String> {
 static MOONLIGHT_PROCESS: std::sync::LazyLock<Mutex<Option<std::process::Child>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
 
+/// Cancel signal for the Moonlight session watcher.
+/// When a stream starts, we spawn a background task that polls the session
+/// and kills Moonlight when the session ends.  This lives in Rust so it
+/// works even if the Vue page navigates away or unmounts.
+static MOONLIGHT_WATCHER_CANCEL: std::sync::LazyLock<Mutex<Option<watch::Sender<bool>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
+
 /// Kill the running Moonlight process (called when the streaming session ends).
 #[tauri::command]
 pub async fn kill_moonlight() -> Result<(), String> {
@@ -1080,6 +1087,14 @@ pub async fn kill_moonlight() -> Result<(), String> {
         let _ = Command::new("taskkill")
             .args(["/F", "/IM", "Moonlight.exe"])
             .output();
+    }
+
+    // Cancel the session watcher (if running) so it doesn't try to double-kill
+    {
+        let mut guard = MOONLIGHT_WATCHER_CANCEL.lock().await;
+        if let Some(tx) = guard.take() {
+            let _ = tx.send(true);
+        }
     }
 
     info!("[MOONLIGHT] Moonlight killed");
@@ -1156,11 +1171,14 @@ pub async fn launch_moonlight(
         }
     }
 
-    // Launch Moonlight in stream mode — stream the registered game app (or Desktop as fallback)
-    let stream_app = app_name.unwrap_or_else(|| "Desktop".to_string());
-    info!("[MOONLIGHT] Starting stream to {} app '{}'...", address, stream_app);
+    // Launch Moonlight in stream mode.
+    // Always stream "Desktop" because Drop launches the game independently
+    // (via fulfill_stream_request step 9).  Sunshine's per-app entries would
+    // try to launch the game a second time, causing conflicts.  The game is
+    // already running on the PC desktop — Moonlight just captures the screen.
+    info!("[MOONLIGHT] Starting stream to {} (Desktop capture)...", address);
     let mut cmd = moonlight_command(&moonlight_str);
-    cmd.args(["stream", &address, &stream_app]);
+    cmd.args(["stream", &address, "Desktop"]);
 
     let child = cmd.spawn()
         .map_err(|e| format!("Failed to launch Moonlight: {e}"))?;
@@ -1170,6 +1188,71 @@ pub async fn launch_moonlight(
         let mut guard = MOONLIGHT_PROCESS.lock().await;
         *guard = Some(child);
     }
+
+    Ok(())
+}
+
+/// Start a background watcher that polls the session status and kills Moonlight
+/// when the session ends.  This is the **authoritative** kill mechanism — it
+/// lives in Rust and keeps running even if the Vue component unmounts.
+#[tauri::command]
+pub async fn watch_moonlight_session(session_id: String) -> Result<(), String> {
+    // Cancel any previous watcher
+    {
+        let mut guard = MOONLIGHT_WATCHER_CANCEL.lock().await;
+        if let Some(tx) = guard.take() {
+            let _ = tx.send(true);
+        }
+    }
+
+    let (cancel_tx, mut cancel_rx) = watch::channel(false);
+    {
+        let mut guard = MOONLIGHT_WATCHER_CANCEL.lock().await;
+        *guard = Some(cancel_tx);
+    }
+
+    info!("[MOONLIGHT-WATCHER] Starting session watcher for {}", session_id);
+    let sid = session_id.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+            // Check if we were cancelled (e.g. manual kill_moonlight)
+            if *cancel_rx.borrow() {
+                info!("[MOONLIGHT-WATCHER] Watcher cancelled for {}", sid);
+                break;
+            }
+
+            // Poll the session from the server
+            match streaming_sessions::list_streaming_sessions().await {
+                Ok(sessions) => {
+                    let found = sessions.iter().find(|s| s.id == sid);
+                    match found {
+                        None => {
+                            // Session gone (filtered out because status is Stopped)
+                            info!("[MOONLIGHT-WATCHER] Session {} gone from server, killing Moonlight", sid);
+                            let _ = kill_moonlight().await;
+                            break;
+                        }
+                        Some(s) if s.status == "Stopped" => {
+                            info!("[MOONLIGHT-WATCHER] Session {} stopped, killing Moonlight", sid);
+                            let _ = kill_moonlight().await;
+                            break;
+                        }
+                        _ => {} // Still active, keep watching
+                    }
+                }
+                Err(e) => {
+                    warn!("[MOONLIGHT-WATCHER] Failed to poll sessions: {e}");
+                    // Don't break on transient errors — keep trying
+                }
+            }
+        }
+        info!("[MOONLIGHT-WATCHER] Watcher exiting for {}", sid);
+        // Clean up the cancel handle
+        let mut guard = MOONLIGHT_WATCHER_CANCEL.lock().await;
+        *guard = None;
+    });
 
     Ok(())
 }
@@ -1455,13 +1538,8 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
         }
     }
 
-    // 5. Register the game in Sunshine's apps
-    if let Err(e) = register_game_app(&game_id, &game_name, Some("drop-launch"), None) {
-        warn!("[STREAM-FULFILL] Failed to register game: {e}");
-        // Non-fatal
-    }
-
-    // 6. Send the PIN to Sunshine's API for pre-pairing
+    // 5. Send the PIN to Sunshine's API for pre-pairing (Moonlight streams
+    //    "Desktop" so no per-game app registration is needed)
     let pin_body = serde_json::json!({ "pin": pin, "name": "Drop Client" });
     if let Err(e) = sunshine_api_request(
         reqwest::Method::POST,
@@ -1473,14 +1551,14 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
         warn!("[STREAM-FULFILL] Failed to send PIN to Sunshine (may not need pairing): {e}");
     }
 
-    // 7. Mark the session as Ready
+    // 6. Mark the session as Ready
     if let Err(e) = streaming_sessions::mark_session_ready(&session_id, Some(&pin)).await {
         warn!("[STREAM-FULFILL] Failed to mark session ready: {e}");
         return;
     }
     info!("[STREAM-FULFILL] Session {} marked Ready", session_id);
 
-    // 8. Change resolution for Steam Deck streaming (Windows only)
+    // 7. Change resolution for Steam Deck streaming (Windows only)
     #[cfg(target_os = "windows")]
     {
         // Steam Deck native resolution is 1280x800
@@ -1494,7 +1572,7 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
         }
     }
 
-    // 9. Launch the game (on a blocking thread — launch_game uses block_on internally)
+    // 8. Launch the game (on a blocking thread — launch_game uses block_on internally)
     info!("[STREAM-FULFILL] Launching game {}", game_id);
     {
         use crate::process::launch_game;
@@ -1506,7 +1584,7 @@ async fn fulfill_stream_request(session_id: String, game_id: String, game_name: 
         }
     }
 
-    // 10. Register this session and start heartbeating in background (cancellable)
+    // 9. Start heartbeating in background; auto-stop session when game exits
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
     {
         let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;

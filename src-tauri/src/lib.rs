@@ -345,6 +345,7 @@ pub fn run() {
             streaming_get_connection_info,
             launch_moonlight,
             kill_moonlight,
+            watch_moonlight_session,
             streaming_request_stream,
             list_devices,
             request_remote_install,
