@@ -173,6 +173,74 @@ pub async fn set_default(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Attempt to install umu-launcher via pipx (preferred) or pip --user (fallback).
+/// Returns a success message with the installed path, or an error string.
+#[tauri::command]
+pub async fn install_umu() -> Result<String, String> {
+    use std::process::{Command, Stdio};
+
+    /// Build a clean command that removes Python env vars set by AppImage/Steam.
+    fn clean_command(program: &str) -> Command {
+        let mut cmd = Command::new(program);
+        cmd.env_remove("PYTHONHOME")
+            .env_remove("PYTHONPATH")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        cmd
+    }
+
+    // Strategy 1: pipx install (preferred, isolates dependencies)
+    info!("[UMU-INSTALL] Trying pipx install umu-launcher...");
+    let pipx_result = clean_command("pipx")
+        .args(["install", "umu-launcher"])
+        .output();
+
+    if let Ok(output) = pipx_result {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        info!("[UMU-INSTALL] pipx stdout: {stdout}");
+        info!("[UMU-INSTALL] pipx stderr: {stderr}");
+
+        if output.status.success() || stderr.contains("already") {
+            // Refresh the cached executable path
+            let path = client::compat::get_umu_executable_fresh();
+            if let Some(p) = &path {
+                return Ok(format!("umu-launcher installed successfully via pipx at {}", p.display()));
+            }
+            return Ok("umu-launcher installed via pipx (restart Drop to detect)".to_string());
+        }
+    }
+
+    // Strategy 2: pip install --user (fallback)
+    info!("[UMU-INSTALL] pipx failed, trying pip install --user umu-launcher...");
+    for pip_cmd in &["pip3", "pip"] {
+        let pip_result = clean_command(pip_cmd)
+            .args(["install", "--user", "umu-launcher"])
+            .output();
+
+        if let Ok(output) = pip_result {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            info!("[UMU-INSTALL] {pip_cmd} stdout: {stdout}");
+            info!("[UMU-INSTALL] {pip_cmd} stderr: {stderr}");
+
+            if output.status.success() {
+                let path = client::compat::get_umu_executable_fresh();
+                if let Some(p) = &path {
+                    return Ok(format!("umu-launcher installed via {pip_cmd} at {}", p.display()));
+                }
+                return Ok(format!("umu-launcher installed via {pip_cmd} (restart Drop to detect)"));
+            }
+        }
+    }
+
+    Err("Failed to install umu-launcher. Please install it manually:\n\
+         • pipx install umu-launcher\n\
+         • Or: pip install --user umu-launcher\n\
+         • Or via your distro's package manager (e.g. pacman -S umu-launcher)"
+        .to_string())
+}
+
 /// Diagnostic report for debugging launch issues on Steam Deck / Linux.
 /// Returns a human-readable summary of the entire launch environment.
 #[derive(Serialize)]

@@ -322,6 +322,8 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             ::process::compat::diagnose_launch_environment,
             #[cfg(target_os = "linux")]
+            ::process::compat::install_umu,
+            #[cfg(target_os = "linux")]
             register_steam_shortcut,
             #[cfg(target_os = "linux")]
             add_game_to_steam,

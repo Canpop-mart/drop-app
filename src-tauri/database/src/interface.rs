@@ -123,6 +123,9 @@ impl DatabaseInterface {
     }
 
     /// Serialize and encrypt the database to disk from a reference, avoiding a full clone.
+    ///
+    /// Uses atomic write (temp file + rename) to prevent corruption if the
+    /// process is killed mid-write.
     fn write_to_path(db_path: &Path, database: &Database) -> Result<(), Error> {
         let mut database_data = DatabaseVersionSerializable::serialize_ref_to_ron(database)?.into_bytes();
 
@@ -130,7 +133,11 @@ impl DatabaseInterface {
         let mut cipher = Aes128Ctr64LE::new(&key.into(), &iv.into());
         cipher.apply_keystream(&mut database_data);
 
-        std::fs::write(db_path, database_data)?;
+        // Write to a temp file in the same directory, then atomically rename.
+        // This ensures the database file is never left in a partially-written state.
+        let tmp_path = db_path.with_file_name("drop.db.tmp");
+        std::fs::write(&tmp_path, database_data)?;
+        std::fs::rename(&tmp_path, db_path)?;
         Ok(())
     }
 
@@ -146,13 +153,6 @@ impl DatabaseInterface {
             // receive a network error rather than a crash.
             Url::parse("http://invalid.localhost").expect("hardcoded URL must parse")
         })
-    }
-
-    fn save(&self) -> Result<(), Error> {
-        let lock = self.data.read().map_err(|e| {
-            anyhow::anyhow!("failed to lock database to save: {}", e)
-        })?;
-        Self::write_to_path(&self.path, &lock)
     }
 
     fn borrow_data(
@@ -222,16 +222,23 @@ impl<'a> Deref for DBRead<'a> {
 }
 impl Drop for DBWrite<'_> {
     fn drop(&mut self) {
-        unsafe {
-            ManuallyDrop::drop(&mut self.0);
-        }
-
-        match DB.save() {
+        // Save BEFORE releasing the write lock to prevent concurrent writes.
+        // The old code dropped the lock first then called save() which took a
+        // read lock — this allowed two concurrent saves to race on the file.
+        match DatabaseInterface::write_to_path(&DB.path, &self.0) {
             Ok(()) => {}
             Err(e) => {
                 error!("database failed to save with error {e}");
-                panic!("database failed to save with error {e}")
+                // Don't panic — this would poison the RwLock and make ALL
+                // subsequent database access crash the app in a loop.
+                // Log the error and continue; data is still in memory.
+                error!("WARNING: in-memory database may be ahead of disk");
             }
+        }
+
+        // Now release the write lock
+        unsafe {
+            ManuallyDrop::drop(&mut self.0);
         }
     }
 }

@@ -41,6 +41,18 @@
             until you install UMU Launcher and restart Drop.
           </p>
         </div>
+        <div class="mt-3 flex items-center gap-x-3">
+          <button
+            @click="tryInstallUmu"
+            :disabled="umuInstalling"
+            class="rounded-md bg-red-500/30 px-3 py-1.5 text-sm font-semibold text-red-100 hover:bg-red-500/40 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {{ umuInstalling ? "Installing..." : "Try Auto-Install" }}
+          </button>
+          <span v-if="umuInstallResult" class="text-sm" :class="umuInstallSuccess ? 'text-green-300' : 'text-red-300'">
+            {{ umuInstallResult }}
+          </span>
+        </div>
       </div>
     </div>
   </div>
@@ -298,6 +310,25 @@ const appState = useAppState();
 const paths = await useProtonPaths();
 const pickLayerModal = ref(false);
 const pickError = ref<string | null>(null);
+
+const umuInstalling = ref(false);
+const umuInstallResult = ref<string | null>(null);
+const umuInstallSuccess = ref(false);
+
+async function tryInstallUmu() {
+  umuInstalling.value = true;
+  umuInstallResult.value = null;
+  try {
+    const result = await invoke<string>("install_umu");
+    umuInstallResult.value = result;
+    umuInstallSuccess.value = true;
+  } catch (e) {
+    umuInstallResult.value = String(e);
+    umuInstallSuccess.value = false;
+  } finally {
+    umuInstalling.value = false;
+  }
+}
 
 const path = ref<string | null>(null);
 

@@ -90,6 +90,12 @@ fn is_valid_executable(path: &PathBuf) -> bool {
     }
 }
 
+/// Re-run umu-run detection without the LazyLock cache.
+/// Used after installing umu-launcher at runtime.
+pub fn get_umu_executable_fresh() -> Option<PathBuf> {
+    get_umu_executable()
+}
+
 fn get_umu_executable() -> Option<PathBuf> {
     // Build a list of candidate paths from multiple sources, then validate
     // each one. This handles the common Steam Deck case where
