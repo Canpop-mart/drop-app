@@ -10,7 +10,6 @@
         <div
           class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-8 max-w-lg w-full mx-4"
         >
-          <!-- Title -->
           <h2
             v-if="title"
             class="text-xl font-semibold font-display text-zinc-100 mb-2"
@@ -18,43 +17,28 @@
             {{ title }}
           </h2>
 
-          <!-- Message -->
           <p v-if="message" class="text-zinc-400 mb-6">
             {{ message }}
           </p>
 
-          <!-- Custom content slot -->
           <slot />
 
-          <!-- Buttons -->
           <div class="flex items-center justify-end gap-3 mt-6">
             <button
               v-if="showCancel"
-              ref="cancelBtn"
-              class="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-colors"
-              :class="[
-                focusedButton === 'cancel'
-                  ? 'bg-zinc-700 text-zinc-100 ring-2 ring-blue-500'
-                  : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200',
-              ]"
+              class="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors"
               @click="handleCancel"
             >
               <BigPictureButtonPrompt button="B" :label="cancelLabel" size="sm" />
             </button>
 
             <button
-              ref="confirmBtn"
               class="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-colors"
-              :class="[
-                focusedButton === 'confirm'
-                  ? 'bg-blue-600 text-white ring-2 ring-blue-400 shadow-lg shadow-blue-500/30'
-                  : 'bg-blue-600/80 text-blue-100 hover:bg-blue-600',
+              :class="
                 destructive
-                  ? focusedButton === 'confirm'
-                    ? 'bg-red-600 ring-red-400 shadow-red-500/30'
-                    : 'bg-red-600/80 text-red-100 hover:bg-red-600'
-                  : '',
-              ]"
+                  ? 'bg-red-600 text-white hover:bg-red-500'
+                  : 'bg-blue-600 text-white hover:bg-blue-500'
+              "
               @click="handleConfirm"
             >
               <BigPictureButtonPrompt button="A" :label="confirmLabel" size="sm" />
@@ -99,7 +83,6 @@ const emit = defineEmits<{
   cancel: [];
 }>();
 
-const focusedButton = ref<"confirm" | "cancel">("confirm");
 const gamepad = useGamepad();
 const unsubs: (() => void)[] = [];
 
@@ -115,11 +98,6 @@ watch(
   () => props.visible,
   (v) => {
     if (v) {
-      // Destructive actions default to Cancel so a stray A-press doesn't
-      // delete files or log the user out.
-      focusedButton.value = props.destructive && props.showCancel
-        ? "cancel"
-        : "confirm";
       lockId = focusNav.acquireInputLock();
       wireGamepad();
     } else {
@@ -131,43 +109,13 @@ watch(
 
 function wireGamepad() {
   unwireGamepad();
-
-  // M6 fix: D-pad left/right AND up/down to switch focus between buttons
-  unsubs.push(
-    gamepad.onButton(GamepadButton.DPadLeft, () => {
-      if (!props.visible) return;
-      if (props.showCancel) focusedButton.value = "cancel";
-    }),
-  );
-  unsubs.push(
-    gamepad.onButton(GamepadButton.DPadRight, () => {
-      if (!props.visible) return;
-      focusedButton.value = "confirm";
-    }),
-  );
-  unsubs.push(
-    gamepad.onButton(GamepadButton.DPadUp, () => {
-      if (!props.visible) return;
-      if (props.showCancel) focusedButton.value = "cancel";
-    }),
-  );
-  unsubs.push(
-    gamepad.onButton(GamepadButton.DPadDown, () => {
-      if (!props.visible) return;
-      focusedButton.value = "confirm";
-    }),
-  );
-
-  // A = select focused button
+  // Direct mapping — A=confirm, B=cancel. No D-pad focus.
   unsubs.push(
     gamepad.onButton(GamepadButton.South, () => {
       if (!props.visible) return;
-      if (focusedButton.value === "confirm") handleConfirm();
-      else handleCancel();
+      handleConfirm();
     }),
   );
-
-  // B = cancel
   unsubs.push(
     gamepad.onButton(GamepadButton.East, () => {
       if (!props.visible) return;

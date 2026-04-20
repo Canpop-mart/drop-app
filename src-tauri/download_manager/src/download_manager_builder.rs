@@ -348,6 +348,10 @@ impl DownloadManagerBuilder {
             self.remove_and_cleanup_front_download(&meta).await;
         }
 
+        // Distinct from `update_queue` so the frontend can tell a real
+        // completion apart from a cancellation (which also shrinks the queue).
+        app_emit!(&self.app_handle, "download_complete", &meta.id);
+
         self.push_ui_queue_update();
         send!(self.sender, DownloadManagerSignal::Go);
     }

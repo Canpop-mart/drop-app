@@ -57,12 +57,16 @@ import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useDeckMode } from "~/composables/deck-mode";
 import { useBpmTheme } from "~/composables/bp-theme";
+import { useUiZoom } from "~/composables/ui-zoom";
 
 const focusNav = useFocusNavigation();
 const bpmTheme = useBpmTheme();
 const themeClass = computed(() => bpmTheme.themeData.value.cssClass);
 const modeClass = computed(() => `bpm-${bpmTheme.mode.value}`);
 const { isGamescope } = useDeckMode();
+// Apply persisted UI zoom level. Gamescope + WebKitGTK sometimes renders the
+// webview smaller than expected on first paint; this lets the user rescale.
+useUiZoom();
 
 // ── On-screen debug overlay ─────────────────────────────────────────────
 // Hidden by default — toggle with Select+Start on gamepad

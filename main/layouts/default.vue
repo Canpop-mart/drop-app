@@ -78,6 +78,11 @@
 </template>
 
 <script setup lang="ts">
+import { useUiZoom } from "~/composables/ui-zoom";
+
 // Initialize global queue state
 useQueueState();
+// Apply persisted UI zoom (fixes "too small" rendering under some gamescope
+// scale-factor combinations where the viewport meta tag isn't honored).
+useUiZoom();
 </script>

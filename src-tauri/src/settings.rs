@@ -320,9 +320,12 @@ pub fn collect_bug_report_logs(max_lines: Option<usize>) -> Result<String, Strin
 const MAX_LOGFILE_BYTES: usize = 5 * 1024 * 1024;
 
 /// Full-file variant of [`collect_bug_report_logs`] — returns the entire
-/// `drop.log` (tail-truncated to ~5 MB) after secret redaction, for upload
-/// as a multipart file attachment. Exposed separately so the frontend can
-/// decide whether to send it as a text field (legacy) or a file blob (new).
+/// `drop.log` (tail-truncated to ~5 MB) after secret redaction, as a plain
+/// UTF-8 string. The frontend wraps it in a Blob for multipart upload.
+///
+/// We return a String (not Vec<u8>) because Tauri serializes Vec<u8> as a
+/// JSON array of numbers — a 5MB log would produce ~20MB of JSON text on
+/// the IPC bridge, which crashed the webview on Steam Deck.
 #[tauri::command]
 pub fn collect_bug_report_log_file() -> Result<LogFilePayload, String> {
     let log_path = DATA_ROOT_DIR.join("drop.log");
@@ -330,14 +333,17 @@ pub fn collect_bug_report_log_file() -> Result<LogFilePayload, String> {
         .map_err(|e| format!("Failed to read log file: {}", e))?;
 
     let redacted = ::utils::redact(&raw);
-    let bytes = redacted.into_bytes();
-    let truncated = bytes.len() > MAX_LOGFILE_BYTES;
-    // Keep the tail — more recent entries are almost always more useful.
+    let truncated = redacted.len() > MAX_LOGFILE_BYTES;
     let content = if truncated {
-        let start = bytes.len() - MAX_LOGFILE_BYTES;
-        bytes[start..].to_vec()
+        let mut start = redacted.len() - MAX_LOGFILE_BYTES;
+        // Advance to the next valid UTF-8 char boundary so we don't split
+        // a codepoint in half.
+        while start < redacted.len() && !redacted.is_char_boundary(start) {
+            start += 1;
+        }
+        redacted[start..].to_string()
     } else {
-        bytes
+        redacted
     };
 
     Ok(LogFilePayload {
@@ -351,9 +357,7 @@ pub fn collect_bug_report_log_file() -> Result<LogFilePayload, String> {
 #[serde(rename_all = "camelCase")]
 pub struct LogFilePayload {
     pub filename: String,
-    /// Serde will serialize `Vec<u8>` as a JSON array of numbers, which the
-    /// frontend turns into a `Uint8Array` and wraps in a `Blob` for upload.
-    pub content: Vec<u8>,
+    pub content: String,
     pub truncated: bool,
 }
 
@@ -368,4 +372,17 @@ pub fn open_log_folder(app_handle: tauri::AppHandle) -> Result<(), String> {
         .opener()
         .open_path(dir.display().to_string(), None::<&str>)
         .map_err(|e| format!("Failed to open log folder: {}", e))
+}
+
+/// Opens the SteamOS on-screen keyboard via `steam://open/keyboard`.
+/// Only has an effect on systems where Steam is running and registered
+/// as the handler for `steam://`; we still return Ok in other cases and
+/// let the caller fall back to the custom keyboard.
+#[tauri::command]
+pub fn open_steam_keyboard(app_handle: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app_handle
+        .opener()
+        .open_url("steam://open/keyboard", None::<&str>)
+        .map_err(|e| format!("Failed to open Steam keyboard: {}", e))
 }

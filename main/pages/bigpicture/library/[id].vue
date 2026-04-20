@@ -122,6 +122,16 @@
             Stop
           </button>
 
+          <!-- Launch status line — visible during launch and for the first
+               few moments after the game is Running (until user dismisses). -->
+          <div
+            v-if="launchStatus"
+            class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-950/60 border border-blue-500/30 text-blue-200 text-sm font-medium"
+          >
+            <span class="h-3 w-3 rounded-full border-2 border-blue-300/40 border-t-blue-300 animate-spin" />
+            {{ launchStatus }}
+          </div>
+
           <!-- ── Downloading/Queued: Status ── -->
           <button
             v-else-if="status?.type === 'Downloading' || status?.type === 'Queued'"
@@ -690,17 +700,6 @@
         <p v-if="savesLoading" class="text-zinc-500 text-center py-8 text-sm">
           Loading saves...
         </p>
-
-        <!-- Dev: Test Conflict Dialog -->
-        <div class="mt-6 pt-4 border-t border-zinc-800/30">
-          <button
-            :ref="(el: any) => registerAction(el, { onSelect: triggerTestConflict })"
-            class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-amber-900/20 text-amber-400 border border-amber-500/30 hover:bg-amber-900/30"
-            @click="triggerTestConflict"
-          >
-            Test Conflict Dialog
-          </button>
-        </div>
       </div>
     </div>
 
@@ -2648,48 +2647,6 @@ useListen<{ gameId: string; conflicts: SaveConflict[] }>(
   },
 );
 
-function triggerTestConflict() {
-  saveConflicts.value = [
-    {
-      filename: "test-save-01.srm",
-      saveType: "save",
-      localHash: "abc123local",
-      localSize: 32768,
-      localModifiedAt: Math.floor(Date.now() / 1000) - 3600,
-      cloudId: "cloud-save-uuid-1",
-      cloudHash: "def456cloud",
-      cloudSize: 32512,
-      cloudModifiedAt: new Date(Date.now() - 7200_000).toISOString(),
-      cloudUploadedFrom: "Gaming-PC",
-    },
-    {
-      filename: "test-save-02.state",
-      saveType: "state",
-      localHash: "ghi789local",
-      localSize: 1048576,
-      localModifiedAt: Math.floor(Date.now() / 1000) - 600,
-      cloudId: "cloud-save-uuid-2",
-      cloudHash: "jkl012cloud",
-      cloudSize: 1048320,
-      cloudModifiedAt: new Date(Date.now() - 1800_000).toISOString(),
-      cloudUploadedFrom: "Living-Room-PC",
-    },
-    {
-      filename: "pc/AppData/Saves/slot1.sav",
-      saveType: "pc",
-      localHash: "mno345local",
-      localSize: 524288,
-      localModifiedAt: Math.floor(Date.now() / 1000) - 120,
-      cloudId: "cloud-save-uuid-3",
-      cloudHash: "pqr678cloud",
-      cloudSize: 524000,
-      cloudModifiedAt: new Date(Date.now() - 300_000).toISOString(),
-      cloudUploadedFrom: "Laptop",
-    },
-  ] as SaveConflict[];
-  saveConflictVisible.value = true;
-}
-
 // On-demand hash check
 async function checkRomHash() {
   romHashChecking.value = true;
@@ -2859,6 +2816,34 @@ function dismissLaunchError() {
 }
 
 const launchInFlight = ref(false);
+const launchStatus = ref<string | null>(null);
+
+function stepLabel(step: string): string | null {
+  // Map backend launch_trace step IDs to short user-facing labels.
+  if (step.startsWith("1_")) return "Preparing...";
+  if (step.startsWith("2_")) return "Reading game config...";
+  if (step.startsWith("3_")) return "Selecting compatibility layer...";
+  if (step.startsWith("4_")) return "Setting up runtime...";
+  if (step.startsWith("5_")) return "Building command...";
+  if (step.startsWith("6_")) return "Finalizing...";
+  if (step.startsWith("7b_")) return "Checking ROM...";
+  if (step.startsWith("7c_") || step.startsWith("7d_")) return "Syncing saves...";
+  if (step.startsWith("7_")) return "Configuring emulator...";
+  if (step.startsWith("8_")) return "Launching...";
+  return null;
+}
+
+useListen<{ step: string; game_id: string }>("launch_trace", (event) => {
+  if (event.payload.game_id !== gameId) return;
+  if (!launchInFlight.value && status.value?.type !== "Running") return;
+  const label = stepLabel(event.payload.step);
+  if (label) launchStatus.value = label;
+});
+
+// Clear the transient status line when running-state settles or launch errors.
+watch([launchInFlight, () => status.value?.type], ([inFlight, type]) => {
+  if (!inFlight && type !== "Running") launchStatus.value = null;
+});
 
 async function launchGame() {
   if (launchGuard) return;
@@ -3022,40 +3007,6 @@ async function addToLibrary() {
 
 function openStore() {
   navigateTo(`/store/${gameId}`);
-}
-
-// ── Add to Steam ────────────────────────────────────────────────────────
-
-const addedToSteam = ref(false);
-const steamLoading = ref(false);
-
-async function addToSteam() {
-  if (steamLoading.value || addedToSteam.value) return;
-  steamLoading.value = true;
-  try {
-    const g = game.value;
-    const result = await invoke<{ success: boolean; message: string }>(
-      "add_game_to_steam",
-      {
-        gameId,
-        gameName: g?.mName ?? "Unknown Game",
-        bannerObjectId: g?.mBannerObjectId || null,
-        coverObjectId: g?.mCoverObjectId || null,
-        iconObjectId: g?.mIconObjectId || null,
-      },
-    );
-    console.log("[BPM:GAME] Add to Steam result:", result);
-    if (result.success) {
-      addedToSteam.value = true;
-    } else {
-      launchError.value = result.message;
-    }
-  } catch (e) {
-    console.error("[BPM:GAME] Add to Steam failed:", e);
-    launchError.value = `Failed to add to Steam: ${e instanceof Error ? e.message : String(e)}`;
-  } finally {
-    steamLoading.value = false;
-  }
 }
 
 async function checkForUpdates() {

@@ -1,19 +1,16 @@
 /**
  * BPM Idle Detection
  *
- * Detects user inactivity to trigger screensaver/dimming features.
- * Uses requestAnimationFrame for smooth idle duration tracking.
+ * Detects user inactivity to trigger screensaver/dimming features. A 1 Hz
+ * tick is enough here — the previous 60 Hz RAF loop kept the iGPU busy and
+ * caused every component watching `idleDuration` to re-render every frame.
  */
 
 import { ref, onMounted, onUnmounted, onScopeDispose } from "vue";
 
-// ── Singleton state ──────────────────────────────────────────────────────────
-
-let idleTimeoutMs = 300000; // 5 minutes default
+let idleTimeoutMs = 300000;
 let lastActivityTime = Date.now();
-let trackingRafId: number | null = null;
-
-// ── Composable ───────────────────────────────────────────────────────────────
+let trackingIntervalId: ReturnType<typeof setInterval> | null = null;
 
 export function useBpmIdle(timeoutMs: number = 300000) {
   idleTimeoutMs = timeoutMs;
@@ -28,18 +25,11 @@ export function useBpmIdle(timeoutMs: number = 300000) {
     idleDuration.value = 0;
   }
 
-  function updateIdleDuration() {
-    const now = Date.now();
-    const elapsed = now - lastActivityTime;
+  function tick() {
+    const elapsed = Date.now() - lastActivityTime;
     idleDuration.value = elapsed;
-
-    if (elapsed >= idleTimeoutMs) {
-      isIdle.value = true;
-    } else if (isIdle.value) {
-      isIdle.value = false;
-    }
-
-    trackingRafId = requestAnimationFrame(updateIdleDuration);
+    const nowIdle = elapsed >= idleTimeoutMs;
+    if (nowIdle !== isIdle.value) isIdle.value = nowIdle;
   }
 
   function onActivity() {
@@ -48,32 +38,24 @@ export function useBpmIdle(timeoutMs: number = 300000) {
 
   function startTracking() {
     if (typeof window === "undefined") return;
-
-    // Register activity listeners
-    window.addEventListener("mousemove", onActivity);
-    window.addEventListener("keydown", onActivity);
-    window.addEventListener("mousedown", onActivity);
-    window.addEventListener("touchstart", onActivity);
-    window.addEventListener("gamepadconnected", onActivity);
-
-    // Start RAF-based duration tracker
-    trackingRafId = requestAnimationFrame(updateIdleDuration);
+    window.addEventListener("mousemove", onActivity, { passive: true });
+    window.addEventListener("keydown", onActivity, { passive: true });
+    window.addEventListener("mousedown", onActivity, { passive: true });
+    window.addEventListener("touchstart", onActivity, { passive: true });
+    window.addEventListener("gamepadconnected", onActivity, { passive: true });
+    trackingIntervalId = setInterval(tick, 1000);
   }
 
   function stopTracking() {
     if (typeof window === "undefined") return;
-
-    // Remove activity listeners
     window.removeEventListener("mousemove", onActivity);
     window.removeEventListener("keydown", onActivity);
     window.removeEventListener("mousedown", onActivity);
     window.removeEventListener("touchstart", onActivity);
     window.removeEventListener("gamepadconnected", onActivity);
-
-    // Stop RAF
-    if (trackingRafId !== null) {
-      cancelAnimationFrame(trackingRafId);
-      trackingRafId = null;
+    if (trackingIntervalId !== null) {
+      clearInterval(trackingIntervalId);
+      trackingIntervalId = null;
     }
   }
 
