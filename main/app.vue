@@ -67,7 +67,8 @@ initialNavigation(state);
 //   2. User toggled "Start in Big Picture Mode" in BPM settings
 // Only activate after successful auth (not on setup/signout screens).
 const bigPicture = useBigPictureMode();
-const shouldAutoBPM = (() => {
+
+function shouldAutoBPM(): boolean {
   // Gamescope session = always enter BPM
   if (state.value?.sessionType === "gamescope") return true;
   // User preference from BPM settings
@@ -77,21 +78,40 @@ const shouldAutoBPM = (() => {
   )
     return true;
   return false;
-})();
-
-// Only auto-enter BPM if the user is authenticated (not on setup/auth/error screens)
-const isAuthenticated =
-  state.value?.status !== AppStatus.NotConfigured &&
-  state.value?.status !== AppStatus.SignedOut &&
-  state.value?.status !== AppStatus.SignedInNeedsReauth &&
-  state.value?.status !== AppStatus.ServerUnavailable;
-
-if (shouldAutoBPM && isAuthenticated) {
-  // Use nextTick to ensure the initial navigation has settled before entering BPM
-  nextTick(() => {
-    bigPicture.enter();
-  });
 }
+
+function isAuthenticatedStatus(s: AppState | null | undefined): boolean {
+  if (!s) return false;
+  return (
+    s.status !== AppStatus.NotConfigured &&
+    s.status !== AppStatus.SignedOut &&
+    s.status !== AppStatus.SignedInNeedsReauth &&
+    s.status !== AppStatus.ServerUnavailable
+  );
+}
+
+/** Try to enter BPM if conditions are met and we're not already in it. */
+function tryEnterBPM() {
+  if (bigPicture.isActive.value) return;
+  if (shouldAutoBPM() && isAuthenticatedStatus(state.value)) {
+    nextTick(() => {
+      bigPicture.enter();
+    });
+  }
+}
+
+// Try on initial load
+tryEnterBPM();
+
+// Also re-check after auth completes or state updates (e.g., user was on
+// setup/signout screen and just authenticated — the initial check would
+// have skipped BPM because isAuthenticated was false at that point).
+watch(
+  () => state.value?.status,
+  () => {
+    tryEnterBPM();
+  },
+);
 
 // ── Suspend/Resume handling ──────────────────────────────────────────────
 // On Steam Deck (or any device), the OS may suspend the app. When it wakes,

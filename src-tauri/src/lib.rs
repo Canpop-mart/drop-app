@@ -125,11 +125,7 @@ async fn setup(handle: AppHandle) -> AppState {
     };
 
     let session_type = SessionType::detect();
-    info!("detected session type: {:?}", match &session_type {
-        SessionType::Desktop => "Desktop",
-        SessionType::Gamescope => "Gamescope",
-        SessionType::SteamDeckDesktop => "SteamDeckDesktop",
-    });
+    info!("detected session type: {:?}", session_type);
 
     scan_install_dirs();
 

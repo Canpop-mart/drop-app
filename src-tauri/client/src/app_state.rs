@@ -12,7 +12,7 @@ pub enum UmuState {
 
 /// Describes the display session environment the app is running in.
 /// Used by the frontend to decide whether to auto-enter Big Picture Mode.
-#[derive(Clone, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionType {
     /// Standard desktop session (X11/Wayland compositor)
