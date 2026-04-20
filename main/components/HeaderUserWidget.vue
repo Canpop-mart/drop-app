@@ -86,12 +86,16 @@ router.afterEach(() => {
 });
 
 const state = useAppState();
-const profilePictureUrl: string = await useObject(
+// useObject is synchronous (just convertFileSrc), no await needed.
+const profilePictureUrl = useObject(
   state.value?.user?.profilePictureObjectId ?? "",
 );
-const adminUrl: string = await invoke("gen_drop_url", {
-  path: "/admin",
-});
+// Avoid top-level await for adminUrl — it makes this an async component which
+// can block the entire default layout rendering during transitions (BPM exit).
+const adminUrl = ref("");
+invoke<string>("gen_drop_url", { path: "/admin" })
+  .then((url) => { adminUrl.value = url; })
+  .catch(() => {});
 
 function navigate(close: () => any, to: NavigationItem) {
   close();

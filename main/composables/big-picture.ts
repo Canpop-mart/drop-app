@@ -46,14 +46,13 @@ export function useBigPictureMode() {
 
     isActive.value = false;
 
-    // H2 fix: fully tear down BPM subsystems (stops gamepad polling,
-    // clears all focus-nav listeners, clears repeat timers, etc.)
-    focusNav.destroy();
+    // Navigate FIRST — this triggers the layout switch from bigpicture → default.
+    // Doing this before destroying subsystems avoids white-screen races where
+    // the bigpicture layout's components lose their dependencies mid-render.
+    await router.push(previousRoute.value);
 
-    const gamepad = useGamepad();
-    gamepad.destroy();
-
-    // Exit fullscreen
+    // Exit fullscreen after navigation so the new layout renders at the
+    // correct windowed size.
     try {
       const win = getCurrentWindow();
       await win.setFullscreen(false);
@@ -61,8 +60,13 @@ export function useBigPictureMode() {
       console.warn("Failed to exit fullscreen:", e);
     }
 
-    // Return to previous route
-    await router.push(previousRoute.value);
+    // H2 fix: fully tear down BPM subsystems (stops gamepad polling,
+    // clears all focus-nav listeners, clears repeat timers, etc.)
+    // Done last so bigpicture layout's onUnmounted has clean state.
+    focusNav.destroy();
+
+    const gamepad = useGamepad();
+    gamepad.destroy();
   }
 
   async function toggle() {
