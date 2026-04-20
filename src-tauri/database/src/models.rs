@@ -334,7 +334,7 @@ pub mod data {
             pub platform: Platform,
         }
 
-        #[derive(Serialize, Deserialize, Clone, Debug)]
+        #[derive(Serialize, Deserialize, Clone)]
         #[serde(rename_all = "camelCase")]
         pub struct Settings {
             pub autostart: bool,
@@ -346,9 +346,31 @@ pub mod data {
             /// Sunshine admin username for streaming (defaults to "sunshine").
             #[serde(default = "default_sunshine_username")]
             pub sunshine_username: String,
-            /// Sunshine admin password for streaming.
+            /// Sunshine admin password for streaming. Never logged via Debug.
             #[serde(default)]
             pub sunshine_password: String,
+        }
+
+        // Manual Debug impl: redact the Sunshine password so it never leaks
+        // via error reports, log lines, or panic messages.
+        impl std::fmt::Debug for Settings {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("Settings")
+                    .field("autostart", &self.autostart)
+                    .field("max_download_threads", &self.max_download_threads)
+                    .field("force_offline", &self.force_offline)
+                    .field("global_mangohud", &self.global_mangohud)
+                    .field("sunshine_username", &self.sunshine_username)
+                    .field(
+                        "sunshine_password",
+                        &if self.sunshine_password.is_empty() {
+                            "<unset>"
+                        } else {
+                            "<redacted>"
+                        },
+                    )
+                    .finish()
+            }
         }
 
         fn default_sunshine_username() -> String {

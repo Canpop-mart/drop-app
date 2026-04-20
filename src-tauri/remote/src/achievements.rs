@@ -10,6 +10,7 @@ use crate::{
     goldberg::{self, EmulatorInfo},
     requests::{generate_url, make_authenticated_get, make_authenticated_post},
     cache::{cache_object, get_cached_object},
+    utils::{bounded_json, DEFAULT_JSON_CAP_BYTES},
 };
 
 /// Prefix for all achievement debug logs — makes grep/filter easy.
@@ -127,7 +128,7 @@ pub async fn fetch_achievement_config(
         )));
     }
 
-    let data: AchievementConfigResponse = response.json().await?;
+    let data: AchievementConfigResponse = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
     debug!(
         "{TAG} Config for {game_id}: {} achievements, {} external links, {} already unlocked",
         data.achievements.len(),
@@ -178,7 +179,7 @@ pub async fn report_achievements(
         )));
     }
 
-    let data: AchievementReportResponse = response.json().await?;
+    let data: AchievementReportResponse = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
     info!("{TAG} Server recorded {} achievements for {game_id}", data.recorded);
     Ok(data)
 }

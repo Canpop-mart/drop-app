@@ -63,6 +63,21 @@ pub fn add_download_dir(new_dir: PathBuf) -> Result<(), DownloadManagerError<()>
     Ok(())
 }
 
+/// Keys the frontend is allowed to patch via `update_settings`. Must stay in
+/// sync with `Settings` field names (camelCase serde form).
+const ALLOWED_SETTINGS_KEYS: &[&str] = &[
+    "autostart",
+    "maxDownloadThreads",
+    "forceOffline",
+    "globalMangohud",
+    "sunshineUsername",
+    "sunshinePassword",
+];
+
+/// Max length accepted for free-form string settings. Prevents a rogue
+/// frontend bug from stuffing multi-MB blobs into the settings blob.
+const MAX_SETTING_STRING_LEN: usize = 4096;
+
 #[tauri::command]
 pub fn update_settings(new_settings: Value) {
     let mut db_lock = borrow_db_mut_checked();
@@ -76,6 +91,26 @@ pub fn update_settings(new_settings: Value) {
         }
     };
     for (key, value) in values {
+        if !ALLOWED_SETTINGS_KEYS.contains(&key.as_str()) {
+            error!("Rejecting unknown settings key: {key}");
+            continue;
+        }
+        if let Some(s) = value.as_str() {
+            if s.len() > MAX_SETTING_STRING_LEN {
+                error!(
+                    "Rejecting oversized settings value for {key} ({} bytes)",
+                    s.len()
+                );
+                continue;
+            }
+        }
+        if key == "maxDownloadThreads" {
+            let threads = value.as_u64().unwrap_or(0);
+            if !(1..=64).contains(&threads) {
+                error!("Rejecting out-of-range maxDownloadThreads: {threads}");
+                continue;
+            }
+        }
         current_settings[key] = value.clone();
     }
     let new_settings: Settings = match serde_json::from_value(current_settings) {

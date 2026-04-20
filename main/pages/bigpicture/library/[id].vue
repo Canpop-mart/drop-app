@@ -928,7 +928,7 @@
 <script setup lang="ts">
 import BpmSaveConflictDialog from "~/components/bigpicture/BpmSaveConflictDialog.vue";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useListen } from "~/composables/useListen";
 import {
   PlayIcon,
   StopIcon,
@@ -2630,14 +2630,8 @@ const romHashResult = ref<RomHashResult | null>(null);
 const romHashChecking = ref(false);
 
 // Listen for launch-time hash check results
-let unlistenHash: (() => void) | null = null;
-onMounted(async () => {
-  unlistenHash = await listen<RomHashResult>(
-    `ra_hash_check/${gameId}`,
-    (event) => {
-      romHashResult.value = event.payload;
-    },
-  );
+useListen<RomHashResult>(`ra_hash_check/${gameId}`, (event) => {
+  romHashResult.value = event.payload;
 });
 
 // ── Cloud Save Conflict Resolution ──────────────────────────────────────
@@ -2646,16 +2640,13 @@ import type { SaveConflict } from "~/types/save-sync";
 const saveConflictVisible = ref(false);
 const saveConflicts = ref<SaveConflict[]>([]);
 
-let unlistenConflict: (() => void) | null = null;
-onMounted(async () => {
-  unlistenConflict = await listen<{ gameId: string; conflicts: SaveConflict[] }>(
-    `save_sync_conflict/${gameId}`,
-    (event) => {
-      saveConflicts.value = event.payload.conflicts;
-      saveConflictVisible.value = true;
-    },
-  );
-});
+useListen<{ gameId: string; conflicts: SaveConflict[] }>(
+  `save_sync_conflict/${gameId}`,
+  (event) => {
+    saveConflicts.value = event.payload.conflicts;
+    saveConflictVisible.value = true;
+  },
+);
 
 function triggerTestConflict() {
   saveConflicts.value = [
@@ -2849,8 +2840,6 @@ onUnmounted(() => {
   for (const unsub of _unsubs) unsub();
   _unsubs.length = 0;
   unwireOptionsGamepad();
-  unlistenHash?.();
-  unlistenConflict?.();
   if (showOptions.value) focusNav.releaseInputLock(optionsLockId);
   window.removeEventListener("resize", _onResize);
   // Clean up streaming
@@ -2869,23 +2858,41 @@ function dismissLaunchError() {
   setTimeout(() => { launchGuard = false; }, 300);
 }
 
+const launchInFlight = ref(false);
+
 async function launchGame() {
   if (launchGuard) return;
+  // Without this guard, mashing A during launch fires multiple
+  // `invoke("launch_game")` calls in parallel — the backend may accept one
+  // and reject the rest with `AlreadyRunning`, which surfaces as a scary
+  // error dialog over a game that is actually starting correctly.
+  if (launchInFlight.value) return;
+  launchInFlight.value = true;
   try {
     const result: LaunchResult = await invoke("launch_game", {
       id: gameId,
       index: 0,
     });
     if (result.result === "InstallRequired") {
-      // Auto-download the required dependency (e.g. runtime/tool)
+      // Auto-download the required dependency (e.g. runtime/tool).
+      // Resolve the dependency's own platform rather than reusing the host
+      // game's platform — Proton/Wine builds are Linux-only, and a Windows
+      // game would otherwise ask for a "windows" build of the dep.
       const [depGameId, depVersionId] = result.data;
       try {
-        const installDirs = await invoke<string[]>("fetch_download_dir_stats");
+        const depVersions = await invoke<VersionOption[]>(
+          "fetch_game_version_options",
+          { gameId: depGameId },
+        );
+        const depPlatform =
+          depVersions?.find((v) => v.versionId === depVersionId)?.platform
+          ?? depVersions?.[0]?.platform
+          ?? "linux";
         await invoke("download_game", {
           gameId: depGameId,
           versionId: depVersionId,
           installDir: 0,
-          targetPlatform: versionOptions.value?.[0]?.platform ?? "linux",
+          targetPlatform: depPlatform,
           enableUpdates: true,
         });
         launchError.value = `A required dependency is being installed. Please try launching again once the download completes.`;
@@ -2907,9 +2914,15 @@ async function launchGame() {
       launchError.value = "No Proton compatibility layer found. Set a default Proton path in Settings or add an override for this game.";
     } else if (errMsg.includes("InvalidPlatform")) {
       launchError.value = "This game can't be played on the current platform. It may need a compatibility layer like Proton.";
+    } else if (errMsg.includes("AlreadyRunning") || errMsg.includes("already running")) {
+      // Benign — Drop already has this game running. Clear any error the
+      // user might be staring at so the "Stop" state is all they see.
+      launchError.value = null;
     } else {
       launchError.value = `Launch error: ${errMsg}`;
     }
+  } finally {
+    launchInFlight.value = false;
   }
 }
 

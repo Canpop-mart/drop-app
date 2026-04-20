@@ -2,7 +2,7 @@
 # Drop OSS v0.4.0 - Steam Deck Build Script
 # Run from the SteamOS host terminal (NOT inside a distrobox)
 
-set -e
+set -euo pipefail
 
 CONTAINER_NAME="drop-app"
 REPO_TAG="v0.4.0-rc-4"

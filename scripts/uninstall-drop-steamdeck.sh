@@ -4,6 +4,8 @@
 # old Flatpak install, desktop shortcuts, and leftover files.
 # Run from the SteamOS host terminal (Desktop Mode > Konsole).
 
+set -uo pipefail
+
 CONTAINER_NAME="drop-app"
 APP_ID="org.droposs.client"
 

@@ -132,12 +132,16 @@ impl DownloadManager {
     }
     pub async fn rearrange_string(&self, meta: &DownloadableMetadata, new_index: usize) {
         let mut queue = self.edit();
-        let current_index =
-            get_index_from_id(&mut queue, meta).expect("Failed to get meta index from id");
-        let to_move = queue
-            .remove(current_index)
-            .expect("Failed to remove meta at index from queue");
-        queue.insert(new_index, to_move);
+        let Some(current_index) = get_index_from_id(&mut queue, meta) else {
+            log::warn!("rearrange_string: no queue entry matches metadata");
+            return;
+        };
+        let Some(to_move) = queue.remove(current_index) else {
+            log::warn!("rearrange_string: index {current_index} no longer valid");
+            return;
+        };
+        let clamped = new_index.min(queue.len());
+        queue.insert(clamped, to_move);
         send!(self.command_sender, DownloadManagerSignal::UpdateUIQueue);
     }
     pub async fn cancel(&self, meta: DownloadableMetadata) {
@@ -155,10 +159,33 @@ impl DownloadManager {
 
         debug!("moving download at index {current_index} to index {new_index}");
 
-        {
+        // Mutate the queue in a synchronous block and capture whether the
+        // edit actually took effect. The guard is a `std::sync::MutexGuard`
+        // (not Send) — we must release it before any `.await` below.
+        let rearranged = {
             let mut queue = self.edit();
-            let to_move = queue.remove(current_index).expect("Failed to get");
-            queue.insert(new_index, to_move);
+            if current_index >= queue.len() {
+                log::warn!(
+                    "rearrange: current_index {current_index} out of bounds (queue len {})",
+                    queue.len()
+                );
+                false
+            } else if let Some(to_move) = queue.remove(current_index) {
+                let clamped = new_index.min(queue.len());
+                queue.insert(clamped, to_move);
+                true
+            } else {
+                log::warn!("rearrange: remove({current_index}) returned None");
+                false
+            }
+        };
+
+        if !rearranged {
+            // Nothing to UI-update; just resume if we paused.
+            if needs_pause {
+                send!(self.command_sender, DownloadManagerSignal::Go);
+            }
+            return;
         }
 
         if needs_pause {
@@ -175,8 +202,11 @@ impl DownloadManager {
     }
     pub async fn ensure_terminated(&self) -> Result<(), tauri::Error> {
         send!(self.command_sender, DownloadManagerSignal::Finish);
-        let terminator = lock!(self.terminator).take();
-        terminator.unwrap().await
+        let Some(terminator) = lock!(self.terminator).take() else {
+            // Already terminated — nothing to await.
+            return Ok(());
+        };
+        terminator.await
     }
     pub fn get_sender(&self) -> Sender<DownloadManagerSignal> {
         self.command_sender.clone()

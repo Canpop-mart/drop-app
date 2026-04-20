@@ -87,25 +87,34 @@
             </div>
           </div>
 
+          <div
+            v-if="submitError"
+            class="mt-4 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
+          >
+            {{ submitError }}
+          </div>
+
           <!-- Buttons -->
           <div class="flex items-center justify-end gap-3 mt-6">
             <button
-              class="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-colors"
+              class="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               :class="focusArea === 'buttons' && focusedButton === 'cancel'
                 ? 'bg-zinc-700 text-zinc-100 ring-2 ring-blue-500'
                 : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'"
+              :disabled="submitting"
               @click="keepAllLocal"
             >
               <BigPictureButtonPrompt button="B" label="Keep All Local" size="sm" />
             </button>
             <button
-              class="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-colors"
+              class="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               :class="focusArea === 'buttons' && focusedButton === 'confirm'
                 ? 'bg-blue-600 text-white ring-2 ring-blue-400 shadow-lg shadow-blue-500/30'
                 : 'bg-blue-600/80 text-blue-100 hover:bg-blue-600'"
+              :disabled="submitting"
               @click="submit"
             >
-              <BigPictureButtonPrompt button="A" label="Continue" size="sm" />
+              <BigPictureButtonPrompt button="A" :label="submitting ? 'Applying…' : 'Continue'" size="sm" />
             </button>
           </div>
         </div>
@@ -132,6 +141,8 @@ const emit = defineEmits<{
 }>();
 
 const choices = ref<string[]>([]);
+const submitting = ref(false);
+const submitError = ref<string | null>(null);
 // Navigation state: "conflicts" area (rows) or "buttons" area (confirm/cancel)
 const focusArea = ref<"conflicts" | "buttons">("conflicts");
 const focusedRow = ref(0);
@@ -161,9 +172,16 @@ watch(
     choices.value = val.map(() => "keep_local");
     focusedRow.value = 0;
     focusArea.value = val.length > 0 ? "conflicts" : "buttons";
+    submitError.value = null;
   },
   { immediate: true },
 );
+
+// Clear the error whenever the user changes a selection so stale text
+// doesn't hang around after they've picked a different choice.
+watch(choices, () => {
+  if (submitError.value) submitError.value = null;
+}, { deep: true });
 
 watch(
   () => props.visible,
@@ -282,6 +300,9 @@ function keepAllLocal() {
 }
 
 async function submit() {
+  if (submitting.value) return;
+  submitting.value = true;
+  submitError.value = null;
   const resolutions = props.conflicts.map((c, i) => ({
     filename: c.filename,
     choice: choices.value[i],
@@ -294,11 +315,18 @@ async function submit() {
         resolutions,
       },
     });
+    emit("resolved");
   } catch (e) {
     console.warn("[SAVE-SYNC] Failed to send conflict resolutions:", e);
+    submitError.value =
+      e instanceof Error
+        ? `Couldn't apply choices: ${e.message}`
+        : `Couldn't apply choices: ${String(e)}`;
+    // Leave the dialog open so the user can retry without losing their
+    // per-file choices on a transient failure.
+  } finally {
+    submitting.value = false;
   }
-
-  emit("resolved");
 }
 
 function formatSize(bytes: number): string {

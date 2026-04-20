@@ -36,6 +36,7 @@ pub enum RemoteAccessError {
     CorruptedState,
     NoDepots,
     FailedDownload,
+    ResponseTooLarge(u64),
 }
 
 impl Display for RemoteAccessError {
@@ -151,6 +152,10 @@ impl Display for RemoteAccessError {
                 "There are no download depots configured on the server. Contact your server admin."
             ),
             RemoteAccessError::FailedDownload => write!(f, "Failed to download."),
+            RemoteAccessError::ResponseTooLarge(cap) => write!(
+                f,
+                "Server response exceeded the maximum allowed size ({cap} bytes)."
+            ),
         }
     }
 }

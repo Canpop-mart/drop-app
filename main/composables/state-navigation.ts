@@ -1,58 +1,41 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { AppStatus, type AppState } from "~/types";
+import { useListen } from "./useListen";
 
 export function setupHooks() {
   const router = useRouter();
   const state = useAppState();
 
-  const unlistenFns: Array<Promise<() => void>> = [];
+  useListen("auth/processing", () => {
+    router.push("/auth/processing");
+  });
 
-  unlistenFns.push(
-    listen("auth/processing", (event) => {
-      router.push("/auth/processing");
-    }),
-  );
+  useListen<string>("auth/failed", (event) => {
+    router.push(`/auth/failed?error=${encodeURIComponent(event.payload)}`);
+  });
 
-  unlistenFns.push(
-    listen("auth/failed", (event) => {
-      router.push(
-        `/auth/failed?error=${encodeURIComponent(event.payload as string)}`,
-      );
-    }),
-  );
+  useListen("auth/finished", async () => {
+    router.push("/library");
+    state.value = JSON.parse(await invoke("fetch_state"));
+  });
 
-  unlistenFns.push(
-    listen("auth/finished", async (event) => {
-      router.push("/library");
-      state.value = JSON.parse(await invoke("fetch_state"));
-    }),
-  );
-
-  unlistenFns.push(
-    listen("download_error", (event) => {
-      createModal(
-        ModalType.Notification,
-        {
-          title: "Drop encountered an error while downloading",
-          description: `Drop encountered an error while downloading your game: "${(
-            event.payload as unknown as string
-          ).toString()}"`,
-          buttonText: "Close",
-        },
-        (e, c) => c(),
-      );
-    }),
-  );
+  useListen<string>("download_error", (event) => {
+    createModal(
+      ModalType.Notification,
+      {
+        title: "Drop encountered an error while downloading",
+        description: `Drop encountered an error while downloading your game: "${event.payload.toString()}"`,
+        buttonText: "Close",
+      },
+      (e, c) => c(),
+    );
+  });
 
   // Handle remote install requests from other devices
-  unlistenFns.push(
-    listen("remote-install-request", async (event) => {
-      const payload = event.payload as {
-        gameId: string;
-        gameName: string;
-        sessionId: string;
-      };
+  useListen<{ gameId: string; gameName: string; sessionId: string }>(
+    "remote-install-request",
+    async (event) => {
+      const payload = event.payload;
       console.log(
         "[REMOTE-INSTALL] Received request to install:",
         payload.gameName,
@@ -84,33 +67,26 @@ export function setupHooks() {
       } catch (e) {
         console.warn("[REMOTE-INSTALL] Failed to start download:", e);
       }
-    }),
+    },
   );
 
   // This is for errors that (we think) aren't our fault
-  unlistenFns.push(
-    listen("launch_external_error", (event) => {
-      createModal(
-        ModalType.Confirmation,
-        {
-          title: "Did something go wrong?",
-          description:
-            "Drop detected that something might've gone wrong with launching your game. Do you want to open the log directory?",
-          buttonText: "Open",
-        },
-        async (e, c) => {
-          if (e == "confirm") {
-            await invoke("open_process_logs", { gameId: event.payload });
-          }
-          c();
-        },
-      );
-    }),
-  );
-
-  onUnmounted(async () => {
-    const resolvedFns = await Promise.all(unlistenFns);
-    resolvedFns.forEach((fn) => fn());
+  useListen<string>("launch_external_error", (event) => {
+    createModal(
+      ModalType.Confirmation,
+      {
+        title: "Did something go wrong?",
+        description:
+          "Drop detected that something might've gone wrong with launching your game. Do you want to open the log directory?",
+        buttonText: "Open",
+      },
+      async (e, c) => {
+        if (e == "confirm") {
+          await invoke("open_process_logs", { gameId: event.payload });
+        }
+        c();
+      },
+    );
   });
 }
 

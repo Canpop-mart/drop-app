@@ -5,6 +5,8 @@
 #   - Distrobox container (drop-app)
 #   - Desktop entries, icons, build caches, export folders
 
+set -uo pipefail
+
 echo "======================================"
 echo " Drop OSS - Uninstaller"
 echo "======================================"

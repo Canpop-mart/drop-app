@@ -397,10 +397,35 @@ pub fn run() {
 
                 let handle = app.handle().clone();
 
-                // In Gamescope (SteamOS Game Mode), start fullscreen with
-                // Deck-appropriate dimensions. On desktop, use normal window.
+                // In Gamescope (SteamOS Game Mode), start fullscreen at the
+                // compositor's actual size. Hard-coding 1280x800 breaks when
+                // the Deck is docked to an external 1080p/4K display, when
+                // gamescope runs at a non-native internal resolution, or when
+                // it's used on a non-Deck handheld. Ask the windowing system
+                // for the real primary monitor size and fall back to Deck
+                // dimensions only if the query fails.
                 let (width, height) = if is_gamescope {
-                    (1280.0, 800.0) // Steam Deck internal display
+                    match handle.primary_monitor() {
+                        Ok(Some(monitor)) => {
+                            let size = monitor.size();
+                            let scale = monitor.scale_factor().max(f64::EPSILON);
+                            let logical_w = size.width as f64 / scale;
+                            let logical_h = size.height as f64 / scale;
+                            info!(
+                                "[STARTUP] Gamescope monitor: physical {}x{} @ scale {:.2} \
+                                 → logical {:.0}x{:.0}",
+                                size.width, size.height, scale, logical_w, logical_h
+                            );
+                            (logical_w, logical_h)
+                        }
+                        other => {
+                            warn!(
+                                "[STARTUP] Gamescope: couldn't read primary monitor ({other:?}), \
+                                 falling back to 1280x800"
+                            );
+                            (1280.0, 800.0)
+                        }
+                    }
                 } else {
                     (1536.0, 864.0)
                 };
@@ -428,12 +453,43 @@ pub fn run() {
                     .build()
                     .expect("failed to build main window");
 
+                // On Gamescope, the fullscreen window ends up at the compositor
+                // resolution (which may differ from what we passed as
+                // inner_size because the compositor enforces its own size).
+                // Read the window's actual inner size back so the webview
+                // starts at the real display size — otherwise `.auto_resize()`
+                // has to chase the window on first paint and the UI renders at
+                // the wrong resolution for the first frame (and sometimes
+                // permanently, on Wayland compositors that batch resize events
+                // before the webview attaches).
+                let (webview_w, webview_h) = if is_gamescope {
+                    match main_window.inner_size() {
+                        Ok(phys) => {
+                            let scale = main_window.scale_factor().unwrap_or(1.0).max(f64::EPSILON);
+                            let w = phys.width as f64 / scale;
+                            let h = phys.height as f64 / scale;
+                            info!(
+                                "[STARTUP] Gamescope window actual size: physical {}x{} @ scale {:.2} \
+                                 → logical {:.0}x{:.0}",
+                                phys.width, phys.height, scale, w, h
+                            );
+                            (w, h)
+                        }
+                        Err(e) => {
+                            warn!("[STARTUP] Couldn't read window inner size ({e}), using requested {width}x{height}");
+                            (width, height)
+                        }
+                    }
+                } else {
+                    (width, height)
+                };
+
                 main_window
                     .add_child(
                         WebviewBuilder::new("frontend", WebviewUrl::App("main".into()))
                             .auto_resize(),
                         LogicalPosition::new(0., 0.),
-                        LogicalSize::new(width, height),
+                        LogicalSize::new(webview_w, webview_h),
                     )
                     .expect("failed to create frontend webview");
 
@@ -449,15 +505,10 @@ pub fn run() {
                     };
                     if let Some("handshake") = url.host_str() {
                         let path = url.path().to_string();
-                        // Validate path: must be non-empty and must not contain traversal sequences
-                        if !path.is_empty() && !path.contains("..") {
-                            tauri::async_runtime::spawn(recieve_handshake(
-                                handle.clone(),
-                                path,
-                            ));
-                        } else {
-                            warn!("Invalid handshake path received: {}", path);
-                        }
+                        tauri::async_runtime::spawn(recieve_handshake(
+                            handle.clone(),
+                            path,
+                        ));
                     }
                 });
                 let open_menu_item = MenuItem::with_id(app, "open", "Open", true, None::<&str>)
@@ -618,13 +669,27 @@ async fn recieve_handshake_logic(app: &AppHandle, path: String) -> Result<(), Re
         Url::parse(handle.base_url.as_str())?
     };
 
-    let client_id = path_chunks
-        .get(1)
-        .expect("Failed to get client id from path chunks");
-    let token = path_chunks
-        .get(2)
-        .expect("Failed to get token from path chunks");
-    let body = HandshakeRequestBody::new((client_id).to_string(), (token).to_string());
+    let client_id = path_chunks.get(1).ok_or_else(|| {
+        RemoteAccessError::HandshakeFailed("missing client id in handshake path".to_string())
+    })?;
+    let token = path_chunks.get(2).ok_or_else(|| {
+        RemoteAccessError::HandshakeFailed("missing token in handshake path".to_string())
+    })?;
+    // Client id and token are opaque identifiers issued by the server. Reject
+    // anything with structural characters so a malformed deep link can't be
+    // coerced into something weirder downstream.
+    let is_token_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    if client_id.is_empty() || !client_id.chars().all(is_token_char) {
+        return Err(RemoteAccessError::HandshakeFailed(
+            "invalid client id in handshake path".to_string(),
+        ));
+    }
+    if token.is_empty() || !token.chars().all(is_token_char) {
+        return Err(RemoteAccessError::HandshakeFailed(
+            "invalid token in handshake path".to_string(),
+        ));
+    }
+    let body = HandshakeRequestBody::new((*client_id).to_string(), (*token).to_string());
 
     let endpoint = base_url.join("/api/v1/client/auth/handshake")?;
     let client = DROP_CLIENT_ASYNC.clone();

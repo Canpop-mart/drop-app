@@ -2,7 +2,7 @@
 # Drop OSS - Steam Deck Installer
 # Place this file next to drop-app.AppImage and run it.
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APPIMAGE_SRC="$SCRIPT_DIR/drop-app.AppImage"

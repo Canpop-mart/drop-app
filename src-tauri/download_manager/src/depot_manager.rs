@@ -155,8 +155,10 @@ impl DepotManager {
                 true
             })
             .max_by(|x, y| {
-                let x_speed = x.latest_speed.unwrap_or(0) / x.current_downloads.permits();
-                let y_speed = y.latest_speed.unwrap_or(0) / y.current_downloads.permits();
+                // permits() + 1 avoids div-by-zero when no downloads are in flight;
+                // preserves ordering since both sides use the same +1 offset.
+                let x_speed = x.latest_speed.unwrap_or(0) / (x.current_downloads.permits() + 1);
+                let y_speed = y.latest_speed.unwrap_or(0) / (y.current_downloads.permits() + 1);
                 x_speed.cmp(&y_speed)
             })
             .ok_or(RemoteAccessError::NoDepots)?;

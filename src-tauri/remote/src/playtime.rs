@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::RemoteAccessError,
     requests::{generate_url, make_authenticated_post},
+    utils::{bounded_json, DEFAULT_JSON_CAP_BYTES},
 };
 
 #[derive(Serialize)]
@@ -52,7 +53,7 @@ pub async fn start_playtime(game_id: &str) -> Result<String, RemoteAccessError> 
         ));
     }
 
-    let data: PlaytimeStartResponse = response.json().await?;
+    let data: PlaytimeStartResponse = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
     info!("Started playtime session {} for game {}", data.session_id, game_id);
     Ok(data.session_id)
 }

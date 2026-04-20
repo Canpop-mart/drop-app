@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 echo "=== Drop Desktop Client — Steam Deck Build Script ==="
 echo ""

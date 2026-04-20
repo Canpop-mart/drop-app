@@ -5,7 +5,12 @@ use http::{
 use log::{error, warn};
 use tauri::UriSchemeResponder;
 
-use crate::utils::DROP_CLIENT_ASYNC;
+use crate::utils::{DROP_CLIENT_ASYNC, bounded_bytes};
+
+/// Cap for `server://` proxied responses. The proxy is used for arbitrary
+/// HTML/JS content from the drop server, so we give it plenty of room
+/// (128 MiB) without letting a malicious server drain memory.
+const SERVER_PROTO_CAP: u64 = 128 * 1024 * 1024;
 
 pub async fn handle_server_proto_offline_wrapper(
     request: Request<Vec<u8>>,
@@ -128,12 +133,15 @@ async fn handle_server_proto(request: Request<Vec<u8>>) -> Result<Response<Vec<u
         }
     };
 
-    let response_body = match response.bytes().await {
+    let response_body = match bounded_bytes(response, SERVER_PROTO_CAP).await {
         Ok(bytes) => bytes,
-        Err(e) => return Err(e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)),
+        Err(e) => {
+            warn!("server:// proxy rejected oversized body: {e}");
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
+        }
     };
 
-    let client_http_response = match client_http_response.body(response_body.to_vec()) {
+    let client_http_response = match client_http_response.body(response_body) {
         Ok(resp) => resp,
         Err(e) => {
             error!("Failed to build server proto response: {}", e);
