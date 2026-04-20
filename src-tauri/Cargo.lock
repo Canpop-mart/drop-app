@@ -1510,7 +1510,7 @@ dependencies = [
 
 [[package]]
 name = "drop-app"
-version = "0.4.0"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7608,6 +7608,7 @@ name = "utils"
 version = "0.1.0"
 dependencies = [
  "log",
+ "regex",
  "thiserror 2.0.17",
  "url",
  "webbrowser",

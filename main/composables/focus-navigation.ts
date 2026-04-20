@@ -1,5 +1,6 @@
 import { GamepadButton, useGamepad, type ButtonCallback } from "./gamepad";
 import { useBpAudio, tryGamepadAudioUnlock } from "./bp-audio";
+import { useDeckMode } from "./deck-mode";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -216,6 +217,23 @@ interface FocusSnapshot {
 
 /** Per-route focus snapshots for back-navigation restoration. */
 const focusHistory = new Map<string, FocusSnapshot>();
+
+/**
+ * Per-route free-form state bag. Pages can use this to persist things
+ * focus-nav doesn't know about — e.g. which tab was active on the store
+ * page. Survives route changes so back-navigation restores the user's
+ * last view, not the page's default.
+ */
+const routeStateStore = new Map<string, Map<string, unknown>>();
+
+function _routeStateBag(path: string): Map<string, unknown> {
+  let bag = routeStateStore.get(path);
+  if (!bag) {
+    bag = new Map();
+    routeStateStore.set(path, bag);
+  }
+  return bag;
+}
 
 /**
  * Save the current focus state for a route path (module-level).
@@ -730,6 +748,7 @@ export function useFocusNavigation() {
     gridGroups.clear();
     gridContexts.clear();
     focusHistory.clear();
+    routeStateStore.clear();
     currentFocused.value = null;
     currentGroup.value = "";
     enabled.value = false;
@@ -746,6 +765,24 @@ export function useFocusNavigation() {
 
   const saveFocusSnapshot = _saveFocusSnapshot;
   const restoreFocusSnapshot = _restoreFocusSnapshot;
+
+  /**
+   * Record a per-route piece of page state (e.g. "activeTab" on the store).
+   * Pages call this when the state changes; `getRouteState` reads it on
+   * mount so back-navigation restores the user's last view.
+   *
+   * When no `routePath` is supplied, uses the current route. Values persist
+   * until `destroy()` clears them (i.e. exiting BPM).
+   */
+  function setRouteState(key: string, value: unknown, routePath?: string) {
+    const path = routePath ?? useRouter().currentRoute.value.path;
+    _routeStateBag(path).set(key, value);
+  }
+
+  function getRouteState<T = unknown>(key: string, routePath?: string): T | undefined {
+    const path = routePath ?? useRouter().currentRoute.value.path;
+    return routeStateStore.get(path)?.get(key) as T | undefined;
+  }
 
   /**
    * Auto-focus the first element in `preferredGroup` (default "content").
@@ -810,6 +847,8 @@ export function useFocusNavigation() {
     unrestrictFocus,
     saveFocusSnapshot,
     restoreFocusSnapshot,
+    setRouteState,
+    getRouteState,
     autoFocusContent,
     contextHandled: readonly(contextHandled),
     destroy,
@@ -929,10 +968,16 @@ function wireGamepad() {
     }),
   );
 
-  // X = Context action
-  // Sets contextHandled flag so page-level X handlers can skip
+  // X = Context action.
+  // Sets contextHandled flag so page-level X handlers can skip.
+  // Physical X reports as North under gamescope, so swap accordingly —
+  // without this, a Deck user pressing physical X does nothing while
+  // physical Y would open context menus behind any search/paste action
+  // already bound to Y.
+  const { isGamescope: _isGSCtx } = useDeckMode();
+  const _contextBtn = _isGSCtx.value ? GamepadButton.North : GamepadButton.West;
   gamepadUnsubs.push(
-    gamepad.onButton(GamepadButton.West, () => {
+    gamepad.onButton(_contextBtn, () => {
       if (!enabled.value || inputLocked.value) return;
       if (currentFocused.value?.onContext) {
         currentFocused.value.onContext();

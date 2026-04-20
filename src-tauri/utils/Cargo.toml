@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 log = "0.4.28"
+regex = "1.11.1"
 thiserror = "2"
 url = "2.5"
 webbrowser = "1.0.5"

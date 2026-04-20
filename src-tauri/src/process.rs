@@ -84,6 +84,87 @@ pub fn open_process_logs(game_id: String, app_handle: AppHandle) -> Result<(), P
         .map_err(|v| ProcessError::OpenerError(Arc::new(v)))
 }
 
+/// Read the tail of the most recent per-launch log for a game. Used by the
+/// BPM launch error dialog so the user can see why the process died without
+/// leaving Big Picture Mode.
+#[tauri::command]
+pub fn read_latest_launch_log(
+    game_id: String,
+    max_lines: Option<usize>,
+    stderr: Option<bool>,
+) -> Result<LaunchLogTail, String> {
+    let dir = {
+        let lock = PROCESS_MANAGER.lock();
+        lock.get_log_dir(&game_id)
+    };
+    if !dir.exists() {
+        return Ok(LaunchLogTail {
+            path: dir.display().to_string(),
+            tail: String::new(),
+            truncated: false,
+        });
+    }
+
+    // Find the newest .log file. If `stderr` is true, prefer *-error.log; else
+    // prefer the plain log. Fall back to any if the preferred suffix is missing.
+    let want_stderr = stderr.unwrap_or(false);
+    let mut best: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(e) => return Err(format!("read_dir({}): {e}", dir.display())),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.ends_with(".log") {
+            continue;
+        }
+        let is_error = name.ends_with("-error.log");
+        if want_stderr != is_error {
+            continue;
+        }
+        let mtime = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        match &best {
+            None => best = Some((path, mtime)),
+            Some((_, prev)) if mtime > *prev => best = Some((path, mtime)),
+            _ => {}
+        }
+    }
+
+    let Some((path, _)) = best else {
+        return Ok(LaunchLogTail {
+            path: dir.display().to_string(),
+            tail: String::new(),
+            truncated: false,
+        });
+    };
+
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let max = max_lines.unwrap_or(400);
+    let lines: Vec<&str> = content.lines().collect();
+    let truncated = lines.len() > max;
+    let start = if truncated { lines.len() - max } else { 0 };
+    Ok(LaunchLogTail {
+        path: path.display().to_string(),
+        tail: lines[start..].join("\n"),
+        truncated,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchLogTail {
+    pub path: String,
+    pub tail: String,
+    pub truncated: bool,
+}
+
 /// Frontend sends this after the user resolves save conflicts.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

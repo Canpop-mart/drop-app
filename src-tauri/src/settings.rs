@@ -299,6 +299,8 @@ pub fn collect_bug_report_diagnostics() -> HashMap<String, String> {
 }
 
 /// Reads the last N lines of the client log file for bug report attachment.
+/// Output is passed through the secret redactor so tokens never leave
+/// the local machine in plaintext.
 #[tauri::command]
 pub fn collect_bug_report_logs(max_lines: Option<usize>) -> Result<String, String> {
     let log_path = DATA_ROOT_DIR.join("drop.log");
@@ -308,5 +310,62 @@ pub fn collect_bug_report_logs(max_lines: Option<usize>) -> Result<String, Strin
     let max = max_lines.unwrap_or(200);
     let lines: Vec<&str> = content.lines().collect();
     let start = if lines.len() > max { lines.len() - max } else { 0 };
-    Ok(lines[start..].join("\n"))
+    let tail = lines[start..].join("\n");
+    Ok(::utils::redact(&tail))
+}
+
+/// Max bytes of `drop.log` we attach as a file to a bug report. The server
+/// has its own upload limits; this is belt-and-braces to keep the payload
+/// reasonable for reviewers and to avoid slow uploads on Deck LTE tethers.
+const MAX_LOGFILE_BYTES: usize = 5 * 1024 * 1024;
+
+/// Full-file variant of [`collect_bug_report_logs`] — returns the entire
+/// `drop.log` (tail-truncated to ~5 MB) after secret redaction, for upload
+/// as a multipart file attachment. Exposed separately so the frontend can
+/// decide whether to send it as a text field (legacy) or a file blob (new).
+#[tauri::command]
+pub fn collect_bug_report_log_file() -> Result<LogFilePayload, String> {
+    let log_path = DATA_ROOT_DIR.join("drop.log");
+    let raw = std::fs::read_to_string(&log_path)
+        .map_err(|e| format!("Failed to read log file: {}", e))?;
+
+    let redacted = ::utils::redact(&raw);
+    let bytes = redacted.into_bytes();
+    let truncated = bytes.len() > MAX_LOGFILE_BYTES;
+    // Keep the tail — more recent entries are almost always more useful.
+    let content = if truncated {
+        let start = bytes.len() - MAX_LOGFILE_BYTES;
+        bytes[start..].to_vec()
+    } else {
+        bytes
+    };
+
+    Ok(LogFilePayload {
+        filename: "drop.log".into(),
+        content,
+        truncated,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogFilePayload {
+    pub filename: String,
+    /// Serde will serialize `Vec<u8>` as a JSON array of numbers, which the
+    /// frontend turns into a `Uint8Array` and wraps in a `Blob` for upload.
+    pub content: Vec<u8>,
+    pub truncated: bool,
+}
+
+/// Opens the folder containing `drop.log` in the platform file manager.
+/// Useful on Steam Deck Desktop Mode when a user wants to grab the log
+/// manually before filing an issue.
+#[tauri::command]
+pub fn open_log_folder(app_handle: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = DATA_ROOT_DIR.to_path_buf();
+    app_handle
+        .opener()
+        .open_path(dir.display().to_string(), None::<&str>)
+        .map_err(|e| format!("Failed to open log folder: {}", e))
 }

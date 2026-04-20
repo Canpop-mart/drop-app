@@ -6,7 +6,7 @@
     <!-- Main content area -->
     <div class="flex-1 flex flex-col min-w-0">
       <BigPictureTopBar />
-      <div class="flex-1 overflow-y-auto" data-bp-scroll>
+      <div class="flex-1 overflow-y-auto bp-scroll-hint" data-bp-scroll>
         <!-- No <Transition> wrapper — it caused white screens on WebKitGTK
              (SteamOS / Steam Deck) because position:absolute on the leaving
              page would cover the entering page if the transition didn't
@@ -15,6 +15,12 @@
       </div>
       <BigPictureContextBar />
     </div>
+
+    <!-- Launch error dialog — listens globally for launch_external_error_detail -->
+    <LaunchErrorDialog />
+
+    <!-- Download completion toast — watches useCompletedDownloads -->
+    <BpmDownloadToast />
 
     <!-- Debug overlay (toggle with Select button) -->
     <div
@@ -45,6 +51,8 @@
 import BigPictureNavRail from "~/components/bigpicture/BigPictureNavRail.vue";
 import BigPictureTopBar from "~/components/bigpicture/BigPictureTopBar.vue";
 import BigPictureContextBar from "~/components/bigpicture/BigPictureContextBar.vue";
+import LaunchErrorDialog from "~/components/bigpicture/LaunchErrorDialog.vue";
+import BpmDownloadToast from "~/components/bigpicture/BpmDownloadToast.vue";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useDeckMode } from "~/composables/deck-mode";
@@ -201,6 +209,13 @@ onUnmounted(() => {
 
 <!-- Global BPM focus & press styles (unscoped so child components inherit) -->
 <style>
+/* Hint the compositor to promote the BPM scroll container to its own layer.
+   Noticeably cheaper than `transform: translateZ(0)` on weak iGPUs (Deck)
+   because the browser picks a less expensive backing store. */
+.bp-scroll-hint {
+  will-change: scroll-position;
+}
+
 /* Focus indicator ring — applied by focus-navigation.ts */
 [data-focusable].bp-focused {
   outline: 3px solid rgba(var(--bpm-accent, 59 130 246) / 0.8);

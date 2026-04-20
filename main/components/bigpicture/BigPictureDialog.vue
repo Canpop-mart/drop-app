@@ -3,7 +3,8 @@
     <Transition name="bp-dialog">
       <div
         v-if="visible"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+        :class="{ 'backdrop-blur-sm': !reducedMotion }"
         @click.self="handleCancel"
       >
         <div
@@ -69,7 +70,9 @@
 import BigPictureButtonPrompt from "~/components/bigpicture/BigPictureButtonPrompt.vue";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useFocusNavigation } from "~/composables/focus-navigation";
+import { useReducedMotion } from "~/composables/bp-reduced-motion";
 
+const { reducedMotion } = useReducedMotion();
 const focusNav = useFocusNavigation();
 let lockId = 0;
 
@@ -112,7 +115,11 @@ watch(
   () => props.visible,
   (v) => {
     if (v) {
-      focusedButton.value = "confirm";
+      // Destructive actions default to Cancel so a stray A-press doesn't
+      // delete files or log the user out.
+      focusedButton.value = props.destructive && props.showCancel
+        ? "cancel"
+        : "confirm";
       lockId = focusNav.acquireInputLock();
       wireGamepad();
     } else {
