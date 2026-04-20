@@ -445,12 +445,22 @@ pub fn run() {
                     .resizable(true);
 
                 // In Gamescope, go fullscreen and skip window decorations/shadow
-                // (Gamescope handles the compositor chrome)
+                // (Gamescope handles the compositor chrome). On Deck hardware,
+                // skip explicit fullscreen — gamescope already presents the
+                // window at its internal 1280x800 render target and toggling
+                // fullscreen makes it stretch to the compositor output size
+                // (1080p/4K when docked), which is the wrong render target.
                 if is_gamescope {
-                    window_builder = window_builder
-                        .fullscreen(true)
-                        .decorations(false)
-                        .shadow(false);
+                    if is_deck_hw {
+                        window_builder = window_builder
+                            .decorations(false)
+                            .shadow(false);
+                    } else {
+                        window_builder = window_builder
+                            .fullscreen(true)
+                            .decorations(false)
+                            .shadow(false);
+                    }
                 } else {
                     window_builder = window_builder
                         .decorations(false)
@@ -470,7 +480,13 @@ pub fn run() {
                 // the wrong resolution for the first frame (and sometimes
                 // permanently, on Wayland compositors that batch resize events
                 // before the webview attaches).
-                let (webview_w, webview_h) = if is_gamescope {
+                // For Deck hardware under gamescope we trust our hardcoded
+                // 1280x800 — the compositor may report a larger logical size
+                // (matching the external display when docked) but the actual
+                // render target gamescope hands us is always 1280x800.
+                // For non-Deck handhelds / desktop gamescope, use the
+                // compositor-reported size so we match the real output.
+                let (webview_w, webview_h) = if is_gamescope && !is_deck_hw {
                     match main_window.inner_size() {
                         Ok(phys) => {
                             let scale = main_window.scale_factor().unwrap_or(1.0).max(f64::EPSILON);

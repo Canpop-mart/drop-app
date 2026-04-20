@@ -36,7 +36,7 @@
         <!-- Action buttons -->
         <div class="flex items-center gap-3">
           <!-- ── Installed: Play button with dropdown ── -->
-          <div v-if="status?.type === 'Installed'" class="relative inline-flex">
+          <div v-if="status?.type === 'Installed' && status.install_type.type === 'Installed'" class="relative inline-flex">
             <div
               :ref="(el: any) => registerAction(el, { onSelect: launchGame, onContext: togglePlayMenu })"
               class="bp-focus-delegate inline-flex cursor-pointer"
@@ -111,6 +111,28 @@
             <div v-if="playMenuOpen" class="fixed inset-0 z-40" @click="playMenuOpen = false" />
           </div>
 
+          <!-- ── Installed + PartiallyInstalled: Resume button ── -->
+          <button
+            v-else-if="status?.type === 'Installed' && status.install_type.type === 'PartiallyInstalled'"
+            :ref="(el: any) => registerAction(el, { onSelect: resumePartialDownload })"
+            class="inline-flex items-center px-8 py-4 text-lg gap-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl transition-colors shadow-lg"
+            @click="resumePartialDownload"
+          >
+            <ArrowDownTrayIcon class="size-6" />
+            Resume
+          </button>
+
+          <!-- ── Installed + SetupRequired: Setup button ── -->
+          <button
+            v-else-if="status?.type === 'Installed' && status.install_type.type === 'SetupRequired'"
+            :ref="(el: any) => registerAction(el, { onSelect: launchGame })"
+            class="inline-flex items-center px-8 py-4 text-lg gap-3 bg-yellow-600 hover:bg-yellow-500 text-white font-semibold rounded-xl transition-colors shadow-lg"
+            @click="launchGame"
+          >
+            <WrenchIcon class="size-6" />
+            Setup
+          </button>
+
           <!-- ── Running: Stop button ── -->
           <button
             v-else-if="status?.type === 'Running'"
@@ -134,7 +156,7 @@
 
           <!-- ── Downloading/Queued: Status ── -->
           <button
-            v-else-if="status?.type === 'Downloading' || status?.type === 'Queued'"
+            v-if="status?.type === 'Downloading' || status?.type === 'Queued'"
             class="inline-flex items-center px-8 py-4 text-lg gap-3 font-semibold rounded-xl cursor-not-allowed"
             style="background-color: rgba(59,130,246,0.2); color: rgb(147,197,253)"
             disabled
@@ -143,8 +165,21 @@
             {{ status?.type === "Downloading" ? "Downloading..." : "Queued" }}
           </button>
 
-          <!-- ── Not installed: Install button with device picker ── -->
-          <div v-else class="relative inline-flex">
+          <!-- ── Not installed: Install button with device picker.
+               Explicit condition (not v-else) because launchStatus
+               breaks the chain above — we must NOT render Install
+               when the game is already Installed / Running / in
+               flight, or we end up with two buttons side by side. -->
+          <div
+            v-if="
+              status &&
+              status.type !== 'Installed' &&
+              status.type !== 'Running' &&
+              status.type !== 'Downloading' &&
+              status.type !== 'Queued'
+            "
+            class="relative inline-flex"
+          >
             <div
               :ref="(el: any) => registerAction(el, { onSelect: downloadGame, onContext: installableDevices.length > 0 ? togglePlayMenu : undefined })"
               class="bp-focus-delegate inline-flex cursor-pointer"
@@ -955,7 +990,7 @@ import {
   SignalIcon,
 } from "@heroicons/vue/24/solid";
 import { ChevronDownIcon } from "@heroicons/vue/20/solid";
-import { ClockIcon } from "@heroicons/vue/24/outline";
+import { ClockIcon, WrenchIcon } from "@heroicons/vue/24/outline";
 import BigPictureDialog from "~/components/bigpicture/BigPictureDialog.vue";
 import BigPictureButtonPrompt from "~/components/bigpicture/BigPictureButtonPrompt.vue";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
@@ -2709,6 +2744,11 @@ onMounted(async () => {
       showOptions.value = true;
     }),
     gamepad.onButton(_playMenuBtn, () => {
+      // Focus-nav also routes this button to the focused element's onContext.
+      // When the Play button itself is focused, onContext = togglePlayMenu
+      // already ran this tick — running it again here would flip it back
+      // closed on a single press.
+      if (focusNav.contextHandled.value) return;
       if (showOptions.value) return;
       if (streamableDevices.value.length === 0 && installableDevices.value.length === 0) return;
       togglePlayMenu();
@@ -2958,6 +2998,15 @@ async function killGame() {
  * Download/install the game.
  * Fetches version options to find the best version, then starts the download.
  */
+async function resumePartialDownload() {
+  try {
+    await invoke("resume_download", { gameId });
+  } catch (e) {
+    console.error("Failed to resume download:", e);
+    launchError.value = `Resume failed: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
 async function downloadGame() {
   try {
     // Need version options to know what to download

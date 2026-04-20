@@ -69,9 +69,13 @@ import { useQueueState, useStatsState, formatKilobytes } from "~/composables/dow
 const { reducedMotion } = useReducedMotion();
 const route = useRoute();
 
+// Search is only wired up on list pages that have a searchable input —
+// not on the library detail page (/bigpicture/library/[id]), downloads,
+// settings, profile, etc.
 const showSearch = computed(() =>
-  route.path.startsWith("/bigpicture/library") ||
-  route.path.startsWith("/bigpicture/store"),
+  route.path === "/bigpicture/library" ||
+  route.path === "/bigpicture/library/collections" ||
+  route.path === "/bigpicture/store",
 );
 
 const showOptions = computed(() =>
@@ -81,7 +85,7 @@ const showOptions = computed(() =>
 
 const showSort = computed(() =>
   route.path === "/bigpicture/library" ||
-  route.path.startsWith("/bigpicture/store"),
+  route.path === "/bigpicture/store",
 );
 
 // ── Download indicator strip ────────────────────────────────────────────

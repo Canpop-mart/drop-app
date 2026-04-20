@@ -1,8 +1,36 @@
 <template>
   <Teleport to="body">
+    <!-- Steam OSK mode: render a focused native input so the Steam
+         on-screen keyboard has somewhere to type into. Our custom key
+         UI isn't shown. -->
     <Transition name="kb-slide">
       <div
-        v-if="visible"
+        v-if="visible && steamOskMode"
+        class="fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center pb-6 bg-gradient-to-t from-zinc-950 via-zinc-950/95 to-transparent pt-8"
+      >
+        <div class="w-full max-w-4xl px-6 py-3 bg-zinc-900 rounded-xl border border-blue-500/50 shadow-lg">
+          <input
+            ref="steamInputRef"
+            :value="modelValue"
+            :placeholder="placeholder"
+            class="w-full bg-transparent text-zinc-100 text-lg font-medium outline-none placeholder-zinc-600"
+            @input="(e: Event) => emit('update:modelValue', (e.target as HTMLInputElement).value)"
+            @keydown.enter.prevent="emit('submit')"
+            @keydown.escape.prevent="emit('close')"
+          />
+        </div>
+        <div class="flex items-center gap-6 mt-2 text-xs text-zinc-500">
+          <span>Use the Steam keyboard to type</span>
+          <div class="flex-1" />
+          <BigPictureButtonPrompt button="B" label="Close" size="sm" />
+        </div>
+      </div>
+    </Transition>
+
+    <!-- Custom keyboard mode -->
+    <Transition name="kb-slide">
+      <div
+        v-if="visible && !steamOskMode"
         class="fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center pb-4 bg-gradient-to-t from-zinc-950 via-zinc-950/95 to-transparent pt-8"
       >
         <!-- Input preview -->
@@ -200,15 +228,15 @@ function clampFocus() {
 }
 
 let kbLockId = 0;
+const steamOskMode = ref(false);
+const steamInputRef = ref<HTMLInputElement | null>(null);
 
-// Returns true if we handed off to the SteamOS OSK; caller should then
-// close the custom keyboard UI without acquiring gamepad lock etc.
-async function tryOpenSteamOSK(): Promise<boolean> {
-  const mode =
-    typeof localStorage !== "undefined"
-      ? localStorage.getItem("bpm:keyboardMode")
-      : null;
-  if (mode !== "steam") return false;
+function shouldUseSteamOsk(): boolean {
+  if (typeof localStorage === "undefined") return false;
+  return localStorage.getItem("bpm:keyboardMode") === "steam";
+}
+
+async function openSteamOSK(): Promise<boolean> {
   try {
     await invoke("open_steam_keyboard");
     return true;
@@ -222,13 +250,27 @@ watch(
   () => props.visible,
   async (v) => {
     if (v) {
-      // If the user picked Steam's OSK and it's available, hand off and
-      // close our UI immediately — parent keeps the model updated via
-      // standard input events wherever it actually binds them.
-      if (await tryOpenSteamOSK()) {
-        emit("close");
+      if (shouldUseSteamOsk()) {
+        // Render a focused native input so Steam's OSK has a target.
+        // If the OSK invoke fails, fall back to the custom keyboard.
+        steamOskMode.value = true;
+        await nextTick();
+        steamInputRef.value?.focus();
+        const ok = await openSteamOSK();
+        if (!ok) {
+          steamOskMode.value = false;
+          focusedRow.value = 1;
+          focusedCol.value = 0;
+          kbLockId = focusNav.acquireInputLock();
+          wireGamepad();
+        } else {
+          // Still handle B-to-close on the gamepad while Steam OSK is up.
+          kbLockId = focusNav.acquireInputLock();
+          wireGamepadSteamMode();
+        }
         return;
       }
+      steamOskMode.value = false;
       focusedRow.value = 1;
       focusedCol.value = 0;
       kbLockId = focusNav.acquireInputLock();
@@ -236,6 +278,7 @@ watch(
     } else {
       unwireGamepad();
       focusNav.releaseInputLock(kbLockId);
+      steamOskMode.value = false;
     }
   },
 );
@@ -327,6 +370,17 @@ function wireGamepad() {
     gamepad.onButton(GamepadButton.LeftTrigger, () => {
       if (!props.visible) return;
       paste();
+    }),
+  );
+}
+
+function wireGamepadSteamMode() {
+  unwireGamepad();
+  // Only B = close in steam mode — let the OSK handle everything else.
+  unsubs.push(
+    gamepad.onButton(GamepadButton.East, () => {
+      if (!props.visible) return;
+      emit("close");
     }),
   );
 }
