@@ -76,6 +76,7 @@ import BigPictureButtonPrompt from "~/components/bigpicture/BigPictureButtonProm
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { useDeckMode } from "~/composables/deck-mode";
+import { invoke } from "@tauri-apps/api/core";
 
 const props = defineProps<{
   visible: boolean;
@@ -200,10 +201,34 @@ function clampFocus() {
 
 let kbLockId = 0;
 
+// Returns true if we handed off to the SteamOS OSK; caller should then
+// close the custom keyboard UI without acquiring gamepad lock etc.
+async function tryOpenSteamOSK(): Promise<boolean> {
+  const mode =
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem("bpm:keyboardMode")
+      : null;
+  if (mode !== "steam") return false;
+  try {
+    await invoke("open_steam_keyboard");
+    return true;
+  } catch (e) {
+    console.warn("[BPM:KB] Steam OSK unavailable, falling back to custom:", e);
+    return false;
+  }
+}
+
 watch(
   () => props.visible,
-  (v) => {
+  async (v) => {
     if (v) {
+      // If the user picked Steam's OSK and it's available, hand off and
+      // close our UI immediately — parent keeps the model updated via
+      // standard input events wherever it actually binds them.
+      if (await tryOpenSteamOSK()) {
+        emit("close");
+        return;
+      }
       focusedRow.value = 1;
       focusedCol.value = 0;
       kbLockId = focusNav.acquireInputLock();

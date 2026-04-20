@@ -252,6 +252,7 @@ pub fn run() {
             collect_bug_report_logs,
             collect_bug_report_log_file,
             open_log_folder,
+            open_steam_keyboard,
             open_fs,
             // User utils
             update_settings,

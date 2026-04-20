@@ -337,27 +337,66 @@
           </button>
         </div>
 
-        <!-- Deck Mode override -->
-        <div class="bg-zinc-900/50 rounded-xl p-4" style="background-color: var(--bpm-surface)">
+        <!-- UI Zoom (rescales the whole webview — fixes gamescope "too zoomed out") -->
+        <div class="rounded-xl p-4" style="background-color: var(--bpm-surface)">
           <div class="mb-3">
-            <p class="font-medium text-sm" style="color: var(--bpm-text)">Deck Mode</p>
+            <p class="font-medium text-sm" style="color: var(--bpm-text)">Interface zoom</p>
             <p class="text-xs mt-0.5" style="color: var(--bpm-muted)">
-              Layout tuned for handhelds (larger touch targets, bottom tabs).
-              Auto detects Steam Deck hardware.
+              Rescale the whole interface. Use this if the app looks too small in Steam's Game Mode.
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: () => bumpUiZoom(-0.05) })"
+              :disabled="uiZoom <= uiZoomMin"
+              class="size-9 inline-flex items-center justify-center rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              aria-label="Decrease UI zoom"
+              @click.stop="bumpUiZoom(-0.05)"
+            >
+              <span class="text-lg leading-none">−</span>
+            </button>
+            <div class="flex-1 text-center text-sm tabular-nums text-zinc-200">
+              {{ Math.round(uiZoom * 100) }}%
+            </div>
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: () => bumpUiZoom(0.05) })"
+              :disabled="uiZoom >= uiZoomMax"
+              class="size-9 inline-flex items-center justify-center rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              aria-label="Increase UI zoom"
+              @click.stop="bumpUiZoom(0.05)"
+            >
+              <span class="text-lg leading-none">+</span>
+            </button>
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: () => (uiZoom = 1) })"
+              class="px-3 h-9 inline-flex items-center rounded-lg text-xs font-medium bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-colors"
+              @click.stop="uiZoom = 1"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        <!-- Keyboard preference (custom BPM keyboard vs SteamOS OSK) -->
+        <div class="rounded-xl p-4" style="background-color: var(--bpm-surface)">
+          <div class="mb-3">
+            <p class="font-medium text-sm" style="color: var(--bpm-text)">On-screen keyboard</p>
+            <p class="text-xs mt-0.5" style="color: var(--bpm-muted)">
+              Steam's native keyboard requires Steam to be running; falls back to Drop's built-in keyboard if unavailable.
             </p>
           </div>
           <div class="flex gap-2">
             <button
-              v-for="option in deckModeOptions"
+              v-for="option in keyboardOptions"
               :key="option.value"
-              :ref="(el: any) => registerContent(el, { onSelect: () => (deckMode.forceOverride.value = option.value as any) })"
+              :ref="(el: any) => registerContent(el, { onSelect: () => (keyboardMode = option.value) })"
               class="flex-1 py-2.5 rounded-lg text-xs font-medium transition-all border"
               :class="[
-                deckMode.forceOverride.value === option.value
+                keyboardMode === option.value
                   ? 'bg-blue-600/20 text-blue-400 border-blue-500/50'
                   : 'bg-zinc-800/50 text-zinc-400 border-zinc-700/50 hover:text-zinc-200 hover:bg-zinc-800',
               ]"
-              @click="deckMode.forceOverride.value = option.value as any"
+              @click="keyboardMode = option.value"
             >
               {{ option.label }}
             </button>
@@ -789,6 +828,7 @@ import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useBpAudio, soundProfiles, type SoundProfileId } from "~/composables/bp-audio";
 import { useBpmTheme, themes, type ThemeId } from "~/composables/bp-theme";
 import { useDeckMode } from "~/composables/deck-mode";
+import { useUiZoom } from "~/composables/ui-zoom";
 import { type Ref } from "vue";
 
 definePageMeta({ layout: "bigpicture" });
@@ -844,11 +884,30 @@ watch(reducedMotion, (val) => {
   }
 });
 
-const deckModeOptions = [
-  { label: "Auto", value: "auto" },
-  { label: "Handheld", value: "deck" },
-  { label: "Desktop", value: "desktop" },
+// UI zoom — rescales the entire webview. Useful when gamescope renders the
+// layout smaller than expected.
+const { zoom: uiZoom, minZoom: uiZoomMin, maxZoom: uiZoomMax } = useUiZoom();
+function bumpUiZoom(delta: number) {
+  uiZoom.value = Math.round((uiZoom.value + delta) * 100) / 100;
+}
+
+// Keyboard preference: "custom" uses Drop's on-screen keyboard; "steam"
+// tries steam://open/keyboard first and falls back to custom on failure.
+type KeyboardMode = "custom" | "steam";
+const keyboardOptions: { label: string; value: KeyboardMode }[] = [
+  { label: "Drop (built-in)", value: "custom" },
+  { label: "Steam OSK", value: "steam" },
 ];
+const keyboardMode = ref<KeyboardMode>(
+  typeof localStorage !== "undefined"
+    ? ((localStorage.getItem("bpm:keyboardMode") as KeyboardMode) ?? "custom")
+    : "custom",
+);
+watch(keyboardMode, (val) => {
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem("bpm:keyboardMode", val);
+  }
+});
 
 const registerSidebar = useBpFocusableGroup("content");
 const registerContent = useBpFocusableGroup("content");

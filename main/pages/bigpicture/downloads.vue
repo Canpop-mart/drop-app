@@ -1,18 +1,19 @@
 <template>
   <div class="px-8 py-6" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)', minHeight: '100%' }">
-    <!-- Download stats header (speed + ETA) -->
+    <!-- Download controls header — always visible while a queue exists so
+         the user can resume after a pause (speed==0 while paused). -->
     <div
-      v-if="queue.length > 0 && (stats.speed > 0 || stats.time > 0)"
+      v-if="queue.length > 0"
       class="flex items-center justify-between mb-4 px-1"
     >
       <div class="flex items-center gap-4">
         <div class="flex items-center gap-1.5">
           <ArrowDownTrayIcon class="size-4 text-blue-400" />
           <span class="text-sm font-medium text-zinc-300">
-            {{ formatSpeed(stats.speed) }}
+            {{ isPaused ? "Paused" : formatSpeed(stats.speed) }}
           </span>
         </div>
-        <div v-if="stats.time > 0" class="flex items-center gap-1.5">
+        <div v-if="!isPaused && stats.time > 0" class="flex items-center gap-1.5">
           <ClockIcon class="size-4 text-zinc-500" />
           <span class="text-sm text-zinc-500">
             {{ formatETA(stats.time) }} remaining
@@ -22,11 +23,11 @@
       <div class="flex gap-2">
         <button
           :ref="(el: any) => registerAction(el, { onSelect: togglePause })"
-          class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+          class="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
           :class="
             isPaused
-              ? 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
-              : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+              ? 'bg-green-600 text-white hover:bg-green-500'
+              : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700'
           "
           @click="togglePause"
         >
@@ -34,7 +35,7 @@
         </button>
         <button
           :ref="(el: any) => registerAction(el, { onSelect: cancelCurrentDownload })"
-          class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-red-900/20 text-red-400 hover:bg-red-900/30"
+          class="px-4 py-2 rounded-lg text-sm font-medium transition-colors bg-red-900/40 text-red-200 hover:bg-red-900/60"
           @click="cancelCurrentDownload"
         >
           Cancel
@@ -70,21 +71,25 @@
         "
         class="flex items-center gap-6 bg-zinc-900/50 rounded-xl p-6"
       >
-        <!-- Reorder buttons -->
-        <div v-if="queue.length > 1" class="flex flex-col gap-1 flex-shrink-0">
+        <!-- Reorder buttons — controller-friendly size -->
+        <div v-if="queue.length > 1" class="flex flex-col gap-1.5 flex-shrink-0">
           <button
-            v-if="qIdx > 0"
-            class="px-1.5 py-0.5 rounded text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            :ref="(el: any) => qIdx > 0 && registerAction(el, { onSelect: () => reorderDownload(qIdx, qIdx - 1) })"
+            :disabled="qIdx === 0"
+            aria-label="Move up in queue"
+            class="size-9 inline-flex items-center justify-center rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             @click.stop="reorderDownload(qIdx, qIdx - 1)"
           >
-            <svg class="size-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" /></svg>
+            <svg class="size-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" /></svg>
           </button>
           <button
-            v-if="qIdx < queue.length - 1"
-            class="px-1.5 py-0.5 rounded text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            :ref="(el: any) => qIdx < queue.length - 1 && registerAction(el, { onSelect: () => reorderDownload(qIdx, qIdx + 1) })"
+            :disabled="qIdx === queue.length - 1"
+            aria-label="Move down in queue"
+            class="size-9 inline-flex items-center justify-center rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             @click.stop="reorderDownload(qIdx, qIdx + 1)"
           >
-            <svg class="size-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" /></svg>
+            <svg class="size-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" /></svg>
           </button>
         </div>
         <!-- Cover art -->

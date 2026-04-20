@@ -175,7 +175,7 @@ async function submitReport() {
 
     // Collect the full log file (redacted) if opted in. Fall back to a
     // short text tail if the file read fails.
-    let logFile: { filename: string; content: number[]; truncated: boolean } | undefined;
+    let logFile: { filename: string; content: string; truncated: boolean } | undefined;
     let logsText: string | undefined;
     if (includeLogs.value) {
       try {
@@ -199,7 +199,7 @@ async function submitReport() {
     form.append("description", description.value.trim());
     form.append("systemInfo", JSON.stringify(diagnostics));
     if (logFile) {
-      const blob = new Blob([new Uint8Array(logFile.content)], { type: "text/plain" });
+      const blob = new Blob([logFile.content], { type: "text/plain" });
       form.append("logfile", blob, logFile.filename);
       if (logFile.truncated) {
         form.append("logfileTruncated", "1");

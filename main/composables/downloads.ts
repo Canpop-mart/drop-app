@@ -29,28 +29,20 @@ export const useStatsState = () =>
 export function useDownloadListeners() {
   useListen<QueueState>("update_queue", (event) => {
     const queue = useQueueState();
+    queue.value = event.payload;
+  });
+
+  // Backend emits this ONLY on real completion, never on cancel. This is the
+  // signal the UI uses to promote a game to "Recently Completed".
+  useListen<string>("download_complete", (event) => {
     const completed = useCompletedDownloads();
-    const prev = queue.value;
-    const next = event.payload;
-
-    // Detect items that were in the previous queue but are no longer present
-    // — these have completed (or been cancelled, but we treat them as done).
-    if (prev.queue.length > 0) {
-      const nextIds = new Set(next.queue.map((q) => q.meta.id));
-      for (const item of prev.queue) {
-        if (
-          !nextIds.has(item.meta.id) &&
-          !completed.value.some((c) => c.gameId === item.meta.id)
-        ) {
-          completed.value = [
-            { gameId: item.meta.id, completedAt: Date.now() },
-            ...completed.value,
-          ].slice(0, 50); // Keep last 50
-        }
-      }
+    const gameId = event.payload;
+    if (!completed.value.some((c) => c.gameId === gameId)) {
+      completed.value = [
+        { gameId, completedAt: Date.now() },
+        ...completed.value,
+      ].slice(0, 50);
     }
-
-    queue.value = next;
   });
 
   useListen<StatsState>("update_stats", (event) => {
