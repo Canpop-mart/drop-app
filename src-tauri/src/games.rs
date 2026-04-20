@@ -679,15 +679,19 @@ pub fn write_save_file(
         _ => return Err("Invalid save type".to_string()),
     };
 
+    // Security check: filename must be a plain leaf name with no traversal.
+    if filename.is_empty()
+        || filename.contains("..")
+        || filename.contains('/')
+        || filename.contains('\\')
+    {
+        return Err("Invalid filename".to_string());
+    }
+
     let dir = saves_dir.join(subdir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create dir: {e}"))?;
 
     let file_path = dir.join(&filename);
-
-    // Security check
-    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
-        return Err("Invalid filename".to_string());
-    }
 
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD
@@ -700,19 +704,30 @@ pub fn write_save_file(
 
 // ── PC save file I/O (arbitrary paths from Ludusavi) ─────────────────────
 
+/// Validate that a PC save path is absolute and contains no traversal
+/// components. Returns the path if safe, or an error string otherwise.
+fn validate_pc_save_path(file_path: &str) -> Result<std::path::PathBuf, String> {
+    use std::path::{Component, PathBuf};
+    let path = PathBuf::from(file_path);
+    if !path.is_absolute() {
+        return Err("File path must be absolute".to_string());
+    }
+    for comp in path.components() {
+        if matches!(comp, Component::ParentDir) {
+            return Err("File path contains invalid component".to_string());
+        }
+    }
+    Ok(path)
+}
+
 /// Read a PC save file by its full path (as returned by Ludusavi) as base64.
-/// Security: rejects paths containing ".." to prevent traversal.
 #[tauri::command]
 pub fn read_pc_save_file(file_path: String) -> Result<String, String> {
-    // Basic traversal protection
-    if file_path.contains("..") {
-        return Err("Invalid file path".to_string());
-    }
-    let path = std::path::Path::new(&file_path);
+    let path = validate_pc_save_path(&file_path)?;
     if !path.exists() {
         return Err("File not found".to_string());
     }
-    let data = std::fs::read(path).map_err(|e| format!("Failed to read: {e}"))?;
+    let data = std::fs::read(&path).map_err(|e| format!("Failed to read: {e}"))?;
     use base64::Engine;
     Ok(base64::engine::general_purpose::STANDARD.encode(&data))
 }
@@ -721,10 +736,7 @@ pub fn read_pc_save_file(file_path: String) -> Result<String, String> {
 /// Used for restoring individual cloud saves to their original location.
 #[tauri::command]
 pub fn write_pc_save_file(file_path: String, data: String) -> Result<(), String> {
-    if file_path.contains("..") {
-        return Err("Invalid file path".to_string());
-    }
-    let path = std::path::Path::new(&file_path);
+    let path = validate_pc_save_path(&file_path)?;
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create dir: {e}"))?;
@@ -735,10 +747,14 @@ pub fn write_pc_save_file(file_path: String, data: String) -> Result<(), String>
         .map_err(|e| format!("Invalid base64: {e}"))?;
     // If file exists, create a backup first
     if path.exists() {
-        let backup = format!("{}.bak", file_path);
-        let _ = std::fs::copy(path, &backup); // best-effort backup
+        let backup = path.with_extension(
+            path.extension()
+                .map(|e| format!("{}.bak", e.to_string_lossy()))
+                .unwrap_or_else(|| "bak".to_string()),
+        );
+        let _ = std::fs::copy(&path, &backup); // best-effort backup
     }
-    std::fs::write(path, &bytes).map_err(|e| format!("Failed to write: {e}"))?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("Failed to write: {e}"))?;
     Ok(())
 }
 

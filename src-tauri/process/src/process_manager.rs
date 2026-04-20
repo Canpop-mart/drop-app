@@ -57,6 +57,94 @@ pub struct SaveSyncSnapshot {
     pub pc_save_paths: HashMap<String, PathBuf>,
 }
 
+/// Env vars we refuse to set from a launch config (server-provided or pasted
+/// by the user). These can be used to hijack loading / command resolution and
+/// should never be controllable by a remote config. Legitimate game launches
+/// should never need to override these — Steam/Proton/Wine set them
+/// themselves.
+const FORBIDDEN_ENV_KEYS: &[&str] = &[
+    "LD_PRELOAD",
+    "LD_AUDIT",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FORCE_FLAT_NAMESPACE",
+    "PATH",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "CURL_CA_BUNDLE",
+    "REQUESTS_CA_BUNDLE",
+    "GIT_SSH",
+    "GIT_SSH_COMMAND",
+];
+
+fn is_env_key_forbidden(key: &str) -> bool {
+    FORBIDDEN_ENV_KEYS
+        .iter()
+        .any(|forbidden| key.eq_ignore_ascii_case(forbidden))
+}
+
+/// Detect whether *this* process is running from an AppImage. Cheap — just
+/// reads an env var — but worth caching into a local so callers don't repeat
+/// the syscall for every spawn.
+#[cfg(target_os = "linux")]
+fn running_from_appimage() -> bool {
+    std::env::var_os("APPIMAGE").is_some() || std::env::var_os("APPDIR").is_some()
+}
+
+/// Scrub the env pollution an AppImage runtime injects into its children.
+///
+/// When Drop is packaged as an AppImage, the runtime mounts the image at
+/// `/tmp/.mount_DropXXXXXX/` and prepends its `usr/lib/` to `LD_LIBRARY_PATH`
+/// (and sets `APPDIR`, `APPIMAGE`, `ARGV0`, sometimes `LD_PRELOAD`). If we
+/// naively forward the parent env when spawning tools that link against
+/// system libraries — `umu-run`, Proton, Wine, system Python — the bundled
+/// older libs shadow the system's and trip version-symbol errors
+/// (the one we hit in practice: `OPENSSL_3.3.0 not found` when Python 3.13's
+/// `_ssl` loads our older libcrypto).
+///
+/// AppImage runtimes stash the caller's original `LD_LIBRARY_PATH` in
+/// `LD_LIBRARY_PATH_ORIG` before mutating the live var, so we restore from
+/// that when available; otherwise we drop `LD_LIBRARY_PATH` entirely so the
+/// child uses the OS default search path.
+#[cfg(target_os = "linux")]
+fn sanitize_appimage_env(command: &mut Command) {
+    if !running_from_appimage() {
+        return;
+    }
+
+    match std::env::var("LD_LIBRARY_PATH_ORIG") {
+        Ok(orig) if !orig.is_empty() => {
+            command.env("LD_LIBRARY_PATH", orig);
+        }
+        _ => {
+            command.env_remove("LD_LIBRARY_PATH");
+        }
+    }
+
+    // These are either AppImage-runtime bookkeeping that we don't want to
+    // propagate (APPDIR, APPIMAGE, ARGV0, LD_LIBRARY_PATH_ORIG) or vectors
+    // for symbol injection from the AppImage's bundled stack (LD_PRELOAD,
+    // LD_AUDIT). Python-specific vars are cleaned elsewhere by the caller.
+    for key in [
+        "LD_LIBRARY_PATH_ORIG",
+        "LD_PRELOAD",
+        "LD_AUDIT",
+        "APPDIR",
+        "APPIMAGE",
+        "ARGV0",
+    ] {
+        command.env_remove(key);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sanitize_appimage_env(_command: &mut Command) {}
+
 pub struct ProcessManager<'a> {
     current_platform: Platform,
     log_output_dir: PathBuf,
@@ -1009,6 +1097,12 @@ impl ProcessManager<'_> {
 
             for env_str in launch_parameters.0.env {
                 if let Some((key, value)) = env_str.split_once('=') {
+                    if is_env_key_forbidden(key) {
+                        warn!(
+                            "[LAUNCH] Ignoring forbidden env var from launch config: {key}"
+                        );
+                        continue;
+                    }
                     command.env(key, value);
                 }
             }
@@ -1027,6 +1121,13 @@ impl ProcessManager<'_> {
             .env_remove("PYTHONHOME")
             .env_remove("PYTHONPATH")
             .current_dir(launch_parameters.1);
+
+        // Scrub AppImage-injected LD_LIBRARY_PATH / APPDIR / LD_PRELOAD from
+        // the child env. Without this, system Python (used by umu-run) picks
+        // up the AppImage's older libcrypto and fails with
+        // `OPENSSL_3.3.0 not found`. Safe no-op outside Linux or when we
+        // weren't launched from an AppImage.
+        sanitize_appimage_env(&mut command);
 
         // ── Gamescope / Steam Deck env vars ─────────────────────────────
         // When running inside Gamescope (SteamOS Game Mode), pass through
@@ -1833,7 +1934,14 @@ impl ProcessManager<'_> {
                                     .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap())
                             ))
                             .env_remove("RUST_LOG")
+                            .env_remove("PYTHONHOME")
+                            .env_remove("PYTHONPATH")
                             .current_dir(&working_dir_owned);
+
+                        // Same AppImage-env scrub as the primary spawn path —
+                        // if we hit ENOEXEC, retry still needs a clean env or
+                        // Python-based tools like umu-run keep failing.
+                        sanitize_appimage_env(&mut retry_cmd);
 
                         // Re-apply Gamescope env vars for the retry
                         #[cfg(target_os = "linux")]

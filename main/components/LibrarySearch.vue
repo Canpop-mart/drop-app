@@ -149,7 +149,7 @@ import {
   type GameStatus,
 } from "~/types";
 import { TransitionGroup } from "vue";
-import { listen } from "@tauri-apps/api/event";
+import { useListen } from "~/composables/useListen";
 
 // Style information
 const gameStatusTextStyle: { [key in EmptyGameStatusEnum]: string } = {
@@ -347,7 +347,7 @@ const filteredNavigation = computed(() => {
 
 // Debounce library updates to prevent request storms when multiple events fire rapidly
 let libraryUpdateTimeout: ReturnType<typeof setTimeout> | null = null;
-listen("update_library", () => {
+useListen("update_library", () => {
   if (libraryUpdateTimeout) clearTimeout(libraryUpdateTimeout);
   libraryUpdateTimeout = setTimeout(async () => {
     console.log("Updating library (debounced)");
@@ -357,6 +357,13 @@ listen("update_library", () => {
       router.push("/library");
     }
   }, 500);
+});
+
+onUnmounted(() => {
+  if (libraryUpdateTimeout) {
+    clearTimeout(libraryUpdateTimeout);
+    libraryUpdateTimeout = null;
+  }
 });
 </script>
 

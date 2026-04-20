@@ -136,10 +136,17 @@ import { invoke } from "@tauri-apps/api/core";
 const loading = ref(false);
 const error = ref<string | undefined>();
 
-let offerManualTimeout: NodeJS.Timeout | undefined;
+let offerManualTimeout: ReturnType<typeof setTimeout> | undefined;
 const offerManual = ref(false);
 const manualToken = ref("");
 const manualLoading = ref(false);
+
+function clearOfferManualTimeout() {
+  if (offerManualTimeout) {
+    clearTimeout(offerManualTimeout);
+    offerManualTimeout = undefined;
+  }
+}
 
 async function auth() {
   await invoke("auth_initiate");
@@ -148,15 +155,25 @@ async function auth() {
 function authWrapper_wrapper() {
   error.value = undefined;
   loading.value = true;
-  auth().catch((e) => {
-    loading.value = false;
-    error.value = e;
-    if (offerManualTimeout) clearTimeout(offerManualTimeout);
-  });
+  clearOfferManualTimeout();
+  auth()
+    .catch((e) => {
+      error.value = e;
+    })
+    .finally(() => {
+      // Whether auth_initiate succeeded or failed, the foreground phase is
+      // done — stop pending loading state and the manual-fallback timer.
+      loading.value = false;
+      clearOfferManualTimeout();
+    });
   offerManualTimeout = setTimeout(() => {
     offerManual.value = true;
   }, 2000);
 }
+
+onUnmounted(() => {
+  clearOfferManualTimeout();
+});
 
 async function continueManual() {
   await invoke("manual_recieve_handshake", { token: manualToken.value });

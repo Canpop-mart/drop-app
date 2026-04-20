@@ -27,6 +27,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::RemoteAccessError;
 use crate::requests::{generate_url, make_authenticated_post};
+use crate::utils::{bounded_json, DEFAULT_JSON_CAP_BYTES};
+
+/// Cloud save sync responses can include large binary blobs (base64). Allow
+/// up to 512 MiB to cover archives built from many large PC save files.
+const SAVE_SYNC_RESPONSE_CAP: u64 = 512 * 1024 * 1024;
 
 // ── Manifest (persisted to disk between sessions) ──────────────────────
 
@@ -295,26 +300,62 @@ pub fn manifest_path(game_id: &str) -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join("drop").join("sync-manifests").join(format!("{}.json", game_id)))
 }
 
+/// Maximum size of a sync manifest on disk. Manifests are metadata (hashes,
+/// timestamps, paths) so even libraries with thousands of save files should
+/// stay well under 64 MiB. Anything larger is corruption or tampering.
+const MANIFEST_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Load a sync manifest from disk, or return a fresh empty one.
 pub fn load_manifest(game_id: &str) -> SyncManifest {
     if let Some(path) = manifest_path(game_id) {
         if path.exists() {
-            match fs::read_to_string(&path) {
-                Ok(json) => match serde_json::from_str::<SyncManifest>(&json) {
-                    Ok(m) => return m,
+            let oversize = fs::metadata(&path)
+                .map(|m| m.len() > MANIFEST_MAX_BYTES)
+                .unwrap_or(false);
+            if oversize {
+                warn!(
+                    "[SAVE-SYNC] Manifest for {} exceeds {} bytes, treating as corrupt",
+                    game_id, MANIFEST_MAX_BYTES
+                );
+                backup_corrupt_manifest(&path);
+            } else {
+                match fs::read_to_string(&path) {
+                    Ok(json) => match serde_json::from_str::<SyncManifest>(&json) {
+                        Ok(m) => return m,
+                        Err(e) => {
+                            warn!(
+                                "[SAVE-SYNC] Corrupt manifest for {}, resetting: {}",
+                                game_id, e
+                            );
+                            backup_corrupt_manifest(&path);
+                        }
+                    },
                     Err(e) => {
-                        warn!("[SAVE-SYNC] Corrupt manifest for {}, resetting: {}", game_id, e);
-                        // Backup corrupt manifest
-                        let _ = fs::rename(&path, path.with_extension("json.bak"));
+                        warn!("[SAVE-SYNC] Could not read manifest for {}: {}", game_id, e)
                     }
-                },
-                Err(e) => warn!("[SAVE-SYNC] Could not read manifest for {}: {}", game_id, e),
+                }
             }
         }
     }
     SyncManifest {
         game_id: game_id.to_string(),
         ..Default::default()
+    }
+}
+
+/// Move a corrupt manifest aside so we don't clobber earlier backups.
+fn backup_corrupt_manifest(path: &Path) {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let backup = path.with_extension(format!("json.bak.{ts}"));
+    if let Err(e) = fs::rename(path, &backup) {
+        warn!(
+            "[SAVE-SYNC] Could not back up corrupt manifest at {}: {}",
+            path.display(),
+            e
+        );
     }
 }
 
@@ -378,7 +419,7 @@ pub async fn check_sync(
         ));
     }
 
-    let data: SyncCheckResponse = resp.json().await?;
+    let data: SyncCheckResponse = bounded_json(resp, DEFAULT_JSON_CAP_BYTES).await?;
     Ok(data)
 }
 
@@ -402,7 +443,7 @@ pub async fn bulk_download(save_ids: &[String]) -> Result<Vec<(String, String, S
         ));
     }
 
-    let data: BulkDownloadResponse = resp.json().await?;
+    let data: BulkDownloadResponse = bounded_json(resp, SAVE_SYNC_RESPONSE_CAP).await?;
     let mut results = Vec::new();
     for save in data.saves {
         use base64::Engine;
@@ -512,7 +553,7 @@ pub async fn upload_changed_saves(
         ));
     }
 
-    let data: BulkUploadResponse = resp.json().await?;
+    let data: BulkUploadResponse = bounded_json(resp, DEFAULT_JSON_CAP_BYTES).await?;
     let uploaded_count = data.results.len();
     let errors: Vec<String> = data.errors.iter().map(|e| format!("{}: {}", e.filename, e.error)).collect();
     for err in &errors {

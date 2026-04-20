@@ -23,6 +23,7 @@ use sha2::Digest;
 use tauri::Url;
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _, AsyncWriteExt as _};
 use tokio_util::io::StreamReader;
+use utils::path_guard;
 
 const READ_BUF_LEN: usize = 1024 * 1024;
 
@@ -107,7 +108,12 @@ pub async fn download_game_chunk(
             .get(&file.filename)
             .map(|v| v == version_id)
             .unwrap_or(false);
-        let path = base_path.join(file.filename.clone());
+        let path = path_guard::join_within(base_path, Path::new(&file.filename)).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("server chunk contains unsafe filename {:?}: {e}", file.filename),
+            )
+        })?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }

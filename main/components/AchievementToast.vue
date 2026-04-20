@@ -56,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { listen } from "@tauri-apps/api/event";
+import { useListen } from "~/composables/useListen";
 
 interface AchievementToastItem {
   id: string;
@@ -74,25 +74,43 @@ interface AchievementPayload {
 
 const toasts = ref<AchievementToastItem[]>([]);
 
-// Listen for achievement_unlocked events from the Rust backend
-const unlisten = listen<AchievementPayload>("achievement_unlocked", (event) => {
+// Dedup window: backends occasionally re-fire the same unlock event (retry,
+// reconnect, multi-source sync). Swallow the same achievement id for this long.
+const DEDUP_WINDOW_MS = 10_000;
+// Cap on simultaneously-visible toasts so a burst doesn't fill the viewport.
+const MAX_VISIBLE_TOASTS = 5;
+const TOAST_LIFETIME_MS = 6_000;
+
+const recentIds = new Map<string, number>();
+
+useListen<AchievementPayload>("achievement_unlocked", (event) => {
   const data = event.payload;
+  const now = Date.now();
+
+  // Drop stale entries so the map doesn't grow unbounded.
+  for (const [id, ts] of recentIds) {
+    if (now - ts > DEDUP_WINDOW_MS) recentIds.delete(id);
+  }
+
+  const lastSeen = recentIds.get(data.id);
+  if (lastSeen !== undefined && now - lastSeen < DEDUP_WINDOW_MS) return;
+  recentIds.set(data.id, now);
+
   const toast: AchievementToastItem = {
-    id: `${data.id}-${Date.now()}`,
+    id: `${data.id}-${now}`,
     title: data.title,
     description: data.description || undefined,
     iconUrl: data.iconUrl || undefined,
   };
 
   toasts.value.push(toast);
+  // Drop the oldest if we're over the cap.
+  if (toasts.value.length > MAX_VISIBLE_TOASTS) {
+    toasts.value = toasts.value.slice(-MAX_VISIBLE_TOASTS);
+  }
 
-  // Auto-dismiss after 6 seconds
   setTimeout(() => {
     toasts.value = toasts.value.filter((t) => t.id !== toast.id);
-  }, 6000);
-});
-
-onUnmounted(async () => {
-  (await unlisten)();
+  }, TOAST_LIFETIME_MS);
 });
 </script>

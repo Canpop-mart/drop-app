@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::RemoteAccessError,
     requests::{generate_url, make_authenticated_get, make_authenticated_post},
+    utils::{bounded_json, DEFAULT_JSON_CAP_BYTES},
 };
 
 // ── Request bodies ──────────────────────────────────────────────────
@@ -146,7 +147,7 @@ pub async fn start_streaming_session(
         )));
     }
 
-    let data: StartSessionResponse = response.json().await?;
+    let data: StartSessionResponse = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
     info!("Started streaming session {}", data.session_id);
     Ok(data.session_id)
 }
@@ -242,7 +243,7 @@ pub async fn list_streaming_sessions() -> Result<Vec<StreamingSession>, RemoteAc
         )));
     }
 
-    let sessions: Vec<StreamingSession> = response.json().await?;
+    let sessions: Vec<StreamingSession> = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
     info!("Fetched {} streaming sessions", sessions.len());
     Ok(sessions)
 }
@@ -267,7 +268,7 @@ pub async fn get_streaming_connection_info(
         )));
     }
 
-    let info: StreamingConnectionInfo = response.json().await?;
+    let info: StreamingConnectionInfo = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
     info!("Got connection info for session {}", session_id);
     Ok(info)
 }
@@ -314,7 +315,7 @@ pub async fn request_stream(
         )));
     }
 
-    let data: StartSessionResponse = response.json().await?;
+    let data: StartSessionResponse = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
     info!("Requested stream, session {}", data.session_id);
     Ok(data.session_id)
 }
@@ -332,7 +333,7 @@ pub async fn poll_pending_requests() -> Result<Vec<PendingStreamRequest>, Remote
         )));
     }
 
-    let requests: Vec<PendingStreamRequest> = response.json().await?;
+    let requests: Vec<PendingStreamRequest> = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
     Ok(requests)
 }
 
@@ -398,7 +399,7 @@ pub async fn list_devices(game_id: Option<&str>) -> Result<Vec<ClientDevice>, Re
         )));
     }
 
-    let devices: Vec<ClientDevice> = response.json().await?;
+    let devices: Vec<ClientDevice> = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
     info!("Fetched {} devices", devices.len());
     Ok(devices)
 }

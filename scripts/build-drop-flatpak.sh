@@ -21,7 +21,7 @@
 # Output: ~/drop-app-export/drop.flatpak
 # Build time: ~30-60 minutes
 
-set -e
+set -euo pipefail
 
 REPO_TAG="v0.4.0-rc-4"
 APP_ID="org.droposs.client"
@@ -224,7 +224,7 @@ echo ">> Installing JS dependencies..."
 
 cat > "$BUILD_DIR/sdk-compile.sh" << SDKEOF
 #!/bin/bash
-set -e
+set -euo pipefail
 export RUSTUP_HOME="$RUSTUP_HOME"
 export CARGO_HOME="$CARGO_HOME"
 export PATH="$CARGO_HOME/bin:$NODE_BIN:$PNPM_PREFIX/bin:/usr/bin:/bin"

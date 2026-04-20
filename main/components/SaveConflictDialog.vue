@@ -85,16 +85,24 @@
       </div>
     </div>
 
+    <div
+      v-if="submitError"
+      class="mt-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
+    >
+      {{ submitError }}
+    </div>
+
     <template #buttons="{ close }">
       <button
         class="inline-flex justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
-        :disabled="!allResolved"
+        :disabled="!allResolved || submitting"
         @click="submit"
       >
-        Continue Launch
+        {{ submitting ? "Applying…" : "Continue Launch" }}
       </button>
       <button
-        class="inline-flex justify-center rounded-md bg-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-200 shadow-sm hover:bg-zinc-600"
+        class="inline-flex justify-center rounded-md bg-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-200 shadow-sm hover:bg-zinc-600 disabled:opacity-40 disabled:cursor-not-allowed"
+        :disabled="submitting"
         @click="keepAllLocal"
       >
         Keep All Local
@@ -120,15 +128,24 @@ const props = defineProps<{
 const open = defineModel<boolean>();
 
 const choices = ref<string[]>([]);
+const submitting = ref(false);
+const submitError = ref<string | null>(null);
 
 watch(
   () => props.conflicts,
   (val) => {
     // Default all to keep_local
     choices.value = val.map(() => "keep_local");
+    submitError.value = null;
   },
   { immediate: true },
 );
+
+// Clear the error whenever the user changes a selection so stale text
+// doesn't hang around after they've picked a different choice.
+watch(choices, () => {
+  if (submitError.value) submitError.value = null;
+}, { deep: true });
 
 const allResolved = computed(() =>
   choices.value.every((c) => c === "keep_local" || c === "keep_cloud"),
@@ -140,6 +157,9 @@ function keepAllLocal() {
 }
 
 async function submit() {
+  if (submitting.value) return;
+  submitting.value = true;
+  submitError.value = null;
   const resolutions = props.conflicts.map((c, i) => ({
     filename: c.filename,
     choice: choices.value[i],
@@ -152,11 +172,19 @@ async function submit() {
         resolutions,
       },
     });
+    open.value = false;
   } catch (e) {
     console.warn("[SAVE-SYNC] Failed to send conflict resolutions:", e);
+    submitError.value =
+      e instanceof Error
+        ? `Couldn't apply choices: ${e.message}`
+        : `Couldn't apply choices: ${String(e)}`;
+    // Deliberately leave the dialog open — losing the user's conflict
+    // resolution choices on a transient failure would be worse than asking
+    // them to retry.
+  } finally {
+    submitting.value = false;
   }
-
-  open.value = false;
 }
 
 function formatSize(bytes: number): string {

@@ -15,7 +15,7 @@ import {
   initialNavigation,
   setupHooks,
 } from "./composables/state-navigation.js";
-import { listen } from "@tauri-apps/api/event";
+import { useListen } from "./composables/useListen";
 import { AppStatus, type AppState } from "./types.js";
 import { setSessionType } from "./composables/deck-mode.js";
 import { useBigPictureMode } from "./composables/big-picture.js";
@@ -51,11 +51,8 @@ if (state.value?.sessionType) {
   setSessionType(state.value.sessionType);
 }
 
-const unlistenState = listen("update_state", (event) => {
-  state.value = event.payload as AppState;
-});
-onUnmounted(async () => {
-  (await unlistenState)();
+useListen<AppState>("update_state", (event) => {
+  state.value = event.payload;
 });
 
 setupHooks();

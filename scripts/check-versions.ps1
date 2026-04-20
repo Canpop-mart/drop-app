@@ -1,20 +1,22 @@
-$token = '4b9500c4-1488-4d47-9d8f-1403d5169fe9'
-$base  = 'https://drop.canpop.synology.me'
-$h     = @{ Authorization = "Bearer $token" }
-$gameId = '0cef0064-d5de-4331-ba6a-e9bed73e40a8'
+param(
+    [Parameter(Mandatory = $true)][string]$Base,
+    [Parameter(Mandatory = $true)][string]$Token,
+    [Parameter(Mandatory = $true)][string]$GameId
+)
 
-# Try to get versions for this specific game
+$h = @{ Authorization = "Bearer $Token" }
+
 $endpoints = @(
-    "/api/v1/admin/games/$gameId/versions",
-    "/api/v1/admin/library/$gameId",
-    "/api/v1/admin/library/$gameId/versions",
-    "/api/v1/games/$gameId/versions"
+    "/api/v1/admin/games/$GameId/versions",
+    "/api/v1/admin/library/$GameId",
+    "/api/v1/admin/library/$GameId/versions",
+    "/api/v1/games/$GameId/versions"
 )
 
 foreach ($ep in $endpoints) {
     Write-Host "=== GET $ep ==="
     try {
-        $r = Invoke-RestMethod -Uri "$base$ep" -Headers $h
+        $r = Invoke-RestMethod -Uri "$Base$ep" -Headers $h
         $r | ConvertTo-Json -Depth 5
     } catch {
         Write-Host "ERROR: $($_.Exception.Message)"

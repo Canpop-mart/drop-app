@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use utils::path_guard;
+
 use crate::error::ProcessError;
 
 /// Prefix for temporary .m3u files so they can be identified and cleaned up.
@@ -48,9 +50,15 @@ pub fn generate_m3u(
             // (e.g. "Metal\ Gear\ Solid\ \(Disc\ 1\)"). Strip backslash
             // escapes since m3u files need plain filesystem paths.
             let unescaped = unescape_shell(p);
-            let full = game_install_dir.join(&unescaped);
-            full.to_string_lossy().to_string()
+            path_guard::join_within(game_install_dir, Path::new(&unescaped)).map_err(|e| {
+                ProcessError::FormatError(format!(
+                    "Disc path {unescaped:?} is unsafe for m3u generation: {e}"
+                ))
+            })
         })
+        .collect::<Result<Vec<PathBuf>, ProcessError>>()?
+        .into_iter()
+        .map(|full| full.to_string_lossy().to_string())
         .collect();
 
     fs::write(&m3u_path, contents.join("\n")).map_err(|e| {

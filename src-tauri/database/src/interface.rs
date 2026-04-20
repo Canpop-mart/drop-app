@@ -244,21 +244,21 @@ impl Drop for DBWrite<'_> {
 }
 
 pub fn borrow_db_checked<'a>() -> DBRead<'a> {
-    match DB.borrow_data() {
-        Ok(data) => DBRead(data),
-        Err(e) => {
-            error!("database borrow failed with error {e}");
-            panic!("database borrow failed with error {e}");
-        }
-    }
+    // A PoisonError means some earlier thread panicked while holding the
+    // write lock. The in-memory state may be inconsistent, but propagating
+    // a panic from every reader would brick the app. Log loudly and
+    // recover the guard so the rest of the app keeps running.
+    let guard = DB.borrow_data().unwrap_or_else(|e| {
+        error!("database read lock poisoned, recovering: {e}");
+        e.into_inner()
+    });
+    DBRead(guard)
 }
 
 pub fn borrow_db_mut_checked<'a>() -> DBWrite<'a> {
-    match DB.borrow_data_mut() {
-        Ok(data) => DBWrite(ManuallyDrop::new(data)),
-        Err(e) => {
-            error!("database borrow mut failed with error {e}");
-            panic!("database borrow mut failed with error {e}");
-        }
-    }
+    let guard = DB.borrow_data_mut().unwrap_or_else(|e| {
+        error!("database write lock poisoned, recovering: {e}");
+        e.into_inner()
+    });
+    DBWrite(ManuallyDrop::new(guard))
 }

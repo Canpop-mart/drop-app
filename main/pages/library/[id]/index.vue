@@ -1112,7 +1112,7 @@ import {
   XCircleIcon,
 } from "@heroicons/vue/24/solid";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useListen } from "~/composables/useListen";
 import { micromark } from "micromark";
 import { InstalledType } from "~/types";
 import type { AspectRatio, ControllerType, QualityPreset } from "~/types";
@@ -1307,17 +1307,8 @@ const romHashResult = ref<RomHashResult | null>(null);
 const romHashChecking = ref(false);
 
 // Listen for launch-time hash check results
-let unlistenHash: (() => void) | null = null;
-onMounted(async () => {
-  unlistenHash = await listen<RomHashResult>(
-    `ra_hash_check/${game.id}`,
-    (event) => {
-      romHashResult.value = event.payload;
-    },
-  );
-});
-onUnmounted(() => {
-  unlistenHash?.();
+useListen<RomHashResult>(`ra_hash_check/${game.id}`, (event) => {
+  romHashResult.value = event.payload;
 });
 
 // On-demand hash check (Phase 3)
@@ -1345,19 +1336,13 @@ import type { SaveConflict } from "~/types/save-sync";
 const saveConflictOpen = ref(false);
 const saveConflicts = ref<SaveConflict[]>([]);
 
-let unlistenConflict: (() => void) | null = null;
-onMounted(async () => {
-  unlistenConflict = await listen<{ gameId: string; conflicts: SaveConflict[] }>(
-    `save_sync_conflict/${game.id}`,
-    (event) => {
-      saveConflicts.value = event.payload.conflicts;
-      saveConflictOpen.value = true;
-    },
-  );
-});
-onUnmounted(() => {
-  unlistenConflict?.();
-});
+useListen<{ gameId: string; conflicts: SaveConflict[] }>(
+  `save_sync_conflict/${game.id}`,
+  (event) => {
+    saveConflicts.value = event.payload.conflicts;
+    saveConflictOpen.value = true;
+  },
+);
 
 const installFlowOpen = ref(false);
 const versionOptions = ref<undefined | Array<VersionOption>>();
@@ -1483,7 +1468,15 @@ const dependencyRequiredModal = ref<
   { gameId: string; versionId: string } | undefined
 >(undefined);
 
+const launchInFlight = ref(false);
+
 async function launchIndex(index: number) {
+  // Guard against duplicate `launch_game` invocations from double-clicks /
+  // repeated keyboard activations. The backend rejects the second call with
+  // `AlreadyRunning`, which would show an error over a game that's actually
+  // starting fine.
+  if (launchInFlight.value) return;
+  launchInFlight.value = true;
   launchOptions.value = undefined;
   try {
     const result = await invoke<LaunchResult>("launch_game", {
@@ -1497,15 +1490,22 @@ async function launchIndex(index: number) {
       };
     }
   } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    if (errMsg.includes("AlreadyRunning") || errMsg.includes("already running")) {
+      // Benign — the first invoke already started the game.
+      return;
+    }
     createModal(
       ModalType.Notification,
       {
         title: `Couldn't run "${game.mName}"`,
-        description: `Drop failed to launch "${game.mName}": ${e}`,
+        description: `Drop failed to launch "${game.mName}": ${errMsg}`,
         buttonText: "Close",
       },
       (e, c) => c(),
     );
+  } finally {
+    launchInFlight.value = false;
   }
 }
 

@@ -3,7 +3,15 @@ use http::{Response, header::CONTENT_TYPE, response::Builder as ResponseBuilder}
 use log::{debug, warn};
 use tauri::UriSchemeResponder;
 
-use crate::{error::CacheError, utils::DROP_CLIENT_ASYNC};
+use crate::{
+    error::CacheError,
+    utils::{DROP_CLIENT_ASYNC, bounded_bytes},
+};
+
+/// Cap for `object://` fetches — game covers, banners, icons. 64 MiB leaves
+/// headroom for uncompressed banner art without letting a malicious server
+/// drain memory.
+const OBJECT_FETCH_CAP: u64 = 64 * 1024 * 1024;
 
 use super::{
     auth::generate_authorization_header,
@@ -51,8 +59,8 @@ pub async fn fetch_object(
                     .get("Content-Type")
                     .expect("Failed get Content-Type header"),
             );
-            let data = match r.bytes().await {
-                Ok(data) => Vec::from(data),
+            let data = match bounded_bytes(r, OBJECT_FETCH_CAP).await {
+                Ok(data) => data,
                 Err(e) => {
                     warn!("Could not get data from cache object {object_id} with error {e}",);
                     Vec::new()

@@ -11,7 +11,7 @@
   },
   "app": {
     "security": {
-      "csp": "default-src 'self' server: object: asset: http://server.localhost http://object.localhost http://asset.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: server: object: asset: http://server.localhost http://object.localhost http://asset.localhost https://*.steamstatic.com https://*.akamaihd.net https://retroachievements.org https://media.retroachievements.org; connect-src 'self' server: http://server.localhost https:; font-src 'self' data:; frame-src server: http://server.localhost",
+      "csp": "default-src 'self' server: object: asset: http://server.localhost http://object.localhost http://asset.localhost; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: server: object: asset: http://server.localhost http://object.localhost http://asset.localhost https://*.steamstatic.com https://*.akamaihd.net https://retroachievements.org https://media.retroachievements.org; connect-src 'self' server: http://server.localhost; font-src 'self' data:; frame-src server: http://server.localhost",
       "assetProtocol": {
         "enable": true,
         "scope": {}

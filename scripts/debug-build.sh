@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 export RUSTUP_HOME=/root/.cache/drop-flatpak-build/rustup
 export CARGO_HOME=/root/.cache/drop-flatpak-build/cargo
 NVM_DIR=/root/.cache/drop-flatpak-build/nvm
@@ -9,6 +10,7 @@ export PATH="$CARGO_HOME/bin:$NODE_BIN:$PNPM_PREFIX/bin:/usr/local/sbin:/usr/loc
 
 cat > /root/sdk-debug.sh << 'INNER'
 #!/bin/bash
+set -euo pipefail
 export RUSTUP_HOME=/root/.cache/drop-flatpak-build/rustup
 export CARGO_HOME=/root/.cache/drop-flatpak-build/cargo
 NVM_DIR=/root/.cache/drop-flatpak-build/nvm

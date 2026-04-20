@@ -10,7 +10,7 @@
 #
 # That's it. Takes about 5 minutes. No compiling required.
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE="$SCRIPT_DIR/drop.flatpak"

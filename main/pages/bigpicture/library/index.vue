@@ -478,7 +478,7 @@
 
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useListen } from "~/composables/useListen";
 import {
   MagnifyingGlassIcon,
   XMarkIcon,
@@ -703,19 +703,15 @@ onMounted(async () => {
 });
 
 let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
-let _unlistenLibrary: (() => void) | undefined;
 
-onMounted(async () => {
-  _unlistenLibrary = await listen("update_library", () => {
-    if (refreshTimeout) clearTimeout(refreshTimeout);
-    refreshTimeout = setTimeout(() => loadLibrary(true), 500);
-  });
+useListen("update_library", () => {
+  if (refreshTimeout) clearTimeout(refreshTimeout);
+  refreshTimeout = setTimeout(() => loadLibrary(true), 500);
 });
 
 onUnmounted(() => {
   for (const unsub of _unsubs) unsub();
   _unsubs.length = 0;
-  _unlistenLibrary?.();
   if (refreshTimeout) {
     clearTimeout(refreshTimeout);
     refreshTimeout = null;

@@ -1,5 +1,5 @@
-import { listen } from "@tauri-apps/api/event";
 import type { DownloadableMetadata } from "~/types";
+import { useListen } from "./useListen";
 
 export type QueueState = {
   queue: Array<{
@@ -27,45 +27,35 @@ export const useStatsState = () =>
   useState<StatsState>("stats", () => ({ speed: 0, time: 0 }));
 
 export function useDownloadListeners() {
-  let unlistenQueue: (() => void) | undefined;
-  let unlistenStats: (() => void) | undefined;
+  useListen<QueueState>("update_queue", (event) => {
+    const queue = useQueueState();
+    const completed = useCompletedDownloads();
+    const prev = queue.value;
+    const next = event.payload;
 
-  onMounted(async () => {
-    unlistenQueue = await listen("update_queue", (event) => {
-      const queue = useQueueState();
-      const completed = useCompletedDownloads();
-      const prev = queue.value;
-      const next = event.payload as QueueState;
-
-      // Detect items that were in the previous queue but are no longer present
-      // — these have completed (or been cancelled, but we treat them as done).
-      if (prev.queue.length > 0) {
-        const nextIds = new Set(next.queue.map((q) => q.meta.id));
-        for (const item of prev.queue) {
-          if (
-            !nextIds.has(item.meta.id) &&
-            !completed.value.some((c) => c.gameId === item.meta.id)
-          ) {
-            completed.value = [
-              { gameId: item.meta.id, completedAt: Date.now() },
-              ...completed.value,
-            ].slice(0, 50); // Keep last 50
-          }
+    // Detect items that were in the previous queue but are no longer present
+    // — these have completed (or been cancelled, but we treat them as done).
+    if (prev.queue.length > 0) {
+      const nextIds = new Set(next.queue.map((q) => q.meta.id));
+      for (const item of prev.queue) {
+        if (
+          !nextIds.has(item.meta.id) &&
+          !completed.value.some((c) => c.gameId === item.meta.id)
+        ) {
+          completed.value = [
+            { gameId: item.meta.id, completedAt: Date.now() },
+            ...completed.value,
+          ].slice(0, 50); // Keep last 50
         }
       }
+    }
 
-      queue.value = next;
-    });
-
-    unlistenStats = await listen("update_stats", (event) => {
-      const stats = useStatsState();
-      stats.value = event.payload as StatsState;
-    });
+    queue.value = next;
   });
 
-  onUnmounted(() => {
-    unlistenQueue?.();
-    unlistenStats?.();
+  useListen<StatsState>("update_stats", (event) => {
+    const stats = useStatsState();
+    stats.value = event.payload;
   });
 }
 

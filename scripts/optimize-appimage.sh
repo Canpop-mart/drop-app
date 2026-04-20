@@ -1,3 +1,5 @@
+#!/bin/bash
+set -euo pipefail
 ## This script is largely useless, because there's not much we can do about AppImage size
 
 ARCH=$(uname -m)

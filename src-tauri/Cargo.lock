@@ -3702,7 +3702,7 @@ dependencies = [
 [[package]]
 name = "native_model"
 version = "0.6.4"
-source = "git+https://github.com/Drop-OSS/native_model.git#a91b422cbd53116df1f20b2459fb3d8257458bfd"
+source = "git+https://github.com/Drop-OSS/native_model.git?rev=a91b422cbd53116df1f20b2459fb3d8257458bfd#a91b422cbd53116df1f20b2459fb3d8257458bfd"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3718,7 +3718,7 @@ dependencies = [
 [[package]]
 name = "native_model_macro"
 version = "0.6.4"
-source = "git+https://github.com/Drop-OSS/native_model.git#a91b422cbd53116df1f20b2459fb3d8257458bfd"
+source = "git+https://github.com/Drop-OSS/native_model.git?rev=a91b422cbd53116df1f20b2459fb3d8257458bfd#a91b422cbd53116df1f20b2459fb3d8257458bfd"
 dependencies = [
  "log",
  "proc-macro2",
@@ -5245,6 +5245,7 @@ dependencies = [
  "database",
  "dirs 6.0.0",
  "droplet-rs 0.7.3",
+ "futures-util",
  "gethostname",
  "hex 0.4.3",
  "http 1.4.0",
@@ -7607,6 +7608,8 @@ name = "utils"
 version = "0.1.0"
 dependencies = [
  "log",
+ "thiserror 2.0.17",
+ "url",
  "webbrowser",
 ]
 

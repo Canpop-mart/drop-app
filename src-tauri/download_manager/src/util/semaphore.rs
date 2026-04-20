@@ -16,12 +16,12 @@ impl SyncSemaphore {
     }
 
     pub fn acquire(&self) -> SyncSemaphorePermit  {
-        self.inner.fetch_add(1, Ordering::Relaxed);
+        self.inner.fetch_add(1, Ordering::AcqRel);
         SyncSemaphorePermit(self.inner.clone())
     }
 
     pub fn permits(&self) -> usize {
-        self.inner.fetch_add(0, Ordering::Relaxed)
+        self.inner.load(Ordering::Acquire)
     }
 }
 
@@ -29,6 +29,6 @@ pub struct SyncSemaphorePermit(Arc<AtomicUsize>);
 
 impl Drop for SyncSemaphorePermit {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Relaxed);
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }

@@ -36,6 +36,9 @@ impl<const S: usize> RollingProgressWindow<S> {
             .map(|(_, x)| x.load(Ordering::Acquire))
             .collect::<Vec<usize>>();
         let amount = valid.len();
+        if amount == 0 {
+            return 0;
+        }
         let sum = valid.into_iter().sum::<usize>();
 
         sum / amount

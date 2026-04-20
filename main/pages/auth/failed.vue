@@ -9,7 +9,7 @@
         <div class="mt-4">
           <p class="text-sm text-zinc-400 max-w-sm">
             Drop encountered an error while connecting to your instance. Error:
-            {{ message }}
+            <span class="text-zinc-200">{{ message }}</span>
           </p>
         </div>
         <div class="mt-10 flex items-center justify-center gap-x-6">
@@ -26,7 +26,19 @@
 import { XCircleIcon } from "@heroicons/vue/16/solid";
 
 const route = useRoute();
-const message = route.query.error ?? "An unknown error occurred";
+
+// Sanitize the error query param: coerce to string, cap length,
+// strip control chars. Mustache interpolation already escapes HTML,
+// but defense-in-depth is cheap.
+function sanitizeError(raw: unknown): string {
+  if (raw == null) return "An unknown error occurred";
+  const asString = Array.isArray(raw) ? raw.join(", ") : String(raw);
+  // eslint-disable-next-line no-control-regex
+  const stripped = asString.replace(/[\x00-\x1F\x7F]/g, "");
+  return stripped.slice(0, 500) || "An unknown error occurred";
+}
+
+const message = sanitizeError(route.query.error);
 
 definePageMeta({
   layout: "mini",

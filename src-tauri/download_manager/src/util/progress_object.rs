@@ -113,7 +113,11 @@ impl ProgressObject {
             (0..length).map(|_| Arc::new(AtomicUsize::new(0))).collect();
     }
     pub fn get_progress(&self) -> f64 {
-        self.sum() as f64 / self.get_max() as f64
+        let max = self.get_max();
+        if max == 0 {
+            return 0.0;
+        }
+        self.sum() as f64 / max as f64
     }
     pub fn get(&self, index: usize) -> Arc<AtomicUsize> {
         lock!(self.progress_instances)[index].clone()

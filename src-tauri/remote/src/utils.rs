@@ -7,6 +7,7 @@ use std::{
 
 use client::{app_state::AppState, app_status::AppStatus};
 use database::db::DATA_ROOT_DIR;
+use futures_util::StreamExt as _;
 use http::Extensions;
 use log::{debug, info, warn};
 use reqwest::Certificate;
@@ -14,8 +15,56 @@ use reqwest_middleware::{
     ClientBuilder, ClientWithMiddleware, Error, Middleware, Next, Result,
     reqwest::{Request, Response},
 };
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 use tauri::{AppHandle, Emitter, Manager, async_runtime::Mutex};
+
+use crate::error::RemoteAccessError;
+
+/// Default cap for JSON API responses. Most endpoints return a few kilobytes;
+/// 8 MiB leaves headroom for large library/save manifests without letting a
+/// malicious server drain memory.
+pub const DEFAULT_JSON_CAP_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Deserialize a JSON response body into `T`, rejecting payloads that exceed
+/// `cap_bytes`. Enforces the cap both via Content-Length (if provided) and by
+/// streaming the body so chunked transfers can't sneak past the limit.
+pub async fn bounded_json<T: DeserializeOwned>(
+    response: reqwest::Response,
+    cap_bytes: u64,
+) -> std::result::Result<T, RemoteAccessError> {
+    if let Some(len) = response.content_length() {
+        if len > cap_bytes {
+            return Err(RemoteAccessError::ResponseTooLarge(cap_bytes));
+        }
+    }
+    let bytes = bounded_bytes(response, cap_bytes).await?;
+    serde_json::from_slice(&bytes)
+        .map_err(|e| RemoteAccessError::UnparseableResponse(e.to_string()))
+}
+
+/// Collect a response body into a `Vec<u8>`, rejecting payloads that exceed
+/// `cap_bytes`. Preferred over `.bytes()` for any server-controlled response
+/// where the size isn't bounded by earlier validation.
+pub async fn bounded_bytes(
+    response: reqwest::Response,
+    cap_bytes: u64,
+) -> std::result::Result<Vec<u8>, RemoteAccessError> {
+    if let Some(len) = response.content_length() {
+        if len > cap_bytes {
+            return Err(RemoteAccessError::ResponseTooLarge(cap_bytes));
+        }
+    }
+    let mut stream = response.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| RemoteAccessError::FetchErrorLegacy(std::sync::Arc::new(e)))?;
+        if buf.len() as u64 + chunk.len() as u64 > cap_bytes {
+            return Err(RemoteAccessError::ResponseTooLarge(cap_bytes));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
