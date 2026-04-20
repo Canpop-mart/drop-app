@@ -145,6 +145,56 @@ fn sanitize_appimage_env(command: &mut Command) {
 #[cfg(not(target_os = "linux"))]
 fn sanitize_appimage_env(_command: &mut Command) {}
 
+/// Emit a one-line summary of the launch-relevant env we're passing to the
+/// child. Lets a black-screen report be triaged from the log alone: which
+/// Proton did umu use, which game id, whether AppImage sanitization kicked
+/// in, whether LD_LIBRARY_PATH / LD_PRELOAD escaped. Values that can carry
+/// filesystem paths (WINEPREFIX, PROTONPATH) are logged verbatim — they're
+/// not secret. We never log full LD_LIBRARY_PATH contents (can be long and
+/// noisy); instead we record whether it's set and its byte length.
+fn log_launch_env_fingerprint(command: &Command, game_id: &str) {
+    let env_of = |k: &str| -> Option<String> {
+        command
+            .get_envs()
+            .find(|(key, _)| key.to_string_lossy() == k)
+            .and_then(|(_, val)| val.map(|v| v.to_string_lossy().to_string()))
+    };
+    let removed = |k: &str| -> bool {
+        command
+            .get_envs()
+            .any(|(key, val)| key.to_string_lossy() == k && val.is_none())
+    };
+    let ld_summary = match env_of("LD_LIBRARY_PATH") {
+        Some(v) if v.is_empty() => "empty".to_string(),
+        Some(v) => format!("set({} bytes)", v.len()),
+        None if removed("LD_LIBRARY_PATH") => "removed".to_string(),
+        None => "inherited".to_string(),
+    };
+
+    info!(
+        "[LAUNCH/env] game_id={game_id} \
+         GAMEID={gid:?} \
+         PROTONPATH={proton:?} \
+         WINEPREFIX={pfx:?} \
+         LD_LIBRARY_PATH={ld} \
+         LD_PRELOAD={preload} \
+         MANGOHUD={mango:?} \
+         appimage_scrubbed={scrubbed}",
+        gid = env_of("GAMEID").unwrap_or_default(),
+        proton = env_of("PROTONPATH").unwrap_or_default(),
+        pfx = env_of("WINEPREFIX").unwrap_or_default(),
+        ld = ld_summary,
+        preload = env_of("LD_PRELOAD").unwrap_or_else(|| "(unset)".into()),
+        mango = env_of("MANGOHUD").unwrap_or_default(),
+        scrubbed = {
+            #[cfg(target_os = "linux")]
+            { running_from_appimage() }
+            #[cfg(not(target_os = "linux"))]
+            { false }
+        },
+    );
+}
+
 pub struct ProcessManager<'a> {
     current_platform: Platform,
     log_output_dir: PathBuf,
@@ -402,10 +452,24 @@ impl ProcessManager<'_> {
         // Or if the status isn't 0
         // Or if it's an error
         if !process.manually_killed
-            && (elapsed.as_secs() <= 2 || result.map_or(true, |r| !r.success()))
+            && (elapsed.as_secs() <= 2 || result.as_ref().map_or(true, |r| !r.success()))
         {
             warn!("drop detected that the game {game_id} may have failed to launch properly");
+            // Legacy event (string payload) — kept for backwards compat with
+            // desktop modal listener in state-navigation.ts.
             let _ = self.app_handle.emit("launch_external_error", &game_id);
+            // Detailed event for BPM error dialog.
+            let exit_code = result.as_ref().ok().and_then(|s| s.code());
+            let io_err = result.as_ref().err().map(|e| e.to_string());
+            let _ = self.app_handle.emit(
+                "launch_external_error_detail",
+                serde_json::json!({
+                    "gameId": &game_id,
+                    "exitCode": exit_code,
+                    "elapsedSecs": elapsed.as_secs(),
+                    "ioError": io_err,
+                }),
+            );
         }
 
         let version_data = db_handle
@@ -1861,6 +1925,11 @@ impl ProcessManager<'_> {
             "command": &spawn_executable,
             "wrapped_in_bash": is_script,
         }));
+
+        // Fingerprint the env we're handing to the child. Essential for
+        // diagnosing black-screens / umu / proton issues from drop.log
+        // without having to reproduce on the user's box.
+        log_launch_env_fingerprint(&command, &game_id);
 
         // Create a new process group for the child so we can send signals
         // to the entire process tree (bash → umu-run → proton → wine → game)

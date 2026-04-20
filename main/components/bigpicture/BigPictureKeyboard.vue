@@ -39,12 +39,30 @@
           </div>
         </div>
 
-        <!-- Hints -->
-        <div class="flex gap-6 mt-3 text-xs text-zinc-500">
+        <!-- Paste + hints row -->
+        <div class="flex items-center gap-6 mt-3 text-xs text-zinc-500">
+          <button
+            type="button"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-zinc-800/80 text-zinc-300 hover:bg-zinc-700 transition-colors"
+            :class="{ 'ring-2 ring-green-400': pasteFlash }"
+            @click="paste"
+          >
+            <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="2" width="6" height="4" rx="1" />
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+            </svg>
+            <span>Paste</span>
+          </button>
+          <span
+            v-if="pasteError"
+            class="text-red-400 text-[11px]"
+          >{{ pasteError }}</span>
+          <div class="flex-1" />
           <BigPictureButtonPrompt button="A" label="Type" size="sm" />
           <BigPictureButtonPrompt button="B" label="Close" size="sm" />
           <BigPictureButtonPrompt button="X" label="Backspace" size="sm" />
           <BigPictureButtonPrompt button="Y" label="Space" size="sm" />
+          <BigPictureButtonPrompt button="LT" label="Paste" size="sm" />
           <BigPictureButtonPrompt button="LB" label="Shift" size="sm" />
           <BigPictureButtonPrompt button="RB" label="Submit" size="sm" />
         </div>
@@ -126,6 +144,32 @@ function backspace() {
 
 function space() {
   emit("update:modelValue", props.modelValue + " ");
+}
+
+const pasteFlash = ref(false);
+const pasteError = ref("");
+
+async function paste() {
+  pasteError.value = "";
+  try {
+    const text =
+      typeof navigator !== "undefined" && navigator.clipboard
+        ? await navigator.clipboard.readText()
+        : "";
+    if (!text) {
+      pasteError.value = "Clipboard empty";
+      return;
+    }
+    emit("update:modelValue", props.modelValue + text);
+    pasteFlash.value = true;
+    setTimeout(() => (pasteFlash.value = false), 600);
+  } catch (e) {
+    // Clipboard access can be blocked by the browser (insecure context,
+    // permissions, or gamescope sandboxing). Give the user a hint instead
+    // of silently failing.
+    pasteError.value = "Clipboard unavailable";
+    console.warn("[BPM:KB] clipboard paste failed:", e);
+  }
 }
 
 // ── Gamepad wiring ────────────────────────────────────────────────────────
@@ -250,6 +294,14 @@ function wireGamepad() {
     gamepad.onButton(GamepadButton.RightBumper, () => {
       if (!props.visible) return;
       emit("submit");
+    }),
+  );
+
+  // LT = paste from clipboard
+  unsubs.push(
+    gamepad.onButton(GamepadButton.LeftTrigger, () => {
+      if (!props.visible) return;
+      paste();
     }),
   );
 }

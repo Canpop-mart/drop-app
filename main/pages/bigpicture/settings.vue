@@ -311,6 +311,59 @@
           </button>
         </div>
 
+        <!-- Reduced Motion (turns off blur/animations on low-end GPUs like the Deck) -->
+        <div
+          :ref="(el: any) => registerContent(el, { onSelect: () => (reducedMotion = !reducedMotion) })"
+          class="flex items-center justify-between rounded-xl cursor-pointer p-4"
+          style="background-color: var(--bpm-surface)"
+        >
+          <div>
+            <p class="font-medium text-sm" style="color: var(--bpm-text)">
+              Reduced Motion
+            </p>
+            <p class="text-xs mt-0.5" style="color: var(--bpm-muted)">
+              Disable backdrop blur and soft animations. Recommended on Steam Deck.
+            </p>
+          </div>
+          <button
+            class="w-12 h-7 rounded-full transition-colors relative shrink-0 ml-4"
+            :class="reducedMotion ? 'bg-blue-600' : 'bg-zinc-700'"
+            @click.stop="reducedMotion = !reducedMotion"
+          >
+            <div
+              class="absolute top-0.5 size-6 rounded-full bg-white shadow transition-transform"
+              :class="reducedMotion ? 'translate-x-5' : 'translate-x-0.5'"
+            />
+          </button>
+        </div>
+
+        <!-- Deck Mode override -->
+        <div class="bg-zinc-900/50 rounded-xl p-4" style="background-color: var(--bpm-surface)">
+          <div class="mb-3">
+            <p class="font-medium text-sm" style="color: var(--bpm-text)">Deck Mode</p>
+            <p class="text-xs mt-0.5" style="color: var(--bpm-muted)">
+              Layout tuned for handhelds (larger touch targets, bottom tabs).
+              Auto detects Steam Deck hardware.
+            </p>
+          </div>
+          <div class="flex gap-2">
+            <button
+              v-for="option in deckModeOptions"
+              :key="option.value"
+              :ref="(el: any) => registerContent(el, { onSelect: () => (deckMode.forceOverride.value = option.value as any) })"
+              class="flex-1 py-2.5 rounded-lg text-xs font-medium transition-all border"
+              :class="[
+                deckMode.forceOverride.value === option.value
+                  ? 'bg-blue-600/20 text-blue-400 border-blue-500/50'
+                  : 'bg-zinc-800/50 text-zinc-400 border-zinc-700/50 hover:text-zinc-200 hover:bg-zinc-800',
+              ]"
+              @click="deckMode.forceOverride.value = option.value as any"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+
       </div>
 
       <!-- ═══════ Performance ═══════ -->
@@ -496,6 +549,37 @@
           </p>
         </div>
 
+        <!-- Max concurrent download threads -->
+        <div class="bg-zinc-900/50 rounded-xl p-4">
+          <div class="mb-3">
+            <p class="font-medium text-zinc-200 text-sm">Concurrent download threads</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Higher values saturate the network faster but use more CPU.
+              1–64 allowed; defaults to 4.
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: () => bumpThreads(-1) })"
+              class="px-3 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm"
+              @click="bumpThreads(-1)"
+            >
+              −
+            </button>
+            <span class="min-w-[2rem] text-center text-sm font-mono text-zinc-200">
+              {{ maxDownloadThreads }}
+            </span>
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: () => bumpThreads(1) })"
+              class="px-3 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm"
+              @click="bumpThreads(1)"
+            >
+              +
+            </button>
+            <span v-if="threadsSaved" class="text-xs text-green-400 ml-2">Saved</span>
+          </div>
+        </div>
+
         <!-- SD Card / Removable storage -->
         <div
           v-if="removableStorage.length > 0"
@@ -555,15 +639,38 @@
             Discovering Proton installations...
           </div>
 
-          <div v-else-if="allProtonPaths.length === 0" class="py-2">
-            <p class="text-yellow-400/80 text-xs">
-              No Proton installations found. Install Proton via Steam
-              (Settings → Compatibility → Enable Steam Play) or place it in
-              <code class="bg-zinc-800 px-1 rounded">~/.steam/root/compatibilitytools.d/</code>.
-            </p>
-          </div>
-
           <div v-else class="space-y-2">
+            <!-- Auto / GE-Proton — recommended default, umu downloads it on first launch -->
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: () => setAutoProton() })"
+              class="w-full flex items-center justify-between bg-zinc-800/50 rounded-lg px-3 py-2.5 text-left transition-colors"
+              :class="[
+                selectedProtonDefault === null
+                  ? 'ring-1 ring-blue-500/50 bg-blue-600/10'
+                  : 'hover:bg-zinc-700/50',
+              ]"
+              @click="setAutoProton()"
+            >
+              <div class="min-w-0">
+                <span class="text-xs font-medium text-zinc-200 block truncate">
+                  Auto (GE-Proton, recommended)
+                </span>
+                <span class="text-[10px] text-zinc-500 block truncate">
+                  umu-launcher downloads the latest GE-Proton on first launch
+                </span>
+              </div>
+              <div
+                v-if="selectedProtonDefault === null"
+                class="size-2 rounded-full bg-blue-500 shrink-0 ml-2"
+              />
+            </button>
+
+            <div v-if="allProtonPaths.length === 0" class="py-2">
+              <p class="text-zinc-500 text-xs">
+                No local Proton installations detected. Auto works even without
+                one — umu fetches GE-Proton on its own.
+              </p>
+            </div>
             <button
               v-for="proton in allProtonPaths"
               :key="proton.path"
@@ -681,6 +788,7 @@ import { useGamepad } from "~/composables/gamepad";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useBpAudio, soundProfiles, type SoundProfileId } from "~/composables/bp-audio";
 import { useBpmTheme, themes, type ThemeId } from "~/composables/bp-theme";
+import { useDeckMode } from "~/composables/deck-mode";
 import { type Ref } from "vue";
 
 definePageMeta({ layout: "bigpicture" });
@@ -718,6 +826,29 @@ watch(hideTitles, (val) => {
 function toggleHideTitles() {
   hideTitles.value = !hideTitles.value;
 }
+
+// ── Reduced motion — persisted via localStorage, consumed by BPM chrome
+//    (backdrop-blur off, animations shortened). Default true when we detect
+//    Steam Deck hardware so first-run is already snappy.
+const deckMode = useDeckMode();
+const reducedMotion = ref(
+  typeof localStorage !== "undefined"
+    ? (localStorage.getItem("bpm:reducedMotion") ?? (deckMode.isSteamDeckHardware.value ? "true" : "false")) === "true"
+    : false,
+);
+watch(reducedMotion, (val) => {
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem("bpm:reducedMotion", String(val));
+    // Broadcast so layout-level providers pick it up without a full reload
+    window.dispatchEvent(new CustomEvent("bpm:reducedMotion", { detail: val }));
+  }
+});
+
+const deckModeOptions = [
+  { label: "Auto", value: "auto" },
+  { label: "Handheld", value: "deck" },
+  { label: "Desktop", value: "desktop" },
+];
 
 const registerSidebar = useBpFocusableGroup("content");
 const registerContent = useBpFocusableGroup("content");
@@ -941,6 +1072,41 @@ const packageFormatLabel = computed(() => {
 
 const installDirs = ref<string[]>([]);
 const removableStorage = ref<string[]>([]);
+const maxDownloadThreads = ref(4);
+const threadsSaved = ref(false);
+let threadsDirty = false;
+let threadsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+onMounted(async () => {
+  try {
+    const settings = await invoke<{ maxDownloadThreads?: number }>("fetch_settings");
+    if (typeof settings.maxDownloadThreads === "number") {
+      maxDownloadThreads.value = settings.maxDownloadThreads;
+    }
+  } catch { /* ignore */ }
+});
+
+function bumpThreads(delta: number) {
+  const next = Math.max(1, Math.min(64, maxDownloadThreads.value + delta));
+  if (next === maxDownloadThreads.value) return;
+  maxDownloadThreads.value = next;
+  threadsDirty = true;
+  if (threadsSaveTimer) clearTimeout(threadsSaveTimer);
+  // Debounce rapid presses so we only send one update_settings call.
+  threadsSaveTimer = setTimeout(async () => {
+    if (!threadsDirty) return;
+    threadsDirty = false;
+    try {
+      await invoke("update_settings", {
+        newSettings: { maxDownloadThreads: maxDownloadThreads.value },
+      });
+      threadsSaved.value = true;
+      setTimeout(() => { threadsSaved.value = false; }, 1500);
+    } catch (e) {
+      console.warn("[BPM:SETTINGS] Failed to save maxDownloadThreads:", e);
+    }
+  }, 400);
+}
 
 onMounted(async () => {
   try {
@@ -984,18 +1150,10 @@ onMounted(async () => {
 
     allProtonPaths.value = [...result.autodiscovered, ...result.custom];
     selectedProtonDefault.value = result.default;
-
-    // Auto-set default if one is discovered but none is selected
-    if (!result.default && allProtonPaths.value.length > 0) {
-      const firstPath = allProtonPaths.value[0].path;
-      try {
-        await invoke("set_default", { path: firstPath });
-        selectedProtonDefault.value = firstPath;
-        console.log("[BPM:SETTINGS] Auto-selected Proton default:", firstPath);
-      } catch (e) {
-        console.warn("[BPM:SETTINGS] Failed to auto-set Proton default:", e);
-      }
-    }
+    // No auto-selection here: leaving `default` as null is the "Auto
+    // (GE-Proton)" opt-in, which umu-launcher resolves on first launch.
+    // Previously we silently picked the first discovered Proton, which
+    // made the Auto option impossible to preserve across visits.
   } catch (e) {
     console.warn("[BPM:SETTINGS] Proton discovery failed:", e);
   } finally {
@@ -1010,6 +1168,16 @@ async function setDefaultProton(path: string) {
     selectedProtonDefault.value = path;
   } catch (e) {
     protonSaveError.value = `Failed to set default: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+async function setAutoProton() {
+  protonSaveError.value = null;
+  try {
+    await invoke("clear_default_proton");
+    selectedProtonDefault.value = null;
+  } catch (e) {
+    protonSaveError.value = `Failed to enable Auto: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 

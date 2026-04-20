@@ -173,6 +173,17 @@ pub async fn set_default(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Clears the user's Proton override so umu-launcher falls back to the
+/// bundled default (`GE-Proton` keyword), which umu auto-downloads on
+/// first launch. Used by the "Auto" option in the Compatibility settings
+/// to let Deck users opt into a zero-config flow.
+#[tauri::command]
+pub async fn clear_default_proton() -> Result<(), String> {
+    let mut db_lock = borrow_db_mut_checked();
+    db_lock.applications.default_proton_path = None;
+    Ok(())
+}
+
 /// Attempt to install umu-launcher via pipx (preferred) or pip --user (fallback).
 /// Returns a success message with the installed path, or an error string.
 #[tauri::command]

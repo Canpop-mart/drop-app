@@ -1,7 +1,13 @@
 <template>
   <div
-    class="flex items-center justify-between px-8 h-14 backdrop-blur-sm border-b shrink-0"
-    :style="{ backgroundColor: 'color-mix(in srgb, var(--bpm-bg) 80%, transparent)', borderColor: 'var(--bpm-border)' }"
+    class="flex items-center justify-between px-8 h-14 border-b shrink-0"
+    :class="{ 'backdrop-blur-sm': !reducedMotion }"
+    :style="{
+      backgroundColor: reducedMotion
+        ? 'var(--bpm-bg)'
+        : 'color-mix(in srgb, var(--bpm-bg) 80%, transparent)',
+      borderColor: 'var(--bpm-border)',
+    }"
   >
     <!-- Left: breadcrumbs -->
     <div class="flex items-center gap-1.5">
@@ -64,6 +70,9 @@ import { useAppState } from "~/composables/app-state";
 import { useObject } from "~/composables/use-object";
 import { serverUrl } from "~/composables/use-server-fetch";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
+import { useReducedMotion } from "~/composables/bp-reduced-motion";
+
+const { reducedMotion } = useReducedMotion();
 
 const route = useRoute();
 const router = useRouter();

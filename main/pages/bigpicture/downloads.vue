@@ -172,6 +172,18 @@
         </div>
       </div>
     </div>
+
+    <!-- Cancel confirmation -->
+    <BigPictureDialog
+      :visible="showCancelConfirm"
+      title="Cancel Download"
+      :message="`Stop downloading ${cancelTargetName || 'this game'}? Any partial data will be removed.`"
+      confirm-label="Cancel Download"
+      cancel-label="Keep"
+      :destructive="true"
+      @confirm="confirmCancel"
+      @cancel="showCancelConfirm = false"
+    />
   </div>
 </template>
 
@@ -189,6 +201,7 @@ import { useGame } from "~/composables/game";
 import { serverUrl } from "~/composables/use-server-fetch";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
+import BigPictureDialog from "~/components/bigpicture/BigPictureDialog.vue";
 definePageMeta({ layout: "bigpicture" });
 const queueState = useQueueState();
 const statsState = useStatsState();
@@ -299,13 +312,29 @@ async function reorderDownload(oldIndex: number, newIndex: number) {
   }
 }
 
-async function cancelCurrentDownload() {
+const showCancelConfirm = ref(false);
+const cancelTargetMeta = ref<any>(null);
+const cancelTargetName = ref<string>("");
+
+function cancelCurrentDownload() {
   const current = queue.value[0];
   if (!current) return;
+  cancelTargetMeta.value = current.meta;
+  cancelTargetName.value = gameNames.value[current.meta.id]?.name ?? "";
+  showCancelConfirm.value = true;
+}
+
+async function confirmCancel() {
+  const meta = cancelTargetMeta.value;
+  showCancelConfirm.value = false;
+  if (!meta) return;
   try {
-    await invoke("cancel_game", { meta: current.meta });
+    await invoke("cancel_game", { meta });
   } catch (e) {
     console.error("Failed to cancel download:", e);
+  } finally {
+    cancelTargetMeta.value = null;
+    cancelTargetName.value = "";
   }
 }
 

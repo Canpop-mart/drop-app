@@ -442,7 +442,7 @@ const registerFilterMenu = useBpFocusableGroup("filter-menu");
 // State
 const loading = ref(true);
 const browseLoading = ref(false);
-const activeTab = ref("featured");
+const activeTab = ref<string>(focusNav.getRouteState<string>("activeTab") ?? "featured");
 const showSearch = ref(false);
 const showFilterMenu = ref(false);
 const searchQuery = ref("");
@@ -658,8 +658,9 @@ watch(showFilterMenu, (open) => {
   }
 });
 
-// Reload browse when tab switches to browse
+// Reload browse when tab switches to browse; persist tab across back-nav.
 watch(activeTab, (tab) => {
+  focusNav.setRouteState("activeTab", tab);
   if (tab === "browse") {
     loadBrowse(true);
   }

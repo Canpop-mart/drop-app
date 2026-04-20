@@ -250,6 +250,8 @@ pub fn run() {
             fetch_system_data,
             collect_bug_report_diagnostics,
             collect_bug_report_logs,
+            collect_bug_report_log_file,
+            open_log_folder,
             open_fs,
             // User utils
             update_settings,
@@ -304,6 +306,7 @@ pub fn run() {
             toggle_autostart,
             get_autostart_enabled,
             open_process_logs,
+            read_latest_launch_log,
             get_launch_options,
             detect_package_format,
             detect_removable_storage,
@@ -315,6 +318,8 @@ pub fn run() {
             ::process::compat::remove_proton_layer,
             #[cfg(target_os = "linux")]
             ::process::compat::set_default,
+            #[cfg(target_os = "linux")]
+            ::process::compat::clear_default_proton,
             #[cfg(target_os = "linux")]
             ::process::compat::diagnose_launch_environment,
             #[cfg(target_os = "linux")]

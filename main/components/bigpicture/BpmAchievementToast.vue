@@ -1,6 +1,21 @@
 <template>
   <Transition :enter-active-class="enterActiveClass" :leave-active-class="leaveActiveClass">
-    <div v-if="show" class="toast" :style="toastStyle">
+    <div
+      v-if="show"
+      class="toast"
+      :style="toastStyle"
+      role="button"
+      tabindex="0"
+      @click="dismiss"
+      @keydown.enter.prevent="dismiss"
+      @keydown.space.prevent="dismiss"
+    >
+      <button
+        type="button"
+        class="toast-close"
+        aria-label="Dismiss"
+        @click.stop="dismiss"
+      >&times;</button>
       <div class="achievement-label">{{ achievementLabel }}</div>
       <div class="achievement-name">{{ achievement?.title }}</div>
       <div class="achievement-game">{{ achievement?.game }}</div>
@@ -211,6 +226,15 @@ const leaveActiveClass = computed(() => `${config.value.animationClass}-leave-ac
 
 const achievementLabel = computed(() => config.value.label)
 
+function dismiss() {
+  if (!show.value) return
+  clearTimeout(timeout)
+  show.value = false
+  // Let the leave-transition play before telling the parent to null the
+  // achievement, otherwise it pops instead of sliding out.
+  setTimeout(() => emit('dismissed'), 500)
+}
+
 watch(
   () => props.achievement,
   (newAchievement) => {
@@ -229,6 +253,37 @@ watch(
 </script>
 
 <style scoped>
+.toast {
+  cursor: pointer;
+  outline: none;
+}
+.toast:focus-visible {
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.7);
+}
+.toast-close {
+  position: absolute;
+  top: 0.4vh;
+  right: 0.6vw;
+  width: 2.2vh;
+  height: 2.2vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  border: none;
+  border-radius: 50%;
+  font-size: 1.4em;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.toast-close:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.45);
+}
+
 .achievement-label {
   font-size: 0.9em;
   font-weight: bold;

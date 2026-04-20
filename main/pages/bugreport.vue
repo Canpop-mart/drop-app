@@ -173,15 +173,20 @@ async function submitReport() {
       "collect_bug_report_diagnostics",
     );
 
-    // Collect logs if opted in
-    let logs: string | undefined;
+    // Collect the full log file (redacted) if opted in. Fall back to a
+    // short text tail if the file read fails.
+    let logFile: { filename: string; content: number[]; truncated: boolean } | undefined;
+    let logsText: string | undefined;
     if (includeLogs.value) {
       try {
-        logs = await invoke<string>("collect_bug_report_logs", {
-          maxLines: 200,
-        });
+        logFile = await invoke("collect_bug_report_log_file");
       } catch (e) {
-        console.warn("Failed to collect logs:", e);
+        console.warn("Failed to collect log file, falling back to text tail:", e);
+        try {
+          logsText = await invoke<string>("collect_bug_report_logs", { maxLines: 400 });
+        } catch (inner) {
+          console.warn("Failed to collect log tail:", inner);
+        }
       }
     }
 
@@ -193,8 +198,14 @@ async function submitReport() {
     form.append("title", title.value.trim());
     form.append("description", description.value.trim());
     form.append("systemInfo", JSON.stringify(diagnostics));
-    if (logs) {
-      form.append("logs", logs);
+    if (logFile) {
+      const blob = new Blob([new Uint8Array(logFile.content)], { type: "text/plain" });
+      form.append("logfile", blob, logFile.filename);
+      if (logFile.truncated) {
+        form.append("logfileTruncated", "1");
+      }
+    } else if (logsText) {
+      form.append("logs", logsText);
     }
     if (screenshotFile.value) {
       form.append("screenshot", screenshotFile.value);

@@ -175,6 +175,22 @@ impl ProcessHandler for UMUNativeLauncher {
     fn modify_command(&self, _command: &mut Command) {}
 }
 
+/// umu-launcher reserved shorthands. When PROTONPATH is set to one of these
+/// strings, umu resolves it itself (downloading the latest GE-Proton /
+/// UMU-Proton release into ~/.cache/umu-launcher/ on first run). We must
+/// NOT try to validate these as filesystem paths — they aren't paths.
+fn is_umu_proton_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "GE-Proton" | "GE-Latest" | "UMU-Proton" | "UMU-Latest" | "Proton-GE" | "GE-Proton-Latest"
+    )
+}
+
+/// Default Proton when the user has configured nothing. GE-Proton has the
+/// DXVK/VKD3D/winetricks gamefixes most Windows titles need; umu will
+/// auto-download it on first launch.
+const DEFAULT_UMU_PROTON: &str = "GE-Proton";
+
 pub struct UMUCompatLauncher;
 impl ProcessHandler for UMUCompatLauncher {
     fn create_launch_process(
@@ -202,35 +218,40 @@ impl ProcessHandler for UMUCompatLauncher {
         let pfx_dir = pfx_dir.join(meta.id.clone());
         create_dir_all(&pfx_dir)?;
 
-        let proton_path = game_version
+        // Resolve Proton in priority order: per-game override → global default
+        // → GE-Proton (umu auto-downloads on first use).
+        let proton_path: String = game_version
             .user_configuration
             .override_proton_path
-            .as_ref()
-            .or(database.applications.default_proton_path.as_ref());
+            .clone()
+            .or_else(|| database.applications.default_proton_path.clone())
+            .unwrap_or_else(|| {
+                info!(
+                    "[UMUCompat] No Proton configured — falling back to {DEFAULT_UMU_PROTON}. \
+                     umu-launcher will auto-download it on first launch."
+                );
+                DEFAULT_UMU_PROTON.to_string()
+            });
 
-        if proton_path.is_none() {
-            warn!(
-                "[UMUCompat] No Proton path configured (no per-game override, no global default). \
-                 Set a default Proton path in Settings → Compatibility."
-            );
-            return Err(ProcessError::NoCompat);
-        }
-        let proton_path = proton_path.unwrap();
-        info!("[UMUCompat] Using Proton path: {}", proton_path);
+        info!("[UMUCompat] Using Proton: {}", proton_path);
 
-        #[cfg(target_os = "linux")]
-        let proton_valid = crate::compat::read_proton_path(PathBuf::from(proton_path))
-            .ok()
-            .flatten()
-            .is_some();
-        #[cfg(not(target_os = "linux"))]
-        let proton_valid = false;
-        if !proton_valid {
-            warn!(
-                "[UMUCompat] Proton path {:?} is invalid (missing proton binary or compatibilitytool.vdf)",
-                proton_path
-            );
-            return Err(ProcessError::NoCompat);
+        // Keywords (GE-Proton, UMU-Proton, etc.) are resolved by umu itself;
+        // skip filesystem validation for those. Real paths still get checked.
+        if !is_umu_proton_keyword(&proton_path) {
+            #[cfg(target_os = "linux")]
+            let proton_valid = crate::compat::read_proton_path(PathBuf::from(&proton_path))
+                .ok()
+                .flatten()
+                .is_some();
+            #[cfg(not(target_os = "linux"))]
+            let proton_valid = false;
+            if !proton_valid {
+                warn!(
+                    "[UMUCompat] Proton path {:?} is invalid (missing proton binary or compatibilitytool.vdf)",
+                    proton_path
+                );
+                return Err(ProcessError::NoCompat);
+            }
         }
         let proton_env = format!("PROTONPATH={}", proton_path);
         info!("[UMUCompat] Proton valid. Building launch command...");

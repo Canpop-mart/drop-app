@@ -98,6 +98,22 @@
         <!-- Auto-collected info hint -->
         <div class="rounded-md bg-zinc-800/50 px-3 py-2 text-xs text-zinc-500">
           System info (OS, CPU, RAM, client version) will be attached automatically.
+          Secrets like auth tokens are redacted from the log before upload.
+        </div>
+
+        <!-- Open log folder (useful when running in SteamDeckDesktop) -->
+        <div class="flex justify-start">
+          <button
+            :ref="(el: any) => registerContent(el, { onSelect: openLogFolder })"
+            type="button"
+            class="inline-flex items-center gap-2 px-3 py-2 rounded-md text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-800 hover:bg-zinc-700"
+            @click="openLogFolder"
+          >
+            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+            {{ logFolderOpened ? "Opened!" : "Open log folder" }}
+          </button>
         </div>
 
         <!-- Error display -->
@@ -144,14 +160,27 @@ definePageMeta({ layout: "bigpicture" });
 
 const registerContent = useBpFocusableGroup("content");
 
-const title = ref("");
-const description = ref("");
+const route = useRoute();
+const title = ref(typeof route.query.title === "string" ? route.query.title : "");
+const description = ref(typeof route.query.body === "string" ? route.query.body : "");
 const showTitleKeyboard = ref(false);
 const showDescKeyboard = ref(false);
-const includeLogs = ref(true);
+// If caller passed ?attachLog=1 (launch-error handoff), default to attaching.
+const includeLogs = ref(route.query.attachLog !== "0");
 const submitting = ref(false);
 const submitError = ref<string | undefined>();
 const submitted = ref(false);
+const logFolderOpened = ref(false);
+
+async function openLogFolder() {
+  try {
+    await invoke("open_log_folder");
+    logFolderOpened.value = true;
+    setTimeout(() => { logFolderOpened.value = false; }, 2000);
+  } catch (e) {
+    console.warn("Failed to open log folder:", e);
+  }
+}
 
 async function submitReport() {
   if (!title.value.trim()) return;
@@ -164,15 +193,21 @@ async function submitReport() {
       "collect_bug_report_diagnostics",
     );
 
-    // Collect logs if opted in
-    let logs: string | undefined;
+    // Collect the full log file (redacted) if opted in. Fall back to a
+    // short text tail if the file read fails for any reason — the server
+    // accepts either `logfile` (multipart) or `logs` (text) today.
+    let logFile: { filename: string; content: number[]; truncated: boolean } | undefined;
+    let logsText: string | undefined;
     if (includeLogs.value) {
       try {
-        logs = await invoke<string>("collect_bug_report_logs", {
-          maxLines: 200,
-        });
+        logFile = await invoke("collect_bug_report_log_file");
       } catch (e) {
-        console.warn("Failed to collect logs:", e);
+        console.warn("Failed to collect log file, falling back to text tail:", e);
+        try {
+          logsText = await invoke<string>("collect_bug_report_logs", { maxLines: 400 });
+        } catch (inner) {
+          console.warn("Failed to collect log tail:", inner);
+        }
       }
     }
 
@@ -184,8 +219,14 @@ async function submitReport() {
     form.append("title", title.value.trim());
     form.append("description", description.value.trim());
     form.append("systemInfo", JSON.stringify(diagnostics));
-    if (logs) {
-      form.append("logs", logs);
+    if (logFile) {
+      const blob = new Blob([new Uint8Array(logFile.content)], { type: "text/plain" });
+      form.append("logfile", blob, logFile.filename);
+      if (logFile.truncated) {
+        form.append("logfileTruncated", "1");
+      }
+    } else if (logsText) {
+      form.append("logs", logsText);
     }
 
     // Submit via server:// protocol
