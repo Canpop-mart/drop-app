@@ -105,6 +105,13 @@ fn get_umu_executable() -> Option<PathBuf> {
 
     let mut candidates: Vec<PathBuf> = Vec::new();
 
+    // 0. Bundled copy inside AppImage — highest priority.
+    //    The AppImage runtime sets APPDIR to the extracted mount point.
+    //    Our CI bundles umu-run at $APPDIR/usr/bin/umu-run.
+    if let Some(appdir) = std::env::var_os("APPDIR") {
+        candidates.push(PathBuf::from(&appdir).join("usr/bin/umu-run"));
+    }
+
     // 1. pipx venv paths FIRST — these are most likely to have the real
     //    executable on Steam Deck, even when the ~/.local/bin shim is broken.
     if let Some(home) = std::env::var_os("HOME") {

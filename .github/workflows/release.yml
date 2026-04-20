@@ -73,6 +73,7 @@ jobs:
       # SteamOS which doesn't ship webkit2gtk-4.1), but remove libs that clash
       # with the host (glib, EGL/mesa — cause crashes due to symbol mismatches
       # between Ubuntu 22.04 build env and SteamOS runtime).
+      # Also bundles umu-launcher so Windows game compatibility works out of the box.
       - name: Fix AppImage for SteamOS compatibility
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -100,6 +101,33 @@ jobs:
             echo "Kept bundled libs:"
             ls -la *.so* 2>/dev/null || echo "(none remaining)"
             cd ../../..
+          fi
+
+          # Bundle umu-launcher (zipapp) so Windows game compat works out of the box.
+          # Same approach as the Flatpak build script — downloads the standalone zipapp
+          # release which is a single self-contained executable.
+          echo "Downloading umu-launcher..."
+          UMU_URL=$(curl -fsSL "https://api.github.com/repos/Open-Wine-Components/umu-launcher/releases/latest" | \
+            python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          print(next((a['browser_download_url'] for a in d['assets'] if 'zipapp.tar' in a['name']), ''))
+          ")
+          if [ -n "$UMU_URL" ]; then
+            curl -fsSL -o /tmp/umu.tar "$UMU_URL"
+            tar -xf /tmp/umu.tar -C /tmp/
+            UMU_BIN=$(find /tmp -maxdepth 4 -name "umu-run" -type f | head -1)
+            if [ -n "$UMU_BIN" ]; then
+              mkdir -p squashfs-root/usr/bin
+              cp "$UMU_BIN" squashfs-root/usr/bin/umu-run
+              chmod +x squashfs-root/usr/bin/umu-run
+              echo "Bundled umu-run: $(squashfs-root/usr/bin/umu-run --version 2>&1 || echo 'ok')"
+            else
+              echo "WARNING: umu-run not found in archive, skipping bundle"
+            fi
+            rm -f /tmp/umu.tar
+          else
+            echo "WARNING: Could not get umu-launcher download URL, skipping bundle"
           fi
 
           # Download appimagetool to repack
