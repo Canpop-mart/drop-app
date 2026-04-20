@@ -314,29 +314,6 @@ function removeRingFocus(el: HTMLElement) {
   if (ring) ring.classList.remove(RING_FOCUS_CLASS);
 }
 
-/**
- * Check if an element is fully visible within its scrollable ancestor.
- * Returns true when scrolling is NOT needed.
- */
-function isVisibleInScrollParent(el: HTMLElement): boolean {
-  const rect = el.getBoundingClientRect();
-  let parent = el.parentElement;
-  while (parent) {
-    if (parent.scrollHeight > parent.clientHeight) {
-      const parentRect = parent.getBoundingClientRect();
-      // Element is fully visible if its entire rect is within the parent viewport
-      const margin = 20; // px of padding from edges
-      return (
-        rect.top >= parentRect.top + margin &&
-        rect.bottom <= parentRect.bottom - margin
-      );
-    }
-    parent = parent.parentElement;
-  }
-  // No scrollable parent — check viewport
-  return rect.top >= 0 && rect.bottom <= window.innerHeight;
-}
-
 function applyFocus(element: FocusableElement | null, fromGroupCycle = false) {
   // Remove from previous
   if (currentFocused.value) {
@@ -355,12 +332,8 @@ function applyFocus(element: FocusableElement | null, fromGroupCycle = false) {
     // Play focus feedback sound
     useBpAudio().play("focus");
 
-    // Only scroll if the element is not already visible — avoids the
-    // jarring "scroll fight" reported in issue G.
-    if (!isVisibleInScrollParent(element.el) || fromGroupCycle) {
-      const scrollBlock = fromGroupCycle ? "center" : "nearest";
-      element.el.scrollIntoView({ block: scrollBlock, behavior: "smooth" });
-    }
+    const scrollBlock = fromGroupCycle ? "center" : "nearest";
+    element.el.scrollIntoView({ block: scrollBlock, behavior: "smooth" });
 
     currentGroup.value = element.group;
 
@@ -1008,23 +981,28 @@ function wireGamepad() {
   // (or the layout's [data-bp-scroll] container) and scrolls by one viewport.
 
   function findScrollContainer(): HTMLElement | null {
-    // First try the focused element's scrollable parent
+    // Prefer a [data-bp-scroll] ancestor of the focused element — the
+    // page author tagged these as the authoritative scroll containers.
     if (currentFocused.value?.el) {
       let parent = currentFocused.value.el.parentElement;
+      while (parent) {
+        if (parent.hasAttribute("data-bp-scroll")) return parent;
+        parent = parent.parentElement;
+      }
+      // No tagged ancestor; fall back to any scrollable ancestor.
+      parent = currentFocused.value.el.parentElement;
       while (parent) {
         if (parent.scrollHeight > parent.clientHeight) return parent;
         parent = parent.parentElement;
       }
     }
-    // Fallback: find the best [data-bp-scroll] container — prefer one that
-    // actually has overflow (inner page scroll) over the layout wrapper.
+    // No focused element: pick the deepest scrollable [data-bp-scroll].
     const candidates = document.querySelectorAll<HTMLElement>("[data-bp-scroll]");
     for (let i = candidates.length - 1; i >= 0; i--) {
       if (candidates[i].scrollHeight > candidates[i].clientHeight) {
         return candidates[i];
       }
     }
-    // If none are scrollable, return the last one (deepest in DOM)
     return candidates.length > 0 ? candidates[candidates.length - 1] : null;
   }
 

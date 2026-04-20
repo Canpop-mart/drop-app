@@ -68,15 +68,39 @@ function ctx(): { ac: AudioContext; out: GainNode } | null {
  * 3. Periodically retry resume() since Tauri webviews can sometimes allow it
  *    after the webview fully initializes (no gesture needed).
  */
+// Silent 44.1kHz WAV fragment (data URL) — used by a muted HTMLAudioElement
+// that autoplays on page load. Autoplay of muted media is allowed without a
+// user gesture in both Chromium and WebKitGTK, and the element's play()
+// call unlocks the WebAudio pipeline so subsequent oscillator output is
+// audible even from gamepad-only sessions (where synthetic clicks fail to
+// grant a trusted user activation).
+const SILENT_WAV =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+
 function ensureAudioUnlock() {
   if (audioUnlocked || typeof document === "undefined") return;
+
+  // Drop a muted, autoplaying, looping silent <audio> into the page.
+  // This primes the platform's audio pipeline without any user gesture.
+  try {
+    const unlockEl = document.createElement("audio");
+    unlockEl.src = SILENT_WAV;
+    unlockEl.muted = true;
+    unlockEl.loop = true;
+    unlockEl.autoplay = true;
+    unlockEl.setAttribute("playsinline", "");
+    unlockEl.style.display = "none";
+    document.body.appendChild(unlockEl);
+    unlockEl.play().catch(() => {});
+  } catch {
+    /* no body yet — retryTimer below will handle it */
+  }
 
   const unlock = () => {
     if (audioUnlocked) return;
     const c = ctx();
     if (c && c.ac.state === "suspended") {
       c.ac.resume().then(() => {
-        console.log("[BPM:AUDIO] AudioContext resumed after user gesture");
         audioUnlocked = true;
         cleanup();
       }).catch(() => {});
@@ -84,7 +108,6 @@ function ensureAudioUnlock() {
       audioUnlocked = true;
       cleanup();
     }
-    // Also play a silent buffer to fully unlock on some devices
     if (c && c.ac.state === "running") {
       const buf = c.ac.createBuffer(1, 1, c.ac.sampleRate);
       const src = c.ac.createBufferSource();
@@ -94,7 +117,6 @@ function ensureAudioUnlock() {
     }
   };
 
-  // Listen for any user interaction
   const events = ["click", "touchstart", "keydown", "pointerdown", "mousedown"];
   for (const evt of events) {
     document.addEventListener(evt, unlock, { once: false, passive: true });
@@ -107,10 +129,12 @@ function ensureAudioUnlock() {
     if (retryTimer) clearInterval(retryTimer);
   };
 
-  // Periodic retry — Tauri webviews sometimes allow resume after init
+  // Periodic retry — Tauri webviews often allow resume() after init even
+  // without a DOM event (and the muted <audio> above may have unlocked
+  // things asynchronously).
   let retryCount = 0;
   const retryTimer = setInterval(() => {
-    if (audioUnlocked || retryCount > 30) {
+    if (audioUnlocked || retryCount > 60) {
       clearInterval(retryTimer);
       return;
     }
@@ -118,7 +142,6 @@ function ensureAudioUnlock() {
     const c = ctx();
     if (c && c.ac.state === "suspended") {
       c.ac.resume().then(() => {
-        console.log("[BPM:AUDIO] AudioContext resumed via periodic retry");
         audioUnlocked = true;
         cleanup();
       }).catch(() => {});
@@ -126,24 +149,32 @@ function ensureAudioUnlock() {
       audioUnlocked = true;
       cleanup();
     }
-  }, 1000);
+  }, 500);
 }
 
 /**
  * Called from the gamepad polling loop (focus-navigation) when a button
- * is pressed. Dispatches a synthetic click to create a user activation
- * context, then tries to unlock audio.
+ * is pressed. Tries everything short of summoning a real click event:
+ * resume the AudioContext directly, and dispatch a synthetic click for
+ * any listeners still waiting on one.
  */
 export function tryGamepadAudioUnlock() {
   if (audioUnlocked) return;
-  // Dispatch a synthetic click — this creates a trusted user activation
-  // in Chromium and allows AudioContext.resume() to succeed.
+  const c = ctx();
+  if (c && c.ac.state === "suspended") {
+    c.ac.resume().then(() => {
+      audioUnlocked = true;
+    }).catch(() => {});
+  } else if (c && c.ac.state === "running") {
+    audioUnlocked = true;
+  }
   document.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 }
 
-// Auto-setup the unlock listeners
 if (typeof document !== "undefined") {
-  ensureAudioUnlock();
+  // document.body may not exist yet during module eval; defer a tick.
+  if (document.body) ensureAudioUnlock();
+  else document.addEventListener("DOMContentLoaded", ensureAudioUnlock, { once: true });
 }
 
 // ── Primitive sound generators ──────────────────────────────────────────────

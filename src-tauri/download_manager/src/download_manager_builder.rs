@@ -119,6 +119,7 @@ impl DownloadManagerBuilder {
 
     fn set_status(&self, status: DownloadManagerStatus) {
         *lock!(self.status) = status;
+        self.push_ui_queue_update();
     }
 
     async fn remove_and_cleanup_front_download(
@@ -424,7 +425,11 @@ impl DownloadManagerBuilder {
             })
             .collect();
 
-        let event_data = QueueUpdateEvent { queue: queue_objs };
+        let status = lock!(self.status).clone();
+        let event_data = QueueUpdateEvent {
+            queue: queue_objs,
+            status,
+        };
         app_emit!(&self.app_handle, "update_queue", event_data);
     }
 }

@@ -43,7 +43,7 @@ pub enum DownloadManagerSignal {
     UpdateUIDownloadStats(usize, usize), //kb/s and seconds
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DownloadManagerStatus {
     Downloading,
     Paused,

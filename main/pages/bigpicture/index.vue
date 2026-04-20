@@ -1826,12 +1826,22 @@ const focusedDcIdx = ref(0);
 const crtEnabled = ref(
   typeof localStorage !== "undefined" ? localStorage.getItem("bpm:crtFilter") === "true" : false
 );
-const animBgEnabled = ref(
-  typeof localStorage !== "undefined" ? localStorage.getItem("bpm:animBg") !== "false" : true
-);
-// Reduce animation complexity on low-power devices (Steam Deck / gamescope)
 const { isSteamDeckHardware } = useDeckMode();
-const reducedAnimations = computed(() => isSteamDeckHardware.value);
+// `reducedMotion` is user-overridable (BPM settings), defaults to
+// `isSteamDeckHardware` if the user has never toggled it.
+const { reducedMotion } = useReducedMotion();
+const reducedAnimations = computed(() => reducedMotion.value);
+// Default the animated background off on Deck — even the reduced variant's
+// animation loops are enough to chip fps off the iGPU during scroll.
+// Users can opt back in from the BPM settings page.
+function readAnimBg(): boolean {
+  if (typeof localStorage === "undefined") return true;
+  const stored = localStorage.getItem("bpm:animBg");
+  if (stored === "true") return true;
+  if (stored === "false") return false;
+  return !isSteamDeckHardware.value;
+}
+const animBgEnabled = ref(readAnimBg());
 const currentAchievement = ref<{ title: string; game: string; icon?: string } | null>(null);
 const launchingGame = ref<{ name: string; coverUrl?: string } | null>(null);
 const screensaverEnabled = ref(

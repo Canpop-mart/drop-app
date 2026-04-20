@@ -264,6 +264,25 @@
               </svg>
               <span class="font-medium">{{ aspectLabel }}</span>
             </button>
+
+            <button
+              :ref="(el: any) => registerAction(el, { onSelect: toggleCrtShader })"
+              class="inline-flex items-center gap-1.5 px-4 py-3 text-sm rounded-xl transition-colors backdrop-blur-sm"
+              :class="[
+                crtShaderEnabled
+                  ? 'bg-amber-600/80 hover:bg-amber-500 text-white'
+                  : 'bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300',
+              ]"
+              @click="toggleCrtShader"
+              :title="`CRT Shader: ${crtShaderEnabled ? 'On' : 'Off'}`"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="size-4" :class="crtShaderEnabled ? 'text-white' : 'text-amber-400'">
+                <rect x="3" y="4" width="18" height="13" rx="1.5" />
+                <path d="M8 21h8M12 17v4" />
+                <path d="M6 8h12M6 11h12M6 14h12" stroke-width="1" opacity="0.5" />
+              </svg>
+              <span class="font-medium">CRT</span>
+            </button>
           </template>
 
           <!-- Stream status / stop button (when streaming is active) -->
@@ -963,6 +982,7 @@ import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useStreaming } from "~/composables/useStreaming";
+import { useDeckMode } from "~/composables/deck-mode";
 
 definePageMeta({ layout: "bigpicture" });
 
@@ -2679,9 +2699,19 @@ onMounted(async () => {
   console.log(`[BPM:GAME] Route: ${route.fullPath}`);
 
   // Wire up gamepad immediately — don't wait for data to load
+  const { isGamescope: _pageIsGs } = useDeckMode();
+  // Physical X button — maps to West on normal controllers, North under gamescope.
+  // Opens the play/stream dropdown regardless of focus so users can launch or
+  // stream even when focus has drifted elsewhere on the page.
+  const _playMenuBtn = _pageIsGs.value ? GamepadButton.North : GamepadButton.West;
   _unsubs.push(
     gamepad.onButton(GamepadButton.Start, () => {
       showOptions.value = true;
+    }),
+    gamepad.onButton(_playMenuBtn, () => {
+      if (showOptions.value) return;
+      if (streamableDevices.value.length === 0 && installableDevices.value.length === 0) return;
+      togglePlayMenu();
     }),
   );
 

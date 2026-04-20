@@ -212,50 +212,7 @@
             <BuildingStorefrontIcon class="mr-2 size-5" aria-hidden="true" />
             Store
           </NuxtLink>
-          <button
-            v-if="canAddToSteam"
-            :disabled="steamLoading"
-            :title="
-              steamResult
-                ? steamResult.message
-                : 'Create a non-Steam shortcut with this game\u2019s artwork'
-            "
-            class="transition-transform duration-300 hover:scale-105 active:scale-95 inline-flex items-center rounded-md px-6 font-semibold text-white shadow-xl backdrop-blur-sm uppercase font-display disabled:cursor-wait disabled:opacity-70"
-            :class="[
-              steamResult?.success
-                ? 'bg-emerald-600/80 hover:bg-emerald-600'
-                : 'bg-[#1b2838] hover:bg-[#2a475e]',
-            ]"
-            @click="addToSteam"
-          >
-            <svg
-              class="mr-2 size-5"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path
-                d="M12 2C6.477 2 2 6.477 2 12c0 4.237 2.636 7.855 6.356 9.31l3.19-1.32a2.71 2.71 0 1 0 2.93-4.17l1.585-2.31a3.5 3.5 0 1 0-3.48-3.5v.09L8.92 12.69a2.71 2.71 0 0 0-2.03.58L3.14 10.9A9 9 0 0 1 21 12a9 9 0 0 1-9 9 8.96 8.96 0 0 1-4.2-1.04l1.79-.74a1.8 1.8 0 1 0 1.27-1.86l-4.4 1.83C2.88 18.94 2 15.59 2 12 2 6.477 6.477 2 12 2Zm4.25 6.25a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"
-              />
-            </svg>
-            <span>{{
-              steamLoading
-                ? "Adding…"
-                : steamResult?.success
-                  ? "Added"
-                  : "Add to Steam"
-            }}</span>
-          </button>
         </div>
-        <p
-          v-if="steamResult"
-          class="mt-2 text-xs"
-          :class="
-            steamResult.success ? 'text-emerald-400/80' : 'text-red-400/80'
-          "
-        >
-          {{ steamResult.message }}
-        </p>
       </div>
 
       <!-- Stat bar -->
@@ -1155,9 +1112,7 @@ import {
   XCircleIcon,
 } from "@heroicons/vue/24/solid";
 import { invoke } from "@tauri-apps/api/core";
-import { platform } from "@tauri-apps/plugin-os";
 import { useListen } from "~/composables/useListen";
-import { useDeckMode } from "~/composables/deck-mode";
 import { micromark } from "micromark";
 import { InstalledType } from "~/types";
 import type { AspectRatio, ControllerType, QualityPreset } from "~/types";
@@ -1184,45 +1139,6 @@ const isEmulatedGame = computed(
   () => version.value?.launches?.some((l: any) => l.emulator != null) ?? false,
 );
 const isNativeGame = computed(() => !isEmulatedGame.value);
-
-// ── Add to Steam (desktop-mode only, Linux only) ────────────────────────
-// Steam overwrites shortcuts.vdf on exit, so writes from inside Game Mode
-// would get clobbered when Steam picks the file up again. Hide the button
-// whenever we're running under gamescope.
-const deckMode = useDeckMode();
-const steamLoading = ref(false);
-const steamResult = ref<{ success: boolean; message: string } | null>(null);
-const canAddToSteam = computed(
-  () =>
-    platform() === "linux" &&
-    !deckMode.isGamescope.value &&
-    status.value.type === "Installed",
-);
-
-async function addToSteam() {
-  if (steamLoading.value) return;
-  steamLoading.value = true;
-  steamResult.value = null;
-  try {
-    steamResult.value = await invoke<{ success: boolean; message: string }>(
-      "add_game_to_steam",
-      {
-        gameId: game.id,
-        gameName: game.mName ?? "Unknown Game",
-        bannerObjectId: game.mBannerObjectId || null,
-        coverObjectId: game.mCoverObjectId || null,
-        iconObjectId: game.mIconObjectId || null,
-      },
-    );
-  } catch (e) {
-    steamResult.value = {
-      success: false,
-      message: `Failed: ${e instanceof Error ? e.message : String(e)}`,
-    };
-  } finally {
-    steamLoading.value = false;
-  }
-}
 
 // ── Controller & Quality presets ─────────────────────────────────────────
 const controllerOptions: { label: string; value: ControllerType | null }[] = [

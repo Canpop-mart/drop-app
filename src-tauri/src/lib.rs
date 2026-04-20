@@ -325,10 +325,6 @@ pub fn run() {
             ::process::compat::diagnose_launch_environment,
             #[cfg(target_os = "linux")]
             ::process::compat::install_umu,
-            #[cfg(target_os = "linux")]
-            register_steam_shortcut,
-            #[cfg(target_os = "linux")]
-            add_game_to_steam,
             // Streaming (Sunshine)
             check_sunshine,
             install_sunshine,
@@ -387,6 +383,7 @@ pub fn run() {
                 });
 
                 let is_gamescope = state.session_type == SessionType::Gamescope;
+                let is_deck_hw = state.session_type.is_steam_deck_hardware();
                 app.manage(Mutex::new(state));
 
                 let global_app_handle = handle;
@@ -403,33 +400,38 @@ pub fn run() {
 
                 let handle = app.handle().clone();
 
-                // In Gamescope (SteamOS Game Mode), start fullscreen at the
-                // compositor's actual size. Hard-coding 1280x800 breaks when
-                // the Deck is docked to an external 1080p/4K display, when
-                // gamescope runs at a non-native internal resolution, or when
-                // it's used on a non-Deck handheld. Ask the windowing system
-                // for the real primary monitor size and fall back to Deck
-                // dimensions only if the query fails.
+                // In Gamescope on Deck hardware, primary_monitor() can
+                // report the compositor's output resolution (1080p/4K when
+                // docked) rather than the internal 1280x800 render target
+                // gamescope actually hands to the client, which leaves the
+                // webview rendering at the wrong size. Force native Deck
+                // dimensions in that case. For non-Deck handhelds under
+                // gamescope, keep the monitor query.
                 let (width, height) = if is_gamescope {
-                    match handle.primary_monitor() {
-                        Ok(Some(monitor)) => {
-                            let size = monitor.size();
-                            let scale = monitor.scale_factor().max(f64::EPSILON);
-                            let logical_w = size.width as f64 / scale;
-                            let logical_h = size.height as f64 / scale;
-                            info!(
-                                "[STARTUP] Gamescope monitor: physical {}x{} @ scale {:.2} \
-                                 → logical {:.0}x{:.0}",
-                                size.width, size.height, scale, logical_w, logical_h
-                            );
-                            (logical_w, logical_h)
-                        }
-                        other => {
-                            warn!(
-                                "[STARTUP] Gamescope: couldn't read primary monitor ({other:?}), \
-                                 falling back to 1280x800"
-                            );
-                            (1280.0, 800.0)
+                    if is_deck_hw {
+                        info!("[STARTUP] Steam Deck hardware under gamescope — forcing 1280x800");
+                        (1280.0, 800.0)
+                    } else {
+                        match handle.primary_monitor() {
+                            Ok(Some(monitor)) => {
+                                let size = monitor.size();
+                                let scale = monitor.scale_factor().max(f64::EPSILON);
+                                let logical_w = size.width as f64 / scale;
+                                let logical_h = size.height as f64 / scale;
+                                info!(
+                                    "[STARTUP] Gamescope monitor: physical {}x{} @ scale {:.2} \
+                                     → logical {:.0}x{:.0}",
+                                    size.width, size.height, scale, logical_w, logical_h
+                                );
+                                (logical_w, logical_h)
+                            }
+                            other => {
+                                warn!(
+                                    "[STARTUP] Gamescope: couldn't read primary monitor ({other:?}), \
+                                     falling back to 1280x800"
+                                );
+                                (1280.0, 800.0)
+                            }
                         }
                     }
                 } else {

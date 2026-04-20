@@ -1,5 +1,5 @@
 <template>
-  <div :class="['flex h-screen w-screen overflow-hidden', themeClass, modeClass]" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
+  <div :class="['flex h-screen w-screen overflow-hidden', themeClass, modeClass, { 'bpm-reduced-motion': reducedMotion }]" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
     <!-- Navigation Rail (left edge) -->
     <BigPictureNavRail />
 
@@ -58,12 +58,16 @@ import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useDeckMode } from "~/composables/deck-mode";
 import { useBpmTheme } from "~/composables/bp-theme";
 import { useUiZoom } from "~/composables/ui-zoom";
+import { useReducedMotion } from "~/composables/bp-reduced-motion";
 
 const focusNav = useFocusNavigation();
 const bpmTheme = useBpmTheme();
 const themeClass = computed(() => bpmTheme.themeData.value.cssClass);
 const modeClass = computed(() => `bpm-${bpmTheme.mode.value}`);
 const { isGamescope } = useDeckMode();
+// When true (user preference or Deck default), we strip out backdrop-blur
+// and cut animation complexity globally. See .bpm-reduced-motion rules below.
+const { reducedMotion } = useReducedMotion();
 // Apply persisted UI zoom level. Gamescope + WebKitGTK sometimes renders the
 // webview smaller than expected on first paint; this lets the user rescale.
 useUiZoom();
@@ -218,6 +222,17 @@ onUnmounted(() => {
    because the browser picks a less expensive backing store. */
 .bp-scroll-hint {
   will-change: scroll-position;
+}
+
+/* Reduced-motion mode: strip every backdrop-filter in the BPM subtree.
+   `backdrop-filter: blur()` is the single most expensive effect on the
+   Deck's iGPU — far more than per-frame animations — because it forces
+   a copy of the surface behind every blurred element. Killing it
+   globally here avoids editing ~15 components one-by-one. */
+.bpm-reduced-motion [class*="backdrop-blur"],
+.bpm-reduced-motion [class*="backdrop-filter"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* Focus indicator ring — applied by focus-navigation.ts */

@@ -47,11 +47,13 @@ export function useBpFocusable(
  */
 export function useBpFocusableGroup(group: string) {
   const focusNav = useFocusNavigation();
-  const cleanups: (() => void)[] = [];
+  // Track per-element unregister fns so elements unmounted mid-lifetime
+  // (e.g. v-else-if tab switch, pagination) clean up immediately.
+  const registrations = new Map<HTMLElement, () => void>();
 
   onUnmounted(() => {
-    for (const cleanup of cleanups) cleanup();
-    cleanups.length = 0;
+    for (const unregister of registrations.values()) unregister();
+    registrations.clear();
   });
 
   return function register(
@@ -62,11 +64,22 @@ export function useBpFocusableGroup(group: string) {
       onFocus?: () => void;
     },
   ) {
-    if (!el) return;
+    if (!el) {
+      // Vue calls the ref with null when the element unmounts. Drop any
+      // stale registrations whose DOM node is no longer connected.
+      for (const [node, unregister] of registrations) {
+        if (!node.isConnected) {
+          unregister();
+          registrations.delete(node);
+        }
+      }
+      return;
+    }
     const htmlEl = (el as any).$el ?? el;
     if (!(htmlEl instanceof HTMLElement)) return;
+    if (registrations.has(htmlEl)) return;
     const unregister = focusNav.registerElement(htmlEl, group, options);
-    cleanups.push(unregister);
+    registrations.set(htmlEl, unregister);
   };
 }
 
@@ -81,7 +94,7 @@ export function useBpFocusableGroup(group: string) {
  */
 export function useBpFocusableGrid(group: string) {
   const focusNav = useFocusNavigation();
-  const cleanups: (() => void)[] = [];
+  const registrations = new Map<HTMLElement, () => void>();
 
   // Register this group as a grid on mount
   onMounted(() => {
@@ -90,8 +103,8 @@ export function useBpFocusableGrid(group: string) {
 
   onUnmounted(() => {
     focusNav.unregisterGrid(group);
-    for (const cleanup of cleanups) cleanup();
-    cleanups.length = 0;
+    for (const unregister of registrations.values()) unregister();
+    registrations.clear();
   });
 
   return function register(
@@ -102,10 +115,19 @@ export function useBpFocusableGrid(group: string) {
       onFocus?: () => void;
     },
   ) {
-    if (!el) return;
+    if (!el) {
+      for (const [node, unregister] of registrations) {
+        if (!node.isConnected) {
+          unregister();
+          registrations.delete(node);
+        }
+      }
+      return;
+    }
     const htmlEl = (el as any).$el ?? el;
     if (!(htmlEl instanceof HTMLElement)) return;
+    if (registrations.has(htmlEl)) return;
     const unregister = focusNav.registerElement(htmlEl, group, options);
-    cleanups.push(unregister);
+    registrations.set(htmlEl, unregister);
   };
 }

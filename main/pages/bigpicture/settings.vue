@@ -450,57 +450,6 @@
         </div>
       </div>
 
-      <!-- ═══════ Steam Integration ═══════ -->
-      <div
-        v-if="activeSection === 'steam'"
-        class="space-y-5 max-w-xl"
-      >
-        <h3 class="text-lg font-semibold text-zinc-200 font-display">
-          Steam Integration
-        </h3>
-
-        <!-- Add to Steam Library -->
-        <div class="bg-zinc-900/50 rounded-xl p-4">
-          <div class="mb-3">
-            <p class="font-medium text-zinc-200 text-sm">Add Drop to Steam</p>
-            <p class="text-zinc-500 text-xs mt-0.5">
-              Register Drop as a non-Steam game so it appears in SteamOS Game
-              Mode
-            </p>
-          </div>
-          <button
-            :ref="(el: any) => registerContent(el, { onSelect: addToSteam })"
-            class="px-4 py-2.5 rounded-lg text-sm font-medium transition-all border"
-            :class="[
-              steamShortcutResult?.success
-                ? 'bg-emerald-600/20 text-emerald-400 border-emerald-500/50'
-                : 'bg-blue-600/20 text-blue-400 border-blue-500/50 hover:bg-blue-600/30',
-            ]"
-            :disabled="steamShortcutLoading"
-            @click="addToSteam"
-          >
-            {{
-              steamShortcutLoading
-                ? "Adding..."
-                : steamShortcutResult?.success
-                  ? "Added to Steam"
-                  : "Add to Steam Library"
-            }}
-          </button>
-          <p
-            v-if="steamShortcutResult"
-            class="text-xs mt-2"
-            :class="
-              steamShortcutResult.success
-                ? 'text-emerald-400/60'
-                : 'text-red-400/60'
-            "
-          >
-            {{ steamShortcutResult.message }}
-          </p>
-        </div>
-      </div>
-
       <!-- ═══════ Controller ═══════ -->
       <div
         v-if="activeSection === 'controller'"
@@ -916,7 +865,6 @@ const sections = [
   { label: "Theme", value: "theme" },
   { label: "Interface", value: "interface" },
   { label: "Performance", value: "performance" },
-  { label: "Steam", value: "steam" },
   { label: "Controller", value: "controller" },
   { label: "Storage", value: "storage" },
   { label: "Compatibility", value: "compatibility" },
@@ -1082,28 +1030,6 @@ watch(activeThemeId, (id) => {
   // Preview the select sound on theme change
   audio.preview(id as SoundProfileId, "select");
 });
-
-// ── Steam shortcut ──────────────────────────────────────────────────────────
-
-const steamShortcutLoading = ref(false);
-const steamShortcutResult = ref<{ success: boolean; message: string } | null>(
-  null,
-);
-
-async function addToSteam() {
-  if (steamShortcutLoading.value) return;
-  steamShortcutLoading.value = true;
-  try {
-    steamShortcutResult.value = await invoke("register_steam_shortcut");
-  } catch (e) {
-    steamShortcutResult.value = {
-      success: false,
-      message: `Failed: ${e instanceof Error ? e.message : String(e)}`,
-    };
-  } finally {
-    steamShortcutLoading.value = false;
-  }
-}
 
 // ── Package format detection ────────────────────────────────────────────────
 

@@ -1,7 +1,7 @@
 use database::DownloadableMetadata;
 use serde::Serialize;
 
-use crate::download_manager_frontend::DownloadStatus;
+use crate::download_manager_frontend::{DownloadManagerStatus, DownloadStatus};
 
 #[derive(Serialize, Clone)]
 pub struct QueueUpdateEventQueueData {
@@ -18,6 +18,7 @@ pub struct QueueUpdateEventQueueData {
 #[derive(Serialize, Clone)]
 pub struct QueueUpdateEvent {
     pub queue: Vec<QueueUpdateEventQueueData>,
+    pub status: DownloadManagerStatus,
 }
 
 #[derive(Serialize, Clone)]

@@ -60,6 +60,15 @@
       </div>
     </div>
 
+    <!-- Drag-mode hint -->
+    <div
+      v-if="draggedIdx !== null"
+      class="flex items-center gap-2 mb-3 px-4 py-2 rounded-lg bg-blue-600/10 border border-blue-500/30 text-blue-300 text-sm"
+    >
+      <ArrowsUpDownIcon class="size-4" />
+      <span>Reordering — D-pad up/down to move, A to drop, B to cancel</span>
+    </div>
+
     <!-- Active downloads -->
     <div v-if="queue.length > 0" class="space-y-3">
       <div
@@ -67,9 +76,12 @@
         :key="item.meta.id"
         :ref="
           (el: any) =>
-            registerItem(el, { onSelect: () => navigateToGame(item.meta.id) })
+            registerItem(el, { onSelect: () => onQueueItemSelect(qIdx, item.meta.id) })
         "
-        class="flex items-center gap-6 bg-zinc-900/50 rounded-xl p-6"
+        class="flex items-center gap-6 rounded-xl p-6 transition-colors"
+        :class="draggedIdx === qIdx
+          ? 'bg-blue-600/20 ring-2 ring-blue-500'
+          : 'bg-zinc-900/50'"
       >
         <!-- Reorder buttons — controller-friendly size -->
         <div v-if="queue.length > 1" class="flex flex-col gap-1.5 flex-shrink-0">
@@ -194,7 +206,7 @@
 
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowDownTrayIcon, ClockIcon } from "@heroicons/vue/24/outline";
+import { ArrowDownTrayIcon, ArrowsUpDownIcon, ClockIcon } from "@heroicons/vue/24/outline";
 import { CheckCircleIcon } from "@heroicons/vue/24/solid";
 import {
   useQueueState,
@@ -206,6 +218,7 @@ import { useGame } from "~/composables/game";
 import { serverUrl } from "~/composables/use-server-fetch";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
+import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import BigPictureDialog from "~/components/bigpicture/BigPictureDialog.vue";
 definePageMeta({ layout: "bigpicture" });
 const queueState = useQueueState();
@@ -281,11 +294,89 @@ function formatTimeAgo(timestamp: number): string {
 
 // C6 fix: register items with focus group so controller can interact
 const focusNav = useFocusNavigation();
+const gamepad = useGamepad();
 const registerItem = useBpFocusableGroup("content");
 const registerAction = useBpFocusableGroup("content");
 
+// ── Long-press A to enter reorder mode ──────────────────────────────────────
+// Holding A on a queue row for 500ms grabs it. While grabbed, D-pad up/down
+// moves the row; A drops; B cancels.
+const draggedIdx = ref<number | null>(null);
+const LONG_PRESS_MS = 500;
+let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+let longPressReleaseUnsub: (() => void) | null = null;
+let dragInputLockId: number | null = null;
+const dragUnsubs: (() => void)[] = [];
+
+function onQueueItemSelect(idx: number, gameId: string) {
+  // If already dragging, the focus-nav onSelect fires via our own handler in
+  // enterDragMode() — so this path only runs when we're NOT dragging.
+  if (draggedIdx.value !== null) return;
+
+  longPressTimer = setTimeout(() => {
+    longPressTimer = null;
+    longPressReleaseUnsub?.();
+    longPressReleaseUnsub = null;
+    enterDragMode(idx);
+  }, LONG_PRESS_MS);
+
+  longPressReleaseUnsub = gamepad.onButtonRelease(GamepadButton.South, () => {
+    longPressReleaseUnsub?.();
+    longPressReleaseUnsub = null;
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+      navigateToGame(gameId);
+    }
+  });
+}
+
+function enterDragMode(idx: number) {
+  draggedIdx.value = idx;
+  gamepad.vibrate("medium");
+  dragInputLockId = focusNav.acquireInputLock();
+  dragUnsubs.push(
+    gamepad.onButton(GamepadButton.DPadUp, moveDraggedUp),
+    gamepad.onButton(GamepadButton.DPadDown, moveDraggedDown),
+    gamepad.onButton(GamepadButton.South, exitDragMode),
+    gamepad.onButton(GamepadButton.East, exitDragMode),
+  );
+}
+
+function exitDragMode() {
+  draggedIdx.value = null;
+  if (dragInputLockId !== null) {
+    focusNav.releaseInputLock(dragInputLockId);
+    dragInputLockId = null;
+  }
+  for (const unsub of dragUnsubs) unsub();
+  dragUnsubs.length = 0;
+}
+
+async function moveDraggedUp() {
+  if (draggedIdx.value === null || draggedIdx.value === 0) return;
+  const from = draggedIdx.value;
+  await reorderDownload(from, from - 1);
+  draggedIdx.value = from - 1;
+  gamepad.vibrate("light");
+}
+
+async function moveDraggedDown() {
+  if (draggedIdx.value === null || draggedIdx.value >= queue.value.length - 1) return;
+  const from = draggedIdx.value;
+  await reorderDownload(from, from + 1);
+  draggedIdx.value = from + 1;
+  gamepad.vibrate("light");
+}
+
 onMounted(() => {
   focusNav.autoFocusContent("content");
+});
+
+onUnmounted(() => {
+  if (longPressTimer) clearTimeout(longPressTimer);
+  longPressReleaseUnsub?.();
+  exitDragMode();
 });
 
 // Download listeners are set up in app.vue via useDownloadListeners(),
