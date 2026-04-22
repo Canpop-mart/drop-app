@@ -775,13 +775,15 @@ pub struct LudusaviFile {
 }
 
 /// Ludusavi release info for auto-download.
+/// Windows ships as .zip, Linux/macOS as .tar.gz — upstream convention,
+/// not our choice. Mismatch here was the reason Deck installs 404'd.
 const LUDUSAVI_VERSION: &str = "0.27.0";
 #[cfg(target_os = "windows")]
 const LUDUSAVI_ARCHIVE: &str = "ludusavi-v0.27.0-win64.zip";
 #[cfg(target_os = "linux")]
-const LUDUSAVI_ARCHIVE: &str = "ludusavi-v0.27.0-linux.zip";
+const LUDUSAVI_ARCHIVE: &str = "ludusavi-v0.27.0-linux.tar.gz";
 #[cfg(target_os = "macos")]
-const LUDUSAVI_ARCHIVE: &str = "ludusavi-v0.27.0-mac.zip";
+const LUDUSAVI_ARCHIVE: &str = "ludusavi-v0.27.0-mac.tar.gz";
 
 /// Get the directory where Drop stores bundled tools.
 fn tools_dir() -> std::path::PathBuf {
@@ -874,60 +876,228 @@ pub async fn install_ludusavi() -> Result<String, String> {
     let bytes = response.bytes().await.map_err(|e| format!("Download failed: {e}"))?;
     info!("[LUDUSAVI] Downloaded {} bytes", bytes.len());
 
-    // Extract the zip
-    let cursor = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor)
-        .map_err(|e| format!("Failed to open archive: {e}"))?;
+    #[cfg(target_os = "windows")]
+    let out_path = extract_ludusavi_from_zip(&bytes, &ludusavi_dir)?;
+    #[cfg(not(target_os = "windows"))]
+    let out_path = extract_ludusavi_from_tar_gz(&bytes, &ludusavi_dir)?;
 
-    info!("[LUDUSAVI] Archive contains {} entries", archive.len());
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i).map_err(|e| format!("Archive error: {e}"))?;
-        let name = file.name().to_string();
-        let size = file.size();
-        info!("[LUDUSAVI] Archive entry [{}]: {:?} ({} bytes, is_dir={})", i, name, size, name.ends_with('/'));
-
-        // Only extract the ludusavi binary
-        if name.contains("ludusavi") && !name.ends_with('/') {
-            let out_name = if name.ends_with(".exe") { "ludusavi.exe" } else { "ludusavi" };
-            let out_path = ludusavi_dir.join(out_name);
-            info!("[LUDUSAVI] Extracting to: {}", out_path.display());
-            let mut out_file = std::fs::File::create(&out_path)
-                .map_err(|e| format!("Failed to create file {}: {e}", out_path.display()))?;
-            let copied = std::io::copy(&mut file, &mut out_file)
-                .map_err(|e| format!("Failed to extract to {}: {e}", out_path.display()))?;
-            info!("[LUDUSAVI] Extracted {} bytes", copied);
-
-            // Make executable on Unix
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(0o755))
-                    .map_err(|e| format!("Failed to set permissions on {}: {e}", out_path.display()))?;
-                info!("[LUDUSAVI] Set executable permissions (0o755)");
-            }
-
-            // Verify the binary exists and is executable
-            let meta = std::fs::metadata(&out_path);
-            match &meta {
-                Ok(m) => info!("[LUDUSAVI] Installed to {} (size={}, readonly={})", out_path.display(), m.len(), m.permissions().readonly()),
-                Err(e) => log::warn!("[LUDUSAVI] Installed but can't stat: {e}"),
-            }
-
-            // Quick sanity check — try running --version
-            match std::process::Command::new(&out_path).arg("--version").output() {
-                Ok(o) => {
-                    let stdout = String::from_utf8_lossy(&o.stdout);
-                    let stderr = String::from_utf8_lossy(&o.stderr);
-                    info!("[LUDUSAVI] Version check: status={}, stdout={:?}, stderr={:?}", o.status, stdout.trim(), stderr.trim());
-                }
-                Err(e) => log::warn!("[LUDUSAVI] Version check failed (binary may not run on this platform): {e}"),
-            }
-
-            return Ok(out_path.to_string_lossy().to_string());
-        }
+    // Make executable on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("Failed to set permissions on {}: {e}", out_path.display()))?;
+        info!("[LUDUSAVI] Set executable permissions (0o755)");
     }
 
-    Err("Ludusavi binary not found in archive".to_string())
+    // Verify the binary exists and is executable
+    match std::fs::metadata(&out_path) {
+        Ok(m) => info!("[LUDUSAVI] Installed to {} (size={})", out_path.display(), m.len()),
+        Err(e) => log::warn!("[LUDUSAVI] Installed but can't stat: {e}"),
+    }
+
+    // Quick sanity check — try running --version
+    match std::process::Command::new(&out_path).arg("--version").output() {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            info!(
+                "[LUDUSAVI] Version check: status={}, stdout={:?}, stderr={:?}",
+                o.status, stdout.trim(), stderr.trim()
+            );
+        }
+        Err(e) => log::warn!("[LUDUSAVI] Version check failed (binary may not run on this platform): {e}"),
+    }
+
+    Ok(out_path.to_string_lossy().to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn extract_ludusavi_from_zip(
+    bytes: &[u8],
+    ludusavi_dir: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    use log::{info, warn};
+
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| format!("Failed to open zip archive: {e}"))?;
+
+    info!("[LUDUSAVI] Zip contains {} entries", archive.len());
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("Archive error: {e}"))?;
+        let name = file.name().to_string();
+        if !name.contains("ludusavi") || name.ends_with('/') {
+            continue;
+        }
+        let out_name = if name.ends_with(".exe") { "ludusavi.exe" } else { "ludusavi" };
+        let out_path = ludusavi_dir.join(out_name);
+
+        // Write to a sibling temp file first. If ludusavi.exe is currently
+        // running or its handle is still held by Windows (AV, Explorer
+        // thumbnail cache, recently-exited `backup_pc_game_saves` child),
+        // overwriting it directly with File::create yields
+        // `os error 32: The process cannot access the file because it is
+        // being used by another process`. Writing aside and then swapping
+        // lets us fall back to a rename-old-aside strategy that works
+        // even if the in-place binary is still in use.
+        let tmp_path = ludusavi_dir.join(format!("{out_name}.new"));
+        info!("[LUDUSAVI] Extracting to temp: {}", tmp_path.display());
+
+        // Drain the zip entry into memory once — we may need to retry the
+        // filesystem write without re-reading from the archive.
+        let mut buf = Vec::with_capacity(file.size() as usize);
+        std::io::copy(&mut file, &mut buf)
+            .map_err(|e| format!("Failed to read zip entry {name}: {e}"))?;
+
+        // Remove any stale .new from a previous half-failed install.
+        let _ = std::fs::remove_file(&tmp_path);
+
+        std::fs::write(&tmp_path, &buf)
+            .map_err(|e| format!("Failed to write temp file {}: {e}", tmp_path.display()))?;
+
+        // Try to swap tmp_path -> out_path with backoff. Windows will
+        // block the rename while the target has open handles.
+        let delays_ms = [0u64, 100, 250, 500, 1000, 2000];
+        let mut swapped = false;
+        let mut last_err: Option<String> = None;
+        for (attempt, &delay) in delays_ms.iter().enumerate() {
+            if delay > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(delay));
+            }
+            // If the target doesn't exist, a plain rename works.
+            // If it exists, std::fs::rename on Windows is equivalent to
+            // MoveFileEx without REPLACE_EXISTING and will fail. Use the
+            // explicit two-step: remove, then rename.
+            let pre_rename = if out_path.exists() {
+                std::fs::remove_file(&out_path)
+            } else {
+                Ok(())
+            };
+            match pre_rename {
+                Ok(()) => match std::fs::rename(&tmp_path, &out_path) {
+                    Ok(()) => {
+                        swapped = true;
+                        info!(
+                            "[LUDUSAVI] Swapped {} into place on attempt {}",
+                            out_path.display(),
+                            attempt + 1
+                        );
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = Some(format!("rename failed: {e}"));
+                    }
+                },
+                Err(e) => {
+                    last_err = Some(format!("remove-existing failed: {e}"));
+                }
+            }
+        }
+
+        if !swapped {
+            // Final fallback: rename the locked binary aside so the new
+            // one can take its place. Windows permits renaming a running
+            // .exe (the handle sticks to the old name). The stale file
+            // gets cleaned up next install or reboot.
+            let aside = ludusavi_dir.join(format!(
+                "{out_name}.old-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+            ));
+            warn!(
+                "[LUDUSAVI] Could not replace {} (last error: {:?}); trying rename-aside to {}",
+                out_path.display(),
+                last_err,
+                aside.display()
+            );
+            if let Err(e) = std::fs::rename(&out_path, &aside) {
+                return Err(format!(
+                    "Failed to replace {} after retries ({:?}) and rename-aside also failed: {e}. \
+                     Close any running Ludusavi instances and try again.",
+                    out_path.display(),
+                    last_err
+                ));
+            }
+            std::fs::rename(&tmp_path, &out_path).map_err(|e| {
+                format!(
+                    "Failed to move new binary into place after rename-aside: {e}",
+                )
+            })?;
+            info!(
+                "[LUDUSAVI] Rename-aside succeeded; old binary parked at {}",
+                aside.display()
+            );
+        }
+
+        // Best-effort cleanup of prior rename-aside leftovers from any
+        // earlier install where the old handle was still held.
+        if let Ok(entries) = std::fs::read_dir(ludusavi_dir) {
+            let stem = format!("{out_name}.old-");
+            for entry in entries.flatten() {
+                let fname = entry.file_name().to_string_lossy().to_string();
+                if fname.starts_with(&stem) {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+
+        info!("[LUDUSAVI] Extracted to: {}", out_path.display());
+        return Ok(out_path);
+    }
+
+    Err("Ludusavi binary not found in zip archive".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn extract_ludusavi_from_tar_gz(
+    bytes: &[u8],
+    ludusavi_dir: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    use log::info;
+    use std::io::Read;
+
+    let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(bytes));
+    let mut archive = tar::Archive::new(gz);
+
+    for entry_result in archive
+        .entries()
+        .map_err(|e| format!("Failed to read tar entries: {e}"))?
+    {
+        let mut entry =
+            entry_result.map_err(|e| format!("Failed to iterate tar entry: {e}"))?;
+        let path = entry
+            .path()
+            .map_err(|e| format!("Failed to read tar entry path: {e}"))?
+            .into_owned();
+        let name = path.to_string_lossy().to_string();
+
+        // Upstream tar contains `ludusavi` at the root. Match it loosely so
+        // we work even if the archive layout changes.
+        let is_binary = path
+            .file_name()
+            .map(|f| f == "ludusavi")
+            .unwrap_or(false);
+        if !is_binary || entry.header().entry_type().is_dir() {
+            continue;
+        }
+
+        let out_path = ludusavi_dir.join("ludusavi");
+        info!("[LUDUSAVI] Extracting {} -> {}", name, out_path.display());
+        let mut buf = Vec::with_capacity(entry.size() as usize);
+        entry
+            .read_to_end(&mut buf)
+            .map_err(|e| format!("Failed to read tar entry body: {e}"))?;
+        std::fs::write(&out_path, &buf)
+            .map_err(|e| format!("Failed to write {}: {e}", out_path.display()))?;
+        return Ok(out_path);
+    }
+
+    Err("Ludusavi binary not found in tar.gz archive".to_string())
 }
 
 /// Try to find the Steam App ID for a game from its install directory.

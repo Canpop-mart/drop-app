@@ -13,6 +13,8 @@
  *   - Wii: Musical notes (G4=392Hz select, D3=147Hz back), bouncy feel
  */
 
+import { devLog } from "./dev-mode";
+
 // ── Audio Context ────────────────────────────────────────────────────────────
 
 let audioCtx: AudioContext | null = null;
@@ -904,6 +906,7 @@ export function useBpAudio() {
   return {
     /** Play a sound effect by name using the active profile. */
     play(sound: BpSound) {
+      devLog("audio", `play ${sound} (profile=${activeProfile})`);
       getActiveProfile().sounds[sound]?.();
     },
 
@@ -928,6 +931,7 @@ export function useBpAudio() {
     /** Switch the active sound profile. */
     setProfile(id: SoundProfileId) {
       if (profileMap.has(id)) {
+        devLog("audio", `setProfile ${activeProfile} -> ${id}`);
         activeProfile = id;
         if (typeof localStorage !== "undefined") {
           localStorage.setItem("bpmAudioProfile", id);

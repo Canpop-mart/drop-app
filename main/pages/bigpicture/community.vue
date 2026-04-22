@@ -245,7 +245,7 @@
               :key="entry.gameId"
               class="flex-shrink-0"
               style="width: 9rem"
-              :ref="(el: any) => registerContent(el, { onSelect: () => router.push(`/bigpicture/library/${entry.gameId}`) })"
+              :ref="(el: any) => registerContent(el, { onSelect: () => goToGame(entry.gameId) })"
             >
               <div class="rounded-lg overflow-hidden cursor-pointer transition-transform hover:scale-105" style="aspect-ratio: 3/4">
                 <img v-if="entry.game.mCoverObjectId" :src="objectUrl(entry.game.mCoverObjectId)" class="w-full h-full object-cover" loading="lazy" />
@@ -325,7 +325,9 @@ function objectUrl(id: string): string {
 
 function goToGame(gameId?: string) {
   if (!gameId) return;
-  router.push(`/bigpicture/library/${gameId}`);
+  const target = `/bigpicture/library/${gameId}`;
+  focusNav.setRouteState("backTo", "/bigpicture/community", target);
+  router.push(target);
 }
 
 function viewProfile(userId: string) {

@@ -79,8 +79,10 @@ const showSearch = computed(() =>
 );
 
 const showOptions = computed(() =>
-  route.path.startsWith("/bigpicture/library/") &&
-  route.path !== "/bigpicture/library",
+  (route.path.startsWith("/bigpicture/library/") &&
+    route.path !== "/bigpicture/library") ||
+  // Store also uses Start — toggles bulk-select mode on the Browse tab.
+  route.path === "/bigpicture/store",
 );
 
 const showSort = computed(() =>
@@ -92,8 +94,14 @@ const showSort = computed(() =>
 const queue = useQueueState();
 const stats = useStatsState();
 const downloadCount = computed(() => queue.value.queue.length);
+// The home page renders its own per-theme Downloads section, and the
+// downloads page is itself the canonical view. Hiding the strip there
+// avoids a duplicate tracker in either surface.
 const showDownloadStrip = computed(
-  () => downloadCount.value > 0 && route.path !== "/bigpicture/downloads",
+  () =>
+    downloadCount.value > 0 &&
+    route.path !== "/bigpicture/downloads" &&
+    route.path !== "/bigpicture",
 );
 const downloadSpeed = computed(() =>
   stats.value.speed > 0 ? formatKilobytes(stats.value.speed) : "",

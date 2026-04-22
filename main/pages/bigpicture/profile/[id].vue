@@ -346,7 +346,9 @@ const recentAchievements = computed(() =>
 
 function navigateToGame(gameId: string) {
   focusNav.saveFocusSnapshot(route.path);
-  router.push(`/bigpicture/library/${gameId}`);
+  const target = `/bigpicture/library/${gameId}`;
+  focusNav.setRouteState("backTo", route.path, target);
+  router.push(target);
 }
 
 async function loadProfile() {

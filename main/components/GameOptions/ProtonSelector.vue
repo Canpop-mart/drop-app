@@ -155,6 +155,7 @@
 
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
+import { platform } from "@tauri-apps/plugin-os";
 import type { ProtonPath } from "~/composables/game";
 import {
   Listbox,
@@ -170,11 +171,21 @@ import type { GameVersion } from "~/types";
 
 const model = defineModel<GameVersion["userConfiguration"]>({ required: true });
 
-const protonPaths = await invoke<{
-  autodiscovered: ProtonPath[];
-  custom: ProtonPath[];
-  default?: string;
-}>("fetch_proton_paths");
+// `fetch_proton_paths` is `#[cfg(target_os = "linux")]` in the Rust
+// backend — on Windows/macOS it's simply not registered, and invoking
+// it here (at top-level await) would throw and prevent this component
+// from ever mounting. The parent `GameOptions/Launch.vue` gates this
+// component behind `protonEnabled`, but cover the edge case defensively
+// so the whole game-options modal doesn't blank out if the prop is ever
+// set on a non-Linux build.
+const protonPaths =
+  platform() === "linux"
+    ? await invoke<{
+        autodiscovered: ProtonPath[];
+        custom: ProtonPath[];
+        default?: string;
+      }>("fetch_proton_paths")
+    : { autodiscovered: [] as ProtonPath[], custom: [] as ProtonPath[], default: undefined };
 const currentProtonPath = computed(
   () =>
     protonPaths.autodiscovered.find(

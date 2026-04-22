@@ -303,17 +303,19 @@ function cycleFocus(delta: number) {
 function wireGamepad() {
   unwireGamepad();
 
+  const bypass = { bypassInputLock: true };
+
   unsubs.push(
     gamepad.onButton(GamepadButton.DPadLeft, () => {
       if (!visible.value || logOpen.value) return;
       cycleFocus(-1);
-    }),
+    }, bypass),
   );
   unsubs.push(
     gamepad.onButton(GamepadButton.DPadRight, () => {
       if (!visible.value || logOpen.value) return;
       cycleFocus(1);
-    }),
+    }, bypass),
   );
 
   // A — activate focused button; in log view, A does nothing (use X/Y/B)
@@ -327,7 +329,7 @@ function wireGamepad() {
         case "copy": copyLog(); break;
         case "report": reportBug(); break;
       }
-    }),
+    }, bypass),
   );
 
   // B — close log viewer if open, else dismiss dialog
@@ -339,7 +341,7 @@ function wireGamepad() {
       } else {
         dismiss();
       }
-    }),
+    }, bypass),
   );
 
   // X — copy log from anywhere (physical X on Deck via _copyBtn)
@@ -347,7 +349,7 @@ function wireGamepad() {
     gamepad.onButton(_copyBtn, () => {
       if (!visible.value) return;
       copyLog();
-    }),
+    }, bypass),
   );
 
   // Y — report bug / toggle stderr (contextual; physical Y on Deck via _reportBtn)
@@ -359,7 +361,7 @@ function wireGamepad() {
       } else {
         reportBug();
       }
-    }),
+    }, bypass),
   );
 
   // Scroll log pre when in log view
@@ -367,13 +369,13 @@ function wireGamepad() {
     gamepad.onButton(GamepadButton.DPadUp, () => {
       if (!visible.value || !logOpen.value) return;
       logPre.value?.scrollBy({ top: -80, behavior: "smooth" });
-    }),
+    }, bypass),
   );
   unsubs.push(
     gamepad.onButton(GamepadButton.DPadDown, () => {
       if (!visible.value || !logOpen.value) return;
       logPre.value?.scrollBy({ top: 80, behavior: "smooth" });
-    }),
+    }, bypass),
   );
 }
 

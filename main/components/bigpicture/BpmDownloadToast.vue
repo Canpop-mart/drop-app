@@ -35,6 +35,7 @@
 <script setup lang="ts">
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useCompletedDownloads, useQueueState } from "~/composables/downloads";
+import { useFocusNavigation } from "~/composables/focus-navigation";
 import { invoke } from "@tauri-apps/api/core";
 
 interface ToastEntry {
@@ -47,6 +48,8 @@ const completed = useCompletedDownloads();
 const queue = useQueueState();
 const gamepad = useGamepad();
 const router = useRouter();
+const route = useRoute();
+const focusNav = useFocusNavigation();
 
 const toastQueue = ref<ToastEntry[]>([]);
 const current = ref<ToastEntry | null>(null);
@@ -131,9 +134,14 @@ function dismissCurrent() {
 
 function goToLibrary() {
   const id = current.value?.gameId;
+  const origin = route.path;
   dismissCurrent();
   if (id) {
-    router.push(`/bigpicture/library/${id}`);
+    const target = `/bigpicture/library/${id}`;
+    // Record where the user was so pressing B returns them there instead
+    // of bouncing to /bigpicture/library.
+    focusNav.setRouteState("backTo", origin, target);
+    router.push(target);
   }
 }
 

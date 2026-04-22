@@ -9,6 +9,8 @@
  * fires the same callback interface the rest of Big Picture Mode expects.
  */
 
+import { devLog } from "./dev-mode";
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface GamepadButtonEvent {
@@ -29,6 +31,20 @@ export interface GamepadConnectionEvent {
 }
 
 export type ButtonCallback = (event: GamepadButtonEvent) => void;
+
+export interface ButtonSubOptions {
+  /**
+   * If true, this subscriber still receives events while the global input
+   * lock is held (i.e. while a modal / overlay has acquired focus-nav's
+   * input lock).  Default false — page-level handlers are auto-silenced
+   * when a modal opens, so they don't compete with its key handlers.
+   *
+   * Modal / overlay components that wire their own gamepad handlers for
+   * in-modal navigation should pass `{ bypassInputLock: true }` so their
+   * handlers keep firing while the lock they acquired is active.
+   */
+  bypassInputLock?: boolean;
+}
 
 // ── Standard button names ───────────────────────────────────────────────────
 
@@ -102,9 +118,29 @@ const connected = ref(false);
 const controllerName = ref("");
 const controllerId = ref<number | null>(null);
 
-const buttonCallbacks = new Map<string, Set<ButtonCallback>>();
-const buttonReleaseCallbacks = new Map<string, Set<ButtonCallback>>();
-const anyButtonCallbacks = new Set<ButtonCallback>();
+interface ButtonSub {
+  fn: ButtonCallback;
+  bypassLock: boolean;
+}
+
+const buttonCallbacks = new Map<string, Set<ButtonSub>>();
+const buttonReleaseCallbacks = new Map<string, Set<ButtonSub>>();
+const anyButtonCallbacks = new Set<ButtonSub>();
+
+/**
+ * Global input lock set by `focus-navigation.ts` when a modal acquires
+ * the input lock.  When true, subscribers without `bypassInputLock: true`
+ * do NOT receive button events — their handlers are silenced for the
+ * duration of the lock so they don't compete with the modal's own handlers.
+ */
+let globalInputLock = false;
+
+export function setGlobalInputLock(value: boolean) {
+  if (globalInputLock !== value) {
+    devLog("state", `globalInputLock ${globalInputLock} -> ${value}`);
+  }
+  globalInputLock = value;
+}
 
 // Previous frame state for diffing
 const prevButtons = new Map<string, boolean>();
@@ -166,11 +202,33 @@ function pollFrame() {
 
         if (pressed) {
           const cbs = buttonCallbacks.get(name);
-          if (cbs) for (const cb of cbs) cb(payload);
-          for (const cb of anyButtonCallbacks) cb(payload);
+          const subCount = (cbs?.size ?? 0) + anyButtonCallbacks.size;
+          devLog(
+            "gamepad",
+            `press ${name} (cid=${cid}, subs=${subCount}, lock=${globalInputLock})`,
+          );
+          if (cbs) {
+            for (const sub of cbs) {
+              if (globalInputLock && !sub.bypassLock) continue;
+              sub.fn(payload);
+            }
+          }
+          for (const sub of anyButtonCallbacks) {
+            if (globalInputLock && !sub.bypassLock) continue;
+            sub.fn(payload);
+          }
         } else {
           const cbs = buttonReleaseCallbacks.get(name);
-          if (cbs) for (const cb of cbs) cb(payload);
+          devLog(
+            "gamepad",
+            `release ${name} (cid=${cid}, subs=${cbs?.size ?? 0})`,
+          );
+          if (cbs) {
+            for (const sub of cbs) {
+              if (globalInputLock && !sub.bypassLock) continue;
+              sub.fn(payload);
+            }
+          }
         }
       }
     }
@@ -186,6 +244,7 @@ function pollFrame() {
       if (Math.abs(filtered - prev) >= AXIS_CHANGE_THRESHOLD) {
         prevAxes.set(name, filtered);
         axes.set(name, filtered);
+        devLog("gamepad", `axis ${name}=${filtered.toFixed(2)} (cid=${cid})`);
       }
     }
 
@@ -269,6 +328,11 @@ function destroy() {
   prevButtons.clear();
   prevAxes.clear();
 
+  // Release the global input lock — when BPM is torn down any modal
+  // that was holding it is also gone, so we shouldn't leak a locked
+  // state into the next session.
+  globalInputLock = false;
+
   // Allow re-initialization next time BPM is entered
   initialized = false;
   console.log("[GAMEPAD] Destroyed — polling stopped, callbacks cleared");
@@ -279,33 +343,53 @@ function destroy() {
 export function useGamepad() {
   init();
 
-  function onButton(button: string, callback: ButtonCallback): () => void {
+  function onButton(
+    button: string,
+    callback: ButtonCallback,
+    options?: ButtonSubOptions,
+  ): () => void {
     if (!buttonCallbacks.has(button)) {
       buttonCallbacks.set(button, new Set());
     }
-    buttonCallbacks.get(button)!.add(callback);
+    const sub: ButtonSub = {
+      fn: callback,
+      bypassLock: options?.bypassInputLock ?? false,
+    };
+    buttonCallbacks.get(button)!.add(sub);
     return () => {
-      buttonCallbacks.get(button)?.delete(callback);
+      buttonCallbacks.get(button)?.delete(sub);
     };
   }
 
   function onButtonRelease(
     button: string,
     callback: ButtonCallback,
+    options?: ButtonSubOptions,
   ): () => void {
     if (!buttonReleaseCallbacks.has(button)) {
       buttonReleaseCallbacks.set(button, new Set());
     }
-    buttonReleaseCallbacks.get(button)!.add(callback);
+    const sub: ButtonSub = {
+      fn: callback,
+      bypassLock: options?.bypassInputLock ?? false,
+    };
+    buttonReleaseCallbacks.get(button)!.add(sub);
     return () => {
-      buttonReleaseCallbacks.get(button)?.delete(callback);
+      buttonReleaseCallbacks.get(button)?.delete(sub);
     };
   }
 
-  function onAnyButton(callback: ButtonCallback): () => void {
-    anyButtonCallbacks.add(callback);
+  function onAnyButton(
+    callback: ButtonCallback,
+    options?: ButtonSubOptions,
+  ): () => void {
+    const sub: ButtonSub = {
+      fn: callback,
+      bypassLock: options?.bypassInputLock ?? false,
+    };
+    anyButtonCallbacks.add(sub);
     return () => {
-      anyButtonCallbacks.delete(callback);
+      anyButtonCallbacks.delete(sub);
     };
   }
 

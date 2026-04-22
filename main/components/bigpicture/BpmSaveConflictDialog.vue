@@ -202,6 +202,8 @@ watch(
 function wireGamepad() {
   unwireGamepad();
 
+  const bypass = { bypassInputLock: true };
+
   // DPad Up — move up through rows, then wrap to buttons
   unsubs.push(
     gamepad.onButton(GamepadButton.DPadUp, () => {
@@ -215,7 +217,7 @@ function wireGamepad() {
       } else if (focusedRow.value > 0) {
         focusedRow.value--;
       }
-    }),
+    }, bypass),
   );
 
   // DPad Down — move down through rows, then to buttons
@@ -233,7 +235,7 @@ function wireGamepad() {
       } else {
         // Already in buttons — no-op (or wrap to top)
       }
-    }),
+    }, bypass),
   );
 
   // DPad Left/Right — toggle local/cloud for focused row, or switch buttons
@@ -245,7 +247,7 @@ function wireGamepad() {
       } else {
         focusedButton.value = "cancel";
       }
-    }),
+    }, bypass),
   );
   unsubs.push(
     gamepad.onButton(GamepadButton.DPadRight, () => {
@@ -255,7 +257,7 @@ function wireGamepad() {
       } else {
         focusedButton.value = "confirm";
       }
-    }),
+    }, bypass),
   );
 
   // A = confirm action
@@ -270,7 +272,7 @@ function wireGamepad() {
         focusArea.value = "buttons";
         focusedButton.value = "confirm";
       }
-    }),
+    }, bypass),
   );
 
   // B = keep all local / cancel
@@ -278,7 +280,7 @@ function wireGamepad() {
     gamepad.onButton(GamepadButton.East, () => {
       if (!props.visible) return;
       keepAllLocal();
-    }),
+    }, bypass),
   );
 }
 

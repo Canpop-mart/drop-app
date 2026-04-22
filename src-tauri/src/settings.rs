@@ -72,6 +72,8 @@ const ALLOWED_SETTINGS_KEYS: &[&str] = &[
     "globalMangohud",
     "sunshineUsername",
     "sunshinePassword",
+    "raUsername",
+    "raToken",
 ];
 
 /// Max length accepted for free-form string settings. Prevents a rogue
@@ -126,6 +128,74 @@ pub fn update_settings(new_settings: Value) {
 pub fn fetch_settings() -> Settings {
     borrow_db_checked().settings.clone()
 }
+
+/// Exchange RA username + password for a Connect token and save both to
+/// local settings. The password never hits disk. Called from the BPM
+/// Achievements settings when the user links their RA account.
+#[tauri::command]
+pub async fn ra_login_and_save(username: String, password: String) -> Result<String, String> {
+    if username.trim().is_empty() || password.is_empty() {
+        return Err("Username and password required".to_string());
+    }
+
+    #[derive(serde::Deserialize)]
+    struct RALoginResponse {
+        #[serde(rename = "Success")]
+        success: Option<bool>,
+        #[serde(rename = "Token")]
+        token: Option<String>,
+        #[serde(rename = "Error")]
+        error: Option<String>,
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let response = client
+        .post("https://retroachievements.org/dorequest.php")
+        .form(&[("r", "login2"), ("u", username.trim()), ("p", &password)])
+        .send()
+        .await
+        .map_err(|e| format!("Network error contacting RetroAchievements: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("RetroAchievements returned HTTP {}", response.status()));
+    }
+
+    let body: RALoginResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Could not parse RA response: {e}"))?;
+
+    if body.success != Some(true) {
+        return Err(body.error.unwrap_or_else(|| "Login rejected".to_string()));
+    }
+
+    let token = body.token.ok_or_else(|| "RA response missing Token".to_string())?;
+    if token.is_empty() {
+        return Err("RA returned empty Token".to_string());
+    }
+
+    {
+        let mut db = borrow_db_mut_checked();
+        db.settings.ra_username = username.trim().to_string();
+        db.settings.ra_token = token;
+    }
+
+    Ok(username.trim().to_string())
+}
+
+/// Unlink the locally-configured RA account. Leaves the server-linked
+/// account (if any) intact so RetroArch falls back to that.
+#[tauri::command]
+pub fn ra_clear_credentials() {
+    let mut db = borrow_db_mut_checked();
+    db.settings.ra_username = String::new();
+    db.settings.ra_token = String::new();
+}
+
 /// Describes how the app was packaged, affecting update behavior.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

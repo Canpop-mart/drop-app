@@ -405,51 +405,6 @@
 
       </div>
 
-      <!-- ═══════ Performance ═══════ -->
-      <div
-        v-if="activeSection === 'performance'"
-        class="space-y-5 max-w-xl"
-      >
-        <h3 class="text-lg font-semibold text-zinc-200 font-display">
-          Performance
-        </h3>
-
-        <!-- MangoHud overlay (Linux only) -->
-        <div class="bg-zinc-900/50 rounded-xl p-4">
-          <div class="mb-3">
-            <p class="font-medium text-zinc-200 text-sm">Performance Overlay</p>
-            <p class="text-zinc-500 text-xs mt-0.5">
-              Show MangoHud FPS/performance overlay in games (Linux only)
-            </p>
-          </div>
-          <div class="flex gap-2">
-            <button
-              v-for="option in mangohudOptions"
-              :key="option.value"
-              :ref="
-                (el: any) =>
-                  registerContent(el, {
-                    onSelect: () => (mangohudPreset = option.value),
-                  })
-              "
-              class="flex-1 py-2.5 rounded-lg text-xs font-medium transition-all border"
-              :class="[
-                mangohudPreset === option.value
-                  ? 'bg-blue-600/20 text-blue-400 border-blue-500/50'
-                  : 'bg-zinc-800/50 text-zinc-400 border-zinc-700/50 hover:text-zinc-200 hover:bg-zinc-800',
-              ]"
-              @click="mangohudPreset = option.value"
-            >
-              {{ option.label }}
-            </button>
-          </div>
-          <p class="text-zinc-600 text-xs mt-2">
-            Applies per-game via MANGOHUD environment variable. Requires
-            MangoHud installed.
-          </p>
-        </div>
-      </div>
-
       <!-- ═══════ Controller ═══════ -->
       <div
         v-if="activeSection === 'controller'"
@@ -688,6 +643,79 @@
         </div>
       </div>
 
+      <!-- ═══════ Achievements ═══════ -->
+      <div
+        v-if="activeSection === 'achievements'"
+        class="space-y-5 max-w-xl"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          RetroAchievements
+        </h3>
+        <p class="text-sm text-zinc-400">
+          Link your RetroAchievements account so RetroArch can track unlocks
+          during emulated gameplay. Your password is exchanged for a session
+          token and never stored.
+        </p>
+
+        <div class="bg-zinc-900/50 rounded-xl p-4 space-y-4">
+          <div v-if="raLinked" class="flex items-start gap-3">
+            <div class="flex-1">
+              <p class="text-sm text-zinc-300">
+                Linked as
+                <span class="font-semibold text-zinc-100">{{ raUsername }}</span>
+              </p>
+              <p class="text-xs text-zinc-500 mt-1">
+                RetroArch will authenticate automatically on next launch.
+              </p>
+            </div>
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: unlinkRetroAchievements })"
+              class="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-zinc-300"
+              @click="unlinkRetroAchievements"
+            >
+              Unlink
+            </button>
+          </div>
+          <template v-else>
+            <div>
+              <label class="block text-sm font-medium text-zinc-400 mb-1">Username</label>
+              <input
+                v-model="raUsername"
+                :ref="(el: any) => registerContent(el, {})"
+                type="text"
+                autocomplete="off"
+                class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                placeholder="RetroAchievements username"
+              />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-zinc-400 mb-1">Password</label>
+              <input
+                v-model="raPassword"
+                :ref="(el: any) => registerContent(el, {})"
+                type="password"
+                autocomplete="off"
+                class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                placeholder="Password"
+              />
+            </div>
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: linkRetroAchievements })"
+              :disabled="raStatus === 'linking' || !raUsername || !raPassword"
+              class="w-full px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-400 text-white font-medium rounded-lg transition-colors"
+              @click="linkRetroAchievements"
+            >
+              <span v-if="raStatus === 'linking'">Linking…</span>
+              <span v-else>Link account</span>
+            </button>
+          </template>
+          <p v-if="raStatus === 'linked'" class="text-xs text-green-400">
+            Account linked.
+          </p>
+          <p v-if="raError" class="text-xs text-red-400">{{ raError }}</p>
+        </div>
+      </div>
+
       <!-- ═══════ Streaming ═══════ -->
       <div
         v-if="activeSection === 'streaming'"
@@ -728,6 +756,112 @@
         </div>
       </div>
 
+      <!-- ═══════ Developer ═══════ -->
+      <div
+        v-if="activeSection === 'developer'"
+        class="space-y-5 max-w-2xl"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          Developer
+        </h3>
+        <p class="text-sm text-zinc-400">
+          Dev mode is a firehose of diagnostic output. When enabled, instrumented
+          code paths log tagged messages that appear in the BPM on-screen debug
+          overlay (toggle the overlay with the Select button). Useful when
+          reporting bugs or chasing controller / focus issues.
+        </p>
+
+        <!-- Master toggle -->
+        <div
+          :ref="(el: any) => registerContent(el, { onSelect: () => dev.toggle() })"
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4 hover:bg-zinc-800/50 transition-colors"
+          @click="dev.toggle()"
+        >
+          <div class="min-w-0 pr-4">
+            <p class="font-medium text-zinc-200 text-sm">Enable dev mode</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Log every gamepad press, focus move, Tauri call, download tick and
+              more to the BPM debug overlay.
+            </p>
+          </div>
+          <button
+            class="w-11 h-6 rounded-full transition-colors relative shrink-0"
+            :class="dev.enabled.value ? 'bg-emerald-500' : 'bg-zinc-700'"
+            @click.stop="dev.toggle()"
+          >
+            <div
+              class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+              :class="dev.enabled.value ? 'translate-x-5' : 'translate-x-0.5'"
+            />
+          </button>
+        </div>
+
+        <!-- Category toggles -->
+        <div
+          class="rounded-xl p-4 space-y-3"
+          :class="dev.enabled.value ? 'bg-zinc-900/50' : 'bg-zinc-900/30 opacity-60'"
+        >
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="font-medium text-zinc-200 text-sm">Categories</p>
+              <p class="text-zinc-500 text-xs mt-0.5">
+                Turn individual firehoses on or off.
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                :ref="(el: any) => registerContent(el, { onSelect: () => dev.setAllCategories(true) })"
+                class="px-3 py-1.5 text-xs rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
+                :disabled="!dev.enabled.value"
+                @click="dev.setAllCategories(true)"
+              >
+                All on
+              </button>
+              <button
+                :ref="(el: any) => registerContent(el, { onSelect: () => dev.setAllCategories(false) })"
+                class="px-3 py-1.5 text-xs rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
+                :disabled="!dev.enabled.value"
+                @click="dev.setAllCategories(false)"
+              >
+                All off
+              </button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div
+              v-for="cat in dev.ALL_CATEGORIES"
+              :key="cat"
+              :ref="(el: any) => registerContent(el, { onSelect: () => dev.toggleCategory(cat) })"
+              class="flex items-center justify-between bg-zinc-900/60 rounded-lg cursor-pointer p-3"
+              :class="{ 'pointer-events-none': !dev.enabled.value }"
+              @click="dev.toggleCategory(cat)"
+            >
+              <div class="min-w-0 pr-2">
+                <p class="font-medium text-zinc-200 text-xs">{{ devCategoryMeta[cat].label }}</p>
+                <p class="text-zinc-500 text-[11px] mt-0.5 truncate">{{ devCategoryMeta[cat].description }}</p>
+              </div>
+              <button
+                class="w-9 h-5 rounded-full transition-colors relative shrink-0"
+                :class="dev.categories.value[cat] ? 'bg-emerald-500' : 'bg-zinc-700'"
+                :disabled="!dev.enabled.value"
+                @click.stop="dev.toggleCategory(cat)"
+              >
+                <div
+                  class="absolute top-0.5 size-4 rounded-full bg-white shadow transition-transform"
+                  :class="dev.categories.value[cat] ? 'translate-x-[18px]' : 'translate-x-0.5'"
+                />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <p class="text-xs text-zinc-500">
+          Tip: press <span class="font-mono text-zinc-300">Select</span> on your
+          controller to show or hide the on-screen overlay.
+        </p>
+      </div>
+
       <!-- ═══════ About ═══════ -->
       <div
         v-if="activeSection === 'about'"
@@ -764,6 +898,40 @@
             <path fill-rule="evenodd" d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
           </svg>
         </div>
+
+        <!-- Run Setup Wizard -->
+        <div
+          :ref="(el: any) => registerContent(el, { onSelect: () => navigateTo('/welcome') })"
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4 hover:bg-zinc-800/50 transition-colors"
+          @click="navigateTo('/welcome')"
+        >
+          <div>
+            <p class="font-medium text-zinc-200 text-sm">Run setup wizard</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Walk through profile, storage, Proton, saves, RetroAchievements and controls again
+            </p>
+          </div>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-5 text-zinc-500">
+            <path fill-rule="evenodd" d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+          </svg>
+        </div>
+
+        <!-- Error Reference -->
+        <div
+          :ref="(el: any) => registerContent(el, { onSelect: () => navigateTo('/help/errors') })"
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4 hover:bg-zinc-800/50 transition-colors"
+          @click="navigateTo('/help/errors')"
+        >
+          <div>
+            <p class="font-medium text-zinc-200 text-sm">Error reference</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Common warnings and messages with plain-English explanations and fixes
+            </p>
+          </div>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-5 text-zinc-500">
+            <path fill-rule="evenodd" d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+          </svg>
+        </div>
       </div>
     </div>
   </div>
@@ -771,6 +939,7 @@
 
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
+import { platform } from "@tauri-apps/plugin-os";
 
 import { useGamepad } from "~/composables/gamepad";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
@@ -778,6 +947,7 @@ import { useBpAudio, soundProfiles, type SoundProfileId } from "~/composables/bp
 import { useBpmTheme, themes, type ThemeId } from "~/composables/bp-theme";
 import { useDeckMode } from "~/composables/deck-mode";
 import { useUiZoom } from "~/composables/ui-zoom";
+import { useDevMode, type DevCategory } from "~/composables/dev-mode";
 import { type Ref } from "vue";
 
 definePageMeta({ layout: "bigpicture" });
@@ -861,16 +1031,104 @@ watch(keyboardMode, (val) => {
 const registerSidebar = useBpFocusableGroup("content");
 const registerContent = useBpFocusableGroup("content");
 
-const sections = [
-  { label: "Theme", value: "theme" },
-  { label: "Interface", value: "interface" },
-  { label: "Performance", value: "performance" },
-  { label: "Controller", value: "controller" },
-  { label: "Storage", value: "storage" },
-  { label: "Compatibility", value: "compatibility" },
-  { label: "Streaming", value: "streaming" },
-  { label: "About", value: "about" },
-];
+// Compatibility is Linux-only — Proton/umu commands in the Rust backend
+// are `#[cfg(target_os = "linux")]`, so the tab would just show spinner
+// and log errors on Windows/macOS. Hide it entirely there.
+const sections = computed(() => {
+  const base = [
+    { label: "Theme", value: "theme" },
+    { label: "Interface", value: "interface" },
+    { label: "Controller", value: "controller" },
+    { label: "Storage", value: "storage" },
+  ];
+  const tail = [
+    { label: "Achievements", value: "achievements" },
+    { label: "Streaming", value: "streaming" },
+    { label: "Developer", value: "developer" },
+    { label: "About", value: "about" },
+  ];
+  return platform() === "linux"
+    ? [...base, { label: "Compatibility", value: "compatibility" }, ...tail]
+    : [...base, ...tail];
+});
+
+// ── Developer / Dev Mode ───────────────────────────────────────────────────
+// Firehose debug output toggle. When enabled, instrumented code paths
+// (gamepad, focus-nav, event subscribe, downloads, invoke, etc.) emit
+// [DEV:CATEGORY] tagged console messages — the BPM debug overlay picks
+// them up so they're visible on-device without leaving Gaming Mode.
+const dev = useDevMode();
+const devCategoryMeta: Record<DevCategory, { label: string; description: string }> = {
+  gamepad: { label: "Gamepad", description: "Button presses, axis changes, connect/disconnect" },
+  focus: { label: "Focus navigation", description: "applyFocus, cycleGroup, input lock" },
+  route: { label: "Route changes", description: "Page-to-page navigation" },
+  api: { label: "Server API", description: "HTTP fetches to the Drop server" },
+  invoke: { label: "Tauri invoke", description: "Rust backend command calls" },
+  download: { label: "Downloads", description: "Queue, stats, completion events" },
+  launch: { label: "Game launch", description: "Launch/exit, umu env, error dialogs" },
+  audio: { label: "Audio", description: "Profile changes and playback" },
+  theme: { label: "Theme", description: "Theme / mode switches" },
+  state: { label: "App state", description: "BPM mode enter/exit, idle, input lock" },
+  event: { label: "Tauri events", description: "useListen subscriptions and emissions" },
+  lifecycle: { label: "Lifecycle", description: "Component mount / unmount in BPM" },
+  window: { label: "Window", description: "Resize, focus, blur" },
+};
+
+// ── RetroAchievements credentials ──────────────────────────────────────────
+
+const raUsername = ref("");
+const raPassword = ref("");
+const raLinked = ref(false);
+const raStatus = ref<"" | "linking" | "linked" | "error">("");
+const raError = ref("");
+
+onMounted(async () => {
+  try {
+    const settings = await invoke<Record<string, any>>("fetch_settings");
+    if (settings.raUsername) {
+      raUsername.value = settings.raUsername;
+      // Presence of raToken is inferred from Rust Debug redaction — we
+      // just rely on raUsername non-empty as "linked".
+      raLinked.value = !!(settings.raToken && settings.raToken.length > 0);
+    }
+  } catch {
+    // Settings not available yet — keep defaults
+  }
+});
+
+async function linkRetroAchievements() {
+  raError.value = "";
+  raStatus.value = "linking";
+  try {
+    const user = await invoke<string>("ra_login_and_save", {
+      username: raUsername.value,
+      password: raPassword.value,
+    });
+    raUsername.value = user;
+    raPassword.value = "";
+    raLinked.value = true;
+    raStatus.value = "linked";
+    setTimeout(() => {
+      if (raStatus.value === "linked") raStatus.value = "";
+    }, 2500);
+  } catch (e: any) {
+    raError.value = typeof e === "string" ? e : String(e?.message ?? e);
+    raStatus.value = "error";
+  }
+}
+
+async function unlinkRetroAchievements() {
+  try {
+    await invoke("ra_clear_credentials");
+    raUsername.value = "";
+    raPassword.value = "";
+    raLinked.value = false;
+    raStatus.value = "";
+    raError.value = "";
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to clear RA credentials:", e);
+  }
+}
 
 // ── Streaming credentials ──────────────────────────────────────────────────
 
@@ -902,41 +1160,6 @@ async function saveStreamingCredentials() {
     console.error("[BPM:SETTINGS] Failed to save streaming credentials:", e);
   }
 }
-
-// ── MangoHud ────────────────────────────────────────────────────────────────
-
-const mangohudOptions = [
-  { label: "Off", value: "off" },
-  { label: "FPS Only", value: "minimal" },
-  { label: "Standard", value: "standard" },
-  { label: "Full", value: "full" },
-];
-
-const mangohudPreset = ref("off");
-
-// Load the current global MangoHud preset from backend settings
-onMounted(async () => {
-  try {
-    const settings = await invoke<{ globalMangohud?: string }>(
-      "fetch_settings",
-    );
-    if (settings.globalMangohud) {
-      mangohudPreset.value = settings.globalMangohud;
-    }
-  } catch {
-    // Settings not available — keep default
-  }
-});
-
-watch(mangohudPreset, async (val) => {
-  try {
-    await invoke("update_settings", {
-      newSettings: { globalMangohud: val === "off" ? null : val },
-    });
-  } catch (e) {
-    console.warn("Failed to save MangoHud setting:", e);
-  }
-});
 
 // ── Haptic feedback ─────────────────────────────────────────────────────────
 
@@ -1124,8 +1347,18 @@ const protonLoading = ref(true);
 const allProtonPaths = ref<ProtonPath[]>([]);
 const selectedProtonDefault = ref<string | null>(null);
 const protonSaveError = ref<string | null>(null);
+// Proton/umu commands are `#[cfg(target_os = "linux")]` in the Rust side
+// (src-tauri/src/lib.rs:316-329) — on Windows/macOS builds they simply
+// aren't registered, and invoking them throws "command not found".
+// Gate the call so the Compatibility section degrades silently on
+// non-Linux instead of spamming errors into the console.
+const isLinuxPlatform = platform() === "linux";
 
 onMounted(async () => {
+  if (!isLinuxPlatform) {
+    protonLoading.value = false;
+    return;
+  }
   try {
     const result = await invoke<{
       autodiscovered: ProtonPath[];

@@ -349,6 +349,14 @@ pub mod data {
             /// Sunshine admin password for streaming. Never logged via Debug.
             #[serde(default)]
             pub sunshine_password: String,
+            /// RetroAchievements username for RetroArch cheevos auth. Empty
+            /// means "fall back to server-linked account".
+            #[serde(default)]
+            pub ra_username: String,
+            /// RetroAchievements Connect token (NOT a password). Never logged
+            /// via Debug.
+            #[serde(default)]
+            pub ra_token: String,
         }
 
         // Manual Debug impl: redact the Sunshine password so it never leaks
@@ -364,6 +372,15 @@ pub mod data {
                     .field(
                         "sunshine_password",
                         &if self.sunshine_password.is_empty() {
+                            "<unset>"
+                        } else {
+                            "<redacted>"
+                        },
+                    )
+                    .field("ra_username", &self.ra_username)
+                    .field(
+                        "ra_token",
+                        &if self.ra_token.is_empty() {
                             "<unset>"
                         } else {
                             "<redacted>"
@@ -386,6 +403,8 @@ pub mod data {
                     global_mangohud: None,
                     sunshine_username: default_sunshine_username(),
                     sunshine_password: String::new(),
+                    ra_username: String::new(),
+                    ra_token: String::new(),
                 }
             }
         }

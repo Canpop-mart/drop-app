@@ -7,8 +7,8 @@ use std::{
 use database::DownloadableMetadata;
 use log::{debug, error, info, warn};
 use tauri::{AppHandle, async_runtime::JoinHandle};
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::{sync::mpsc, time::timeout};
 use utils::{app_emit, lock, send};
 
 use crate::{
@@ -138,37 +138,48 @@ impl DownloadManagerBuilder {
     async fn cleanup_current_download(&mut self) {
         self.active_control_flag = None;
         *lock!(self.progress) = None;
+        self.drain_previous_download(30).await;
+    }
 
-        if let Some(unfinished_thread) = {
+    /// Wait for the prior download thread (if any) to exit. If it doesn't
+    /// exit within `timeout_secs`, abort it forcefully. Returns true if the
+    /// thread drained on its own, false if it had to be aborted.
+    ///
+    /// Rationale: on pause, the thread's in-flight chunk futures keep
+    /// running until the next control-flag check. With `max_download_threads`
+    /// parallel chunks downloading large files, this drain can easily exceed
+    /// the prior 4s cap. When the drain times out silently, a following
+    /// resume sees stale agent state (status=Downloading, flag=Stop) and
+    /// bails out — the user clicks resume but nothing happens, needing a
+    /// second click after the orphaned thread eventually dies on its own.
+    async fn drain_previous_download(&mut self, timeout_secs: u64) -> bool {
+        let handle = {
             let mut download_thread_lock = lock!(self.current_download_thread);
             download_thread_lock.take()
-        } {
-            let _ = unfinished_thread.await;
+        };
+        let Some(mut handle) = handle else { return true };
+
+        tokio::select! {
+            _ = &mut handle => true,
+            _ = tokio::time::sleep(Duration::from_secs(timeout_secs)) => {
+                warn!(
+                    "previous download thread did not exit in {}s; aborting",
+                    timeout_secs
+                );
+                handle.abort();
+                // Await to let the abort propagate. JoinError is expected.
+                let _ = (&mut handle).await;
+                false
+            }
         }
     }
 
-    async fn stop_and_wait_current_download(&self) -> bool {
+    async fn stop_and_wait_current_download(&mut self) -> bool {
         self.set_status(DownloadManagerStatus::Paused);
         if let Some(current_flag) = &self.active_control_flag {
             current_flag.set(DownloadThreadControlFlag::Stop);
-
-            if let Some(current_download_thread) = {
-                let mut download_thread_lock = lock!(self.current_download_thread);
-                download_thread_lock.take()
-            } {
-                let result = timeout(Duration::from_secs(4), async {
-                    current_download_thread.await.is_ok()
-                })
-                .await;
-                if let Ok(result) = result {
-                    return result;
-                };
-                error!("failed to cleanup download: timeout after 4 seconds");
-                return false;
-            };
         }
-
-        true
+        self.drain_previous_download(30).await
     }
 
     async fn manage_queue(mut self) -> Result<(), ()> {
@@ -240,6 +251,22 @@ impl DownloadManagerBuilder {
 
         debug!("current download queue: {:?}", self.download_queue.read());
 
+        // Decide what to do based on the prior download's state:
+        //   - flag=Stop → previous was paused, drain its thread before
+        //     starting a new one (prevents a second concurrent downloader).
+        //   - flag=Go → a download is actively running; leave it alone.
+        //   - no active flag → fresh start, nothing to drain.
+        match self.active_control_flag.as_ref().map(|f| f.get()) {
+            Some(DownloadThreadControlFlag::Stop) => {
+                self.drain_previous_download(30).await;
+            }
+            Some(DownloadThreadControlFlag::Go) => {
+                debug!("Go received while download already active — ignoring");
+                return;
+            }
+            None => {}
+        }
+
         let agent_data = if let Some(agent_data) = self.download_queue.read().front() {
             agent_data.clone()
         } else {
@@ -254,11 +281,13 @@ impl DownloadManagerBuilder {
             }
         };
 
-        let status = download_agent.status();
-
-        // This download is already going
-        if status != DownloadStatus::Queued {
-            return;
+        // After draining, force status back to Queued. The thread normally
+        // calls on_queued() itself before exiting via the Stop path, but if
+        // drain_previous_download had to abort it, that cleanup never ran —
+        // status would still be Downloading/Validating and a subsequent
+        // status check would silently block the resume.
+        if download_agent.status() != DownloadStatus::Queued {
+            download_agent.on_queued(&self.app_handle);
         }
 
         // Ensure all others are marked as queued
@@ -270,6 +299,14 @@ impl DownloadManagerBuilder {
 
         info!("starting download for {agent_data:?}");
         self.active_control_flag = Some(download_agent.control_flag());
+
+        // Set the flag to Go BEFORE spawning the new thread. Otherwise, if
+        // the agent's flag is still Stop from a prior pause, the freshly
+        // spawned task can observe Stop on its first control_flag check and
+        // exit immediately.
+        download_agent
+            .control_flag()
+            .set(DownloadThreadControlFlag::Go);
 
         let sender = self.sender.clone();
 
@@ -289,13 +326,19 @@ impl DownloadManagerBuilder {
                     }
                 };
 
-                // If the download gets canceled
-                // immediately return, on_cancelled gets called for us earlier
+                // If the download gets canceled or paused
+                // If paused (Stop flag set), reset status to Queued so a later
+                // Go signal can re-spawn this thread. If cancelled, on_cancelled
+                // was called earlier and status is already set appropriately.
                 if !download_result {
+                    if download_agent.control_flag().get() == DownloadThreadControlFlag::Stop {
+                        download_agent.on_queued(&app_handle);
+                    }
                     return;
                 }
 
                 if download_agent.control_flag().get() == DownloadThreadControlFlag::Stop {
+                    download_agent.on_queued(&app_handle);
                     return;
                 }
 
@@ -314,6 +357,7 @@ impl DownloadManagerBuilder {
                 };
 
                 if download_agent.control_flag().get() == DownloadThreadControlFlag::Stop {
+                    download_agent.on_queued(&app_handle);
                     return;
                 }
 
@@ -330,11 +374,6 @@ impl DownloadManagerBuilder {
         }));
 
         self.set_status(DownloadManagerStatus::Downloading);
-        if let Some(active_control_flag) = self.active_control_flag.clone() {
-            active_control_flag.set(DownloadThreadControlFlag::Go);
-        } else {
-            warn!("active_control_flag was None after starting download");
-        }
     }
     fn manage_stop_signal(&mut self) {
         if let Some(active_control_flag) = self.active_control_flag.clone() {

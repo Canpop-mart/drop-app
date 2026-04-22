@@ -62,6 +62,7 @@ export function useBpFocusableGroup(group: string) {
       onSelect?: () => void;
       onContext?: () => void;
       onFocus?: () => void;
+      onHold?: () => void;
     },
   ) {
     if (!el) {
@@ -113,6 +114,7 @@ export function useBpFocusableGrid(group: string) {
       onSelect?: () => void;
       onContext?: () => void;
       onFocus?: () => void;
+      onHold?: () => void;
     },
   ) {
     if (!el) {

@@ -257,6 +257,8 @@ pub fn run() {
             // User utils
             update_settings,
             fetch_settings,
+            ra_login_and_save,
+            ra_clear_credentials,
             // Auth
             auth_initiate,
             auth_initiate_code,

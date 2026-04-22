@@ -125,7 +125,7 @@
           <div class="flex items-center gap-2 mt-0.5">
             <span class="text-xs text-zinc-500">{{ item.status }}</span>
             <span v-if="item.dl_current > 0" class="text-xs text-zinc-600">
-              {{ formatBytes(item.dl_current) }} /
+              {{ formatBytes(Math.min(item.dl_current, item.dl_max)) }} /
               {{ formatBytes(item.dl_max) }}
             </span>
           </div>
@@ -335,11 +335,12 @@ function enterDragMode(idx: number) {
   draggedIdx.value = idx;
   gamepad.vibrate("medium");
   dragInputLockId = focusNav.acquireInputLock();
+  const bypass = { bypassInputLock: true };
   dragUnsubs.push(
-    gamepad.onButton(GamepadButton.DPadUp, moveDraggedUp),
-    gamepad.onButton(GamepadButton.DPadDown, moveDraggedDown),
-    gamepad.onButton(GamepadButton.South, exitDragMode),
-    gamepad.onButton(GamepadButton.East, exitDragMode),
+    gamepad.onButton(GamepadButton.DPadUp, moveDraggedUp, bypass),
+    gamepad.onButton(GamepadButton.DPadDown, moveDraggedDown, bypass),
+    gamepad.onButton(GamepadButton.South, exitDragMode, bypass),
+    gamepad.onButton(GamepadButton.East, exitDragMode, bypass),
   );
 }
 
@@ -385,7 +386,9 @@ onUnmounted(() => {
 // C6 fix: allow navigating to game detail from download item
 const router = useRouter();
 function navigateToGame(gameId: string) {
-  router.push(`/bigpicture/library/${gameId}`);
+  const target = `/bigpicture/library/${gameId}`;
+  focusNav.setRouteState("backTo", "/bigpicture/downloads", target);
+  router.push(target);
 }
 
 async function togglePause() {

@@ -36,6 +36,6 @@ serde = "1.0.228"
 serde_json = "1.0"
 serde_with = "3.15.0"
 tauri = "*"
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["sync", "time", "macros"] }
 url = "2.5.7"
 utils = { path = "../utils", version = "0.1.0" }

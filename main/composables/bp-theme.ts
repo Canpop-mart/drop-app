@@ -9,6 +9,7 @@
  */
 
 import { ref, computed, watchEffect } from "vue";
+import { devLog } from "./dev-mode";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -187,6 +188,7 @@ export function useBpmTheme() {
 
     setTheme(id: ThemeId) {
       if (!themeMap.has(id)) return;
+      devLog("theme", `setTheme ${activeThemeId.value} -> ${id}`);
       activeThemeId.value = id;
       if (typeof localStorage !== "undefined") {
         localStorage.setItem("bpmTheme", id);
@@ -194,6 +196,7 @@ export function useBpmTheme() {
     },
 
     setMode(mode: ThemeMode) {
+      devLog("theme", `setMode ${activeMode.value} -> ${mode}`);
       activeMode.value = mode;
       if (typeof localStorage !== "undefined") {
         localStorage.setItem("bpmThemeMode", mode);
@@ -202,6 +205,7 @@ export function useBpmTheme() {
 
     toggleMode() {
       const next: ThemeMode = activeMode.value === "dark" ? "light" : "dark";
+      devLog("theme", `toggleMode ${activeMode.value} -> ${next}`);
       activeMode.value = next;
       if (typeof localStorage !== "undefined") {
         localStorage.setItem("bpmThemeMode", next);

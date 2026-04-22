@@ -25,23 +25,78 @@
     <!-- Debug overlay (toggle with Select button) -->
     <div
       v-if="debugVisible"
-      class="fixed bottom-14 right-4 w-[32rem] max-h-80 overflow-y-auto bg-black/90 border border-zinc-700 rounded-lg p-3 z-[999] font-mono text-[11px] leading-tight"
+      class="fixed bottom-14 right-4 w-[36rem] bg-black/90 border border-zinc-700 rounded-lg z-[999] font-mono text-[11px] leading-tight flex flex-col"
+      style="max-height: 32rem"
     >
-      <div class="flex items-center justify-between mb-2">
-        <span class="text-green-400 font-bold">BPM Debug Console</span>
+      <!-- Header: title + count + close -->
+      <div class="flex items-center justify-between px-3 pt-2 pb-1 shrink-0">
         <div class="flex items-center gap-2">
-          <button
-            class="px-2 py-0.5 text-[10px] bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded"
-            @click="exportDebugLog"
-          >
-            Export Log
-          </button>
-          <button class="text-zinc-500 hover:text-zinc-300" @click="debugVisible = false">✕</button>
+          <span class="text-green-400 font-bold">BPM Debug Console</span>
+          <span class="text-zinc-500 text-[10px]">
+            {{ filteredCount }} / {{ rawBuffer.length }}{{ rawBuffer.length === MAX_DEBUG ? "+" : "" }}
+            <span v-if="debugPaused" class="text-yellow-400 ml-1">· PAUSED</span>
+            <span v-else-if="!autoTail" class="text-amber-400 ml-1">· scrolled</span>
+          </span>
         </div>
+        <button class="text-zinc-500 hover:text-zinc-300" @click="debugVisible = false">✕</button>
       </div>
-      <div v-if="exportMessage" class="text-green-400 text-[10px] mb-1">{{ exportMessage }}</div>
-      <div v-for="(msg, i) in debugMessages" :key="i" :class="msg.color">
-        {{ msg.text }}
+
+      <!-- Control row: pause / clear / filter / tail / export -->
+      <div class="flex items-center gap-1 px-3 pb-1 shrink-0">
+        <button
+          class="px-2 py-0.5 text-[10px] rounded transition-colors"
+          :class="debugPaused ? 'bg-yellow-600 hover:bg-yellow-500 text-white' : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'"
+          @click="debugPaused = !debugPaused"
+        >
+          {{ debugPaused ? "Resume" : "Pause" }}
+        </button>
+        <button
+          class="px-2 py-0.5 text-[10px] bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded"
+          @click="clearDebug"
+        >
+          Clear
+        </button>
+        <button
+          class="px-2 py-0.5 text-[10px] rounded transition-colors"
+          :class="autoTail ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'"
+          @click="toggleAutoTail"
+        >
+          Tail
+        </button>
+        <input
+          v-model="debugFilter"
+          type="text"
+          placeholder="filter (substring or DEV:CAT)"
+          class="flex-1 min-w-0 px-2 py-0.5 text-[10px] bg-zinc-900 border border-zinc-700 text-zinc-200 rounded focus:outline-none focus:border-zinc-500"
+        />
+        <button
+          class="px-2 py-0.5 text-[10px] bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded"
+          @click="exportDebugLog"
+        >
+          Export
+        </button>
+      </div>
+
+      <div v-if="exportMessage" class="px-3 text-green-400 text-[10px] shrink-0">{{ exportMessage }}</div>
+
+      <!-- Scrollable message list: capped for DOM perf; rawBuffer keeps the rest. -->
+      <div
+        ref="debugScrollEl"
+        class="flex-1 overflow-y-auto px-3 pb-2"
+        @scroll="onDebugScroll"
+      >
+        <div v-if="visibleMessages.length === 0" class="text-zinc-600 italic text-[10px] py-1">
+          {{ debugFilter ? "No matches for filter." : "No messages yet — enable dev mode in Settings → Developer." }}
+        </div>
+        <div
+          v-if="truncatedByRenderCap"
+          class="text-zinc-500 italic text-[10px] pb-1 border-b border-zinc-800 mb-1"
+        >
+          Showing last {{ RENDER_CAP }} of {{ filteredCount }} matches — use filter or Export to see the rest.
+        </div>
+        <div v-for="(msg, i) in visibleMessages" :key="msg.id" :class="msg.color">
+          {{ msg.text }}
+        </div>
       </div>
     </div>
   </div>
@@ -73,31 +128,130 @@ const { reducedMotion } = useReducedMotion();
 useUiZoom();
 
 // ── On-screen debug overlay ─────────────────────────────────────────────
-// Hidden by default — toggle with Select+Start on gamepad
+// Hidden by default — toggle with Select button on gamepad.
+//
+// Two-tier buffering:
+//   rawBuffer — up to MAX_DEBUG entries kept in memory (huge ring, ~5000).
+//               Export dumps this in full, filter searches this.
+//   visibleMessages — last RENDER_CAP entries of the filtered view that
+//               actually render in the DOM. Capped to keep Chromium happy
+//               on the Deck's iGPU when dev mode firehoses thousands of
+//               messages per minute.
+//
+// Pause snapshots rawBuffer at the moment Pause is pressed so the user
+// can study the output without it scrolling out from under them.
+// Auto-tail scrolls to the newest line; disabled automatically if the
+// user scrolls up to read history, re-enabled with the Tail button.
 const debugVisible = ref(false);
-const debugMessages = ref<{ text: string; color: string }[]>([]);
-const MAX_DEBUG = 80;
+const debugPaused = ref(false);
+const debugFilter = ref("");
+const autoTail = ref(true);
+
+type DebugMsg = { id: number; text: string; color: string };
+const rawBuffer = ref<DebugMsg[]>([]);
+// When paused, we render this snapshot instead of the live buffer.
+const pausedSnapshot = ref<DebugMsg[] | null>(null);
+const MAX_DEBUG = 5000;
+const RENDER_CAP = 500;
+let _msgIdCounter = 0;
 
 function debugLog(msg: string, level: "info" | "warn" | "error" = "info") {
   const colors = { info: "text-zinc-300", warn: "text-yellow-400", error: "text-red-400" };
   const ts = new Date().toLocaleTimeString("en", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  debugMessages.value.push({ text: `[${ts}] ${msg}`, color: colors[level] });
-  if (debugMessages.value.length > MAX_DEBUG) debugMessages.value.shift();
+  rawBuffer.value.push({
+    id: ++_msgIdCounter,
+    text: `[${ts}] ${msg}`,
+    color: colors[level],
+  });
+  if (rawBuffer.value.length > MAX_DEBUG) rawBuffer.value.shift();
 }
+
+/**
+ * The source list the UI actually filters / displays.
+ * When paused, we freeze on the snapshot so scroll position stays stable.
+ */
+const sourceList = computed<DebugMsg[]>(() =>
+  debugPaused.value && pausedSnapshot.value ? pausedSnapshot.value : rawBuffer.value,
+);
+
+/** Apply the filter string as a case-insensitive substring match. */
+const filtered = computed<DebugMsg[]>(() => {
+  const q = debugFilter.value.trim().toLowerCase();
+  if (!q) return sourceList.value;
+  return sourceList.value.filter((m) => m.text.toLowerCase().includes(q));
+});
+
+const filteredCount = computed(() => filtered.value.length);
+/** The tail we actually render — capped for DOM perf. */
+const visibleMessages = computed<DebugMsg[]>(() =>
+  filtered.value.length > RENDER_CAP ? filtered.value.slice(-RENDER_CAP) : filtered.value,
+);
+const truncatedByRenderCap = computed(() => filtered.value.length > RENDER_CAP);
+
+watch(debugPaused, (paused) => {
+  // Take / clear the snapshot when toggling pause so resuming shows live data.
+  pausedSnapshot.value = paused ? [...rawBuffer.value] : null;
+});
+
+/** Clear the buffer (and the pause snapshot if one is active). */
+function clearDebug() {
+  rawBuffer.value = [];
+  pausedSnapshot.value = null;
+  exportMessage.value = "Cleared.";
+  setTimeout(() => { exportMessage.value = ""; }, 1500);
+}
+
+// Auto-scroll / tail handling ────────────────────────────────────────────
+const debugScrollEl = ref<HTMLElement | null>(null);
+
+function scrollToBottom() {
+  const el = debugScrollEl.value;
+  if (!el) return;
+  el.scrollTop = el.scrollHeight;
+}
+
+function toggleAutoTail() {
+  autoTail.value = !autoTail.value;
+  if (autoTail.value) nextTick(scrollToBottom);
+}
+
+/**
+ * If the user scrolls up to read history, auto-disable tail mode so we
+ * don't keep yanking them back to the bottom on every new message. If
+ * they scroll back to the bottom on their own, re-enable it.
+ */
+function onDebugScroll() {
+  const el = debugScrollEl.value;
+  if (!el) return;
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 16;
+  if (autoTail.value && !atBottom) autoTail.value = false;
+  else if (!autoTail.value && atBottom) autoTail.value = true;
+}
+
+// Tail: whenever visibleMessages changes and we're in tail mode, scroll down.
+watch(visibleMessages, () => {
+  if (autoTail.value && !debugPaused.value) nextTick(scrollToBottom);
+});
+
+watch(debugVisible, (v) => {
+  if (v && autoTail.value) nextTick(scrollToBottom);
+});
 
 const exportMessage = ref("");
 
 /**
  * Export debug log — writes to a file in the app's data dir AND copies
  * to clipboard so the user can paste it after exiting Gaming Mode.
+ * Always exports the FULL rawBuffer (not the filtered view) so the
+ * dumped log isn't accidentally narrowed by a stale filter.
  */
 async function exportDebugLog() {
-  const logText = debugMessages.value.map((m) => m.text).join("\n");
+  const logText = rawBuffer.value.map((m) => m.text).join("\n");
 
   // Try clipboard first
   try {
     await navigator.clipboard.writeText(logText);
-    exportMessage.value = "Copied to clipboard!";
+    exportMessage.value = `Copied ${rawBuffer.value.length} lines to clipboard!`;
   } catch {
     exportMessage.value = "Clipboard unavailable — downloading file...";
   }
@@ -112,7 +266,7 @@ async function exportDebugLog() {
     a.click();
     URL.revokeObjectURL(url);
     if (!exportMessage.value.includes("Copied")) {
-      exportMessage.value = "Log file downloaded!";
+      exportMessage.value = `Downloaded ${rawBuffer.value.length} lines.`;
     }
   } catch (e) {
     console.error("[BPM:LAYOUT] Failed to export log:", e);
@@ -131,15 +285,46 @@ const _origLog = console.log;
 const _origWarn = console.warn;
 const _origError = console.error;
 
+/**
+ * Single regex covering every tag the overlay wants to capture.
+ * Used as a CHEAP pre-filter before doing any stringification — on a hot
+ * page (lots of 3rd-party console output) avoiding a JSON.stringify per
+ * non-string arg per log is a real perf win on the Deck.
+ */
+const DEBUG_TAG_PATTERN = /\[(BPM:|useGame|FOCUS\]|GAMEPAD\]|ERROR|DEV:)/;
+
+function safeStringify(v: unknown): string {
+  // JSON.stringify throws on cyclic structures; guard so an intercepted
+  // log never takes down the interceptor and leaves the overlay blind.
+  try {
+    const s = JSON.stringify(v);
+    return s ? s.slice(0, 200) : String(v);
+  } catch {
+    return "[unserialisable]";
+  }
+}
+
 function interceptConsole(origFn: Function, level: "info" | "warn" | "error") {
   return function (...args: any[]) {
     origFn.apply(console, args);
-    const text = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a)?.slice(0, 200))).join(" ");
-    if (text.includes("[BPM:") || text.includes("[useGame") || text.includes("[FOCUS]") || text.includes("[GAMEPAD]") || text.includes("[ERROR")) {
-      debugLog(text.slice(0, 300), level);
-      // Auto-show overlay on errors
-      if (level === "error") debugVisible.value = true;
+
+    // Fast path: tags are always strings, so if no string arg contains
+    // one of the sentinels, bail before doing any stringification.
+    let matched = false;
+    for (const a of args) {
+      if (typeof a === "string" && DEBUG_TAG_PATTERN.test(a)) {
+        matched = true;
+        break;
+      }
     }
+    if (!matched) return;
+
+    const text = args
+      .map((a) => (typeof a === "string" ? a : safeStringify(a)))
+      .join(" ");
+    debugLog(text.slice(0, 300), level);
+    // Auto-show overlay on errors
+    if (level === "error") debugVisible.value = true;
   };
 }
 
@@ -206,7 +391,12 @@ watch(
 );
 
 onUnmounted(() => {
-  focusNav.enabled.value = false;
+  // Deliberately DO NOT set `focusNav.enabled.value = false` here.
+  // Layout switches (e.g. /bigpicture/* → /welcome/* for the tutorial) mount
+  // the new layout BEFORE unmounting this one, so disabling on unmount races
+  // the new layout's `= true` and leaves the D-pad inert.
+  // focus-nav is disabled centrally by `bigPicture.exit() → focusNav.destroy()`
+  // which fires only on a real BPM exit.
   for (const unsub of _unsubs) unsub();
   // Restore original console methods
   console.log = _origLog;

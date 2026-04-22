@@ -45,10 +45,16 @@ pub async fn download_game_chunk(
     // How much we're writing to disk
     disk_progress: &ProgressHandle,
 ) -> Result<bool, ApplicationDownloadError> {
+    // Reset the per-chunk progress counters at the start of every call.
+    // The outer caller retries this function on failure, and each retry
+    // re-downloads the chunk from byte 0 — without this reset, bytes
+    // from the previous attempt remain in the counter and subsequent
+    // .add() calls stack on top, producing "27/22 GB" style overshoots.
+    download_progress.set(0);
+    disk_progress.set(0);
+
     // If we're paused
     if control_flag.get() == DownloadThreadControlFlag::Stop {
-        download_progress.set(0);
-        disk_progress.set(0);
         return Ok(false);
     }
 

@@ -111,16 +111,24 @@ function wireGamepad() {
   unwireGamepad();
   // Direct mapping — A=confirm, B=cancel. No D-pad focus.
   unsubs.push(
-    gamepad.onButton(GamepadButton.South, () => {
-      if (!props.visible) return;
-      handleConfirm();
-    }),
+    gamepad.onButton(
+      GamepadButton.South,
+      () => {
+        if (!props.visible) return;
+        handleConfirm();
+      },
+      { bypassInputLock: true },
+    ),
   );
   unsubs.push(
-    gamepad.onButton(GamepadButton.East, () => {
-      if (!props.visible) return;
-      handleCancel();
-    }),
+    gamepad.onButton(
+      GamepadButton.East,
+      () => {
+        if (!props.visible) return;
+        handleCancel();
+      },
+      { bypassInputLock: true },
+    ),
   );
 }
 

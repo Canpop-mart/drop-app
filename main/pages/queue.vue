@@ -65,7 +65,7 @@
               <span
                 class="mt-2 inline-flex items-center gap-x-1 text-zinc-400 text-sm font-display"
                 ><span class="text-zinc-300"
-                  >{{ formatKilobytes(element.dl_current / 1000) }}B</span
+                  >{{ formatKilobytes(Math.min(element.dl_current, element.dl_max) / 1000) }}B</span
                 >
                 /
                 <span class=""
@@ -91,7 +91,7 @@
                 v-if="element.dl_max !== element.disk_max"
                 class="mt-2 inline-flex items-center gap-x-1 text-zinc-400 text-sm font-display"
                 ><span class="text-zinc-300"
-                  >{{ formatKilobytes(element.disk_current / 1000) }}B</span
+                  >{{ formatKilobytes(Math.min(element.disk_current, element.disk_max) / 1000) }}B</span
                 >
                 /
                 <span class=""

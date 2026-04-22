@@ -170,8 +170,10 @@ impl GameDownloadAgent {
             return Err(ApplicationDownloadError::NotInitialized);
         }
 
-        self.control_flag.set(DownloadThreadControlFlag::Go);
-
+        // The download manager sets the flag to Go before spawning the
+        // thread that calls us. Setting it again here would clobber any
+        // pause the user issued in the brief window between spawn and the
+        // first chunk check.
         Ok(())
     }
 

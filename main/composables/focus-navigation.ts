@@ -1,6 +1,12 @@
-import { GamepadButton, useGamepad, type ButtonCallback } from "./gamepad";
+import {
+  GamepadButton,
+  setGlobalInputLock,
+  useGamepad,
+  type ButtonCallback,
+} from "./gamepad";
 import { useBpAudio, tryGamepadAudioUnlock } from "./bp-audio";
 import { useDeckMode } from "./deck-mode";
+import { devLog } from "./dev-mode";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -10,6 +16,13 @@ export interface FocusableElement {
   onSelect?: () => void;
   onContext?: () => void;
   onFocus?: () => void;
+  /**
+   * If set, holding A for longer than A_HOLD_MS fires this instead of
+   * onSelect. A quick tap still fires onSelect normally (on release).
+   * Used by the store's bulk-select mode so a long A-press enters select
+   * mode on the focused tile without opening it as a normal tap would.
+   */
+  onHold?: () => void;
 }
 
 interface FocusGroup {
@@ -315,6 +328,20 @@ function removeRingFocus(el: HTMLElement) {
 }
 
 function applyFocus(element: FocusableElement | null, fromGroupCycle = false) {
+  const prev = currentFocused.value;
+  if (prev !== element) {
+    const fromDesc = prev
+      ? `${prev.group}:${prev.el.tagName.toLowerCase()}${prev.el.id ? "#" + prev.el.id : ""}`
+      : "none";
+    const toDesc = element
+      ? `${element.group}:${element.el.tagName.toLowerCase()}${element.el.id ? "#" + element.el.id : ""}`
+      : "none";
+    devLog(
+      "focus",
+      `applyFocus ${fromDesc} -> ${toDesc}${fromGroupCycle ? " (group cycle)" : ""}`,
+    );
+  }
+
   // Remove from previous
   if (currentFocused.value) {
     removeRingFocus(currentFocused.value.el);
@@ -508,6 +535,11 @@ function cycleGroup(forward: boolean) {
   let idx = groupOrder.value.indexOf(currentGroup.value);
   if (idx === -1) idx = 0;
 
+  devLog(
+    "focus",
+    `cycleGroup ${forward ? "forward" : "backward"} from "${currentGroup.value}" (order=[${groupOrder.value.join(",")}])`,
+  );
+
   // Try each group in order, skipping empty ones
   for (let i = 1; i < groupOrder.value.length; i++) {
     const nextIdx = forward
@@ -590,6 +622,21 @@ function stopLeftStickRepeat() {
   }
 }
 
+// ── A-button hold state (module-level so destroy() can clean it up) ──────────
+
+let holdTimer: ReturnType<typeof setTimeout> | null = null;
+let holdFired = false;
+let holdTarget: FocusableElement | null = null;
+
+function clearHold() {
+  if (holdTimer) {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+  }
+  holdFired = false;
+  holdTarget = null;
+}
+
 // ── Composable ───────────────────────────────────────────────────────────────
 
 let gamepadWired = false;
@@ -612,6 +659,7 @@ export function useFocusNavigation() {
       onSelect?: () => void;
       onContext?: () => void;
       onFocus?: () => void;
+      onHold?: () => void;
     },
   ) {
     if (!groups.has(group)) {
@@ -624,6 +672,7 @@ export function useFocusNavigation() {
       onSelect: options?.onSelect,
       onContext: options?.onContext,
       onFocus: options?.onFocus,
+      onHold: options?.onHold,
     };
 
     groups.get(group)!.elements.add(focusable);
@@ -683,6 +732,13 @@ export function useFocusNavigation() {
   function acquireInputLock(): number {
     _inputLockId++;
     inputLocked.value = true;
+    devLog("focus", `acquireInputLock id=${_inputLockId}`);
+    // Also raise the global lock on the gamepad module so that
+    // page-level `gamepad.onButton` subscribers (not just focus-nav's
+    // own handlers) are silenced.  Modal components that wire their
+    // own handlers while holding the lock must opt in with
+    // `{ bypassInputLock: true }` to keep receiving events.
+    setGlobalInputLock(true);
     return _inputLockId;
   }
 
@@ -692,7 +748,14 @@ export function useFocusNavigation() {
    */
   function releaseInputLock(id: number) {
     if (id === _inputLockId) {
+      devLog("focus", `releaseInputLock id=${id}`);
       inputLocked.value = false;
+      setGlobalInputLock(false);
+    } else {
+      devLog(
+        "focus",
+        `releaseInputLock id=${id} SKIPPED (current owner=${_inputLockId})`,
+      );
     }
   }
 
@@ -704,6 +767,7 @@ export function useFocusNavigation() {
     // Stop repeat timers
     stopRepeat();
     stopLeftStickRepeat();
+    clearHold();
     leftStickDirection = null;
 
     // Stop stick polling
@@ -726,6 +790,7 @@ export function useFocusNavigation() {
     currentGroup.value = "";
     enabled.value = false;
     inputLocked.value = false;
+    setGlobalInputLock(false);
     groupOrder.value = [];
 
     // Allow re-wiring on next BPM enter
@@ -784,6 +849,7 @@ export function useFocusNavigation() {
    * Also focuses the first element in that group.
    */
   function restrictFocus(groupName: string) {
+    devLog("focus", `restrictFocus -> "${groupName}"`);
     focusRestriction.value = groupName;
     nextTick(() => focusGroup(groupName));
   }
@@ -792,6 +858,10 @@ export function useFocusNavigation() {
    * Release the focus restriction and optionally refocus a group.
    */
   function unrestrictFocus(refocusGroup?: string) {
+    devLog(
+      "focus",
+      `unrestrictFocus${refocusGroup ? ` (refocus -> "${refocusGroup}")` : ""}`,
+    );
     focusRestriction.value = null;
     if (refocusGroup) {
       nextTick(() => focusGroup(refocusGroup));
@@ -863,6 +933,29 @@ function wireGamepad() {
   // A = Select / Confirm (with press feedback — Phase 1d)
   const PRESS_CLASS = "bp-pressed";
   const PRESS_DURATION = 80; // ms
+  const A_HOLD_MS = 450; // threshold for long-press
+
+  // Hold-press state lives at module scope (see declarations near the top)
+  // so destroy() can clear any pending timer on BPM exit.
+
+  function fireSelect(focused: FocusableElement) {
+    const el = focused.el;
+    if (focused.onSelect) {
+      console.log("[FOCUS] A — calling onSelect for:", el?.tagName, el?.textContent?.slice(0, 30));
+      useBpAudio().play("select");
+      gamepad.vibrate("medium");
+      try {
+        focused.onSelect();
+      } catch (e) {
+        console.error("[FOCUS] onSelect THREW:", e);
+      }
+    } else if (el) {
+      console.log("[FOCUS] A — clicking element:", el.tagName, el.textContent?.slice(0, 30));
+      useBpAudio().play("select");
+      gamepad.vibrate("medium");
+      el.click();
+    }
+  }
 
   gamepadUnsubs.push(
     gamepad.onButton(GamepadButton.South, () => {
@@ -872,27 +965,54 @@ function wireGamepad() {
       // Try to unlock audio on gamepad button press (Steam Deck fix)
       tryGamepadAudioUnlock();
 
-      const el = currentFocused.value?.el;
+      const focused = currentFocused.value;
+      const el = focused?.el;
       if (el) {
         // Apply press feedback: brief scale-down animation
         el.classList.add(PRESS_CLASS);
         setTimeout(() => el.classList.remove(PRESS_CLASS), PRESS_DURATION);
       }
 
-      if (currentFocused.value?.onSelect) {
-        console.log("[FOCUS] A pressed — calling onSelect for:", el?.tagName, el?.textContent?.slice(0, 30));
-        useBpAudio().play("select");
-        gamepad.vibrate("medium");
-        try {
-          currentFocused.value.onSelect();
-        } catch (e) {
-          console.error("[FOCUS] onSelect THREW:", e);
-        }
-      } else if (el) {
-        console.log("[FOCUS] A pressed — clicking element:", el.tagName, el.textContent?.slice(0, 30));
-        useBpAudio().play("select");
-        gamepad.vibrate("medium");
-        el.click();
+      // If this element supports hold, defer onSelect until release and
+      // arm a hold timer. Tap (release < threshold) → onSelect. Hold
+      // (timer fires first) → onHold, release is then a no-op.
+      if (focused?.onHold) {
+        clearHold();
+        holdTarget = focused;
+        holdFired = false;
+        holdTimer = setTimeout(() => {
+          holdFired = true;
+          holdTimer = null;
+          console.log("[FOCUS] A held — calling onHold for:", el?.tagName, el?.textContent?.slice(0, 30));
+          useBpAudio().play("select");
+          gamepad.vibrate("heavy");
+          try {
+            holdTarget?.onHold?.();
+          } catch (e) {
+            console.error("[FOCUS] onHold THREW:", e);
+          }
+        }, A_HOLD_MS);
+        return;
+      }
+
+      // No hold registered — fire onSelect immediately as before.
+      if (focused) fireSelect(focused);
+    }),
+  );
+
+  gamepadUnsubs.push(
+    gamepad.onButtonRelease(GamepadButton.South, () => {
+      // Only relevant if we armed a hold on press.
+      if (!holdTarget) return;
+      const target = holdTarget;
+      const fired = holdFired;
+      clearHold();
+      // If the hold timer already fired, the release is just the
+      // release of a completed long-press — consume it.
+      if (fired) return;
+      // Otherwise it was a tap: fire the normal onSelect on release.
+      if (enabled.value && !inputLocked.value) {
+        fireSelect(target);
       }
     }),
   );
@@ -918,6 +1038,15 @@ function wireGamepad() {
       // L1 fix: use router's own history tracking instead of unreliable window.history.length
       const router = useRouter();
       const path = router.currentRoute.value.path;
+
+      // Skip default back-nav for non-/bigpicture routes (wizard, help, etc.).
+      // Those pages subscribe their own East handler and navigate correctly;
+      // our "chop off trailing segment" logic would push garbage like
+      // /bigpicture/welcome for /welcome/navigation.
+      if (!path.startsWith("/bigpicture/")) {
+        return;
+      }
+
       const segments = path
         .replace("/bigpicture/", "")
         .split("/")
@@ -926,6 +1055,21 @@ function wireGamepad() {
       if (segments.length > 1) {
         // Save focus snapshot before navigating back (Phase 1b)
         _saveFocusSnapshot(path);
+
+        // Prefer an explicit `backTo` path stashed by whoever navigated here.
+        // This lets e.g. the store page send the user to /bigpicture/library/:id
+        // and still get B-back to /bigpicture/store instead of /bigpicture/library.
+        // Consume-on-use: `backTo` is cleared after reading, so a second visit
+        // without a new set-call falls through to the parent-chop default.
+        const bag = routeStateStore.get(path);
+        const backTo = bag?.get("backTo") as string | undefined;
+        if (backTo) {
+          bag?.delete("backTo");
+          useBpAudio().play("back");
+          router.push(backTo);
+          return;
+        }
+
         // On a deep page (e.g. /bigpicture/library/xyz) — navigate to parent
         // Profile pages are reached from community, so go back there
         const parentPath =
@@ -980,30 +1124,40 @@ function wireGamepad() {
   // Global trigger-based page scroll. Finds the nearest scrollable ancestor
   // (or the layout's [data-bp-scroll] container) and scrolls by one viewport.
 
+  function isElementScrollable(el: HTMLElement): boolean {
+    if (el.scrollHeight <= el.clientHeight) return false;
+    const style = window.getComputedStyle(el);
+    // `overflow-y` must actually clip and allow user scroll. A flex parent
+    // whose children overflow visibly has scrollHeight > clientHeight but
+    // scrollBy() is a no-op on it — we'd pick it and nothing would scroll.
+    return (
+      style.overflowY === "auto" ||
+      style.overflowY === "scroll" ||
+      style.overflowY === "overlay"
+    );
+  }
+
   function findScrollContainer(): HTMLElement | null {
-    // Prefer a [data-bp-scroll] ancestor of the focused element — the
-    // page author tagged these as the authoritative scroll containers.
+    // Walk up from the focused element and pick the innermost actually-
+    // scrollable ancestor. The data-bp-scroll attribute is a page-author
+    // hint but we don't require it — many BPM pages have their own
+    // overflow-y-auto scroller that isn't tagged, and preferring the
+    // layout's outer tagged container means scrollBy() runs on the wrong
+    // element (the outer has no overflow because the inner fills it).
     if (currentFocused.value?.el) {
       let parent = currentFocused.value.el.parentElement;
       while (parent) {
+        if (isElementScrollable(parent)) return parent;
         if (parent.hasAttribute("data-bp-scroll")) return parent;
         parent = parent.parentElement;
       }
-      // No tagged ancestor; fall back to any scrollable ancestor.
-      parent = currentFocused.value.el.parentElement;
-      while (parent) {
-        if (parent.scrollHeight > parent.clientHeight) return parent;
-        parent = parent.parentElement;
-      }
     }
-    // No focused element: pick the deepest scrollable [data-bp-scroll].
-    const candidates = document.querySelectorAll<HTMLElement>("[data-bp-scroll]");
-    for (let i = candidates.length - 1; i >= 0; i--) {
-      if (candidates[i].scrollHeight > candidates[i].clientHeight) {
-        return candidates[i];
-      }
+    // No focused element: pick the deepest actually-scrollable element.
+    const tagged = document.querySelectorAll<HTMLElement>("[data-bp-scroll]");
+    for (let i = tagged.length - 1; i >= 0; i--) {
+      if (isElementScrollable(tagged[i])) return tagged[i];
     }
-    return candidates.length > 0 ? candidates[candidates.length - 1] : null;
+    return tagged.length > 0 ? tagged[tagged.length - 1] : null;
   }
 
   gamepadUnsubs.push(

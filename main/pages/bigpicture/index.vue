@@ -1909,9 +1909,19 @@ const queueState = useQueueState();
 const queue = computed(() => queueState.value?.queue ?? []);
 const activeDownloads = computed(() => queue.value.filter((item) => item.status !== "Completed"));
 
-// Computed properties
-const spotlightGame = computed(() => recentGames.value[0] ?? null);
-const otherGames = computed(() => recentGames.value.slice(1));
+// Spotlight: on mount we try to land on a random game the user has marked
+// as a favorite (via their profile showcase). If the user has no
+// favorites, or none of them are in the recently-played list (so we have
+// no GameStatus for them), we fall back to the most-recent entry.
+const spotlightOverride = ref<RecentGameEntry | null>(null);
+const spotlightGame = computed(
+  () => spotlightOverride.value ?? recentGames.value[0] ?? null,
+);
+const otherGames = computed(() => {
+  const spotlightId = spotlightGame.value?.game.id;
+  if (!spotlightId) return recentGames.value.slice(1);
+  return recentGames.value.filter((e) => e.game.id !== spotlightId);
+});
 const installedGames = computed(() => recentGames.value.filter((e) => e.status.installed));
 
 function prefetchGame(gameId: string) {
@@ -1920,7 +1930,9 @@ function prefetchGame(gameId: string) {
 
 function navigateToGame(gameId: string) {
   focusNav.saveFocusSnapshot(route.path);
-  router.push(`/bigpicture/library/${gameId}`).catch((e: any) => {
+  const target = `/bigpicture/library/${gameId}`;
+  focusNav.setRouteState("backTo", route.path, target);
+  router.push(target).catch((e: any) => {
     console.error(`[BPM:HOME] Navigation FAILED for ${gameId}:`, e);
   });
 }
@@ -2007,10 +2019,91 @@ async function loadRecentGames() {
 
 console.log("[BPM:HOME] Active theme:", theme.value);
 
+async function pickRandomFavoriteSpotlight() {
+  console.log(`[BPM:HOME] Spotlight: pickRandomFavoriteSpotlight() called, recentGames=${recentGames.value.length}`);
+  if (!recentGames.value.length) {
+    console.log("[BPM:HOME] Spotlight: no recent games, skipping randomize");
+    return;
+  }
+
+  const topId = recentGames.value[0]?.game.id;
+
+  // First preference: a random game the user has favorited that's in the
+  // recent list (so we have a GameStatus for the installed/playtime UI).
+  // Also: if the *only* matching favorite is the top-of-list game, there's
+  // no visible change vs. no-override, so we fall through to a random
+  // non-top pick rather than "select" the same game the user was already
+  // going to see.
+  try {
+    const userId = appState.value?.user?.id;
+    if (userId) {
+      const url = serverUrl(`api/v1/user/${userId}/showcase`);
+      const resp = await fetch(url);
+      if (resp.ok) {
+        const data: { items?: Array<{ type: string; gameId: string | null }> } = await resp.json();
+        const favoriteIds = new Set(
+          (data.items ?? [])
+            .filter((i) => i.type === "FavoriteGame" && i.gameId)
+            .map((i) => i.gameId as string),
+        );
+        console.log(
+          `[BPM:HOME] Spotlight: found ${favoriteIds.size} favorite(s), ${recentGames.value.length} recent game(s)`,
+        );
+        const favCandidates = recentGames.value.filter((e) => favoriteIds.has(e.game.id));
+        // Prefer favorites that aren't already the most-recent entry.
+        const nonTopFavs = favCandidates.filter((e) => e.game.id !== topId);
+        const pool = nonTopFavs.length > 0 ? nonTopFavs : favCandidates;
+        if (pool.length) {
+          const pick = pool[Math.floor(Math.random() * pool.length)];
+          spotlightOverride.value = pick;
+          console.log(`[BPM:HOME] Spotlight: picked favorite → ${pick.game.mName}`);
+          return;
+        }
+        console.log("[BPM:HOME] Spotlight: no favorited games in recent list, falling back to random recent");
+      } else {
+        console.warn("[BPM:HOME] Spotlight: showcase fetch failed:", resp.status);
+      }
+    } else {
+      console.log("[BPM:HOME] Spotlight: no user id, falling back to random recent");
+    }
+  } catch (e) {
+    console.warn("[BPM:HOME] Spotlight: showcase fetch error, falling back to random recent:", e);
+  }
+
+  // Fallback: random recent game, excluding index 0 so the spotlight
+  // actually changes. Math.random() * length could land on 0, which would
+  // be indistinguishable from "no override" — the user complained about
+  // this exact behaviour ("still just selects The Alters").
+  if (recentGames.value.length > 1) {
+    const idx = 1 + Math.floor(Math.random() * (recentGames.value.length - 1));
+    spotlightOverride.value = recentGames.value[idx];
+    console.log(`[BPM:HOME] Spotlight: picked random recent (idx=${idx}) → ${recentGames.value[idx].game.mName}`);
+  } else {
+    console.log("[BPM:HOME] Spotlight: only one recent game, nothing to randomize");
+  }
+}
+
 onMounted(async () => {
+  console.log("[BPM:HOME] onMounted fired — loading recent games & randomising spotlight");
   await loadRecentGames();
+  // Fire-and-forget: if favorites resolve quickly the spotlight swaps to a
+  // random favorite; otherwise the default (most-recent) shows first.
+  pickRandomFavoriteSpotlight();
   if (!focusNav.restoreFocusSnapshot(route.path)) {
     focusNav.autoFocusContent("content");
   }
 });
+
+// If the page is kept alive by Nuxt (or the user navigates back into
+// /bigpicture without a fresh mount) the spotlight would stick. Watch the
+// route and re-randomise whenever the user re-enters home.
+watch(
+  () => route.path,
+  (to, from) => {
+    if (to === "/bigpicture" && from !== "/bigpicture") {
+      console.log("[BPM:HOME] Re-entered home page — re-randomising spotlight");
+      pickRandomFavoriteSpotlight();
+    }
+  },
+);
 </script>

@@ -318,6 +318,19 @@
               </svg>
               <span class="font-medium">CRT</span>
             </button>
+
+            <button
+              :ref="(el: any) => registerAction(el, { onSelect: openRaCheatsheet })"
+              class="inline-flex items-center gap-1.5 px-4 py-3 text-sm bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 rounded-xl transition-colors backdrop-blur-sm"
+              @click="openRaCheatsheet"
+              title="Controller shortcuts for RetroArch"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="size-4 text-emerald-400">
+                <rect x="2" y="8" width="20" height="10" rx="3" />
+                <path d="M7 13h2M15 13h2M12 11v4" />
+              </svg>
+              <span class="font-medium">Controls</span>
+            </button>
           </template>
 
           <!-- Stream status / stop button (when streaming is active) -->
@@ -766,7 +779,7 @@
           :key="rec.id"
           class="flex-shrink-0 cursor-pointer bp-focus-delegate"
           style="width: 9rem"
-          :ref="(el: any) => registerAction(el, { onSelect: () => $router.push(`/bigpicture/library/${rec.id}`) })"
+          :ref="(el: any) => registerAction(el, { onSelect: () => goToRecommendation(rec.id) })"
         >
           <div class="bp-focus-ring rounded-lg overflow-hidden transition-transform hover:scale-105" style="aspect-ratio: 3/4">
             <img v-if="rec.mCoverObjectId" :src="objectUrl(rec.mCoverObjectId)" class="w-full h-full object-cover" loading="lazy" />
@@ -791,6 +804,21 @@
       >
         {{ settingsToast }}
         <span class="text-xs opacity-70 ml-2">Applied on next launch</span>
+      </div>
+    </Transition>
+
+    <!-- Neutral info toast (e.g. "remote install requested") -->
+    <Transition
+      enter-active-class="transition-all duration-200"
+      leave-active-class="transition-all duration-300"
+      enter-from-class="opacity-0 translate-y-4"
+      leave-to-class="opacity-0 translate-y-4"
+    >
+      <div
+        v-if="infoToast"
+        class="fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] max-w-lg px-6 py-3 rounded-xl text-sm font-medium shadow-lg backdrop-blur-md bg-zinc-900/90 text-zinc-100 border border-zinc-700/60"
+      >
+        {{ infoToast }}
       </div>
     </Transition>
 
@@ -975,11 +1003,18 @@
       :conflicts="saveConflicts"
       @resolved="saveConflictVisible = false"
     />
+
+    <!-- RetroArch controller cheatsheet -->
+    <BpmRetroArchCheatsheet
+      :open="raCheatsheetOpen"
+      @close="closeRaCheatsheet"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import BpmSaveConflictDialog from "~/components/bigpicture/BpmSaveConflictDialog.vue";
+import BpmRetroArchCheatsheet from "~/components/bigpicture/BpmRetroArchCheatsheet.vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useListen } from "~/composables/useListen";
 import {
@@ -1198,8 +1233,12 @@ const otherDevices = computed(() => {
 });
 // Devices that have this game installed (can stream from)
 const streamableDevices = computed(() => otherDevices.value.filter((d) => d.hasGame === true));
-// Devices that do NOT have this game installed (can install on)
-const installableDevices = computed(() => otherDevices.value.filter((d) => d.hasGame !== true));
+// Devices that definitively do NOT have this game installed (can install on).
+// Strict `=== false` check — devices that haven't reported (`hasGame ===
+// undefined`) are treated as unknown and excluded from BOTH lists rather
+// than defaulted into the installable bucket, which previously caused
+// already-installed games to show an "Install on X" entry.
+const installableDevices = computed(() => otherDevices.value.filter((d) => d.hasGame === false));
 
 async function loadDevices() {
   try {
@@ -1279,8 +1318,10 @@ async function installOnDevice(device: ClientDevice) {
   console.log(`[BPM:STREAM] Remote install on device: ${device.name} (${device.id})`);
   try {
     await remoteInstall(gameId, device.id);
-    // Show confirmation using launchError (it's the only toast-like mechanism we have here)
-    launchError.value = `Install requested on ${device.name}. The download will start automatically when that device picks it up.`;
+    // Success: a short confirmation toast (not the Launch-Failed dialog).
+    showInfoToast(
+      `Install requested on ${device.name}. The download will start automatically when that device picks it up.`,
+    );
     console.log(`[BPM:STREAM] Remote install requested on ${device.name}`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -1294,13 +1335,14 @@ function wirePlayMenuGamepad() {
   const maxIdx = status.value?.type === "Installed"
     ? playMenuItemCount.value - 1
     : installMenuItemCount.value - 1;
+  const bypass = { bypassInputLock: true };
   _playMenuUnsubs.push(
     gamepad.onButton(GamepadButton.DPadUp, () => {
       if (playMenuOpen.value) playMenuFocus.value = Math.max(0, playMenuFocus.value - 1);
-    }),
+    }, bypass),
     gamepad.onButton(GamepadButton.DPadDown, () => {
       if (playMenuOpen.value) playMenuFocus.value = Math.min(maxIdx, playMenuFocus.value + 1);
-    }),
+    }, bypass),
     gamepad.onButton(GamepadButton.South, () => {
       if (playMenuOpen.value) {
         if (status.value?.type === "Installed") {
@@ -1309,8 +1351,8 @@ function wirePlayMenuGamepad() {
           selectInstallMenuAction(playMenuFocus.value);
         }
       }
-    }),
-    gamepad.onButton(GamepadButton.East, () => { if (playMenuOpen.value) closePlayMenu(); }),
+    }, bypass),
+    gamepad.onButton(GamepadButton.East, () => { if (playMenuOpen.value) closePlayMenu(); }, bypass),
   );
 }
 function unwirePlayMenuGamepad() {
@@ -1328,7 +1370,7 @@ let streamGuard = false;
  */
 async function streamGame(targetClientId?: string) {
   console.log("[BPM:STREAM] streamGame() called — requesting remote stream, target:", targetClientId ?? "any");
-  if (launchGuard || streamGuard) return;
+  if (streamGuard) return;
   streamGuard = true;
   isStreaming.value = true;
   streamingPhase.value = "requesting";
@@ -1594,6 +1636,19 @@ function showSettingsToast(msg: string) {
   toastTimer = setTimeout(() => { settingsToast.value = ""; }, 2000);
 }
 
+// Generic information toast — separate from settingsToast because that one
+// tacks on "Applied on next launch" which only makes sense for launch-config
+// changes. Used for remote-install acknowledgements and other neutral
+// confirmations that aren't errors but shouldn't block with a dialog.
+const infoToast = ref("");
+let infoToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showInfoToast(msg: string) {
+  infoToast.value = msg;
+  if (infoToastTimer) clearTimeout(infoToastTimer);
+  infoToastTimer = setTimeout(() => { infoToast.value = ""; }, 5000);
+}
+
 async function saveUserConfig() {
   const ver = version.value;
   if (!ver) return;
@@ -1776,11 +1831,13 @@ const _optionsSubs: (() => void)[] = [];
 function wireOptionsGamepad() {
   unwireOptionsGamepad();
 
+  const bypass = { bypassInputLock: true };
+
   _optionsSubs.push(
     gamepad.onButton(GamepadButton.DPadUp, () => {
       if (!showOptions.value) return;
       optionsFocusIdx.value = Math.max(0, optionsFocusIdx.value - 1);
-    }),
+    }, bypass),
   );
   _optionsSubs.push(
     gamepad.onButton(GamepadButton.DPadDown, () => {
@@ -1789,20 +1846,20 @@ function wireOptionsGamepad() {
         optionsMenuItems.value.length - 1,
         optionsFocusIdx.value + 1,
       );
-    }),
+    }, bypass),
   );
   _optionsSubs.push(
     gamepad.onButton(GamepadButton.South, () => {
       if (!showOptions.value) return;
       const item = optionsMenuItems.value[optionsFocusIdx.value];
       if (item) item.action();
-    }),
+    }, bypass),
   );
   _optionsSubs.push(
     gamepad.onButton(GamepadButton.East, () => {
       if (!showOptions.value) return;
       showOptions.value = false;
-    }),
+    }, bypass),
   );
 }
 
@@ -1888,15 +1945,16 @@ let shelfLockId = "";
 function wireShelfGamepad() {
   unwireShelfGamepad();
   const totalItems = shelvesData.shelves.value.length + 2; // shelves + Create button + Done button
+  const bypass = { bypassInputLock: true };
   _shelfSubs.push(
     gamepad.onButton(GamepadButton.DPadUp, () => {
       if (!showShelfPicker.value) return;
       shelfFocusIdx.value = Math.max(0, shelfFocusIdx.value - 1);
-    }),
+    }, bypass),
     gamepad.onButton(GamepadButton.DPadDown, () => {
       if (!showShelfPicker.value) return;
       shelfFocusIdx.value = Math.min(totalItems - 1, shelfFocusIdx.value + 1);
-    }),
+    }, bypass),
     gamepad.onButton(GamepadButton.South, () => {
       if (!showShelfPicker.value) return;
       const idx = shelfFocusIdx.value;
@@ -1908,11 +1966,11 @@ function wireShelfGamepad() {
       } else {
         showShelfPicker.value = false; // Done button
       }
-    }),
+    }, bypass),
     gamepad.onButton(GamepadButton.East, () => {
       if (!showShelfPicker.value) return;
       showShelfPicker.value = false;
-    }),
+    }, bypass),
   );
 }
 
@@ -2694,6 +2752,15 @@ import type { SaveConflict } from "~/types/save-sync";
 const saveConflictVisible = ref(false);
 const saveConflicts = ref<SaveConflict[]>([]);
 
+// ── RetroArch controller cheatsheet ─────────────────────────────────────
+const raCheatsheetOpen = ref(false);
+function openRaCheatsheet() {
+  raCheatsheetOpen.value = true;
+}
+function closeRaCheatsheet() {
+  raCheatsheetOpen.value = false;
+}
+
 useListen<{ gameId: string; conflicts: SaveConflict[] }>(
   `save_sync_conflict/${gameId}`,
   (event) => {
@@ -2874,15 +2941,8 @@ onUnmounted(() => {
   if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
 });
 
-// Guard against re-triggering launch immediately after dismissing error dialog.
-// When the user presses A to dismiss the error dialog, the same A press can
-// propagate to the Play button underneath, causing an immediate re-launch loop.
-let launchGuard = false;
-
 function dismissLaunchError() {
   launchError.value = null;
-  launchGuard = true;
-  setTimeout(() => { launchGuard = false; }, 300);
 }
 
 const launchInFlight = ref(false);
@@ -2916,7 +2976,6 @@ watch([launchInFlight, () => status.value?.type], ([inFlight, type]) => {
 });
 
 async function launchGame() {
-  if (launchGuard) return;
   // Without this guard, mashing A during launch fires multiple
   // `invoke("launch_game")` calls in parallel — the backend may accept one
   // and reject the rest with `AlreadyRunning`, which surfaces as a scary
@@ -3086,6 +3145,14 @@ async function addToLibrary() {
 
 function openStore() {
   navigateTo(`/store/${gameId}`);
+}
+
+function goToRecommendation(recId: string) {
+  const target = `/bigpicture/library/${recId}`;
+  // When jumping between recommended titles, a B press should return to
+  // the game we just came from, not the default parent (library grid).
+  focusNav.setRouteState("backTo", `/bigpicture/library/${gameId}`, target);
+  navigateTo(target);
 }
 
 async function checkForUpdates() {

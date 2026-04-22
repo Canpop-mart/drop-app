@@ -37,9 +37,31 @@ pub struct RACredentials {
     pub connect_token: String,
 }
 
-/// Fetches RetroAchievements Connect credentials from the Drop server.
-/// Returns `None` if the user has no linked RA account or no Connect token.
+/// Fetches RetroAchievements Connect credentials.
+///
+/// Lookup order:
+/// 1. Local settings (`ra_username` + `ra_token`) — user-entered in BPM.
+///    Preferred when set because it works offline and lets users use an
+///    RA account that isn't linked to their Drop account.
+/// 2. Drop server (`/api/v1/client/user/ra-credentials`) — linked account.
+///
+/// Returns `None` if neither path provides a username + Connect token.
 pub async fn fetch_ra_credentials() -> Option<RACredentials> {
+    // 1. Try local settings first.
+    {
+        let db = database::borrow_db_checked();
+        if !db.settings.ra_username.is_empty() && !db.settings.ra_token.is_empty() {
+            info!(
+                "[RETROARCH] Using locally-configured RA credentials for {}",
+                db.settings.ra_username
+            );
+            return Some(RACredentials {
+                username: db.settings.ra_username.clone(),
+                connect_token: db.settings.ra_token.clone(),
+            });
+        }
+    }
+
     let url = match generate_url(&["api", "v1", "client", "user", "ra-credentials"], &[]) {
         Ok(u) => u,
         Err(e) => {

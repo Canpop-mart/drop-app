@@ -2,6 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { GamepadButton, useGamepad } from "./gamepad";
 import { useFocusNavigation } from "./focus-navigation";
 import { useDeckMode } from "./deck-mode";
+import { devLog } from "./dev-mode";
 
 // ── Singleton state ──────────────────────────────────────────────────────────
 
@@ -18,6 +19,7 @@ export function useBigPictureMode() {
     if (isActive.value) return;
 
     previousRoute.value = router.currentRoute.value.fullPath;
+    devLog("state", `BPM enter (from "${previousRoute.value}")`);
     isActive.value = true;
     focusNav.enabled.value = true;
 
@@ -44,6 +46,7 @@ export function useBigPictureMode() {
       return;
     }
 
+    devLog("state", `BPM exit (-> "${previousRoute.value}")`);
     isActive.value = false;
 
     // Navigate FIRST — this triggers the layout switch from bigpicture → default.

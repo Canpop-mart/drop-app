@@ -19,6 +19,20 @@
 
       <div class="flex-1" />
 
+      <!-- Bulk-select toggle (browse tab only) -->
+      <button
+        v-if="activeTab === 'browse'"
+        :ref="(el: any) => registerTab(el, { onSelect: toggleBulkSelect })"
+        class="flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium transition-colors"
+        :class="bulkSelectMode
+          ? 'bg-blue-600/20 text-blue-400'
+          : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'"
+        @click="toggleBulkSelect"
+      >
+        <CheckIcon class="size-4" />
+        <span>{{ bulkSelectMode ? `${selectedIds.size} selected` : "Select" }}</span>
+      </button>
+
       <button
         :ref="(el: any) => registerTab(el, { onSelect: () => (showSearch = true) })"
         class="flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 transition-colors"
@@ -348,9 +362,20 @@
           v-for="game in browsePageResults"
           :key="game.id"
           :ref="(el: any) => registerGrid(el, {
-            onSelect: () => goToGame(game.id),
+            onSelect: () => onTileSelect(game.id),
+            // Controller long-press: focus-nav fires this after A is held
+            // ~450ms. Enters bulk mode (if off) and toggles the focused
+            // tile's selection — mirrors the pointer long-press below.
+            onHold: () => enterBulkViaHold(game.id),
           })"
           class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
+          :class="{ 'ring-2 ring-blue-500 ring-offset-2 ring-offset-zinc-950': bulkSelectMode && selectedIds.has(game.id) }"
+          @pointerdown="startLongPress(game.id)"
+          @pointerup="cancelLongPress"
+          @pointerleave="cancelLongPress"
+          @pointercancel="cancelLongPress"
+          @click="onTileClick(game.id)"
+          @contextmenu.prevent
         >
           <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl overflow-hidden">
             <img
@@ -364,6 +389,16 @@
               <span class="text-2xl font-bold text-zinc-500">{{ game.mName[0] }}</span>
             </div>
             <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
+            <!-- Bulk-select checkbox overlay -->
+            <div
+              v-if="bulkSelectMode"
+              class="absolute top-2 left-2 z-20 size-6 rounded-md border-2 flex items-center justify-center transition-colors"
+              :class="selectedIds.has(game.id)
+                ? 'bg-blue-500 border-blue-300'
+                : 'bg-zinc-900/80 border-zinc-500'"
+            >
+              <CheckIcon v-if="selectedIds.has(game.id)" class="size-4 text-white" />
+            </div>
             <div
               v-if="game.updateAvailable"
               class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
@@ -412,11 +447,104 @@
         </div>
       </div>
     </div>
+
+    <!-- Floating bulk-action bar -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-all duration-200"
+        leave-active-class="transition-all duration-200"
+        enter-from-class="opacity-0 translate-y-4"
+        leave-to-class="opacity-0 translate-y-4"
+      >
+        <div
+          v-if="bulkSelectMode"
+          class="fixed bottom-24 left-1/2 -translate-x-1/2 z-[90] flex items-center gap-3 px-5 py-3 rounded-2xl bg-zinc-900/95 border border-zinc-700/60 shadow-2xl backdrop-blur-sm"
+        >
+          <span class="text-sm text-zinc-300 min-w-[6rem]">
+            <span class="font-semibold text-blue-400">{{ selectedIds.size }}</span>
+            selected
+          </span>
+          <button
+            :ref="(el: any) => registerBulkAction(el, { onSelect: addSelectedToLibrary })"
+            :disabled="selectedIds.size === 0 || bulkApplying"
+            class="px-4 py-2 rounded-xl text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            @click="addSelectedToLibrary"
+          >
+            Add to Library
+          </button>
+          <button
+            :ref="(el: any) => registerBulkAction(el, { onSelect: () => (showBulkShelfPicker = true) })"
+            :disabled="selectedIds.size === 0 || bulkApplying"
+            class="px-4 py-2 rounded-xl text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            @click="showBulkShelfPicker = true"
+          >
+            Add to Shelf
+          </button>
+          <button
+            :ref="(el: any) => registerBulkAction(el, { onSelect: exitBulkMode })"
+            class="px-4 py-2 rounded-xl text-sm font-medium bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-colors"
+            @click="exitBulkMode"
+          >
+            Cancel
+          </button>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- Bulk shelf picker overlay -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-opacity duration-200"
+        leave-active-class="transition-opacity duration-200"
+        enter-from-class="opacity-0"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="showBulkShelfPicker"
+          class="fixed inset-0 z-[110] flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          @click.self="showBulkShelfPicker = false"
+        >
+          <div class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4">
+            <h2 class="text-xl font-semibold font-display text-zinc-100 mb-1">Add to Shelf</h2>
+            <p class="text-sm text-zinc-500 mb-4">
+              Adding <span class="text-blue-400 font-medium">{{ selectedIds.size }}</span>
+              {{ selectedIds.size === 1 ? "game" : "games" }}
+            </p>
+
+            <div v-if="shelvesData.shelves.value.length > 0" class="space-y-2 max-h-80 overflow-y-auto pr-1">
+              <button
+                v-for="shelf in shelvesData.shelves.value"
+                :key="shelf.id"
+                :ref="(el: any) => registerShelfPicker(el, { onSelect: () => addSelectedToShelf(shelf.id) })"
+                :disabled="bulkApplying"
+                class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm bg-zinc-800/50 text-zinc-200 hover:bg-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                @click="addSelectedToShelf(shelf.id)"
+              >
+                <span class="font-medium">{{ shelf.name }}</span>
+                <span class="text-xs text-zinc-500">{{ shelf.entries.length }}</span>
+              </button>
+            </div>
+            <div v-else class="text-sm text-zinc-500 text-center py-6">
+              No shelves yet. Create one from the library page.
+            </div>
+
+            <button
+              :ref="(el: any) => registerShelfPicker(el, { onSelect: () => (showBulkShelfPicker = false) })"
+              :disabled="bulkApplying"
+              class="w-full mt-5 px-4 py-3 rounded-xl text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+              @click="showBulkShelfPicker = false"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { MagnifyingGlassIcon, ArrowsUpDownIcon, FunnelIcon } from "@heroicons/vue/24/outline";
+import { MagnifyingGlassIcon, ArrowsUpDownIcon, FunnelIcon, CheckIcon } from "@heroicons/vue/24/outline";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
 import { useServerApi, type StoreGame, type TrendingGame } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
@@ -425,6 +553,7 @@ import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useDeckMode } from "~/composables/deck-mode";
+import { useShelves } from "~/composables/shelves";
 
 definePageMeta({ layout: "bigpicture" });
 
@@ -438,6 +567,12 @@ const registerTab = useBpFocusableGroup("content");
 const registerFeaturedHero = useBpFocusableGroup("content");
 const registerGrid = useBpFocusableGroup("content");
 const registerFilterMenu = useBpFocusableGroup("filter-menu");
+// Bulk-action bar shares the "content" group so spatial D-pad Down from the
+// bottom row of tiles reaches it naturally — putting it in its own group
+// forced the user to rely on cross-group fallback, which the nav rail was
+// winning (rail items are in the Down cone from some grid columns).
+const registerBulkAction = useBpFocusableGroup("content");
+const registerShelfPicker = useBpFocusableGroup("shelf-picker");
 
 // State
 const loading = ref(true);
@@ -448,6 +583,14 @@ const showFilterMenu = ref(false);
 const searchQuery = ref("");
 const heroIndex = ref(0);
 const browseSort = ref("default");
+
+// Bulk selection (browse tab only — letting the user mass-assign games to
+// a shelf without opening each one individually).
+const bulkSelectMode = ref(false);
+const selectedIds = ref<Set<string>>(new Set());
+const showBulkShelfPicker = ref(false);
+const bulkApplying = ref(false);
+const shelvesData = useShelves();
 
 const browseSortLabels: Record<string, string> = {
   default: "Default",
@@ -506,11 +649,143 @@ function goToGame(gameId?: string) {
   if (!gameId) return;
   console.log(`[BPM:STORE] Navigating to game: ${gameId}`);
   focusNav.saveFocusSnapshot("/bigpicture/store");
-  router.push(`/bigpicture/library/${gameId}`).then(() => {
+  const target = `/bigpicture/library/${gameId}`;
+  // Tell focus-nav's B handler to return to the store (preserving pagination /
+  // tab state via saveFocusSnapshot above) rather than the default library grid.
+  focusNav.setRouteState("backTo", "/bigpicture/store", target);
+  router.push(target).then(() => {
     console.log(`[BPM:STORE] Navigation complete for: ${gameId}`);
   }).catch((e) => {
     console.error(`[BPM:STORE] Navigation FAILED for ${gameId}:`, e);
   });
+}
+
+// ── Bulk selection helpers ──────────────────────────────────────────────
+function onTileSelect(gameId: string) {
+  if (bulkSelectMode.value) {
+    toggleSelection(gameId);
+  } else {
+    goToGame(gameId);
+  }
+}
+
+function toggleBulkSelect() {
+  bulkSelectMode.value = !bulkSelectMode.value;
+  if (!bulkSelectMode.value) {
+    selectedIds.value = new Set();
+    showBulkShelfPicker.value = false;
+  } else {
+    // Ensure shelves are up to date before the user opens the picker.
+    shelvesData.fetchShelves();
+  }
+}
+
+// Long-press on a tile enters bulk-select and selects that tile in one
+// gesture — matches the mobile/touch convention the user expected.
+const LONG_PRESS_MS = 450;
+let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+const longPressTriggered = ref(false);
+
+function startLongPress(gameId: string) {
+  longPressTriggered.value = false;
+  if (longPressTimer) clearTimeout(longPressTimer);
+  longPressTimer = setTimeout(() => {
+    longPressTriggered.value = true;
+    if (!bulkSelectMode.value) {
+      bulkSelectMode.value = true;
+      shelvesData.fetchShelves();
+    }
+    toggleSelection(gameId);
+    // Tactile confirmation if available
+    gamepad.vibrate?.("medium");
+  }, LONG_PRESS_MS);
+}
+
+function cancelLongPress() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+}
+
+function onTileClick(gameId: string) {
+  // A long-press already fired — suppress the trailing click so we don't
+  // navigate into the tile the user just meant to select.
+  if (longPressTriggered.value) {
+    longPressTriggered.value = false;
+    return;
+  }
+  onTileSelect(gameId);
+}
+
+// Controller long-press equivalent. focus-nav swallows the release event
+// after onHold fires, so we don't also get an onSelect → goToGame call.
+function enterBulkViaHold(gameId: string) {
+  if (!bulkSelectMode.value) {
+    bulkSelectMode.value = true;
+    shelvesData.fetchShelves();
+  }
+  toggleSelection(gameId);
+}
+
+function toggleSelection(gameId: string) {
+  const next = new Set(selectedIds.value);
+  if (next.has(gameId)) next.delete(gameId);
+  else next.add(gameId);
+  selectedIds.value = next;
+}
+
+function exitBulkMode() {
+  bulkSelectMode.value = false;
+  selectedIds.value = new Set();
+  showBulkShelfPicker.value = false;
+}
+
+async function addSelectedToShelf(shelfId: string) {
+  if (!selectedIds.value.size || bulkApplying.value) return;
+  bulkApplying.value = true;
+  try {
+    const ids = [...selectedIds.value];
+    // Serial rather than Promise.all — fetchShelves on every add would
+    // thrash the server, and failing one shouldn't abort the others.
+    for (const id of ids) {
+      await shelvesData.addToShelf(shelfId, id);
+    }
+  } finally {
+    bulkApplying.value = false;
+    exitBulkMode();
+  }
+}
+
+// "Add to Library" = POST each selected game id to the user's default
+// collection, which is what `/bigpicture/library` lists. The endpoint
+// pattern mirrors the per-game button at `library/[id].vue:addToLibrary`.
+async function addSelectedToLibrary() {
+  if (!selectedIds.value.size || bulkApplying.value) return;
+  bulkApplying.value = true;
+  let added = 0;
+  let failed = 0;
+  try {
+    const ids = [...selectedIds.value];
+    for (const id of ids) {
+      try {
+        const res = await fetch(serverUrl("api/v1/collection/default/entry"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        });
+        if (res.ok) added++;
+        else failed++;
+      } catch (e) {
+        console.error(`[BPM:STORE] Failed to add ${id} to library:`, e);
+        failed++;
+      }
+    }
+    console.log(`[BPM:STORE] Bulk add to library: ${added} added, ${failed} failed`);
+  } finally {
+    bulkApplying.value = false;
+    exitBulkMode();
+  }
 }
 
 // Hero auto-advance
@@ -658,11 +933,28 @@ watch(showFilterMenu, (open) => {
   }
 });
 
+// Shelf picker modal — trap focus on its buttons.
+watch(showBulkShelfPicker, (open) => {
+  if (open) {
+    focusNav.restrictFocus("shelf-picker");
+    nextTick(() => focusNav.autoFocusContent("shelf-picker"));
+  } else {
+    // Bulk-action bar lives in the "content" group now, so either way we
+    // release focus back there. Vue DOM ordering will put the bar buttons
+    // after the grid, so the next D-pad move from the grid finds them.
+    focusNav.unrestrictFocus("content");
+  }
+});
+
 // Reload browse when tab switches to browse; persist tab across back-nav.
 watch(activeTab, (tab) => {
   focusNav.setRouteState("activeTab", tab);
   if (tab === "browse") {
     loadBrowse(true);
+  } else if (bulkSelectMode.value) {
+    // Leaving browse while mid-selection — drop the bulk state so the
+    // floating bar doesn't linger on an unrelated tab.
+    exitBulkMode();
   }
 });
 
@@ -715,12 +1007,32 @@ _unsubs.push(
     }
   }),
 );
-// B / East — close filter menu when open
+// B / East — close overlays / exit bulk mode. Order matters: if the user
+// has the shelf picker open on top of bulk mode, one press should just
+// close the picker, not wipe the selection.
 _unsubs.push(
   gamepad.onButton(GamepadButton.East, () => {
+    if (showBulkShelfPicker.value) {
+      showBulkShelfPicker.value = false;
+      return;
+    }
     if (showFilterMenu.value) {
       showFilterMenu.value = false;
+      return;
     }
+    if (bulkSelectMode.value) {
+      exitBulkMode();
+      return;
+    }
+  }),
+);
+// Start — toggle bulk-select (browse tab only). Dedicated button rather
+// than a long-press-A because gamepad long-press conflicts with autorepeat.
+_unsubs.push(
+  gamepad.onButton(GamepadButton.Start, () => {
+    if (activeTab.value !== "browse") return;
+    if (showSearch.value || showFilterMenu.value || showBulkShelfPicker.value) return;
+    toggleBulkSelect();
   }),
 );
 
@@ -748,6 +1060,12 @@ onMounted(async () => {
     console.error("Failed to load store data:", e);
   } finally {
     loading.value = false;
+    // If route state restored the tab to 'browse', the watch(activeTab)
+    // below only fires on change — so on re-entry the browse grid would
+    // render empty forever. Kick the fetch off manually here.
+    if (activeTab.value === "browse") {
+      loadBrowse(true);
+    }
     nextTick(() => {
       if (!focusNav.restoreFocusSnapshot("/bigpicture/store")) {
         focusNav.autoFocusContent("content");

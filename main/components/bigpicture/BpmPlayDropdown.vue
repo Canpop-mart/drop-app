@@ -155,29 +155,31 @@ function selectOption(mode: Mode) {
 function wireGamepad() {
   unwireGamepad();
 
+  const bypass = { bypassInputLock: true };
+
   unsubs.push(
     gamepad.onButton(GamepadButton.DPadUp, () => {
       if (!menuOpen.value) return;
       focusedIndex.value = Math.max(0, focusedIndex.value - 1);
-    }),
+    }, bypass),
   );
   unsubs.push(
     gamepad.onButton(GamepadButton.DPadDown, () => {
       if (!menuOpen.value) return;
       focusedIndex.value = Math.min(MODES.length - 1, focusedIndex.value + 1);
-    }),
+    }, bypass),
   );
   unsubs.push(
     gamepad.onButton(GamepadButton.South, () => {
       if (!menuOpen.value) return;
       selectOption(MODES[focusedIndex.value]);
-    }),
+    }, bypass),
   );
   unsubs.push(
     gamepad.onButton(GamepadButton.East, () => {
       if (!menuOpen.value) return;
       closeMenu();
-    }),
+    }, bypass),
   );
 }
 

@@ -286,34 +286,36 @@ watch(
 function wireGamepad() {
   unwireGamepad();
 
+  const bypass = { bypassInputLock: true };
+
   // D-pad navigation
   unsubs.push(
     gamepad.onButton(GamepadButton.DPadUp, () => {
       if (!props.visible) return;
       focusedRow.value--;
       clampFocus();
-    }),
+    }, bypass),
   );
   unsubs.push(
     gamepad.onButton(GamepadButton.DPadDown, () => {
       if (!props.visible) return;
       focusedRow.value++;
       clampFocus();
-    }),
+    }, bypass),
   );
   unsubs.push(
     gamepad.onButton(GamepadButton.DPadLeft, () => {
       if (!props.visible) return;
       focusedCol.value--;
       clampFocus();
-    }),
+    }, bypass),
   );
   unsubs.push(
     gamepad.onButton(GamepadButton.DPadRight, () => {
       if (!props.visible) return;
       focusedCol.value++;
       clampFocus();
-    }),
+    }, bypass),
   );
 
   // A = type focused key
@@ -322,7 +324,7 @@ function wireGamepad() {
       if (!props.visible) return;
       const key = currentLayout.value[focusedRow.value]?.[focusedCol.value];
       if (key) pressKey(key);
-    }),
+    }, bypass),
   );
 
   // B = close
@@ -330,7 +332,7 @@ function wireGamepad() {
     gamepad.onButton(GamepadButton.East, () => {
       if (!props.visible) return;
       emit("close");
-    }),
+    }, bypass),
   );
 
   // X = backspace (swapped on Gamescope so physical button matches label)
@@ -338,7 +340,7 @@ function wireGamepad() {
     gamepad.onButton(_bkspBtn, () => {
       if (!props.visible) return;
       backspace();
-    }),
+    }, bypass),
   );
 
   // Y = space (swapped on Gamescope so physical button matches label)
@@ -346,7 +348,7 @@ function wireGamepad() {
     gamepad.onButton(_spaceBtn, () => {
       if (!props.visible) return;
       space();
-    }),
+    }, bypass),
   );
 
   // LB = toggle shift
@@ -354,7 +356,7 @@ function wireGamepad() {
     gamepad.onButton(GamepadButton.LeftBumper, () => {
       if (!props.visible) return;
       shifted.value = !shifted.value;
-    }),
+    }, bypass),
   );
 
   // RB = submit
@@ -362,7 +364,7 @@ function wireGamepad() {
     gamepad.onButton(GamepadButton.RightBumper, () => {
       if (!props.visible) return;
       emit("submit");
-    }),
+    }, bypass),
   );
 
   // LT = paste from clipboard
@@ -370,7 +372,7 @@ function wireGamepad() {
     gamepad.onButton(GamepadButton.LeftTrigger, () => {
       if (!props.visible) return;
       paste();
-    }),
+    }, bypass),
   );
 }
 
@@ -381,7 +383,7 @@ function wireGamepadSteamMode() {
     gamepad.onButton(GamepadButton.East, () => {
       if (!props.visible) return;
       emit("close");
-    }),
+    }, { bypassInputLock: true }),
   );
 }
 
