@@ -200,6 +200,11 @@
           >
             Update <ArrowDownTrayIcon class="size-5" />
           </button>
+          <CompatTestButton
+            :game-id="game.id"
+            :is-installed="status.type === 'Installed'"
+            @result="(outcome) => onCompatTestResult(outcome)"
+          />
           <NuxtLink
             class="transition-transform duration-300 hover:scale-105 active:scale-95 inline-flex items-center rounded-md bg-zinc-800/50 px-6 font-semibold text-white shadow-xl backdrop-blur-sm hover:bg-zinc-800/80 uppercase font-display"
             :to="{
@@ -1511,6 +1516,50 @@ async function launchIndex(index: number) {
 
 async function queue() {
   router.push("/queue");
+}
+
+type CompatTestOutcome = {
+  status: string;
+  signature: string | null;
+  elapsedSecs: number;
+  posted: boolean;
+};
+
+const COMPAT_STATUS_LABELS: Record<string, string> = {
+  AliveRenders: "Plays correctly",
+  AliveNoRender: "Launches but no visible render",
+  EarlyExit: "Exits before main menu",
+  Crash: "Crashes on launch",
+  NoLaunch: "Won't launch",
+  InstallFailed: "Install failed",
+};
+
+/**
+ * Show the user a one-shot summary of what the compat test found. The
+ * actual result has already been POSTed to drop-server by the Rust side
+ * before this fires; the modal is purely informational.
+ */
+function onCompatTestResult(outcome: CompatTestOutcome) {
+  const label = COMPAT_STATUS_LABELS[outcome.status] ?? outcome.status;
+  const lines = [
+    `Result: ${label}`,
+    `Observed for ${outcome.elapsedSecs}s.`,
+  ];
+  if (outcome.signature) lines.push(`Signature: ${outcome.signature}`);
+  if (!outcome.posted) {
+    lines.push(
+      "(Server didn't accept the result — may be offline or unauthenticated.)",
+    );
+  }
+  createModal(
+    ModalType.Notification,
+    {
+      title: `Compatibility test — ${game.mName}`,
+      description: lines.join("\n"),
+      buttonText: "OK",
+    },
+    (e, c) => c(),
+  );
 }
 
 async function uninstall() {

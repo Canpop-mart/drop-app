@@ -52,6 +52,7 @@ use utils::app_emit;
 
 mod client;
 mod collections;
+mod compat;
 mod download_manager;
 mod downloads;
 mod games;
@@ -63,6 +64,7 @@ mod streaming;
 mod updates;
 
 use client::*;
+use compat::*;
 use download_manager::*;
 use downloads::*;
 use games::*;
@@ -311,6 +313,9 @@ pub fn run() {
             open_process_logs,
             read_latest_launch_log,
             get_launch_options,
+            // Compatibility testing
+            start_compat_test,
+            confirm_compat_render,
             detect_package_format,
             detect_removable_storage,
             #[cfg(target_os = "linux")]
