@@ -6,7 +6,7 @@
     :title="
       testing
         ? `Running test (${elapsedLabel})...`
-        : 'Launch the game with a 45 second observation window, classify the result, and report it to the server. Promotes \`alive\` results based on whether the menu rendered.'
+        : 'Launch the game with a 45 second observation window, classify the result, and report it to the server. Promotes alive results based on whether the menu rendered.'
     "
     @click="runTest"
   >
@@ -68,6 +68,36 @@ function stopTicker() {
   startedAt.value = null;
 }
 
+/**
+ * Ask the user whether the menu actually rendered, returning their answer
+ * via the existing app modal infrastructure (NOT `window.confirm`, which
+ * has well-documented unreliability inside Tauri's WebView2 on Windows —
+ * it can auto-dismiss or return without showing).
+ *
+ * Resolves to `true` if the user clicked "Yes, plays correctly", `false`
+ * otherwise. Skipping the confirmation is treated as "not rendered" so
+ * we don't accidentally promote stuck-on-black-screen games.
+ */
+function askDidItRender(): Promise<boolean> {
+  return new Promise((resolve) => {
+    createModal(
+      ModalType.Confirmation,
+      {
+        title: "Did the game render?",
+        description:
+          "The game launched and stayed alive for the full observation window. " +
+          "Did you actually see the menu / game UI render correctly on screen? " +
+          'Confirm to mark this as "Plays correctly", or cancel to leave it as "Launches but no render".',
+        buttonText: "Yes, plays correctly",
+      },
+      (e, c) => {
+        c();
+        resolve(e === "confirm");
+      },
+    );
+  });
+}
+
 async function runTest() {
   if (testing.value) return;
   testing.value = true;
@@ -75,8 +105,6 @@ async function runTest() {
 
   try {
     // Default options: 45s observation, auto-kill after, no extra notes.
-    // The user gets to promote the result to AliveRenders via a follow-up
-    // dialog if the process stayed alive — see below.
     const outcome = await invoke<CompatTestOutcome>("start_compat_test", {
       gameId,
       versionIndex: 0,
@@ -86,27 +114,25 @@ async function runTest() {
       },
     });
 
-    emit("result", outcome);
+    // Final status starts as the orchestrator's classification but may
+    // get promoted to AliveRenders by the user's answer below. We delay
+    // the toast until after the confirm so it reflects the final state.
+    let finalStatus = outcome.status;
 
-    // Render-confirm dialog: only fires when the process was alive at the
-    // end of the observation window. The user has eyes on the screen, so
-    // their "did the menu render?" answer is the truth — we promote the
-    // server-side status accordingly.
     if (outcome.status === "AliveNoRender") {
-      const rendered = window.confirm(
-        "Test complete. The game launched and stayed alive for 45s.\n\n" +
-          "Did you actually see the main menu / game UI render correctly on screen?\n\n" +
-          'OK = Yes, mark as "Plays correctly".\nCancel = No, leave as "Launches but no render".',
-      );
+      const rendered = await askDidItRender();
       try {
         await invoke("confirm_compat_render", {
           gameId,
           rendered,
         });
+        if (rendered) finalStatus = "AliveRenders";
       } catch (err) {
         console.warn("confirm_compat_render failed:", err);
       }
     }
+
+    emit("result", { ...outcome, status: finalStatus });
 
     if (!outcome.posted) {
       console.warn(
@@ -114,12 +140,29 @@ async function runTest() {
         outcome,
       );
     }
+
+    // Refresh the cached summary so the per-game CompatPanel and any
+    // other components watching `useCompatSummary()` reflect the new
+    // result without requiring a hard page reload. Failure to refresh
+    // is non-fatal — the data is still on the server, the UI will
+    // just lag until the next manual reload.
+    try {
+      await refreshCompatSummary();
+    } catch (e) {
+      console.warn("[compat] post-test summary refresh failed:", e);
+    }
   } catch (err) {
     console.error("compat test failed:", err);
-    window.alert(
-      `Compat test failed to run: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+    createModal(
+      ModalType.Notification,
+      {
+        title: "Compatibility test failed",
+        description: `The test couldn't run: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        buttonText: "Close",
+      },
+      (e, c) => c(),
     );
   } finally {
     stopTicker();

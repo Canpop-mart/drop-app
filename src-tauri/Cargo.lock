@@ -1510,7 +1510,7 @@ dependencies = [
 
 [[package]]
 name = "drop-app"
-version = "1.10.0-rc.2"
+version = "1.10.0-rc.3"
 dependencies = [
  "anyhow",
  "async-trait",

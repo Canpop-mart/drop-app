@@ -591,6 +591,9 @@
       </div>
 
       <div class="space-y-6">
+        <!-- Compatibility test results — only renders when this game has
+             been tested on at least one of the user's devices. -->
+        <GameCompatPanel :compat="gameCompat" />
         <div v-if="versionOptions && versionOptions.length > 0">
           <Listbox as="div" v-model="installVersionIndex">
             <ListboxLabel class="block text-sm/6 font-medium text-zinc-100"
@@ -1134,6 +1137,13 @@ const { game, status, version } = await useGame(id);
 
 const bannerUrl = await useObject(game.mBannerObjectId);
 
+// Compat data scoped to this specific game. Soft-fails (returns null) so a
+// server-side problem with the compat endpoints doesn't 500 the whole page.
+// `gameCompat` is what the right-sidebar panel renders against; refreshing
+// the underlying summary state propagates here automatically.
+const compatSummaryRef = await useCompatSummary().catch(() => null);
+const gameCompat = computed(() => compatSummaryRef?.value?.[id]);
+
 const rawHtml = micromark(game.mDescription);
 const htmlDescription = rewriteDescriptionImages(rawHtml);
 
@@ -1523,6 +1533,8 @@ type CompatTestOutcome = {
   signature: string | null;
   elapsedSecs: number;
   posted: boolean;
+  // Set by the button before emitting if the user confirmed render.
+  protonVersion?: string | null;
 };
 
 const COMPAT_STATUS_LABELS: Record<string, string> = {
@@ -1538,6 +1550,11 @@ const COMPAT_STATUS_LABELS: Record<string, string> = {
  * Show the user a one-shot summary of what the compat test found. The
  * actual result has already been POSTed to drop-server by the Rust side
  * before this fires; the modal is purely informational.
+ *
+ * Includes the runtime version (Proton/Wine) and the crash signature
+ * when applicable, so the user has the same triage info the badge
+ * tooltip would surface — no need to navigate to drop-server's web UI
+ * to see why a test failed.
  */
 function onCompatTestResult(outcome: CompatTestOutcome) {
   const label = COMPAT_STATUS_LABELS[outcome.status] ?? outcome.status;
@@ -1545,7 +1562,12 @@ function onCompatTestResult(outcome: CompatTestOutcome) {
     `Result: ${label}`,
     `Observed for ${outcome.elapsedSecs}s.`,
   ];
-  if (outcome.signature) lines.push(`Signature: ${outcome.signature}`);
+  if (outcome.protonVersion) {
+    lines.push(`Runtime: ${outcome.protonVersion}`);
+  }
+  if (outcome.signature) {
+    lines.push(`Signature: ${outcome.signature}`);
+  }
   if (!outcome.posted) {
     lines.push(
       "(Server didn't accept the result — may be offline or unauthenticated.)",

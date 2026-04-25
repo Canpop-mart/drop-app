@@ -17,6 +17,8 @@
 use std::time::{Duration, Instant};
 
 use ::process::{PROCESS_MANAGER, error::ProcessError};
+#[cfg(target_os = "linux")]
+use database::borrow_db_checked;
 use ::remote::{
     error::RemoteAccessError,
     requests::{generate_url, make_authenticated_post},
@@ -85,6 +87,10 @@ pub struct CompatTestOutcome {
     /// means we tested but the server didn't take it (offline mode, auth
     /// problem); the frontend can warn the user.
     pub posted: bool,
+    /// Proton/Wine version that was used to run the test, if detected.
+    /// `None` on Windows. On Linux this is best-effort: reflects the
+    /// user's default Proton, not necessarily a per-game override.
+    pub proton_version: Option<String>,
 }
 
 /// Errors surfaced to the frontend. We hand-roll Display + Serialize to
@@ -159,6 +165,18 @@ pub async fn start_compat_test(
         game_id, timeout, leave_running
     );
 
+    // Best-effort Proton version detection for Linux launches. We read the
+    // user's currently-configured default proton path and use its basename
+    // as the version label (e.g. "GE-Proton10-32"). This is an approximation
+    // — per-game overrides aren't reflected — but it's accurate for the
+    // common case where the user picks one Proton and tests against it.
+    // On Windows there's no Proton involved, so we leave the field None.
+    let detected_proton_version = detect_proton_version();
+    let proton_version_for_post = opts
+        .proton_version
+        .clone()
+        .or_else(|| detected_proton_version.clone());
+
     // ── 1. Launch ─────────────────────────────────────────────────────
     let launch_result = {
         let mut process_manager_lock = PROCESS_MANAGER.lock();
@@ -173,6 +191,7 @@ pub async fn start_compat_test(
             // launch it for compat reasons" is the most accurate bucket.
             return finish(
                 &game_id,
+                proton_version_for_post.as_deref(),
                 &opts,
                 CompatStatus::InstallFailed,
                 Some("required dependency not installed".to_string()),
@@ -185,6 +204,7 @@ pub async fn start_compat_test(
             let sig = format!("launch error: {other}");
             return finish(
                 &game_id,
+                proton_version_for_post.as_deref(),
                 &opts,
                 CompatStatus::NoLaunch,
                 Some(sig),
@@ -237,7 +257,72 @@ pub async fn start_compat_test(
         let _ = PROCESS_MANAGER.lock().kill_game(game_id.clone());
     }
 
-    finish(&game_id, &opts, status, signature, elapsed_secs, log_tail).await
+    finish(
+        &game_id,
+        proton_version_for_post.as_deref(),
+        &opts,
+        status,
+        signature,
+        elapsed_secs,
+        log_tail,
+    )
+    .await
+}
+
+/// Asks drop-server for the next compat-test work item belonging to the
+/// authenticated client. Returns `None` (HTTP 204) when there's nothing
+/// left to test in the user's installed library.
+///
+/// Drives the batch worker's outer loop — the frontend polls this, runs
+/// `start_compat_test` against each returned game, and stops when this
+/// returns `None`. Pure read: doesn't reserve, doesn't lock; if the same
+/// client polls twice it gets the same item until that item is tested.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompatWorkItem {
+    pub game_id: String,
+    pub name: String,
+    pub metadata_id: String,
+    pub last_tested_at: Option<String>,
+    pub platform: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_next_compat_work() -> Result<Option<CompatWorkItem>, CompatTestError> {
+    let platform = if cfg!(target_os = "windows") {
+        "Windows"
+    } else if cfg!(target_os = "linux") {
+        "Linux"
+    } else if cfg!(target_os = "macos") {
+        "macOS"
+    } else {
+        ""
+    };
+    let url = generate_url(
+        &["api", "v1", "client", "compat", "work", "next"],
+        &[("platform", platform)],
+    )
+    .map_err(CompatTestError::from)?;
+
+    let response = ::remote::requests::make_authenticated_get(url)
+        .await
+        .map_err(|e| CompatTestError::Network(e.to_string()))?;
+
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(CompatTestError::Network(format!(
+            "fetch_next_compat_work returned {}",
+            response.status()
+        )));
+    }
+
+    let item: CompatWorkItem = response
+        .json()
+        .await
+        .map_err(|e| CompatTestError::Network(format!("parse: {e}")))?;
+    Ok(Some(item))
 }
 
 /// Promote an `AliveNoRender` result to `AliveRenders` after the user
@@ -251,12 +336,15 @@ pub async fn confirm_compat_render(
     rendered: bool,
     notes: Option<String>,
 ) -> Result<(), CompatTestError> {
+    info!(
+        "[compat] confirm_compat_render invoked for {game_id} (rendered={rendered})"
+    );
     let status = if rendered {
         CompatStatus::AliveRenders
     } else {
         CompatStatus::AliveNoRender
     };
-    post_result(
+    let outcome = post_result(
         &game_id,
         status,
         None,
@@ -264,15 +352,19 @@ pub async fn confirm_compat_render(
         notes.as_deref(),
         None,
     )
-    .await
-    .map(|_| ())
-    .map_err(CompatTestError::from)
+    .await;
+    match &outcome {
+        Ok(()) => info!("[compat] promotion POST succeeded for {game_id}"),
+        Err(e) => warn!("[compat] promotion POST failed for {game_id}: {e}"),
+    }
+    outcome.map_err(CompatTestError::from)
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────
 
 async fn finish(
     game_id: &str,
+    proton_version: Option<&str>,
     opts: &CompatTestOptions,
     status: CompatStatus,
     signature: Option<String>,
@@ -283,7 +375,7 @@ async fn finish(
         game_id,
         status,
         signature.as_deref(),
-        opts.proton_version.as_deref(),
+        proton_version,
         opts.notes.as_deref(),
         log_tail.as_deref(),
     )
@@ -301,7 +393,27 @@ async fn finish(
         signature,
         elapsed_secs,
         posted,
+        proton_version: proton_version.map(|s| s.to_string()),
     })
+}
+
+/// Best-effort detection of the Proton/Wine version that will run a game.
+/// Reads `applications.default_proton_path` from the local DB and returns
+/// its directory basename (typically "GE-Proton10-32" or similar).
+/// `None` on Windows, or on Linux when no default is set / readable.
+#[cfg(target_os = "linux")]
+fn detect_proton_version() -> Option<String> {
+    let db = borrow_db_checked();
+    let path = db.applications.default_proton_path.as_ref()?;
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn detect_proton_version() -> Option<String> {
+    None
 }
 
 async fn post_result(

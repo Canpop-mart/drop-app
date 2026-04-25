@@ -80,7 +80,10 @@ async fn setup(handle: AppHandle) -> AppState {
         .encoder(Box::new(PatternEncoder::new(
             "{d} | {l} | {f}:{L} - {m}{n}",
         )))
-        .append(false)
+        // Append across restarts so a crash + relaunch doesn't wipe the
+        // evidence. Users (and devs) need to be able to look at the prior
+        // session's tail when triaging "what just happened?" reports.
+        .append(true)
         .build(DATA_ROOT_DIR.join("./drop.log"))
         .expect("Failed to setup logfile");
 
@@ -316,6 +319,7 @@ pub fn run() {
             // Compatibility testing
             start_compat_test,
             confirm_compat_render,
+            fetch_next_compat_work,
             detect_package_format,
             detect_removable_storage,
             #[cfg(target_os = "linux")]
