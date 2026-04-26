@@ -178,9 +178,21 @@ pub async fn start_compat_test(
         .or_else(|| detected_proton_version.clone());
 
     // ── 1. Launch ─────────────────────────────────────────────────────
+    // launch_process is sync but calls block_on internally (e.g. Ludusavi
+    // save sync). Calling it directly from this async context panics with
+    // "Cannot start a runtime from within a runtime" because the tokio
+    // multi-thread scheduler refuses nested block_on calls. spawn_blocking
+    // moves the work onto tokio's blocking thread pool where block_on is
+    // permitted — same trick the existing `launch_game` Tauri command
+    // gets for free by being declared `pub fn` (not `pub async fn`).
     let launch_result = {
-        let mut process_manager_lock = PROCESS_MANAGER.lock();
-        process_manager_lock.launch_process(game_id.clone(), index)
+        let game_id_clone = game_id.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut process_manager_lock = PROCESS_MANAGER.lock();
+            process_manager_lock.launch_process(game_id_clone, index)
+        })
+        .await
+        .map_err(|e| CompatTestError::LaunchFailed(format!("join error: {e}")))?
     };
 
     match launch_result {
@@ -238,9 +250,19 @@ pub async fn start_compat_test(
     // ── 3. Read log + classify ────────────────────────────────────────
     let log_tail = read_log_safe(&game_id);
     let crash_signature = log_tail.as_ref().and_then(|t| extract_crash_signature(t));
+    let render_failure_signature = log_tail
+        .as_ref()
+        .and_then(|t| extract_render_failure_signature(t));
 
     let (status, signature) = match (still_alive, &crash_signature, ever_alive) {
-        (true, _, _) => (CompatStatus::AliveNoRender, None),
+        // Process still alive — almost always AliveNoRender unless we
+        // can be more specific. If the log shows known render-pipeline
+        // failure markers (vkd3d-proton swap_chain spam, Godot "all
+        // display drivers failed", etc.), surface them in the signature
+        // so the user (and any future auto-classifier) sees "this game
+        // looks alive but here's why it probably isn't" without having
+        // to dig through the log themselves.
+        (true, _, _) => (CompatStatus::AliveNoRender, render_failure_signature),
         (false, Some(sig), _) => (CompatStatus::Crash, Some(sig.clone())),
         (false, None, true) => (
             CompatStatus::EarlyExit,
@@ -253,8 +275,15 @@ pub async fn start_compat_test(
     };
 
     // ── 4. Cleanup ────────────────────────────────────────────────────
+    // kill_game on Windows just drops the Child handle, which sends a
+    // soft termination. Many games (especially launchers and Godot/Unity
+    // titles with crashpad helpers) take a few seconds to actually exit,
+    // and some don't respect the soft signal at all — leaving them alive
+    // would stack windows during a batch run. Verify with retries; if
+    // the game still won't die after several attempts, log a loud
+    // warning and move on so the batch doesn't deadlock.
     if still_alive && !leave_running {
-        let _ = PROCESS_MANAGER.lock().kill_game(game_id.clone());
+        ensure_killed(&game_id).await;
     }
 
     finish(
@@ -395,6 +424,116 @@ async fn finish(
         posted,
         proton_version: proton_version.map(|s| s.to_string()),
     })
+}
+
+/// Aggressively kill a game after a compat test, verifying it actually
+/// died and retrying if it didn't. The existing kill_game on Windows just
+/// drops the Child handle, which sends a soft termination — many games
+/// take seconds to react, and some launchers don't react at all. Without
+/// verification the next test in a batch run would launch on top of the
+/// previous one, leaving windows stacked on screen.
+///
+/// Strategy:
+///   1. Send the soft kill via process_manager
+///   2. Poll is_game_running with backoff up to KILL_VERIFY_ATTEMPTS times
+///   3. If still alive, re-issue the soft kill (which on Windows can
+///      sometimes succeed on a retry when the first attempt raced
+///      with a child-process spawn)
+///   4. If still alive after all attempts, log loudly and move on so the
+///      batch doesn't deadlock on a stuck game
+async fn ensure_killed(game_id: &str) {
+    const KILL_VERIFY_ATTEMPTS: usize = 5;
+    const KILL_VERIFY_INTERVAL_MS: u64 = 800;
+
+    // First soft kill
+    let game_id_owned = game_id.to_string();
+    let _ = tokio::task::spawn_blocking(move || {
+        PROCESS_MANAGER.lock().kill_game(game_id_owned)
+    })
+    .await;
+
+    for attempt in 1..=KILL_VERIFY_ATTEMPTS {
+        tokio::time::sleep(Duration::from_millis(KILL_VERIFY_INTERVAL_MS)).await;
+
+        let game_id_owned = game_id.to_string();
+        let still_alive = tokio::task::spawn_blocking(move || {
+            PROCESS_MANAGER.lock().is_game_running(&game_id_owned)
+        })
+        .await
+        .unwrap_or(false);
+
+        if !still_alive {
+            return;
+        }
+        info!(
+            "[compat] {game_id} still running after kill attempt {attempt}/{KILL_VERIFY_ATTEMPTS}, retrying"
+        );
+        let game_id_owned = game_id.to_string();
+        let _ = tokio::task::spawn_blocking(move || {
+            PROCESS_MANAGER.lock().kill_game(game_id_owned)
+        })
+        .await;
+    }
+
+    warn!(
+        "[compat] {game_id} survived {KILL_VERIFY_ATTEMPTS} kill attempts — moving on, but \
+         the next compat test may launch on top of it. Check process_manager.kill_game logic \
+         (likely needs taskkill /F /T on Windows or wineserver -k on Linux)."
+    );
+}
+
+/// Look for known render-pipeline failure markers in the wine/Godot log
+/// when the process is "alive" at the end of the observation window.
+/// Lots of games are technically running but completely failing to render
+/// (STS2's vkd3d-proton swap_chain spam is the canonical example) — the
+/// marker count is a much stronger signal than "process exists".
+///
+/// Returns a short signature like "vkd3d-proton swap_chain x615" that
+/// drops into the GameCompatibilityResult.signature column. The user
+/// reviewing AliveNoRender results sees this without having to dig
+/// through the raw log.
+fn extract_render_failure_signature(log: &str) -> Option<String> {
+    let mut swap_chain_resize = 0usize;
+    let mut display_server_failed = false;
+    let mut window_creation_failed = false;
+    let mut last_godot_error: Option<&str> = None;
+
+    for line in log.lines() {
+        if line.contains("swap_chain_resize") || line.contains("ResizeBuffers") {
+            swap_chain_resize += 1;
+        }
+        if line.contains("Unable to create DisplayServer") {
+            display_server_failed = true;
+        }
+        if line.contains("Failed to create Windows OS window")
+            || line.contains("Failed to create main window")
+        {
+            window_creation_failed = true;
+        }
+        if line.starts_with("ERROR:") || line.contains(" | ERROR | ") {
+            last_godot_error = Some(line);
+        }
+    }
+
+    // Order matters — pick the most specific signal first.
+    if window_creation_failed {
+        return Some("window creation failed (likely missing renderer)".to_string());
+    }
+    if display_server_failed {
+        return Some("DisplayServer init failed".to_string());
+    }
+    if swap_chain_resize > 10 {
+        return Some(format!("vkd3d-proton swap_chain x{swap_chain_resize}"));
+    }
+    if let Some(err) = last_godot_error {
+        // Trim to a short fingerprint
+        let trimmed = err.trim();
+        if trimmed.len() > 180 {
+            return Some(trimmed[..180].to_string());
+        }
+        return Some(trimmed.to_string());
+    }
+    None
 }
 
 /// Best-effort detection of the Proton/Wine version that will run a game.

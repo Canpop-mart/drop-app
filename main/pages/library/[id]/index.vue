@@ -200,7 +200,12 @@
           >
             Update <ArrowDownTrayIcon class="size-5" />
           </button>
+          <!-- Compat testing is a power-user feature — gated behind dev
+               mode so casual users don't see a button whose effect they
+               don't understand. The panel below stays visible regardless
+               since it just displays already-collected data. -->
           <CompatTestButton
+            v-if="devMode.enabled.value"
             :game-id="game.id"
             :is-installed="status.type === 'Installed'"
             @result="(outcome) => onCompatTestResult(outcome)"
@@ -592,8 +597,11 @@
 
       <div class="space-y-6">
         <!-- Compatibility test results — only renders when this game has
-             been tested on at least one of the user's devices. -->
-        <GameCompatPanel :compat="gameCompat" />
+             been tested on at least one of the user's devices. Passing
+             `gameId` enables the quick-promote buttons for AliveNoRender
+             rows so the user can clear batch-test review backlog without
+             re-launching each game. -->
+        <GameCompatPanel :compat="gameCompat" :game-id="id" />
         <div v-if="versionOptions && versionOptions.length > 0">
           <Listbox as="div" v-model="installVersionIndex">
             <ListboxLabel class="block text-sm/6 font-medium text-zinc-100"
@@ -1143,6 +1151,11 @@ const bannerUrl = await useObject(game.mBannerObjectId);
 // the underlying summary state propagates here automatically.
 const compatSummaryRef = await useCompatSummary().catch(() => null);
 const gameCompat = computed(() => compatSummaryRef?.value?.[id]);
+
+// Dev mode gate for the per-game compat-test action button. The display
+// panel (GameCompatPanel) is read-only and renders independent of dev
+// mode — only the test action is hidden when dev mode is off.
+const devMode = useDevMode();
 
 const rawHtml = micromark(game.mDescription);
 const htmlDescription = rewriteDescriptionImages(rawHtml);

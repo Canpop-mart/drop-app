@@ -54,6 +54,38 @@
                 <span v-if="row.protonVersion">{{ row.protonVersion }} • </span>
                 {{ formatTime(row.testedAt) }}
               </div>
+
+              <!-- Quick-promote buttons for batch-tested AliveNoRender
+                   results. The orchestrator can't tell from the outside
+                   whether the screen showed real frames, so it tags
+                   inconclusive results "needs review" — these buttons
+                   let the user clear the queue without re-launching the
+                   game. -->
+              <div
+                v-if="row.status === 'AliveNoRender'"
+                class="mt-2 flex items-center gap-2"
+              >
+                <button
+                  class="text-xs px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold disabled:opacity-50 transition-colors"
+                  :disabled="confirming === row.platform"
+                  @click="confirmRendered(row.platform, true)"
+                >
+                  ✓ Played correctly
+                </button>
+                <button
+                  class="text-xs px-2 py-0.5 rounded bg-rose-700 hover:bg-rose-600 text-white font-semibold disabled:opacity-50 transition-colors"
+                  :disabled="confirming === row.platform"
+                  @click="confirmRendered(row.platform, false)"
+                >
+                  ✗ Didn't render
+                </button>
+                <span
+                  v-if="confirming === row.platform"
+                  class="text-zinc-500 text-[10px]"
+                >
+                  saving…
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -64,21 +96,50 @@
 
 <script setup lang="ts">
 import { ChevronDownIcon } from "@heroicons/vue/20/solid";
+import { invoke } from "@tauri-apps/api/core";
 import type {
   GameCompatibilityStatus,
   ClientPlatform,
   GameCompatSummary,
 } from "~/composables/use-compat-summary";
 
-const { compat = undefined } = defineProps<{
+const { compat = undefined, gameId } = defineProps<{
   /**
    * Compat summary for this game. Pass `useCompatSummary().value[gameId]`
    * from the parent. Component renders nothing if there's no data.
    */
   compat?: GameCompatSummary | undefined;
+  /**
+   * Required when there are pending AliveNoRender rows the user might
+   * want to promote to AliveRenders — the confirm action POSTs the new
+   * status keyed by gameId. Pass undefined to hide the buttons (e.g.
+   * read-only contexts where promotion shouldn't fire).
+   */
+  gameId?: string;
 }>();
 
 const open = ref(true);
+
+// Tracks which platform's confirm button is mid-flight so we can show
+// "saving…" and disable both buttons for that row. Cleared as soon as
+// the post resolves (success or fail).
+const confirming = ref<ClientPlatform | null>(null);
+
+async function confirmRendered(platform: ClientPlatform, rendered: boolean) {
+  if (!gameId) return;
+  confirming.value = platform;
+  try {
+    await invoke("confirm_compat_render", { gameId, rendered });
+    // Refresh the cached summary so the panel reflects the promoted
+    // status without a hard reload. Safe to call even if no other
+    // component is consuming the composable — it's idempotent.
+    await refreshCompatSummary();
+  } catch (err) {
+    console.warn("[compat] confirm_compat_render failed:", err);
+  } finally {
+    confirming.value = null;
+  }
+}
 
 const STATUS_LABEL: Record<GameCompatibilityStatus, string> = {
   AliveRenders: "Plays correctly",
@@ -117,6 +178,7 @@ const rows = computed(() => {
       signature: r.signature,
       protonVersion: r.protonVersion,
       testedAt: r.testedAt,
+      status: r.status,
     };
   });
 });

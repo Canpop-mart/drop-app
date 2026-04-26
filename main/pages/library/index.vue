@@ -17,12 +17,14 @@
         </div>
       </div>
     </div>
-    <!-- Batch compat tester is parked at the bottom so it doesn't compete
-         with the "select a game" affordance, but is one click away when
-         the user wants to triage their whole installed library. -->
-    <CompatBatchPanel class="mb-8" />
+    <!-- Batch compat tester is gated behind dev mode — it's a noisy
+         operation (launches every installed game in sequence) that
+         only power users investigating compat data should reach for. -->
+    <CompatBatchPanel v-if="devMode.enabled.value" class="mb-8" />
   </div>
 </template>
 <script setup lang="ts">
 import { RocketLaunchIcon } from "@heroicons/vue/24/outline";
+
+const devMode = useDevMode();
 </script>

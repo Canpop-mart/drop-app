@@ -1,6 +1,7 @@
 [package]
 name = "drop-app"
-version = "1.10.0-rc.3"
+version = "1.10.0-rc.4"
+# rc.4 — fix tokio panic on launch from compat orchestrator's async context.
 # rc.3 — compat round 2: createModal fix, Proton version detection, batch
 # worker, auto-refresh after test, log4rs append=true.
 description = "The client application for the open-source, self-hosted game distribution platform Drop"

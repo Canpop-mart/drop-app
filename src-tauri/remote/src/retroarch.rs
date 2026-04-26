@@ -652,9 +652,62 @@ pub fn configure_retroarch_for_game(
         }
 
         // ── CRT shader toggle ──────────────────────────────────────────
+        // CRT shaders fall into two compatibility classes:
+        //
+        // 1. Low-res-only (crt-easymode, our bundled drop-crt) — designed
+        //    for pixel-art consoles at ~256-512px native source. Produce
+        //    a black screen on high-res 3D emulators (Dolphin/PCSX2/PPSSPP/
+        //    etc.) rendering at 4-5x internal scale. Audio still plays
+        //    because it's not in the shader path.
+        // 2. Resolution-tolerant (crt-lottes, crt-royale, crt-royale-fast,
+        //    crt-geom-flat) — math-based, handle wider input widths.
+        //
+        // For ROMs that resolve to high-res 3D cores we pick a shader from
+        // class 2. The "CRT effect" is more subtle at 4K Dolphin output
+        // than on native NES, but it renders. For low-res 2D consoles we
+        // keep the existing crt-easymode default which gives a stronger
+        // scanline / phosphor look.
+        let high_res_3d = rom_path
+            .map(rom_implies_high_res_3d_core)
+            .unwrap_or(false);
+
         if cfg.crt_shader {
-            crt_shader_path = apply_crt_shader(&mut overrides, &emu_root);
+            if high_res_3d {
+                info!(
+                    "[RETROARCH] High-res 3D core detected for ROM {:?} — using \
+                     resolution-tolerant CRT shader (crt-lottes / crt-royale-fast).",
+                    rom_path
+                );
+            }
+            crt_shader_path = apply_crt_shader(&mut overrides, &emu_root, high_res_3d);
             info!("[RETROARCH] CRT shader enabled, path: {:?}", crt_shader_path);
+
+            // Dolphin's libretro Hardware backend follows RetroArch's
+            // active video driver — if RA is on Vulkan or D3D11, Dolphin
+            // renders into a context the slang shader pipeline can't see
+            // and the user gets the shader's clear color (black) with
+            // Dolphin's frames never composited in. Audio still plays
+            // because it doesn't traverse video.
+            //
+            // Two-part fix when Dolphin is the target core:
+            //   - Force RA's `video_driver = "glcore"` (modern GL Core
+            //     profile) — slang shaders work natively here, and
+            //     Dolphin's Hardware backend renders into RA's GL
+            //     framebuffer where the shader can wrap it.
+            //   - Set `dolphin_renderer = "Hardware"` explicitly so
+            //     Dolphin doesn't accidentally fall back to Software
+            //     renderer (which is functional but ~10× slower).
+            if rom_path.map(rom_uses_dolphin_core).unwrap_or(false) {
+                overrides.insert("video_driver", "\"glcore\"".into());
+                overrides.insert("dolphin_renderer", "\"Hardware\"".into());
+                info!(
+                    "[RETROARCH] Forcing video_driver=glcore + \
+                     dolphin_renderer=Hardware — Dolphin's D3D11/Vulkan \
+                     backends bypass RA's slang shader pipeline, producing \
+                     a black screen when CRT shader is on. GL Core works \
+                     for both."
+                );
+            }
         } else {
             // Explicitly disable shaders and clear stale path from previous launches
             overrides.insert("video_shader_enable", "false".into());
@@ -1316,7 +1369,11 @@ fn apply_quality_preset(overrides: &mut HashMap<&str, String>, quality: &Quality
 /// Shader source priority:
 /// - System shaders (crt-easymode, etc.) if found on disk
 /// - Bundled Drop CRT shader (always written to `<emu_root>/shaders/drop-crt/`)
-fn apply_crt_shader(overrides: &mut HashMap<&str, String>, emu_root: &std::path::Path) -> Option<String> {
+fn apply_crt_shader(
+    overrides: &mut HashMap<&str, String>,
+    emu_root: &std::path::Path,
+    prefer_high_res_capable: bool,
+) -> Option<String> {
     overrides.insert("video_shader_enable", "true".into());
 
     // Enable auto-shader loading and point shader_dir to emu_root/shaders/
@@ -1333,7 +1390,7 @@ fn apply_crt_shader(overrides: &mut HashMap<&str, String>, emu_root: &std::path:
     let bundled_path = write_bundled_crt_shader(emu_root);
 
     // ── Step 2: Find the best available shader ─────────────────────────
-    let chosen_shader = find_best_crt_shader(emu_root)
+    let chosen_shader = find_best_crt_shader(emu_root, prefer_high_res_capable)
         .or_else(|| {
             // Try AppImage extraction on Linux
             #[cfg(target_os = "linux")]
@@ -1341,7 +1398,7 @@ fn apply_crt_shader(overrides: &mut HashMap<&str, String>, emu_root: &std::path:
                 if let Some(appimage_path) = find_appimage_binary(emu_root) {
                     info!("[RETROARCH] No system shaders found — extracting from AppImage");
                     extract_appimage_shaders(emu_root, &appimage_path);
-                    return find_best_crt_shader(emu_root);
+                    return find_best_crt_shader(emu_root, prefer_high_res_capable);
                 }
             }
             None
@@ -1520,15 +1577,43 @@ fn write_auto_shader_preset(emu_root: &Path, shader_preset_path: &Path) {
 }
 
 /// Searches all known locations for a high-quality system CRT shader preset.
-fn find_best_crt_shader(emu_root: &Path) -> Option<PathBuf> {
-    let preferred_presets = [
-        "crt-easymode.slangp",
-        "crt-royale.slangp",
-        "crt-lottes.slangp",
-        "crt-easymode.glslp",
-        "crt-royale.glslp",
-        "crt-lottes.glslp",
-    ];
+fn find_best_crt_shader(
+    emu_root: &Path,
+    prefer_high_res_capable: bool,
+) -> Option<PathBuf> {
+    // For low-res 2D consoles, crt-easymode wins — strong scanlines and
+    // phosphor mask at native resolution. For high-res 3D consoles
+    // (Dolphin/PCSX2/PPSSPP/Mupen64Plus rendering at 4-5x internal scale),
+    // crt-easymode produces black output because its math assumes a
+    // ~512px-wide source. crt-lottes and crt-royale-fast are math-based
+    // and tolerate any input width — that's what we want for 3D.
+    //
+    // Order is by preference, so the first match wins.
+    let preferred_presets: &[&str] = if prefer_high_res_capable {
+        &[
+            // Lighter resolution-tolerant shaders first
+            "crt-lottes.slangp",
+            "crt-royale-fast.slangp",
+            "crt-geom-flat.slangp",
+            "crt-geom.slangp",
+            "crt-royale.slangp", // heavier, last resort within slang
+            // GLSL fallbacks
+            "crt-lottes.glslp",
+            "crt-royale-fast.glslp",
+            "crt-geom-flat.glslp",
+            "crt-geom.glslp",
+            "crt-royale.glslp",
+        ]
+    } else {
+        &[
+            "crt-easymode.slangp",
+            "crt-royale.slangp",
+            "crt-lottes.slangp",
+            "crt-easymode.glslp",
+            "crt-royale.glslp",
+            "crt-lottes.glslp",
+        ]
+    };
 
     let mut shader_dirs: Vec<PathBuf> = vec![
         emu_root.join("shaders").join("shaders_slang").join("crt"),
@@ -1884,6 +1969,14 @@ fn apply_core_quality_options(overrides: &mut HashMap<&str, String>, quality: &Q
         overrides.insert("beetle_psx_hw_pgxp_texture", "\"disabled\"".into());
     }
 
+    // PCSX2 — deinterlacer. PS2 games render at 480i with each frame split
+    // into two fields; PCSX2's default "Auto" mode often weaves them
+    // literally for games with sub-pixel UI animation, producing ghosted
+    // text on menus (Psychonauts intro is the canonical example). Adaptive
+    // switches between weave and bob based on per-pixel motion — clean
+    // static content + smooth animation, no ghosts.
+    overrides.insert("pcsx2_deinterlace_mode", "\"Adaptive\"".into());
+
     // Mupen64Plus-Next — texture filtering
     let (n64_txfilter, n64_aspect) = match quality {
         QualityPreset::Low => ("None", "4:3"),
@@ -2071,6 +2164,83 @@ const EXTENSION_CORE_MAP: &[(&str, &[&str])] = &[
     ("vec", &["vecx"]),
     ("col", &["bluemsx"]),
 ];
+
+/// True when the given ROM path is going to be loaded by Dolphin
+/// (GameCube/Wii). Used to apply Dolphin-specific shader-compatibility
+/// workarounds (forcing OpenGL backend when CRT shader is on, etc.)
+fn rom_uses_dolphin_core(rom_path: &str) -> bool {
+    let path = Path::new(rom_path);
+    let Some(ext) = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+    else {
+        return false;
+    };
+    // Per EXTENSION_CORE_MAP: these resolve to Dolphin
+    matches!(
+        ext.as_str(),
+        "rvz" | "gcm" | "gcz" | "wbfs" | "wad" | "dol" | "elf" | "wia"
+    )
+    // .iso could also be a Dolphin disc (Wii ISO) but only after
+    // detect_iso_disc_type sniffs it. The shader-pipeline fix is
+    // gated behind that check separately if needed; for now, .iso
+    // is more often PS2 than Wii in user libraries so we skip it
+    // here to avoid wrongly forcing OpenGL on PCSX2 (where the
+    // shader pipeline already works fine — see Psychonauts).
+}
+
+/// Returns true when the given ROM path will be loaded by a core that
+/// renders at high internal resolution / native 3D, where slang CRT
+/// shaders break video output.
+///
+/// Used by `configure_retroarch_for_game` to suppress the CRT shader
+/// for these cases regardless of user preference. The user's "CRT
+/// shader on" intent is "give my retro games a CRT look", not "break
+/// my GameCube and PS2 games."
+///
+/// Heuristic is per-extension. For `.iso` we read the disc magic to
+/// distinguish PS2/Saturn (high-res 3D) from edge cases.
+///
+/// Extensions kept ON the CRT path are the low-res 2D classics:
+///   nes, fds, sfc, smc, gba, gbc, gb, sms, gg, md, gen, smd, 32x,
+///   pce, ngp, ngc, ws, wsc, lnx, a26, a78, vec, col
+fn rom_implies_high_res_3d_core(rom_path: &str) -> bool {
+    let path = Path::new(rom_path);
+    let Some(ext) = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+    else {
+        return false;
+    };
+
+    match ext.as_str() {
+        // Dolphin (GameCube + Wii)
+        "rvz" | "gcm" | "gcz" | "wbfs" | "wad" | "dol" | "elf" | "wia" => true,
+        // Mupen64Plus (N64) — internal resolution defaults much higher than CRT shader assumes
+        "n64" | "z64" | "v64" => true,
+        // PPSSPP (PSP)
+        "cso" | "psp" => true,
+        // Flycast (Dreamcast)
+        "cdi" | "gdi" => true,
+        // Citra (3DS)
+        "3ds" => true,
+        // DS — has 3D and tiny native res; CRT shader doesn't help much
+        "nds" => true,
+        // PSX/PSP/PS2 — beetle_psx_hw is set to 4x internal scale by Drop's
+        // quality preset (see PCSX2/Beetle PSX core options above), so even
+        // 1st-gen 3D consoles are upscaled past where CRT shaders work.
+        "cue" | "bin" | "chd" | "pbp" => true,
+        // ISO is ambiguous — sniff the disc to tell GameCube/Wii (Dolphin)
+        // and non-Nintendo (PS2 via PCSX2) from edge cases. All three
+        // resolve to high-res-3D cores so we can return true unconditionally
+        // for ISO without re-reading the header here.
+        "iso" => true,
+        // Everything else is presumed retro 2D — CRT shader stays.
+        _ => false,
+    }
+}
 
 /// Disc type detected from an ISO file's header magic bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
