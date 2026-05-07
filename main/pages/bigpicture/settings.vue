@@ -1031,6 +1031,11 @@ watch(keyboardMode, (val) => {
 const registerSidebar = useBpFocusableGroup("content");
 const registerContent = useBpFocusableGroup("content");
 
+// Dev mode toggle — declared up here because `sections` below filters
+// itself based on it. The category-toggle UI lower in the file uses the
+// same `dev` ref.
+const dev = useDevMode();
+
 // Compatibility is Linux-only — Proton/umu commands in the Rust backend
 // are `#[cfg(target_os = "linux")]`, so the tab would just show spinner
 // and log errors on Windows/macOS. Hide it entirely there.
@@ -1043,7 +1048,11 @@ const sections = computed(() => {
   ];
   const tail = [
     { label: "Achievements", value: "achievements" },
-    { label: "Streaming", value: "streaming" },
+    // Streaming is gated behind dev mode until the Sunshine/Moonlight flow
+    // is hardened — see the Developer section below for the toggle.
+    ...(dev.enabled.value
+      ? [{ label: "Streaming", value: "streaming" }]
+      : []),
     { label: "Developer", value: "developer" },
     { label: "About", value: "about" },
   ];
@@ -1057,7 +1066,8 @@ const sections = computed(() => {
 // (gamepad, focus-nav, event subscribe, downloads, invoke, etc.) emit
 // [DEV:CATEGORY] tagged console messages — the BPM debug overlay picks
 // them up so they're visible on-device without leaving Gaming Mode.
-const dev = useDevMode();
+// (`dev` itself is declared near the top of this script so `sections` can
+// gate the Streaming entry on it.)
 const devCategoryMeta: Record<DevCategory, { label: string; description: string }> = {
   gamepad: { label: "Gamepad", description: "Button presses, axis changes, connect/disconnect" },
   focus: { label: "Focus navigation", description: "applyFocus, cycleGroup, input lock" },

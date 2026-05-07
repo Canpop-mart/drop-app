@@ -9,6 +9,8 @@
  * step performs its own "already configured?" check and offers to skip.
  */
 
+import { isDevEnabled } from "./dev-mode";
+
 const COMPLETED_AT_KEY = "drop:wizard_completed_at";
 const STEP_SEEN_PREFIX = "drop:wizard_step_seen:";
 
@@ -25,6 +27,22 @@ export const WIZARD_STEPS = [
 ] as const;
 
 export type WizardStep = (typeof WIZARD_STEPS)[number];
+
+// Steps gated behind dev mode. When dev mode is off these are skipped by
+// `activeSteps()`, so `nextRoute`/`prevRoute`/`stepNumber`/`total` all see
+// a wizard that's one entry shorter and the user never lands on the page.
+const DEV_ONLY_STEPS: ReadonlySet<WizardStep> = new Set(["saves"]);
+
+/**
+ * Returns the current sequence of wizard steps, filtered by dev mode.
+ * Re-evaluated on each call — `isDevEnabled()` reads from a module-level
+ * boolean, not a Vue ref, so toggling dev mode mid-wizard requires a
+ * page revisit to take effect (an acceptable edge case).
+ */
+function activeSteps(): readonly WizardStep[] {
+  if (isDevEnabled()) return WIZARD_STEPS;
+  return WIZARD_STEPS.filter((s) => !DEV_ONLY_STEPS.has(s));
+}
 
 export function useOnboarding() {
   function safeStorage(): Storage | null {
@@ -69,19 +87,22 @@ export function useOnboarding() {
   }
 
   function nextRoute(current: WizardStep): string {
-    const idx = WIZARD_STEPS.indexOf(current);
-    if (idx < 0 || idx >= WIZARD_STEPS.length - 1) return "/bigpicture";
-    return stepPath(WIZARD_STEPS[idx + 1]);
+    const steps = activeSteps();
+    const idx = steps.indexOf(current);
+    if (idx < 0 || idx >= steps.length - 1) return "/bigpicture";
+    return stepPath(steps[idx + 1]);
   }
 
   function prevRoute(current: WizardStep): string | null {
-    const idx = WIZARD_STEPS.indexOf(current);
+    const steps = activeSteps();
+    const idx = steps.indexOf(current);
     if (idx <= 0) return null;
-    return stepPath(WIZARD_STEPS[idx - 1]);
+    return stepPath(steps[idx - 1]);
   }
 
   function stepNumber(current: WizardStep): number {
-    const idx = WIZARD_STEPS.indexOf(current);
+    const steps = activeSteps();
+    const idx = steps.indexOf(current);
     return idx < 0 ? 1 : idx + 1;
   }
 
@@ -96,6 +117,8 @@ export function useOnboarding() {
     prevRoute,
     stepPath,
     stepNumber,
-    total: WIZARD_STEPS.length,
+    get total() {
+      return activeSteps().length;
+    },
   };
 }

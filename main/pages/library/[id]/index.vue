@@ -188,7 +188,12 @@
             @resume="() => resumeDownload()"
             :status="status"
           />
+          <!-- Streaming is gated behind dev mode while the Sunshine/Moonlight
+               flow is hardened. The button polls the server every 15s for
+               available remote sessions, so hiding it also avoids the
+               background traffic for users who can't use the feature. -->
           <StreamButton
+            v-if="devMode.enabled.value"
             :game-id="game.id"
             :game-name="game.mName"
             :is-installed="status.type === 'Installed'"

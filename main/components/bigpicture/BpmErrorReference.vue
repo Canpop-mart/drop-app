@@ -63,7 +63,14 @@ interface GlossaryCategory {
   entries: GlossaryEntry[];
 }
 
-const categories: GlossaryCategory[] = [
+// All three Saves entries reference the Ludusavi-backed cloud-save sync,
+// which is gated behind dev mode. When the feature itself is hidden, this
+// glossary category just confuses users — surface it only when dev mode
+// is on so it stays useful for the people who can actually hit those
+// errors.
+const devMode = useDevMode();
+
+const allCategories: GlossaryCategory[] = [
   {
     name: "Launch & Proton",
     icon: "🕹️",
@@ -180,4 +187,10 @@ const categories: GlossaryCategory[] = [
     ],
   },
 ];
+
+const categories = computed(() =>
+  devMode.enabled.value
+    ? allCategories
+    : allCategories.filter((c) => c.name !== "Saves"),
+);
 </script>

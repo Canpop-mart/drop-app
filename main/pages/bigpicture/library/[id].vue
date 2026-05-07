@@ -557,8 +557,13 @@
           No screenshots available.
         </p>
       </div>
-      <!-- Saves -->
-      <div v-else-if="activeTab === 'saves'" class="space-y-4">
+      <!-- Saves — gated by dev mode (also guarded here as a belt-and-braces
+           in case activeTab is briefly still 'saves' when dev mode flips
+           off, before the watcher resets it). -->
+      <div
+        v-else-if="activeTab === 'saves' && devMode.enabled.value"
+        class="space-y-4"
+      >
         <!-- Unified save list: merges local + cloud saves -->
         <div v-if="mergedSaves.length > 0" class="space-y-2">
           <div
@@ -1076,6 +1081,13 @@ const launchError = ref<string | null>(null);
 const diagnosticsRan = ref(false);
 const isStreaming = ref(false);
 
+// Dev mode gates Streaming + Cloud Saves UI on this page (the Saves tab,
+// the Stream-from-device entries in the play menu, and the Ludusavi
+// install prompt). Keep the underlying machinery wired up — composables,
+// listeners — so toggling dev mode at runtime cleanly reveals the UI
+// without a reload.
+const devMode = useDevMode();
+
 // ── Streaming ─────────────────────────────────────────────────────────────
 const {
   checkSunshine,
@@ -1231,8 +1243,14 @@ const otherDevices = computed(() => {
   }
   return [...byKey.values()];
 });
-// Devices that have this game installed (can stream from)
-const streamableDevices = computed(() => otherDevices.value.filter((d) => d.hasGame === true));
+// Devices that have this game installed (can stream from). Empty when dev
+// mode is off so the play menu's "Stream from {device}" rows disappear and
+// `playMenuItemCount` collapses cleanly.
+const streamableDevices = computed(() =>
+  devMode.enabled.value
+    ? otherDevices.value.filter((d) => d.hasGame === true)
+    : [],
+);
 // Devices that definitively do NOT have this game installed (can install on).
 // Strict `=== false` check — devices that haven't reported (`hasGame ===
 // undefined`) are treated as unknown and excluded from BOTH lists rather
@@ -2027,12 +2045,30 @@ function onAchievementIconError(event: Event) {
   img.parentNode?.insertBefore(fallback, img.nextSibling);
 }
 
-const tabs = [
-  { label: "Achievements", value: "achievements" },
-  { label: "Details", value: "details" },
-  { label: "Gallery", value: "gallery" },
-  { label: "Saves", value: "saves" },
-];
+// Saves tab is gated behind dev mode while the Ludusavi-backed cloud sync
+// flow is still in development. When dev mode is off the tab disappears
+// from the row; if `activeTab` happens to be "saves" at the moment the
+// user toggles dev mode off, the watcher below resets it to the first tab.
+const tabs = computed(() => {
+  const list: { label: string; value: string }[] = [
+    { label: "Achievements", value: "achievements" },
+    { label: "Details", value: "details" },
+    { label: "Gallery", value: "gallery" },
+  ];
+  if (devMode.enabled.value) {
+    list.push({ label: "Saves", value: "saves" });
+  }
+  return list;
+});
+
+watch(
+  () => devMode.enabled.value,
+  (enabled) => {
+    if (!enabled && activeTab.value === "saves") {
+      activeTab.value = "achievements";
+    }
+  },
+);
 
 interface AchievementItem {
   id: string;

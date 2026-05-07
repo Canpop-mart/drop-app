@@ -41,7 +41,9 @@
         <ul class="space-y-1.5 list-disc list-inside ml-2">
           <li>Your profile — display name, avatar, bio</li>
           <li>Where games install and how Proton runs Windows titles</li>
-          <li>Cloud saves (Ludusavi)</li>
+          <!-- Cloud saves (Ludusavi) — listed only when dev mode is on,
+               since the saves wizard step itself is also gated. -->
+          <li v-if="devMode.enabled.value">Cloud saves (Ludusavi)</li>
           <li>RetroAchievements for retro titles</li>
           <li>Controller navigation</li>
           <li>What common warnings and errors mean</li>
@@ -58,6 +60,7 @@ import BpmWizardShell from "~/components/bigpicture/BpmWizardShell.vue";
 definePageMeta({ layout: "bpm-wizard" });
 
 const appState = useAppState();
+const devMode = useDevMode();
 
 const displayName = computed(
   () => appState.value?.user?.displayName || appState.value?.user?.username || "User",

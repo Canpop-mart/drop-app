@@ -43,6 +43,7 @@
 <script setup lang="ts">
 import {
   ArrowDownTrayIcon,
+  CodeBracketIcon,
   CubeIcon,
   HomeIcon,
   RectangleGroupIcon,
@@ -62,6 +63,7 @@ const systemData = await invoke<{
 }>("fetch_system_data");
 
 const appState = useAppState();
+const devMode = useDevMode();
 
 // Make navigation reactive by wrapping in computed
 const navigation = computed(() => [
@@ -99,17 +101,29 @@ const navigation = computed(() => [
     prefix: "/settings/achievements",
     icon: TrophyIcon,
   },
-  {
-    label: "Streaming",
-    route: "/settings/streaming",
-    prefix: "/settings/streaming",
-    icon: SignalIcon,
-  },
+  // Streaming is gated behind dev mode until the Sunshine/Moonlight flow is
+  // hardened for end users — see /settings/developer.
+  ...(devMode.enabled.value
+    ? [
+        {
+          label: "Streaming",
+          route: "/settings/streaming",
+          prefix: "/settings/streaming",
+          icon: SignalIcon,
+        },
+      ]
+    : []),
   {
     label: "Account",
     route: "/settings/account",
     prefix: "/settings/account",
     icon: UserIcon,
+  },
+  {
+    label: "Developer",
+    route: "/settings/developer",
+    prefix: "/settings/developer",
+    icon: CodeBracketIcon,
   },
 ]);
 

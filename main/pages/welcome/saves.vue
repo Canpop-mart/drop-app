@@ -122,6 +122,15 @@ definePageMeta({ layout: "bpm-wizard" });
 
 const registerContent = useBpFocusableGroup("content");
 
+// The saves step is hidden from the wizard sequence when dev mode is off,
+// but a direct URL hit (bookmarked link, manual navigation) could still
+// land here. Bounce back to the wizard start in that case so the user
+// doesn't see an unfinished page.
+const devMode = useDevMode();
+if (!devMode.enabled.value) {
+  await navigateTo("/welcome", { replace: true });
+}
+
 const installed = ref(false);
 const installing = ref(false);
 const installResult = ref("");
