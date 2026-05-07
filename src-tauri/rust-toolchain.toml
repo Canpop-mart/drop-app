@@ -1,11 +1,9 @@
 [toolchain]
-# Pinned to a known-good nightly. Bumping this date is safe to try, but
-# verify the build before merging — recent nightlies have been tightening
-# the borrow checker around `Pin<&mut Self>` field borrows in ways that
-# break droplet-rs's archive_backend.rs (E0502 + E0597 lifetime errors
-# in fn poll_read).
-#
-# rc.4 (commit 48a4b0c) was the last release-tagged build that succeeded
-# on this codebase; CI ran it on 2026-04-25, so its nightly was
-# 2026-04-25 or earlier. 2026-04-20 gives a small buffer.
+# Pinned to a known-good nightly for deterministic builds. The previous
+# borrowck failure that triggered this pin turned out to be unrelated
+# (a bad git rev of droplet-rs picked up by `cargo update`, since fixed
+# in games/Cargo.toml), but pinning the toolchain is still worthwhile
+# defensively — keeps CI insulated from random nightly regressions.
+# rc.4 built successfully on 2026-04-25; this date sits comfortably
+# inside that window. Bumping is fine when there's a reason.
 channel = "nightly-2026-04-20"

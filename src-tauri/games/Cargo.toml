@@ -14,7 +14,13 @@ crossbeam-channel = "0.5.15"
 ctr = "0.9.2"
 database = { path = "../database", version = "0.1.0" }
 download_manager = { path = "../download_manager", version = "0.1.0" }
-droplet-rs = { git = "https://github.com/Drop-OSS/droplet-rs" }
+# Pinned to v0.14.1 (rc.4's known-good revision). Upstream HEAD
+# (0107b46, v0.16.3) introduced an `AsyncRead for ArchiveReader` impl
+# in src/versions/archive_backend.rs that fails the borrow checker
+# (E0502 + E0597 — `self.archive` immutable borrow held across a
+# `self.prev_block` mutable borrow inside fn poll_read). Bumping is
+# safe once upstream lands a fix.
+droplet-rs = { git = "https://github.com/Drop-OSS/droplet-rs", rev = "f17a585b563d874ef9a09c27be5169b7e728d148" }
 futures-util = "*"
 hex = "0.4.3"
 log = "0.4.28"
