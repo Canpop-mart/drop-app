@@ -1,23 +1,28 @@
-on: push
 name: Clippy check
+on: push
+
 jobs:
   clippy_check:
     runs-on: ubuntu-24.04
     permissions:
-      checks: write
+      contents: read
     steps:
-      - uses: actions/checkout@v1
-      - name: install dependencies (ubuntu only)
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
-
-      - uses: actions-rs/toolchain@v1
+          sudo apt-get install -y \
+            libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libappindicator3-dev librsvg2-dev patchelf libudev-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libssl-dev
+      - uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly
           components: clippy
-          override: true
-      - uses: actions-rs/clippy-check@v1
+      - uses: swatinem/rust-cache@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: --manifest-path ./src-tauri/Cargo.toml
+          workspaces: ./src-tauri -> target
+      - name: cargo clippy
+        working-directory: ./src-tauri
+        run: cargo clippy --all-targets
