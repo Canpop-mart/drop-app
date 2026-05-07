@@ -321,8 +321,8 @@ pub async fn fetch_game_version_options_logic(
     let unique_platforms: Vec<Platform> = {
         let mut seen = std::collections::HashSet::new();
         data.iter()
-            .filter(|v| seen.insert(v.platform.clone()))
-            .map(|v| v.platform.clone())
+            .filter(|v| seen.insert(v.platform))
+            .map(|v| v.platform)
             .collect()
     };
     let valid_platforms: std::collections::HashSet<Platform> = {
@@ -584,20 +584,20 @@ pub fn list_game_saves(game_id: String) -> Vec<SaveFileInfo> {
     let saves_path = saves_dir.join("saves");
     if let Ok(entries) = std::fs::read_dir(&saves_path) {
         for entry in entries.flatten() {
-            if let Ok(meta) = entry.metadata() {
-                if meta.is_file() {
-                    results.push(SaveFileInfo {
-                        filename: entry.file_name().to_string_lossy().to_string(),
-                        size: meta.len(),
-                        modified: meta
-                            .modified()
-                            .ok()
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0),
-                        save_type: "save".to_string(),
-                    });
-                }
+            if let Ok(meta) = entry.metadata()
+                && meta.is_file()
+            {
+                results.push(SaveFileInfo {
+                    filename: entry.file_name().to_string_lossy().to_string(),
+                    size: meta.len(),
+                    modified: meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                    save_type: "save".to_string(),
+                });
             }
         }
     }
@@ -606,26 +606,26 @@ pub fn list_game_saves(game_id: String) -> Vec<SaveFileInfo> {
     let states_path = saves_dir.join("states");
     if let Ok(entries) = std::fs::read_dir(&states_path) {
         for entry in entries.flatten() {
-            if let Ok(meta) = entry.metadata() {
-                if meta.is_file() {
-                    results.push(SaveFileInfo {
-                        filename: entry.file_name().to_string_lossy().to_string(),
-                        size: meta.len(),
-                        modified: meta
-                            .modified()
-                            .ok()
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0),
-                        save_type: "state".to_string(),
-                    });
-                }
+            if let Ok(meta) = entry.metadata()
+                && meta.is_file()
+            {
+                results.push(SaveFileInfo {
+                    filename: entry.file_name().to_string_lossy().to_string(),
+                    size: meta.len(),
+                    modified: meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                    save_type: "state".to_string(),
+                });
             }
         }
     }
 
-    // Sort by modification time, newest first
-    results.sort_by(|a, b| b.modified.cmp(&a.modified));
+    // Sort by modification time, newest first (Reverse for descending)
+    results.sort_by_key(|b| std::cmp::Reverse(b.modified));
     results
 }
 
@@ -807,10 +807,10 @@ fn find_ludusavi() -> Option<std::path::PathBuf> {
     }
 
     // Check PATH
-    if let Ok(output) = std::process::Command::new("ludusavi").arg("--version").output() {
-        if output.status.success() {
-            return Some(std::path::PathBuf::from("ludusavi"));
-        }
+    if let Ok(output) = std::process::Command::new("ludusavi").arg("--version").output()
+        && output.status.success()
+    {
+        return Some(std::path::PathBuf::from("ludusavi"));
     }
 
     // Check common install locations
@@ -1411,17 +1411,17 @@ fn scan_dir_for_saves(
             scan_dir_for_saves(&path, extensions, results, max_depth - 1);
         } else if path.is_file() {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-            if extensions.contains(&ext.as_str()) {
-                if let Ok(meta) = entry.metadata() {
-                    results.push(LudusaviFile {
-                        path: path.to_string_lossy().to_string(),
-                        size: meta.len(),
-                        modified: meta.modified().ok()
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0),
-                    });
-                }
+            if extensions.contains(&ext.as_str())
+                && let Ok(meta) = entry.metadata()
+            {
+                results.push(LudusaviFile {
+                    path: path.to_string_lossy().to_string(),
+                    size: meta.len(),
+                    modified: meta.modified().ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                });
             }
         }
     }

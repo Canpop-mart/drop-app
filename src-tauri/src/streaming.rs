@@ -143,10 +143,10 @@ fn find_sunshine() -> Option<PathBuf> {
 
     // Check PATH
     let name = if cfg!(target_os = "windows") { "sunshine.exe" } else { "sunshine" };
-    if let Ok(output) = Command::new(name).arg("--version").output() {
-        if output.status.success() {
-            return Some(PathBuf::from(name));
-        }
+    if let Ok(output) = Command::new(name).arg("--version").output()
+        && output.status.success()
+    {
+        return Some(PathBuf::from(name));
     }
 
     // Check common system locations
@@ -512,7 +512,7 @@ pub async fn start_sunshine(
     {
         let mut guard = SUNSHINE_PROCESS.lock().await;
         if let Some(ref mut child) = *guard {
-            if child.try_wait().map_or(false, |s| s.is_none()) {
+            if child.try_wait().is_ok_and(|s| s.is_none()) {
                 return Ok(format!("https://localhost:{}", SUNSHINE_WEB_PORT));
             }
             *guard = None;
@@ -829,10 +829,10 @@ fn find_moonlight() -> Option<PathBuf> {
     let names = &["moonlight"];
 
     for name in names {
-        if let Ok(output) = Command::new(name).arg("--version").output() {
-            if output.status.success() || !output.stdout.is_empty() {
-                return Some(PathBuf::from(name));
-            }
+        if let Ok(output) = Command::new(name).arg("--version").output()
+            && (output.status.success() || !output.stdout.is_empty())
+        {
+            return Some(PathBuf::from(name));
         }
     }
 
@@ -877,11 +877,10 @@ fn find_moonlight() -> Option<PathBuf> {
             .env("LD_LIBRARY_PATH", "")
             .args(["info", "com.moonlight_stream.Moonlight"])
             .output()
+            && output.status.success()
         {
-            if output.status.success() {
-                // Return a sentinel — we'll launch via flatpak run
-                return Some(PathBuf::from("flatpak:com.moonlight_stream.Moonlight"));
-            }
+            // Return a sentinel — we'll launch via flatpak run
+            return Some(PathBuf::from("flatpak:com.moonlight_stream.Moonlight"));
         }
     }
 
@@ -1627,7 +1626,7 @@ async fn fulfill_stream_request(
             }
 
             // Check if the game process has exited — auto-stop the session
-            let game_exited = process::PROCESS_MANAGER.lock().is_game_running(&hb_game_id) == false;
+            let game_exited = !process::PROCESS_MANAGER.lock().is_game_running(&hb_game_id);
             if game_exited {
                 info!("[STREAM-FULFILL] Game {} exited, auto-stopping session {}", hb_game_id, sid);
                 let _ = streaming_sessions::stop_streaming_session(&sid).await;

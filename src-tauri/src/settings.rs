@@ -97,14 +97,14 @@ pub fn update_settings(new_settings: Value) {
             error!("Rejecting unknown settings key: {key}");
             continue;
         }
-        if let Some(s) = value.as_str() {
-            if s.len() > MAX_SETTING_STRING_LEN {
-                error!(
-                    "Rejecting oversized settings value for {key} ({} bytes)",
-                    s.len()
-                );
-                continue;
-            }
+        if let Some(s) = value.as_str()
+            && s.len() > MAX_SETTING_STRING_LEN
+        {
+            error!(
+                "Rejecting oversized settings value for {key} ({} bytes)",
+                s.len()
+            );
+            continue;
         }
         if key == "maxDownloadThreads" {
             let threads = value.as_u64().unwrap_or(0);
@@ -270,13 +270,13 @@ pub fn detect_removable_storage() -> Vec<PathBuf> {
         // Also check user media mounts (common on desktop Linux)
         if let Ok(user) = std::env::var("USER") {
             let user_media = PathBuf::from(format!("/run/media/{}", user));
-            if user_media.is_dir() {
-                if let Ok(entries) = std::fs::read_dir(&user_media) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_dir() {
-                            results.push(path);
-                        }
+            if user_media.is_dir()
+                && let Ok(entries) = std::fs::read_dir(&user_media)
+            {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        results.push(path);
                     }
                 }
             }
