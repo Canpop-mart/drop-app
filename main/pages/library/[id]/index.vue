@@ -213,7 +213,7 @@
             v-if="devMode.enabled.value"
             :game-id="game.id"
             :is-installed="status.type === 'Installed'"
-            @result="(outcome) => onCompatTestResult(outcome)"
+            @result="onCompatTestResult"
           />
           <NuxtLink
             class="transition-transform duration-300 hover:scale-105 active:scale-95 inline-flex items-center rounded-md bg-zinc-800/50 px-6 font-semibold text-white shadow-xl backdrop-blur-sm hover:bg-zinc-800/80 uppercase font-display"
@@ -1089,6 +1089,7 @@
 </template>
 
 <script setup lang="ts">
+import { devLog } from "~/composables/dev-mode";
 import {
   Listbox,
   ListboxButton,
@@ -1193,10 +1194,10 @@ const selectedController = ref<ControllerType | null>(
 const selectedQuality = ref<QualityPreset | null>(
   version.value?.userConfiguration?.qualityPreset ?? null,
 );
-// Backward compat: old databases may still store widescreen as a boolean
-const _ws = version.value?.userConfiguration?.widescreen;
+// widescreen used to be `boolean | AspectRatio`; the type is now just
+// AspectRatio. Keep a null guard for forward-compat with malformed data.
 const aspectRatio = ref<AspectRatio>(
-  _ws === true ? "Wide16_9" : _ws === false || _ws == null ? "Standard" : _ws as AspectRatio,
+  version.value?.userConfiguration?.widescreen ?? "Standard",
 );
 const ASPECT_CYCLE: AspectRatio[] = ["Standard", "Wide16_9", "Wide16_10"];
 const aspectLabel = computed(() => {
@@ -1674,7 +1675,7 @@ async function applyProfileName() {
     const msg = await invoke<string>("configure_game_emulator", {
       gameId: game.id,
     });
-    console.log("[EMU]", msg);
+    devLog("state","[EMU]", msg);
   } catch (e) {
     console.error("[EMU] Failed to apply profile:", e);
   }

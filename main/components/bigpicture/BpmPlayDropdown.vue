@@ -62,6 +62,7 @@
 </template>
 
 <script setup lang="ts">
+import { devLog } from "~/composables/dev-mode";
 import { PlayIcon } from "@heroicons/vue/20/solid";
 import { ChevronDownIcon, SignalIcon } from "@heroicons/vue/20/solid";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
@@ -79,7 +80,7 @@ const emit = defineEmits<{
 
 type Mode = "play" | "stream";
 
-console.log("[BPM:PLAY-DROPDOWN] Component setup");
+devLog("state","[BPM:PLAY-DROPDOWN] Component setup");
 
 const selectedMode = ref<Mode>("play");
 const menuOpen = ref(false);

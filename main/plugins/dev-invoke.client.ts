@@ -85,7 +85,7 @@ export default defineNuxtPlugin(() => {
     });
     if (internals.invoke === wrappedInvoke) {
       patched = true;
-      console.log("[DEV:INVOKE] Tauri invoke interception installed (defineProperty)");
+      devLog("invoke","[DEV:INVOKE] Tauri invoke interception installed (defineProperty)");
       return;
     }
   } catch {
@@ -113,7 +113,7 @@ export default defineNuxtPlugin(() => {
         .__TAURI_INTERNALS__?.invoke === wrappedInvoke
     ) {
       patched = true;
-      console.log("[DEV:INVOKE] Tauri invoke interception installed (window proxy)");
+      devLog("invoke","[DEV:INVOKE] Tauri invoke interception installed (window proxy)");
       return;
     }
   } catch {

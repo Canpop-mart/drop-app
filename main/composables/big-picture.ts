@@ -42,7 +42,7 @@ export function useBigPictureMode() {
     // desktop to return to — exiting BPM would cause a white screen.
     const { isGamescope } = useDeckMode();
     if (isGamescope.value) {
-      console.log("[BPM] Exit blocked — running in Gamescope session");
+      devLog("state","[BPM] Exit blocked — running in Gamescope session");
       return;
     }
 

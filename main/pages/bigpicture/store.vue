@@ -544,6 +544,7 @@
 </template>
 
 <script setup lang="ts">
+import { devLog } from "~/composables/dev-mode";
 import { MagnifyingGlassIcon, ArrowsUpDownIcon, FunnelIcon, CheckIcon } from "@heroicons/vue/24/outline";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
 import { useServerApi, type StoreGame, type TrendingGame } from "~/composables/use-server-api";
@@ -647,14 +648,14 @@ function objectUrl(id: string): string {
 
 function goToGame(gameId?: string) {
   if (!gameId) return;
-  console.log(`[BPM:STORE] Navigating to game: ${gameId}`);
+  devLog("state",`[BPM:STORE] Navigating to game: ${gameId}`);
   focusNav.saveFocusSnapshot("/bigpicture/store");
   const target = `/bigpicture/library/${gameId}`;
   // Tell focus-nav's B handler to return to the store (preserving pagination /
   // tab state via saveFocusSnapshot above) rather than the default library grid.
   focusNav.setRouteState("backTo", "/bigpicture/store", target);
   router.push(target).then(() => {
-    console.log(`[BPM:STORE] Navigation complete for: ${gameId}`);
+    devLog("state",`[BPM:STORE] Navigation complete for: ${gameId}`);
   }).catch((e) => {
     console.error(`[BPM:STORE] Navigation FAILED for ${gameId}:`, e);
   });
@@ -781,7 +782,7 @@ async function addSelectedToLibrary() {
         failed++;
       }
     }
-    console.log(`[BPM:STORE] Bulk add to library: ${added} added, ${failed} failed`);
+    devLog("state",`[BPM:STORE] Bulk add to library: ${added} added, ${failed} failed`);
   } finally {
     bulkApplying.value = false;
     exitBulkMode();

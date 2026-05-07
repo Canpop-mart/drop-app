@@ -1,9 +1,6 @@
 [package]
 name = "drop-app"
-version = "1.10.0-rc.4"
-# rc.4 — fix tokio panic on launch from compat orchestrator's async context.
-# rc.3 — compat round 2: createModal fix, Proton version detection, batch
-# worker, auto-refresh after test, log4rs append=true.
+version = "2.0.0"
 description = "The client application for the open-source, self-hosted game distribution platform Drop"
 authors = ["Drop OSS"]
 edition = "2024"
@@ -83,7 +80,6 @@ serde_json = "1"
 serde_with = "3.12.0"
 sha1 = "0.10.6"
 shared_child = "1.0.1"
-slice-deque = "0.3.0"
 sysinfo = "0.36.1"
 tar = "0.4.44"
 tauri-plugin-autostart = "2.5"

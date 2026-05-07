@@ -440,6 +440,7 @@ import { useAppState } from "~/composables/app-state";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
+import { devLog } from "~/composables/dev-mode";
 
 definePageMeta({ layout: "bigpicture" });
 
@@ -736,29 +737,29 @@ function selectAvatar(pic: string) {
 }
 
 async function confirmAvatarPick() {
-  console.log("[BPM:PROFILE] confirmAvatarPick called, selectedAvatarPic:", selectedAvatarPic.value);
+  devLog("state","[BPM:PROFILE] confirmAvatarPick called, selectedAvatarPic:", selectedAvatarPic.value);
   if (!selectedAvatarPic.value) return;
   avatarUploading.value = true;
   try {
     // Fetch the preset image as a blob and upload it to the avatar endpoint
     const imgUrl = avatarPicUrl(selectedAvatarPic.value);
-    console.log("[BPM:PROFILE] Fetching preset image from:", imgUrl);
+    devLog("state","[BPM:PROFILE] Fetching preset image from:", imgUrl);
     const res = await fetch(imgUrl);
-    console.log("[BPM:PROFILE] Image fetch status:", res.status, res.ok);
+    devLog("state","[BPM:PROFILE] Image fetch status:", res.status, res.ok);
     if (!res.ok) {
       console.error("[BPM:PROFILE] Failed to fetch preset image:", res.status, res.statusText);
       return;
     }
     const blob = await res.blob();
-    console.log("[BPM:PROFILE] Got blob:", blob.size, "bytes, type:", blob.type);
+    devLog("state","[BPM:PROFILE] Got blob:", blob.size, "bytes, type:", blob.type);
     const file = new File([blob], selectedAvatarPic.value, { type: blob.type || "image/png" });
 
     const form = new FormData();
     form.append("file", file);
     const url = serverUrl("api/v1/user/avatar");
-    console.log("[BPM:PROFILE] Uploading avatar to:", url);
+    devLog("state","[BPM:PROFILE] Uploading avatar to:", url);
     const uploadRes = await fetch(url, { method: "POST", body: form });
-    console.log("[BPM:PROFILE] Upload response:", uploadRes.status, uploadRes.ok);
+    devLog("state","[BPM:PROFILE] Upload response:", uploadRes.status, uploadRes.ok);
 
     // Show preview
     avatarPreview.value = imgUrl;
@@ -767,7 +768,7 @@ async function confirmAvatarPick() {
     if (uploadRes.ok) {
       try {
         const data = await uploadRes.json();
-        console.log("[BPM:PROFILE] Avatar response data:", JSON.stringify(data));
+        devLog("state","[BPM:PROFILE] Avatar response data:", JSON.stringify(data));
         // Server returns { profilePictureObjectId: "..." }
         const newId = data?.profilePictureObjectId;
         if (newId && state.value?.user) {
@@ -820,13 +821,13 @@ async function onBannerSelected(e: Event) {
 // ── Save ──────────────────────────────────────────────────────────────────
 
 async function saveProfile() {
-  console.log("[BPM:PROFILE] saveProfile called");
+  devLog("state","[BPM:PROFILE] saveProfile called");
   saving.value = true;
   saveMessage.value = "";
   try {
     // Save profile fields
     const profileUrl = serverUrl("api/v1/user/profile");
-    console.log("[BPM:PROFILE] PATCH profile to:", profileUrl, { displayName: displayName.value, bio: bio.value, profileTheme: selectedTheme.value });
+    devLog("state","[BPM:PROFILE] PATCH profile to:", profileUrl, { displayName: displayName.value, bio: bio.value, profileTheme: selectedTheme.value });
     const profileRes = await fetch(profileUrl, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -836,7 +837,7 @@ async function saveProfile() {
         profileTheme: selectedTheme.value,
       }),
     });
-    console.log("[BPM:PROFILE] Profile PATCH response:", profileRes.status, profileRes.ok);
+    devLog("state","[BPM:PROFILE] Profile PATCH response:", profileRes.status, profileRes.ok);
     if (!profileRes.ok) {
       const errText = await profileRes.text().catch(() => "");
       console.error("[BPM:PROFILE] Profile PATCH failed:", profileRes.status, errText);
@@ -851,13 +852,13 @@ async function saveProfile() {
       .map((s) => ({ type: s.type, gameId: s.gameId, itemId: s.itemId, title: s.title, data: s.data }));
 
     const showcaseUrl = serverUrl("api/v1/user/showcase");
-    console.log("[BPM:PROFILE] PUT showcase to:", showcaseUrl, "items:", gameItems.length + achItems.length);
+    devLog("state","[BPM:PROFILE] PUT showcase to:", showcaseUrl, "items:", gameItems.length + achItems.length);
     const showcaseRes = await fetch(showcaseUrl, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items: [...gameItems, ...achItems] }),
     });
-    console.log("[BPM:PROFILE] Showcase PUT response:", showcaseRes.status, showcaseRes.ok);
+    devLog("state","[BPM:PROFILE] Showcase PUT response:", showcaseRes.status, showcaseRes.ok);
     if (!showcaseRes.ok) {
       const errText = await showcaseRes.text().catch(() => "");
       console.error("[BPM:PROFILE] Showcase PUT failed:", showcaseRes.status, errText);

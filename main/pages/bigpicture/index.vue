@@ -61,8 +61,8 @@
               >
                 <p class="font-bold tracking-widest uppercase" style="color: #66c0f4; font-size: 0.8vw; margin-bottom: 1vh">Continue Playing</p>
                 <h2 class="font-bold" style="color: #c7d5e0; font-size: 2.5vw; margin-bottom: 1vh">{{ spotlightGame.game.mName }}</h2>
-                <p v-if="spotlightGame.status.installed" style="color: #8f98a0; font-size: 0.9vw; margin-bottom: 2vh">
-                  {{ formatPlaytime(spotlightGame.status.playtime) }} played
+                <p v-if="spotlightGame.installed" style="color: #8f98a0; font-size: 0.9vw; margin-bottom: 2vh">
+                  {{ formatPlaytime(spotlightGame.playtimeSeconds) }} played
                 </p>
                 <button
                   class="rounded font-bold tracking-wide transition-all hover:brightness-110 cursor-pointer"
@@ -118,12 +118,12 @@
                       <div
                         class="h-full rounded-full transition-all duration-300"
                         style="background-color: #1a9fff"
-                        :style="{ width: `${(item.dl_progress * 100).toFixed(0)}%` }"
+                        :style="{ width: `${((item.dl_progress ?? 0) * 100).toFixed(0)}%` }"
                       />
                     </div>
                   </div>
                   <span class="font-medium flex-shrink-0" style="color: #8f98a0; font-size: 0.8vw">
-                    {{ (item.dl_progress * 100).toFixed(0) }}%
+                    {{ ((item.dl_progress ?? 0) * 100).toFixed(0) }}%
                   </span>
                 </div>
               </div>
@@ -276,12 +276,12 @@
                       <div
                         class="h-full rounded-full transition-all duration-300"
                         style="background-color: #e60012"
-                        :style="{ width: `${Math.min(item.dl_progress * 100, 100).toFixed(0)}%` }"
+                        :style="{ width: `${Math.min((item.dl_progress ?? 0) * 100, 100).toFixed(0)}%` }"
                       />
                     </div>
                   </div>
                   <span class="font-medium flex-shrink-0" style="color: #888; font-size: 0.8vw">
-                    {{ Math.min(item.dl_progress * 100, 100).toFixed(0) }}%
+                    {{ Math.min((item.dl_progress ?? 0) * 100, 100).toFixed(0) }}%
                   </span>
                 </div>
               </div>
@@ -344,8 +344,8 @@
                   <div class="absolute inset-0" style="background: linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 50%)" />
                   <div class="absolute bottom-0 left-0" style="padding: 3vh 2.5vw">
                     <h3 class="font-bold" style="color: #fff; font-size: 2vw; margin-bottom: 1vh">{{ spotlightGame.game.mName }}</h3>
-                    <p v-if="spotlightGame.status.installed" style="color: #b0b0b0; font-size: 0.9vw; margin-bottom: 2vh">
-                      {{ formatPlaytime(spotlightGame.status.playtime) }} played
+                    <p v-if="spotlightGame.installed" style="color: #b0b0b0; font-size: 0.9vw; margin-bottom: 2vh">
+                      {{ formatPlaytime(spotlightGame.playtimeSeconds) }} played
                     </p>
                     <button
                       class="rounded-sm font-bold tracking-wide text-white transition-colors"
@@ -483,12 +483,12 @@
                       <div
                         class="h-full rounded-full transition-all duration-300"
                         style="background-color: #107c10"
-                        :style="{ width: `${(item.dl_progress * 100).toFixed(0)}%` }"
+                        :style="{ width: `${((item.dl_progress ?? 0) * 100).toFixed(0)}%` }"
                       />
                     </div>
                   </div>
                   <span class="font-medium flex-shrink-0" style="color: #888; font-size: 0.8vw">
-                    {{ (item.dl_progress * 100).toFixed(0) }}%
+                    {{ ((item.dl_progress ?? 0) * 100).toFixed(0) }}%
                   </span>
                 </div>
               </div>
@@ -641,12 +641,12 @@
                       <div
                         class="h-full rounded-full transition-all duration-300"
                         style="background-color: #34beed"
-                        :style="{ width: `${(item.dl_progress * 100).toFixed(0)}%` }"
+                        :style="{ width: `${((item.dl_progress ?? 0) * 100).toFixed(0)}%` }"
                       />
                     </div>
                   </div>
                   <span class="font-medium flex-shrink-0" style="color: #8898a8; font-size: 0.8vw">
-                    {{ (item.dl_progress * 100).toFixed(0) }}%
+                    {{ ((item.dl_progress ?? 0) * 100).toFixed(0) }}%
                   </span>
                 </div>
               </div>
@@ -698,8 +698,8 @@
                 </div>
                 <div v-if="ps2FocusedGame" class="text-right">
                   <p class="font-medium" style="color: #b0b8e0; font-size: 0.95vw">{{ ps2FocusedGame.game.mName }}</p>
-                  <p v-if="ps2FocusedGame.status.installed" style="color: #4060c0; font-size: 0.75vw">
-                    {{ formatPlaytime(ps2FocusedGame.status.playtime) }} played
+                  <p v-if="ps2FocusedGame.installed" style="color: #4060c0; font-size: 0.75vw">
+                    {{ formatPlaytime(ps2FocusedGame.playtimeSeconds) }} played
                   </p>
                 </div>
               </div>
@@ -797,12 +797,12 @@
                       <div
                         class="h-full rounded-full transition-all duration-300"
                         style="background-color: #3050c0"
-                        :style="{ width: `${(item.dl_progress * 100).toFixed(0)}%` }"
+                        :style="{ width: `${((item.dl_progress ?? 0) * 100).toFixed(0)}%` }"
                       />
                     </div>
                   </div>
                   <span class="font-medium flex-shrink-0" style="color: #8090c0; font-size: 0.75vw">
-                    {{ (item.dl_progress * 100).toFixed(0) }}%
+                    {{ ((item.dl_progress ?? 0) * 100).toFixed(0) }}%
                   </span>
                 </div>
               </div>
@@ -876,8 +876,8 @@
                 <div style="max-width: 30vw">
                   <p class="font-medium tracking-wider uppercase" style="color: #d05028; font-size: 0.75vw; margin-bottom: 1vh">Now Playing</p>
                   <h2 class="font-bold" style="color: #333; font-size: 2.2vw; margin-bottom: 1vh">{{ spotlightGame.game.mName }}</h2>
-                  <p v-if="spotlightGame.status.installed" style="color: #666; font-size: 0.85vw; margin-bottom: 2vh">
-                    {{ formatPlaytime(spotlightGame.status.playtime) }} played
+                  <p v-if="spotlightGame.installed" style="color: #666; font-size: 0.85vw; margin-bottom: 2vh">
+                    {{ formatPlaytime(spotlightGame.playtimeSeconds) }} played
                   </p>
                   <button
                     class="rounded-lg font-bold tracking-wide transition-colors"
@@ -1002,12 +1002,12 @@
                       <div
                         class="h-full rounded-full transition-all duration-300"
                         style="background-color: #d05028"
-                        :style="{ width: `${(item.dl_progress * 100).toFixed(0)}%` }"
+                        :style="{ width: `${((item.dl_progress ?? 0) * 100).toFixed(0)}%` }"
                       />
                     </div>
                   </div>
                   <span class="font-medium flex-shrink-0" style="color: #888; font-size: 0.8vw">
-                    {{ (item.dl_progress * 100).toFixed(0) }}%
+                    {{ ((item.dl_progress ?? 0) * 100).toFixed(0) }}%
                   </span>
                 </div>
               </div>
@@ -1213,12 +1213,12 @@
                       <div
                         class="h-full rounded-full transition-all duration-300"
                         style="background-color: #d05010"
-                        :style="{ width: `${(item.dl_progress * 100).toFixed(0)}%` }"
+                        :style="{ width: `${((item.dl_progress ?? 0) * 100).toFixed(0)}%` }"
                       />
                     </div>
                   </div>
                   <span class="font-medium flex-shrink-0" style="color: #8ab0c0; font-size: 0.8vw">
-                    {{ (item.dl_progress * 100).toFixed(0) }}%
+                    {{ ((item.dl_progress ?? 0) * 100).toFixed(0) }}%
                   </span>
                 </div>
               </div>
@@ -1333,12 +1333,12 @@
                       <div
                         class="h-full rounded-full transition-all duration-300"
                         style="background-color: #524EAA"
-                        :style="{ width: `${(item.dl_progress * 100).toFixed(0)}%` }"
+                        :style="{ width: `${((item.dl_progress ?? 0) * 100).toFixed(0)}%` }"
                       />
                     </div>
                   </div>
                   <span class="font-medium flex-shrink-0" style="color: #a8a0d0; font-size: 0.8vw">
-                    {{ (item.dl_progress * 100).toFixed(0) }}%
+                    {{ ((item.dl_progress ?? 0) * 100).toFixed(0) }}%
                   </span>
                 </div>
               </div>
@@ -1453,12 +1453,12 @@
                       <div
                         class="h-full rounded-full transition-all duration-300"
                         style="background-color: #3C5078"
-                        :style="{ width: `${(item.dl_progress * 100).toFixed(0)}%` }"
+                        :style="{ width: `${((item.dl_progress ?? 0) * 100).toFixed(0)}%` }"
                       />
                     </div>
                   </div>
                   <span class="font-medium flex-shrink-0" style="color: #6a8aaa; font-size: 0.75vw">
-                    {{ (item.dl_progress * 100).toFixed(0) }}%
+                    {{ ((item.dl_progress ?? 0) * 100).toFixed(0) }}%
                   </span>
                 </div>
               </div>
@@ -1568,12 +1568,12 @@
                       <div
                         class="h-full transition-all duration-300"
                         style="background-color: #9BBC0F"
-                        :style="{ width: `${(item.dl_progress * 100).toFixed(0)}%` }"
+                        :style="{ width: `${((item.dl_progress ?? 0) * 100).toFixed(0)}%` }"
                       />
                     </div>
                   </div>
                   <span class="font-medium flex-shrink-0" style="color: #9BBC0F; font-size: 0.5vw">
-                    {{ (item.dl_progress * 100).toFixed(0) }}%
+                    {{ ((item.dl_progress ?? 0) * 100).toFixed(0) }}%
                   </span>
                 </div>
               </div>
@@ -1724,12 +1724,12 @@
                       <div
                         class="h-full transition-all duration-300"
                         style="background: linear-gradient(90deg, #ea3323, #2862c8, #5ab033)"
-                        :style="{ width: `${(item.dl_progress * 100).toFixed(0)}%` }"
+                        :style="{ width: `${((item.dl_progress ?? 0) * 100).toFixed(0)}%` }"
                       />
                     </div>
                   </div>
                   <span class="font-medium flex-shrink-0" style="color: #5a5a6a; font-size: 0.75vw">
-                    {{ (item.dl_progress * 100).toFixed(0) }}%
+                    {{ ((item.dl_progress ?? 0) * 100).toFixed(0) }}%
                   </span>
                 </div>
               </div>
@@ -1754,6 +1754,7 @@ import BpmAnimatedBackground from "~/components/bigpicture/BpmAnimatedBackground
 import BpmAchievementToast from "~/components/bigpicture/BpmAchievementToast.vue";
 import BpmLaunchScreen from "~/components/bigpicture/BpmLaunchScreen.vue";
 import BpmBoxArtOverlay from "~/components/bigpicture/BpmBoxArtOverlay.vue";
+import { devLog } from "~/composables/dev-mode";
 import { parseStatus, deduplicatedInvoke } from "~/composables/game";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
@@ -1774,6 +1775,12 @@ definePageMeta({ layout: "bigpicture" });
 interface RecentGameEntry {
   game: Game;
   status: GameStatus;
+  // Cached at load time so templates don't have to type-narrow the
+  // discriminated GameStatus union every time. `playtimeSeconds` comes
+  // straight from the playtime/recent endpoint, not from `status` —
+  // GameStatus tracks install/launch state, not history.
+  installed: boolean;
+  playtimeSeconds: number;
 }
 
 interface RecentGameResponse {
@@ -1922,7 +1929,7 @@ const otherGames = computed(() => {
   if (!spotlightId) return recentGames.value.slice(1);
   return recentGames.value.filter((e) => e.game.id !== spotlightId);
 });
-const installedGames = computed(() => recentGames.value.filter((e) => e.status.installed));
+const installedGames = computed(() => recentGames.value.filter((e) => e.installed));
 
 function prefetchGame(gameId: string) {
   deduplicatedInvoke("fetch_game", { gameId }).catch(() => {});
@@ -1949,7 +1956,7 @@ function formatPlaytime(seconds: number): string {
 async function loadRecentGames() {
   try {
     const url = serverUrl("api/v1/client/playtime/recent");
-    console.log("[BPM:HOME] Fetching recent games from:", url);
+    devLog("state","[BPM:HOME] Fetching recent games from:", url);
     const response = await fetch(url);
     if (!response.ok) {
       console.error("[BPM:HOME] Recent games fetch failed:", response.status, response.statusText);
@@ -1957,7 +1964,7 @@ async function loadRecentGames() {
       return;
     }
     const recentData = await response.json() as RecentGameResponse[];
-    console.log("[BPM:HOME] Got recent games data:", JSON.stringify(recentData).slice(0, 200));
+    devLog("state","[BPM:HOME] Got recent games data:", JSON.stringify(recentData).slice(0, 200));
 
     if (!Array.isArray(recentData)) {
       console.warn("[BPM:HOME] Recent games response is not an array:", typeof recentData);
@@ -1971,7 +1978,12 @@ async function loadRecentGames() {
     for (const gameData of gamesToLoad) {
       try {
         const statusData: RawGameStatus = await invoke("fetch_game_status", { id: gameData.gameId });
-        const game: Game = {
+        // The playtime/recent payload carries only id/name/cover, but the
+        // home page's tiles only ever read those three fields plus
+        // playtime/installed (cached on the entry below). Cast through
+        // `unknown` to make the partial-Game shape explicit — a fuller
+        // Game would require a second fetch per tile we don't need.
+        const game = {
           id: gameData.gameId,
           mName: gameData.gameName,
           mCoverObjectId: gameData.coverObjectId,
@@ -1982,11 +1994,14 @@ async function loadRecentGames() {
           mBackgroundUrl: null,
           mPublisher: null,
           mGenre: null,
-        } as Game;
+        } as unknown as Game;
 
+        const status = parseStatus(statusData);
         entries.push({
           game,
-          status: parseStatus(statusData),
+          status,
+          installed: status.type === "Installed",
+          playtimeSeconds: gameData.totalPlaytimeSeconds,
         });
       } catch (e) {
         console.error(`Failed to load recent game ${gameData.gameId}:`, e);
@@ -2017,12 +2032,12 @@ async function loadRecentGames() {
   }
 }
 
-console.log("[BPM:HOME] Active theme:", theme.value);
+devLog("state","[BPM:HOME] Active theme:", theme.value);
 
 async function pickRandomFavoriteSpotlight() {
-  console.log(`[BPM:HOME] Spotlight: pickRandomFavoriteSpotlight() called, recentGames=${recentGames.value.length}`);
+  devLog("state",`[BPM:HOME] Spotlight: pickRandomFavoriteSpotlight() called, recentGames=${recentGames.value.length}`);
   if (!recentGames.value.length) {
-    console.log("[BPM:HOME] Spotlight: no recent games, skipping randomize");
+    devLog("state","[BPM:HOME] Spotlight: no recent games, skipping randomize");
     return;
   }
 
@@ -2046,7 +2061,7 @@ async function pickRandomFavoriteSpotlight() {
             .filter((i) => i.type === "FavoriteGame" && i.gameId)
             .map((i) => i.gameId as string),
         );
-        console.log(
+        devLog("state",
           `[BPM:HOME] Spotlight: found ${favoriteIds.size} favorite(s), ${recentGames.value.length} recent game(s)`,
         );
         const favCandidates = recentGames.value.filter((e) => favoriteIds.has(e.game.id));
@@ -2056,15 +2071,15 @@ async function pickRandomFavoriteSpotlight() {
         if (pool.length) {
           const pick = pool[Math.floor(Math.random() * pool.length)];
           spotlightOverride.value = pick;
-          console.log(`[BPM:HOME] Spotlight: picked favorite → ${pick.game.mName}`);
+          devLog("state",`[BPM:HOME] Spotlight: picked favorite → ${pick.game.mName}`);
           return;
         }
-        console.log("[BPM:HOME] Spotlight: no favorited games in recent list, falling back to random recent");
+        devLog("state","[BPM:HOME] Spotlight: no favorited games in recent list, falling back to random recent");
       } else {
         console.warn("[BPM:HOME] Spotlight: showcase fetch failed:", resp.status);
       }
     } else {
-      console.log("[BPM:HOME] Spotlight: no user id, falling back to random recent");
+      devLog("state","[BPM:HOME] Spotlight: no user id, falling back to random recent");
     }
   } catch (e) {
     console.warn("[BPM:HOME] Spotlight: showcase fetch error, falling back to random recent:", e);
@@ -2077,14 +2092,14 @@ async function pickRandomFavoriteSpotlight() {
   if (recentGames.value.length > 1) {
     const idx = 1 + Math.floor(Math.random() * (recentGames.value.length - 1));
     spotlightOverride.value = recentGames.value[idx];
-    console.log(`[BPM:HOME] Spotlight: picked random recent (idx=${idx}) → ${recentGames.value[idx].game.mName}`);
+    devLog("state",`[BPM:HOME] Spotlight: picked random recent (idx=${idx}) → ${recentGames.value[idx].game.mName}`);
   } else {
-    console.log("[BPM:HOME] Spotlight: only one recent game, nothing to randomize");
+    devLog("state","[BPM:HOME] Spotlight: only one recent game, nothing to randomize");
   }
 }
 
 onMounted(async () => {
-  console.log("[BPM:HOME] onMounted fired — loading recent games & randomising spotlight");
+  devLog("state","[BPM:HOME] onMounted fired — loading recent games & randomising spotlight");
   await loadRecentGames();
   // Fire-and-forget: if favorites resolve quickly the spotlight swaps to a
   // random favorite; otherwise the default (most-recent) shows first.
@@ -2101,7 +2116,7 @@ watch(
   () => route.path,
   (to, from) => {
     if (to === "/bigpicture" && from !== "/bigpicture") {
-      console.log("[BPM:HOME] Re-entered home page — re-randomising spotlight");
+      devLog("state","[BPM:HOME] Re-entered home page — re-randomising spotlight");
       pickRandomFavoriteSpotlight();
     }
   },

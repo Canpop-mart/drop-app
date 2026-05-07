@@ -11,9 +11,9 @@
       <div class="flex items-center justify-center gap-4">
         <button
           class="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl transition-colors"
-          @click="goBack"
+          @click="goHome"
         >
-          Go Back
+          BPM Home
         </button>
         <button
           class="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold rounded-xl transition-colors"
@@ -59,12 +59,13 @@
             resolves the issue.
           </p>
           <div class="mt-10">
-            <!-- full app reload to fix errors -->
-            <a
-              href="/store"
+            <button
+              type="button"
               class="text-sm font-semibold leading-7 text-blue-600"
-              ><span aria-hidden="true">&larr;</span> Back to store</a
+              @click="goStore"
             >
+              <span aria-hidden="true">&larr;</span> Back to store
+            </button>
           </div>
         </div>
       </main>
@@ -73,7 +74,12 @@
           <nav
             class="mx-auto flex w-full max-w-7xl items-center gap-x-4 px-6 text-sm leading-7 text-zinc-400 lg:px-8"
           >
-            <NuxtLink href="/docs">Documentation</NuxtLink>
+            <a
+              href="https://docs.droposs.org"
+              target="_blank"
+              rel="noopener"
+              >Documentation</a
+            >
             <svg
               viewBox="0 0 2 2"
               aria-hidden="true"
@@ -81,7 +87,7 @@
             >
               <circle cx="1" cy="1" r="1" />
             </svg>
-            <a href="https://discord.gg/NHx46XKJWA" target="_blank"
+            <a href="https://discord.gg/NHx46XKJWA" target="_blank" rel="noopener"
               >Support Discord</a
             >
           </nav>
@@ -127,12 +133,23 @@ onMounted(() => {
     !!document.fullscreenElement;
 });
 
-function goBack() {
+function goHome() {
+  // BPM home — only shown when isBigPicture is true.
   clearError({ redirect: "/bigpicture" });
 }
 
 function goLibrary() {
-  clearError({ redirect: "/bigpicture" });
+  clearError({
+    redirect: isBigPicture.value ? "/bigpicture/library" : "/library",
+  });
+}
+
+function goStore() {
+  // Desktop "Back to store" used to be a plain <a href>, which does a
+  // full page navigation and skips Nuxt error clearing. clearError +
+  // redirect goes through the router, so the error state actually
+  // resets and the user doesn't see a stale message in the next view.
+  clearError({ redirect: "/store" });
 }
 
 console.error("[ERROR PAGE]", props.error);

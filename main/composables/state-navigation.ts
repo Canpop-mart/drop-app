@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { AppStatus, type AppState } from "~/types";
 import { useListen } from "./useListen";
+import { devLog } from "./dev-mode";
 
 export function setupHooks() {
   const router = useRouter();
@@ -36,7 +37,7 @@ export function setupHooks() {
     "remote-install-request",
     async (event) => {
       const payload = event.payload;
-      console.log(
+      devLog("state",
         "[REMOTE-INSTALL] Received request to install:",
         payload.gameName,
         payload.gameId,
@@ -54,7 +55,7 @@ export function setupHooks() {
             targetPlatform: vo.platform,
             enableUpdates: true,
           });
-          console.log(
+          devLog("state",
             "[REMOTE-INSTALL] Download started for:",
             payload.gameName,
           );

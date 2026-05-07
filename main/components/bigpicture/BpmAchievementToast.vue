@@ -179,7 +179,10 @@ const themeConfig = {
   }
 }
 
-const config = computed(() => themeConfig[props.themeId] || themeConfig.steam)
+const config = computed(
+  () =>
+    themeConfig[props.themeId as keyof typeof themeConfig] ?? themeConfig.steam,
+);
 
 const toastStyle = computed(() => {
   const cfg = config.value

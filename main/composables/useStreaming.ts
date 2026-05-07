@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { devLog } from "./dev-mode";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -165,7 +166,7 @@ export function useStreaming() {
     gameId?: string,
     hostLocalIp?: string,
   ): Promise<{ sessionId: string }> {
-    console.log("[STREAMING] startStreamingSession called with gameId:", gameId, "hostLocalIp:", hostLocalIp);
+    devLog("event","[STREAMING] startStreamingSession called with gameId:", gameId, "hostLocalIp:", hostLocalIp);
     const args: Record<string, string | null> = {
       hostLocalIp: hostLocalIp ?? null,
     };
@@ -173,7 +174,7 @@ export function useStreaming() {
     if (gameId) {
       args.gameId = gameId;
     }
-    console.log("[STREAMING] invoke args:", JSON.stringify(args));
+    devLog("event","[STREAMING] invoke args:", JSON.stringify(args));
     const sessionId = await invoke<string>("streaming_create_session", args);
     return { sessionId };
   }

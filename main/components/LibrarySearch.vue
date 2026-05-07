@@ -134,6 +134,7 @@
 </template>
 
 <script setup lang="ts">
+import { devLog } from "~/composables/dev-mode";
 import { Disclosure, DisclosureButton, DisclosurePanel } from "@headlessui/vue";
 import {
   ArrowPathIcon,
@@ -350,7 +351,7 @@ let libraryUpdateTimeout: ReturnType<typeof setTimeout> | null = null;
 useListen("update_library", () => {
   if (libraryUpdateTimeout) clearTimeout(libraryUpdateTimeout);
   libraryUpdateTimeout = setTimeout(async () => {
-    console.log("Updating library (debounced)");
+    devLog("state","Updating library (debounced)");
     let oldNavigation = currentNavigation.value;
     await calculateGames(false, true);
     if (oldNavigation !== currentNavigation.value) {

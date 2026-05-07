@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { devLog } from "./dev-mode";
 import type {
   Game,
   GameStatus,
@@ -53,7 +54,7 @@ export const parseStatus = (status: RawGameStatus): GameStatus => {
 };
 
 export const useGame = async (gameId: string) => {
-  console.log(`[useGame] Fetching game: ${gameId} (cached: ${!!gameRegistry[gameId]})`);
+  devLog("state",`[useGame] Fetching game: ${gameId} (cached: ${!!gameRegistry[gameId]})`);
   if (!gameRegistry[gameId]) {
     try {
       console.time(`[useGame] invoke fetch_game ${gameId}`);
@@ -66,7 +67,7 @@ export const useGame = async (gameId: string) => {
         gameId,
       });
       console.timeEnd(`[useGame] invoke fetch_game ${gameId}`);
-      console.log(`[useGame] Got game: ${data.game.mName}, status:`, data.status, "version:", !!data.version);
+      devLog("state",`[useGame] Got game: ${data.game.mName}, status:`, data.status, "version:", !!data.version);
       gameRegistry[gameId] = { game: data.game, version: ref(data.version) };
       if (!gameStatusRegistry[gameId]) {
         gameStatusRegistry[gameId] = ref(parseStatus(data.status));

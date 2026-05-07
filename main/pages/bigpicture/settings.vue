@@ -947,7 +947,7 @@ import { useBpAudio, soundProfiles, type SoundProfileId } from "~/composables/bp
 import { useBpmTheme, themes, type ThemeId } from "~/composables/bp-theme";
 import { useDeckMode } from "~/composables/deck-mode";
 import { useUiZoom } from "~/composables/ui-zoom";
-import { useDevMode, type DevCategory } from "~/composables/dev-mode";
+import { useDevMode, devLog, type DevCategory } from "~/composables/dev-mode";
 import { type Ref } from "vue";
 
 definePageMeta({ layout: "bigpicture" });
@@ -1220,7 +1220,7 @@ function toggleEffect(key: string) {
     return;
   }
   const newVal = !toggleRef.value;
-  console.log("[BPM:SETTINGS] toggleEffect:", key, "->", newVal);
+  devLog("state","[BPM:SETTINGS] toggleEffect:", key, "->", newVal);
   toggleRef.value = newVal;
   try {
     if (typeof localStorage !== "undefined") {

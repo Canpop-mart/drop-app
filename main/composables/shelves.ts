@@ -37,7 +37,10 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error(`API error ${resp.status}: ${text}`);
   }
   const text = await resp.text();
-  return text ? JSON.parse(text) : {};
+  // Empty body is treated as an empty object — callers requesting an
+  // array type get a runtime mismatch, but no endpoint in this composable
+  // actually returns "" for an array response, so the cast is safe.
+  return text ? JSON.parse(text) : ({} as T);
 }
 
 export function useShelves() {

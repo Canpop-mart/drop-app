@@ -9,6 +9,7 @@
 
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
+import { devLog } from "./composables/dev-mode";
 import { useAppState } from "./composables/app-state.js";
 import { useDownloadListeners } from "./composables/downloads.js";
 import {
@@ -143,7 +144,7 @@ router.onError((error, to, from) => {
 
 router.afterEach((to, from) => {
   if (to.fullPath.startsWith("/bigpicture") || from.fullPath.startsWith("/bigpicture")) {
-    console.log(`[BPM:ROUTER] Navigation complete: ${from.fullPath} → ${to.fullPath}`);
+    devLog("route",`[BPM:ROUTER] Navigation complete: ${from.fullPath} → ${to.fullPath}`);
   }
 });
 

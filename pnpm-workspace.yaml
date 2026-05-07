@@ -1,3 +1,7 @@
+packages:
+  - "main"
+  - "libs/drop-base"
+
 onlyBuiltDependencies:
   - sharp
 

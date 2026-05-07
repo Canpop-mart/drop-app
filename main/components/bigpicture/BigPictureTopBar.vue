@@ -41,9 +41,9 @@
       <!-- User avatar (clickable → profile) -->
       <button
         v-if="state?.user"
-        :ref="(el: any) => registerContent(el, { onSelect: () => router.push(`/bigpicture/profile/${state.user.username}`) })"
+        :ref="(el: any) => registerContent(el, { onSelect: () => router.push(`/bigpicture/profile/${state?.user?.username}`) })"
         class="flex items-center gap-2 rounded-full transition-all hover:ring-2 hover:ring-blue-500/50 focus:ring-2 focus:ring-blue-500/50"
-        @click="router.push(`/bigpicture/profile/${state.user.username}`)"
+        @click="router.push(`/bigpicture/profile/${state?.user?.username}`)"
       >
         <img
           v-if="state.user.profilePictureObjectId"

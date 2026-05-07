@@ -796,7 +796,7 @@ export function useFocusNavigation() {
     // Allow re-wiring on next BPM enter
     gamepadWired = false;
 
-    console.log("[FOCUS-NAV] Destroyed — all listeners removed");
+    devLog("focus","[FOCUS-NAV] Destroyed — all listeners removed");
   }
 
   // ── Focus history (Phase 1b) — delegate to module-level functions ──────
@@ -941,7 +941,7 @@ function wireGamepad() {
   function fireSelect(focused: FocusableElement) {
     const el = focused.el;
     if (focused.onSelect) {
-      console.log("[FOCUS] A — calling onSelect for:", el?.tagName, el?.textContent?.slice(0, 30));
+      devLog("focus","[FOCUS] A — calling onSelect for:", el?.tagName, el?.textContent?.slice(0, 30));
       useBpAudio().play("select");
       gamepad.vibrate("medium");
       try {
@@ -950,7 +950,7 @@ function wireGamepad() {
         console.error("[FOCUS] onSelect THREW:", e);
       }
     } else if (el) {
-      console.log("[FOCUS] A — clicking element:", el.tagName, el.textContent?.slice(0, 30));
+      devLog("focus","[FOCUS] A — clicking element:", el.tagName, el.textContent?.slice(0, 30));
       useBpAudio().play("select");
       gamepad.vibrate("medium");
       el.click();
@@ -983,7 +983,7 @@ function wireGamepad() {
         holdTimer = setTimeout(() => {
           holdFired = true;
           holdTimer = null;
-          console.log("[FOCUS] A held — calling onHold for:", el?.tagName, el?.textContent?.slice(0, 30));
+          devLog("focus","[FOCUS] A held — calling onHold for:", el?.tagName, el?.textContent?.slice(0, 30));
           useBpAudio().play("select");
           gamepad.vibrate("heavy");
           try {

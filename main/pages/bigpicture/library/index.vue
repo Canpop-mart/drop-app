@@ -292,10 +292,10 @@
                         toggleSelect(entry.game.id);
                         return;
                       }
-                      console.log(`[BPM:LIB] Selecting game: ${entry.game.id} (${entry.game.mName})`);
+                      devLog('state', `[BPM:LIB] Selecting game: ${entry.game.id} (${entry.game.mName})`);
                       focusNav.saveFocusSnapshot(route.path);
                       $router.push(`/bigpicture/library/${entry.game.id}`).then(() => {
-                        console.log(`[BPM:LIB] Navigation complete for: ${entry.game.id}`);
+                        devLog('state', `[BPM:LIB] Navigation complete for: ${entry.game.id}`);
                       }).catch((e: any) => {
                         console.error(`[BPM:LIB] Navigation FAILED for ${entry.game.id}:`, e);
                       });
@@ -477,6 +477,7 @@
 </template>
 
 <script setup lang="ts">
+import { devLog } from "~/composables/dev-mode";
 import { invoke } from "@tauri-apps/api/core";
 import { useListen } from "~/composables/useListen";
 import {

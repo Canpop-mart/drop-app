@@ -12,7 +12,6 @@ import { useBpmTheme, type ThemeId } from "./bp-theme";
 
 const TRANSITION_MAP: Record<ThemeId, string> = {
   steam: "bpm-slide",
-  switch: "bpm-slide",
   xbox: "bpm-zoom",
   wii: "bpm-float",
   ps2: "bpm-fade-blue",
@@ -21,10 +20,7 @@ const TRANSITION_MAP: Record<ThemeId, string> = {
   gamecube: "bpm-spin",
   psp: "bpm-slide",
   gameboy: "bpm-pixel",
-  n64: "bpm-zoom",
-  ps1: "bpm-fade",
   snes: "bpm-slide",
-  custom: "bpm-fade",
 };
 
 // ── Composable ───────────────────────────────────────────────────────────────

@@ -1018,6 +1018,7 @@
 </template>
 
 <script setup lang="ts">
+import { devLog } from "~/composables/dev-mode";
 import BpmSaveConflictDialog from "~/components/bigpicture/BpmSaveConflictDialog.vue";
 import BpmRetroArchCheatsheet from "~/components/bigpicture/BpmRetroArchCheatsheet.vue";
 import { invoke } from "@tauri-apps/api/core";
@@ -1061,11 +1062,11 @@ import { useDeckMode } from "~/composables/deck-mode";
 
 definePageMeta({ layout: "bigpicture" });
 
-console.log("[BPM:GAME] >>> Script setup executing (synchronous) <<<");
+devLog("state", "[BPM:GAME] >>> Script setup executing (synchronous) <<<");
 
 const route = useRoute();
 const gameId = route.params.id as string;
-console.log(`[BPM:GAME] Route param gameId: ${gameId}`);
+devLog("state", `[BPM:GAME] Route param gameId: ${gameId}`);
 
 const game = ref<Game | null>(null);
 const statusRef = shallowRef<any>(null);
@@ -1152,7 +1153,7 @@ async function pollRemoteSessions() {
 
     // If we have a pending request and a session just became Ready, auto-connect
     if (pendingRequestSessionId.value && found && found.status === "Ready") {
-      console.log("[BPM:STREAM] Our requested session is now Ready! Auto-connecting...");
+      devLog("event", "[BPM:STREAM] Our requested session is now Ready! Auto-connecting...");
       streamingPhase.value = "connecting";
       pendingRequestSessionId.value = null;
       isStreaming.value = false;
@@ -1168,7 +1169,7 @@ async function connectToRemoteStream() {
   try {
     const sessionId = availableStream.value.id;
     const info = await getConnectionInfo(sessionId);
-    console.log("[BPM:STREAM] Connection info:", JSON.stringify(info));
+    devLog("event", "[BPM:STREAM] Connection info:", JSON.stringify(info));
     const host = info.hostLocalIp || info.hostExternalIp;
     if (!host) {
       launchError.value = "No host IP available for streaming";
@@ -1176,7 +1177,7 @@ async function connectToRemoteStream() {
     }
     // Launch Moonlight pointed at the host
     const port = info.sunshinePort || 47989;
-    console.log(`[BPM:STREAM] Launching Moonlight → ${host}:${port}`);
+    devLog("event", `[BPM:STREAM] Launching Moonlight → ${host}:${port}`);
     await invoke("launch_moonlight", { host, port, pin: info.pairingPin ?? null, appName: info.game?.mName ?? null });
     activeStreamSessionId = sessionId;
     isStreaming.value = true;
@@ -1201,7 +1202,7 @@ async function connectToRemoteStream() {
         const current = sessions.find((s: any) => s.id === sessionId);
         // If the session is gone or stopped, kill Moonlight and clean up
         if (!current || current.status === "Stopped") {
-          console.log("[BPM:STREAM] Session ended on host side — killing Moonlight");
+          devLog("event", "[BPM:STREAM] Session ended on host side — killing Moonlight");
           if (moonlightWatchInterval) {
             clearInterval(moonlightWatchInterval);
             moonlightWatchInterval = null;
@@ -1328,19 +1329,19 @@ function selectInstallMenuAction(index: number) {
 
 async function streamFromDevice(device: ClientDevice) {
   // Request a stream from this specific device
-  console.log(`[BPM:STREAM] Requesting stream from device: ${device.name} (${device.id})`);
+  devLog("event", `[BPM:STREAM] Requesting stream from device: ${device.name} (${device.id})`);
   streamGame(device.id);
 }
 
 async function installOnDevice(device: ClientDevice) {
-  console.log(`[BPM:STREAM] Remote install on device: ${device.name} (${device.id})`);
+  devLog("event", `[BPM:STREAM] Remote install on device: ${device.name} (${device.id})`);
   try {
     await remoteInstall(gameId, device.id);
     // Success: a short confirmation toast (not the Launch-Failed dialog).
     showInfoToast(
       `Install requested on ${device.name}. The download will start automatically when that device picks it up.`,
     );
-    console.log(`[BPM:STREAM] Remote install requested on ${device.name}`);
+    devLog("event", `[BPM:STREAM] Remote install requested on ${device.name}`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     launchError.value = `Remote install failed: ${msg}`;
@@ -1387,7 +1388,7 @@ let streamGuard = false;
  * 3. When the session becomes "Ready", auto-launches Moonlight
  */
 async function streamGame(targetClientId?: string) {
-  console.log("[BPM:STREAM] streamGame() called — requesting remote stream, target:", targetClientId ?? "any");
+  devLog("event", "[BPM:STREAM] streamGame() called — requesting remote stream, target:", targetClientId ?? "any");
   if (streamGuard) return;
   streamGuard = true;
   isStreaming.value = true;
@@ -1399,10 +1400,10 @@ async function streamGame(targetClientId?: string) {
     const gameConfigJson = version.value?.userConfiguration
       ? JSON.stringify(version.value.userConfiguration)
       : undefined;
-    console.log("[BPM:STREAM] Sending stream request for gameId:", gameId, "config:", gameConfigJson);
+    devLog("event", "[BPM:STREAM] Sending stream request for gameId:", gameId, "config:", gameConfigJson);
     const sessionId = await requestStream(gameId, targetClientId, gameConfigJson);
     pendingRequestSessionId.value = sessionId;
-    console.log("[BPM:STREAM] Stream requested, session:", sessionId);
+    devLog("event", "[BPM:STREAM] Stream requested, session:", sessionId);
 
     // Speed up polling while waiting for the host to accept
     if (streamPollInterval) clearInterval(streamPollInterval);
@@ -1438,12 +1439,12 @@ async function streamGame(targetClientId?: string) {
  * - Also stops all host-side sessions (if we're the PC).
  */
 async function stopStreaming() {
-  console.log("[BPM:STREAM] stopStreaming() called");
+  devLog("event", "[BPM:STREAM] stopStreaming() called");
   streamingPhase.value = "ending";
   try {
     // Cancel pending request session if we were waiting
     if (pendingRequestSessionId.value) {
-      console.log("[BPM:STREAM] Cancelling pending request:", pendingRequestSessionId.value);
+      devLog("event", "[BPM:STREAM] Cancelling pending request:", pendingRequestSessionId.value);
       try {
         await stopStreamingSession(pendingRequestSessionId.value);
       } catch (e) {
@@ -1466,7 +1467,7 @@ async function stopStreaming() {
     try {
       const stopped = await stopAllHostSessions();
       if (stopped > 0) {
-        console.log(`[BPM:STREAM] Stopped ${stopped} host session(s)`);
+        devLog("event", `[BPM:STREAM] Stopped ${stopped} host session(s)`);
       }
     } catch (e) {
       console.warn("[BPM:STREAM] Failed to stop host sessions:", e);
@@ -1478,7 +1479,7 @@ async function stopStreaming() {
       const sessions = await listRemoteSessions();
       for (const s of sessions) {
         if (s.status !== "Stopped") {
-          console.log(`[BPM:STREAM] Stopping server session ${s.id} (status: ${s.status})`);
+          devLog("event", `[BPM:STREAM] Stopping server session ${s.id} (status: ${s.status})`);
           try {
             await stopStreamingSession(s.id);
           } catch {
@@ -1526,14 +1527,14 @@ async function runDiagnostics() {
   diagnosticsRan.value = true;
   try {
     const diag = await invoke("diagnose_launch_environment");
-    console.log("[BPM:DIAG] === LAUNCH DIAGNOSTICS ===");
-    console.log("[BPM:DIAG] UMU installed:", (diag as any).umu_installed, "path:", (diag as any).umu_path);
-    console.log("[BPM:DIAG] Proton default:", (diag as any).proton_default, "valid:", (diag as any).proton_default_valid);
-    console.log("[BPM:DIAG] Proton autodiscovered:", (diag as any).proton_autodiscovered);
-    console.log("[BPM:DIAG] Session:", (diag as any).session_type, "gamescope:", (diag as any).gamescope_detected);
-    console.log("[BPM:DIAG] Env:", { display: (diag as any).env_display, wayland: (diag as any).env_wayland, gamescope: (diag as any).env_gamescope, xdg: (diag as any).env_xdg_runtime });
-    console.log("[BPM:DIAG] Installed games:", (diag as any).installed_games);
-    console.log("[BPM:DIAG] === END DIAGNOSTICS ===");
+    devLog("launch", "[BPM:DIAG] === LAUNCH DIAGNOSTICS ===");
+    devLog("launch", "[BPM:DIAG] UMU installed:", (diag as any).umu_installed, "path:", (diag as any).umu_path);
+    devLog("launch", "[BPM:DIAG] Proton default:", (diag as any).proton_default, "valid:", (diag as any).proton_default_valid);
+    devLog("launch", "[BPM:DIAG] Proton autodiscovered:", (diag as any).proton_autodiscovered);
+    devLog("launch", "[BPM:DIAG] Session:", (diag as any).session_type, "gamescope:", (diag as any).gamescope_detected);
+    devLog("launch", "[BPM:DIAG] Env:", { display: (diag as any).env_display, wayland: (diag as any).env_wayland, gamescope: (diag as any).env_gamescope, xdg: (diag as any).env_xdg_runtime });
+    devLog("launch", "[BPM:DIAG] Installed games:", (diag as any).installed_games);
+    devLog("launch", "[BPM:DIAG] === END DIAGNOSTICS ===");
   } catch (e) {
     console.warn("[BPM:DIAG] Diagnostics not available:", e);
   }
@@ -1757,7 +1758,7 @@ async function applyProfileName() {
   showOptions.value = false;
   try {
     const msg = await invoke<string>("configure_game_emulator", { gameId });
-    console.log("[EMU]", msg);
+    devLog("launch", "[EMU]", msg);
   } catch (e) {
     console.error("[EMU] Failed to apply profile:", e);
   }
@@ -1958,7 +1959,7 @@ const newShelfNameInPicker = ref("");
 const showNewShelfKeyboard = ref(false);
 const shelfFocusIdx = ref(0);
 const _shelfSubs: (() => void)[] = [];
-let shelfLockId = "";
+let shelfLockId = 0;
 
 function wireShelfGamepad() {
   unwireShelfGamepad();
@@ -2200,7 +2201,7 @@ async function backupPcSaves() {
     // Upload the backup to cloud
     // For now, just show success
     launchError.value = null;
-    console.log("[BPM:GAME] Ludusavi backup at:", backupPath);
+    devLog("state", "[BPM:GAME] Ludusavi backup at:", backupPath);
   } catch (e) {
     launchError.value = `Backup failed: ${e instanceof Error ? e.message : String(e)}`;
   } finally {
@@ -2642,7 +2643,7 @@ async function uploadPcSave(group: PcSaveGroup) {
     if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
 
     await fetchCloudSaves();
-    console.log("[BPM:GAME] PC save uploaded:", group.name);
+    devLog("state", "[BPM:GAME] PC save uploaded:", group.name);
   } catch (e) {
     console.error("[BPM:GAME] PC save upload failed:", e);
     launchError.value = `Upload failed: ${e instanceof Error ? e.message : String(e)}`;
@@ -2674,7 +2675,7 @@ async function downloadPcSave(group: PcSaveGroup) {
     });
 
     await fetchPcSaves();
-    console.log("[BPM:GAME] PC save downloaded:", group.name);
+    devLog("state", "[BPM:GAME] PC save downloaded:", group.name);
   } catch (e) {
     console.error("[BPM:GAME] PC save download failed:", e);
     launchError.value = `Download failed: ${e instanceof Error ? e.message : String(e)}`;
@@ -2833,8 +2834,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
 }
 
 onMounted(async () => {
-  console.log(`[BPM:GAME] === Page mounted for gameId: ${gameId} ===`);
-  console.log(`[BPM:GAME] Route: ${route.fullPath}`);
+  devLog("state", `[BPM:GAME] === Page mounted for gameId: ${gameId} ===`);
+  devLog("state", `[BPM:GAME] Route: ${route.fullPath}`);
 
   // Wire up gamepad immediately — don't wait for data to load
   const { isGamescope: _pageIsGs } = useDeckMode();
@@ -2862,7 +2863,7 @@ onMounted(async () => {
   const { listen } = await import("@tauri-apps/api/event");
   const unlistenLaunchTrace = await listen("launch_trace", (event) => {
     const p = event.payload as any;
-    console.log(`[BPM:TRACE:${p.step}]`, JSON.stringify(p, null, 2));
+    devLog("launch", `[BPM:TRACE:${p.step}]`, JSON.stringify(p, null, 2));
     // Surface BIOS warnings to the user so they know why a game crashed
     if (p.step === "7_retroarch_config_result" && p.bios_warnings?.length) {
       launchError.value = p.bios_warnings.join("\n");
@@ -2882,31 +2883,33 @@ onMounted(async () => {
   // Remote install requests are handled globally in state-navigation.ts
   // to avoid duplicate downloads. No page-level listener needed.
 
-  console.log("[BPM:GAME] Gamepad wired. Starting data fetch...");
+  devLog("state", "[BPM:GAME] Gamepad wired. Starting data fetch...");
 
   // Fire all fetches in parallel — apply results as each resolves instead
   // of waiting for all (avoids a slow fetch blocking the entire page).
 
   const achievementsUrl = serverUrl(`api/v1/games/${gameId}/achievements`);
-  console.log("[BPM:GAME] Achievements URL:", achievementsUrl);
+  devLog("state", "[BPM:GAME] Achievements URL:", achievementsUrl);
 
   // Game data — needed for the page header, status, and config
   // useGame is a local Tauri invoke (usually cached) — 5s is generous
   const gamePromise = withTimeout(useGame(gameId), 5000)
     .then((r) => {
       if (!r) { console.warn("[BPM:GAME] useGame TIMED OUT or null"); return; }
-      console.log("[BPM:GAME] useGame resolved:", r.game?.mName ?? "null");
+      devLog("state", "[BPM:GAME] useGame resolved:", r.game?.mName ?? "null");
       game.value = r.game;
       statusRef.value = r.status;
       version.value = r.version?.value ?? null;
-      console.log("[BPM:GAME] Game loaded:", r.game.mName, "| Status:", r.status?.value);
+      devLog("state", "[BPM:GAME] Game loaded:", r.game.mName, "| Status:", r.status?.value);
       if (version.value?.userConfiguration) {
         selectedController.value = version.value.userConfiguration.controllerType ?? null;
         selectedQuality.value = version.value.userConfiguration.qualityPreset ?? null;
+        // widescreen used to be `boolean | AspectRatio` and the code below
+        // still handled the legacy true/false shape. The type is now just
+        // AspectRatio (Standard | Wide16_9 | Wide16_10), so we only need
+        // a null guard for forward-compat with malformed server payloads.
         const ws = version.value.userConfiguration.widescreen;
-        if (ws === true) aspectRatio.value = "Wide16_9";
-        else if (ws === false || ws == null) aspectRatio.value = "Standard";
-        else aspectRatio.value = ws as AspectRatio;
+        aspectRatio.value = ws ?? "Standard";
         crtShaderEnabled.value = version.value.userConfiguration.crtShader ?? false;
       }
     })
@@ -2915,7 +2918,7 @@ onMounted(async () => {
   // Version options — can arrive late without blocking the page
   const versionPromise = invoke<VersionOption[]>("fetch_game_version_options", { gameId })
     .then((r) => {
-      console.log("[BPM:GAME] version_options resolved:", r?.length ?? 0, "options");
+      devLog("state", "[BPM:GAME] version_options resolved:", r?.length ?? 0, "options");
       if (r) versionOptions.value = r;
     })
     .catch((e) => console.warn("[BPM:GAME] version_options failed:", e));
@@ -2923,7 +2926,7 @@ onMounted(async () => {
   // Achievements — server:// proxied fetch, 5s timeout
   const achievementsPromise = withTimeout(
     fetch(achievementsUrl).then((res) => {
-      console.log("[BPM:GAME] achievements fetch status:", res.status);
+      devLog("state", "[BPM:GAME] achievements fetch status:", res.status);
       return res.ok ? res.json() : null;
     }),
     5000,
@@ -2931,11 +2934,11 @@ onMounted(async () => {
     .then((r) => {
       if (!r) { console.warn("[BPM:GAME] achievements timed out or null"); return; }
       achievements.value = Array.isArray(r) ? r : (r.achievements ?? []);
-      console.log("[BPM:GAME] Achievements loaded:", achievements.value.length);
+      devLog("state", "[BPM:GAME] Achievements loaded:", achievements.value.length);
       if (achievements.value.length > 0) {
         const sample = achievements.value.slice(0, 3);
         for (const a of sample) {
-          console.log(`[BPM:GAME] Achievement "${a.title}" iconUrl: ${a.iconUrl || "(empty)"}`);
+          devLog("state", `[BPM:GAME] Achievement "${a.title}" iconUrl: ${a.iconUrl || "(empty)"}`);
         }
       }
     })
@@ -2946,12 +2949,12 @@ onMounted(async () => {
   fetchPlaytime();
   fetchRecommendations();
   await Promise.all([gamePromise, achievementsPromise]);
-  console.log("[BPM:GAME] Critical data loaded, versions pending:", !versionOptions.value);
+  devLog("state", "[BPM:GAME] Critical data loaded, versions pending:", !versionOptions.value);
 
-  console.log("[BPM:GAME] Setting up focus...");
+  devLog("state", "[BPM:GAME] Setting up focus...");
   nextTick(() => updateTabIndicator());
   focusNav.autoFocusContent("content");
-  console.log("[BPM:GAME] === Page setup complete ===");
+  devLog("state", "[BPM:GAME] === Page setup complete ===");
 });
 
 function _onResize() {
@@ -3049,9 +3052,10 @@ async function launchGame() {
       } catch (depErr) {
         launchError.value = `A required dependency needs to be installed first, but the download failed: ${depErr instanceof Error ? depErr.message : String(depErr)}`;
       }
-    } else if (result.result !== "Success") {
-      launchError.value = `Failed to launch: ${result.result}`;
     }
+    // LaunchResult is `Success | InstallRequired`. Anything other than
+    // those two would surface as a thrown error from `invoke("launch_game")`,
+    // caught below — no need to second-guess the discriminator.
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
     console.error("[BPM:GAME] Launch error:", errMsg);

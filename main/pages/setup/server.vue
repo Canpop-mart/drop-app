@@ -77,6 +77,7 @@
 <script setup lang="ts">
 import { XCircleIcon } from "@heroicons/vue/16/solid";
 import { invoke } from "@tauri-apps/api/core";
+import { devLog } from "~/composables/dev-mode";
 
 definePageMeta({
   layout: "mini",
@@ -113,7 +114,7 @@ function connect_wrapper() {
   connect()
     .then(() => {})
     .catch((e) => {
-      console.log(e);
+      devLog("state",e);
       error.value = e;
     })
     .finally(() => {

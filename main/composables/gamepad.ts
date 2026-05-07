@@ -173,7 +173,7 @@ function pollFrame() {
       controllerId.value = cid;
       controllerName.value = gp.id;
 
-      console.log(
+      devLog("gamepad",
         `[GAMEPAD] Controller connected: ${gp.id} (index ${cid})`,
       );
     }
@@ -260,7 +260,7 @@ function pollFrame() {
     axes.clear();
     prevButtons.clear();
     prevAxes.clear();
-    console.log("[GAMEPAD] Controller disconnected");
+    devLog("gamepad","[GAMEPAD] Controller disconnected");
   }
 
   rafId = requestAnimationFrame(pollFrame);
@@ -269,7 +269,7 @@ function pollFrame() {
 function startPolling() {
   if (polling) return;
   polling = true;
-  console.log("[GAMEPAD] Web Gamepad API polling started");
+  devLog("gamepad","[GAMEPAD] Web Gamepad API polling started");
   rafId = requestAnimationFrame(pollFrame);
 }
 
@@ -291,12 +291,12 @@ function init() {
 
   // Listen for browser gamepad events to wake up polling
   window.addEventListener("gamepadconnected", (e) => {
-    console.log(`[GAMEPAD] gamepadconnected: ${e.gamepad.id}`);
+    devLog("gamepad",`[GAMEPAD] gamepadconnected: ${e.gamepad.id}`);
     if (!polling) startPolling();
   });
 
   window.addEventListener("gamepaddisconnected", (e) => {
-    console.log(`[GAMEPAD] gamepaddisconnected: ${e.gamepad.id}`);
+    devLog("gamepad",`[GAMEPAD] gamepaddisconnected: ${e.gamepad.id}`);
   });
 
   // Start polling immediately — some browsers don't fire gamepadconnected
@@ -335,7 +335,7 @@ function destroy() {
 
   // Allow re-initialization next time BPM is entered
   initialized = false;
-  console.log("[GAMEPAD] Destroyed — polling stopped, callbacks cleared");
+  devLog("gamepad","[GAMEPAD] Destroyed — polling stopped, callbacks cleared");
 }
 
 // ── Composable ───────────────────────────────────────────────────────────────

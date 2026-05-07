@@ -2,7 +2,7 @@
   <BpmWizardShell
     step-key="welcome"
     title="Welcome to Drop"
-    subtitle="Let's take a couple of minutes to get you set up. You can skip any step — revisit the wizard later from Settings → Help."
+    subtitle="Let's take a couple of minutes to get you set up. You can skip any step."
   >
     <div class="max-w-2xl">
       <div

@@ -1,7 +1,7 @@
 {
   "name": "view",
   "private": true,
-  "version": "1.10.0-rc.1",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "build": "nuxt generate",
@@ -12,31 +12,27 @@
   },
   "dependencies": {
     "@headlessui/vue": "^1.7.23",
-    "@heroicons/vue": "^2.1.5",
-    "@nuxtjs/tailwindcss": "^6.12.2",
-    "@tauri-apps/api": "^2.9.1",
-    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@heroicons/vue": "^2.2.0",
+    "@nuxtjs/tailwindcss": "^6.14.0",
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-os": "^2.3.2",
-    "@tauri-apps/plugin-shell": "^2.3.3",
-    "koa": "^2.16.1",
-    "markdown-it": "^14.1.0",
-    "micromark": "^4.0.1",
-    "nuxt": "^3.16.0",
-    "scss": "^0.2.4",
-    "vue-router": "^4.5.0",
+    "@tauri-apps/plugin-shell": "^2.3.5",
+    "micromark": "^4.0.2",
+    "nuxt": "^3.21.4",
+    "vue-router": "^4.6.4",
     "vuedraggable": "^4.1.0"
   },
   "devDependencies": {
     "@headlessui/vue": "^1.7.23",
-    "@tailwindcss/forms": "^0.5.9",
-    "@tailwindcss/typography": "^0.5.15",
-    "@types/markdown-it": "^14.1.2",
-    "@types/node": "^22.0.0",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.47",
-    "sass-embedded": "^1.79.4",
-    "tailwindcss": "^3.4.13",
-    "typescript": "^5.8.3",
-    "vue-tsc": "^2.2.10"
+    "@tailwindcss/forms": "^0.5.11",
+    "@tailwindcss/typography": "^0.5.19",
+    "@types/node": "^22.19.17",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.14",
+    "sass-embedded": "^1.99.0",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.9.3",
+    "vue-tsc": "^2.2.12"
   }
 }
