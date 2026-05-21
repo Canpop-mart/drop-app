@@ -1,6 +1,7 @@
 use database::borrow_db_checked;
 use http::{
-    HeaderMap, HeaderValue, Request, Response, StatusCode, Uri, header::{CONTENT_SECURITY_POLICY, USER_AGENT, X_FRAME_OPTIONS},
+    HeaderValue, Request, Response, StatusCode, Uri,
+    header::{CONTENT_SECURITY_POLICY, USER_AGENT, X_FRAME_OPTIONS},
 };
 use log::{error, warn};
 use tauri::UriSchemeResponder;
@@ -94,8 +95,15 @@ async fn handle_server_proto(request: Request<Vec<u8>>) -> Result<Response<Vec<u
     let mut headers = parts.headers;
     headers.remove(USER_AGENT);
     headers.append(USER_AGENT, HeaderValue::from_static("Drop Desktop Client"));
+    // Use `insert`, not `append`, for Authorization: if the iframe document
+    // somehow already carried an Authorization header we must *replace* it
+    // with our web token, never send two (the backend would see an ambiguous
+    // pair, and a stale value could leak).
     match HeaderValue::from_str(&format!("Bearer {web_token}")) {
-        Ok(val) => { headers.append("Authorization", val); }
+        Ok(mut val) => {
+            val.set_sensitive(true);
+            headers.insert("Authorization", val);
+        }
         Err(e) => {
             error!("Failed to create Authorization header: {}", e);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);

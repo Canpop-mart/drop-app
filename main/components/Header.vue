@@ -81,6 +81,11 @@ const navigation: Array<NavigationItem> = [
     label: "Community",
   },
   {
+    prefix: "/news",
+    route: "/news",
+    label: "News",
+  },
+  {
     prefix: "/requests",
     route: "/requests",
     label: "Requests",

@@ -1,10 +1,9 @@
-use log::{info, warn};
+use log::info;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     error::RemoteAccessError,
-    requests::{generate_url, make_authenticated_get, make_authenticated_post},
-    utils::{bounded_json, DEFAULT_JSON_CAP_BYTES},
+    requests::{generate_url, remote_request, remote_request_ok, RemoteRequest},
 };
 
 // ── Request bodies ──────────────────────────────────────────────────
@@ -136,18 +135,7 @@ pub async fn start_streaming_session(
         host_external_ip: None,
     };
 
-    let response = make_authenticated_post(url, &body).await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!("Failed to start streaming session: {} - {}", status, text);
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to start streaming session: {status} - {text}"
-        )));
-    }
-
-    let data: StartSessionResponse = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
+    let data: StartSessionResponse = remote_request(RemoteRequest::post(url, &body)).await?;
     info!("Started streaming session {}", data.session_id);
     Ok(data.session_id)
 }
@@ -163,17 +151,7 @@ pub async fn mark_session_ready(
         pairing_pin: pairing_pin.map(|s| s.to_string()),
     };
 
-    let response = make_authenticated_post(url, &body).await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!("Failed to mark session ready: {} - {}", status, text);
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to mark session ready: {status} - {text}"
-        )));
-    }
-
+    remote_request_ok(RemoteRequest::post(url, &body)).await?;
     info!("Marked streaming session {} as ready", session_id);
     Ok(())
 }
@@ -185,17 +163,7 @@ pub async fn stop_streaming_session(session_id: &str) -> Result<(), RemoteAccess
         session_id: session_id.to_string(),
     };
 
-    let response = make_authenticated_post(url, &body).await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!("Failed to stop streaming session: {} - {}", status, text);
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to stop streaming session: {status} - {text}"
-        )));
-    }
-
+    remote_request_ok(RemoteRequest::post(url, &body)).await?;
     info!("Stopped streaming session {}", session_id);
     Ok(())
 }
@@ -211,39 +179,15 @@ pub async fn heartbeat_streaming(
         status: status.map(|s| s.to_string()),
     };
 
-    let response = make_authenticated_post(url, &body).await?;
-
-    if response.status().is_success() {
-        info!("Heartbeat sent for streaming session {}", session_id);
-        Ok(())
-    } else {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!(
-            "Heartbeat failed for streaming session {}: {} - {}",
-            session_id, status, text
-        );
-        Err(RemoteAccessError::UnparseableResponse(format!(
-            "Heartbeat failed: {status} - {text}"
-        )))
-    }
+    remote_request_ok(RemoteRequest::post(url, &body)).await?;
+    info!("Heartbeat sent for streaming session {}", session_id);
+    Ok(())
 }
 
 /// List all active streaming sessions for this user.
 pub async fn list_streaming_sessions() -> Result<Vec<StreamingSession>, RemoteAccessError> {
     let url = generate_url(&["/api/v1/client/streaming/sessions"], &[])?;
-    let response = make_authenticated_get(url).await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!("Failed to list streaming sessions: {} - {}", status, text);
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to list streaming sessions: {status} - {text}"
-        )));
-    }
-
-    let sessions: Vec<StreamingSession> = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
+    let sessions: Vec<StreamingSession> = remote_request(RemoteRequest::get(url)).await?;
     info!("Fetched {} streaming sessions", sessions.len());
     Ok(sessions)
 }
@@ -257,18 +201,7 @@ pub async fn get_streaming_connection_info(
         session_id: session_id.to_string(),
     };
 
-    let response = make_authenticated_post(url, &body).await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!("Failed to get connection info: {} - {}", status, text);
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to get connection info: {status} - {text}"
-        )));
-    }
-
-    let info: StreamingConnectionInfo = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
+    let info: StreamingConnectionInfo = remote_request(RemoteRequest::post(url, &body)).await?;
     info!("Got connection info for session {}", session_id);
     Ok(info)
 }
@@ -304,18 +237,7 @@ pub async fn request_stream(
         game_config,
     };
 
-    let response = make_authenticated_post(url, &body).await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!("Failed to request stream: {} - {}", status, text);
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to request stream: {status} - {text}"
-        )));
-    }
-
-    let data: StartSessionResponse = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
+    let data: StartSessionResponse = remote_request(RemoteRequest::post(url, &body)).await?;
     info!("Requested stream, session {}", data.session_id);
     Ok(data.session_id)
 }
@@ -323,17 +245,7 @@ pub async fn request_stream(
 /// Poll for pending stream requests from other clients.
 pub async fn poll_pending_requests() -> Result<Vec<PendingStreamRequest>, RemoteAccessError> {
     let url = generate_url(&["/api/v1/client/streaming/pending-requests"], &[])?;
-    let response = make_authenticated_get(url).await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to poll pending requests: {status} - {text}"
-        )));
-    }
-
-    let requests: Vec<PendingStreamRequest> = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
+    let requests: Vec<PendingStreamRequest> = remote_request(RemoteRequest::get(url)).await?;
     Ok(requests)
 }
 
@@ -351,17 +263,7 @@ pub async fn accept_stream_request(
         pairing_pin: pairing_pin.map(|s| s.to_string()),
     };
 
-    let response = make_authenticated_post(url, &body).await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!("Failed to accept stream request: {} - {}", status, text);
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to accept stream request: {status} - {text}"
-        )));
-    }
-
+    remote_request_ok(RemoteRequest::post(url, &body)).await?;
     info!("Accepted stream request {}", session_id);
     Ok(())
 }
@@ -388,18 +290,7 @@ pub async fn list_devices(game_id: Option<&str>) -> Result<Vec<ClientDevice>, Re
         None => vec![],
     };
     let url = generate_url(&["/api/v1/client/devices"], &query)?;
-    let response = make_authenticated_get(url).await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!("Failed to list devices: {} - {}", status, text);
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to list devices: {status} - {text}"
-        )));
-    }
-
-    let devices: Vec<ClientDevice> = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
+    let devices: Vec<ClientDevice> = remote_request(RemoteRequest::get(url)).await?;
     info!("Fetched {} devices", devices.len());
     Ok(devices)
 }
@@ -425,17 +316,7 @@ pub async fn request_remote_install(
         target_client_id: target_client_id.map(|s| s.to_string()),
     };
 
-    let response = make_authenticated_post(url, &body).await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!("Failed to request remote install: {} - {}", status, text);
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to request remote install: {status} - {text}"
-        )));
-    }
-
+    remote_request_ok(RemoteRequest::post(url, &body)).await?;
     info!("Requested remote install for game {}", game_id);
     Ok(())
 }
@@ -453,17 +334,7 @@ pub async fn sync_installed_games(game_ids: Vec<String>) -> Result<(), RemoteAcc
     let url = generate_url(&["/api/v1/client/sync-installed"], &[])?;
     let body = SyncInstalledBody { game_ids };
 
-    let response = make_authenticated_post(url, &body).await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!("Failed to sync installed games: {} - {}", status, text);
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to sync installed games: {status} - {text}"
-        )));
-    }
-
+    remote_request_ok(RemoteRequest::post(url, &body)).await?;
     info!("Synced installed games to server");
     Ok(())
 }

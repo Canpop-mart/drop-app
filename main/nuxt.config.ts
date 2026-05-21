@@ -14,6 +14,13 @@ export default defineNuxtConfig({
   ssr: false,
   devtools: false,
 
+  // Nuxt telemetry prompts for consent on first run via consola, which
+  // requires a TTY. `pnpm tauri dev` spawns the dev server through
+  // beforeDevCommand without one — the prompt crashes with
+  // ERR_TTY_INIT_FAILED before Nuxt can boot. Opt out explicitly so the
+  // prompt is never attempted.
+  telemetry: false,
+
   extends: [["../libs/drop-base"]],
 
   app: {

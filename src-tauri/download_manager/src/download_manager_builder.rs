@@ -314,12 +314,25 @@ impl DownloadManagerBuilder {
         let app_handle = self.app_handle.clone();
 
         *download_thread_lock = Some(tauri::async_runtime::spawn(async move {
-            loop {
+            let dl_meta = download_agent.metadata();
+            // Bound the download/validate cycle. Each iteration is one
+            // download pass followed by a validation pass. A pass is only
+            // retried when validation reports a *repairable* mismatch
+            // (Ok(false)); a hard failure returns Err and aborts. The cap
+            // stops a pathologically broken upstream (e.g. the LWIW partial
+            // archive, were validate ever to return Ok(false) for it) from
+            // looping forever re-downloading bytes that can never validate.
+            const MAX_DOWNLOAD_PASSES: u32 = 3;
+            for pass in 1..=MAX_DOWNLOAD_PASSES {
+                info!(
+                    "[phase] download start for {:?} (pass {}/{})",
+                    dl_meta, pass, MAX_DOWNLOAD_PASSES
+                );
                 let download_result = match download_agent.download(&app_handle).await {
                     // Ok(true) is for completed and exited properly
                     Ok(v) => v,
                     Err(e) => {
-                        error!("download {:?} has error {}", download_agent.metadata(), &e);
+                        error!("download {dl_meta:?} has error {}", &e);
                         download_agent.on_error(&app_handle, &e);
                         send!(sender, DownloadManagerSignal::Error(e));
                         return;
@@ -332,6 +345,7 @@ impl DownloadManagerBuilder {
                 // was called earlier and status is already set appropriately.
                 if !download_result {
                     if download_agent.control_flag().get() == DownloadThreadControlFlag::Stop {
+                        info!("[phase] download paused for {dl_meta:?}");
                         download_agent.on_queued(&app_handle);
                     }
                     return;
@@ -342,14 +356,11 @@ impl DownloadManagerBuilder {
                     return;
                 }
 
+                info!("[phase] download complete, beginning validation for {dl_meta:?}");
                 let validate_result = match download_agent.validate(&app_handle) {
                     Ok(v) => v,
                     Err(e) => {
-                        error!(
-                            "download {:?} has validation error {}",
-                            download_agent.metadata(),
-                            &e
-                        );
+                        error!("download {dl_meta:?} has validation error {}", &e);
                         download_agent.on_error(&app_handle, &e);
                         send!(sender, DownloadManagerSignal::Error(e));
                         return;
@@ -362,12 +373,30 @@ impl DownloadManagerBuilder {
                 }
 
                 if validate_result {
+                    info!("[phase] validation passed, marking install complete for {dl_meta:?}");
                     download_agent.on_complete(&app_handle).await;
-                    send!(
-                        sender,
-                        DownloadManagerSignal::Completed(download_agent.metadata())
-                    );
+                    send!(sender, DownloadManagerSignal::Completed(dl_meta.clone()));
                     send!(sender, DownloadManagerSignal::UpdateUIQueue);
+                    return;
+                }
+
+                // validate_result == false: a repairable mismatch. Loop to
+                // re-download. If this was the last allowed pass, give up
+                // loudly rather than spinning — the install does NOT become
+                // Installed.
+                warn!(
+                    "[phase] validation reported repairable mismatch for {dl_meta:?} (pass {}/{})",
+                    pass, MAX_DOWNLOAD_PASSES
+                );
+                if pass == MAX_DOWNLOAD_PASSES {
+                    error!(
+                        "validation still failing for {dl_meta:?} after {MAX_DOWNLOAD_PASSES} passes; aborting"
+                    );
+                    let e = ApplicationDownloadError::ValidationFailed(format!(
+                        "install could not be repaired after {MAX_DOWNLOAD_PASSES} download attempts"
+                    ));
+                    download_agent.on_error(&app_handle, &e);
+                    send!(sender, DownloadManagerSignal::Error(e));
                     return;
                 }
             }

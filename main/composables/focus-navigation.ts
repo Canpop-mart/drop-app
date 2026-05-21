@@ -327,6 +327,89 @@ function removeRingFocus(el: HTMLElement) {
   if (ring) ring.classList.remove(RING_FOCUS_CLASS);
 }
 
+/**
+ * Scroll the focused element comfortably into view.
+ *
+ * Replaces `el.scrollIntoView({ block: "nearest" })`, which is unreliable
+ * for a gamepad grid:
+ *
+ *  - `"nearest"` does the *minimum* scroll, aligning a cut-off tile flush
+ *    to the viewport edge — which clips the 3px focus outline (+2px
+ *    offset) and leaves zero breathing room.
+ *  - With `behavior: "smooth"` and rapid D-pad input, each focus change
+ *    fires a fresh `scrollIntoView` while the previous smooth animation
+ *    is still running; `"nearest"` recomputes a *relative minimum* from
+ *    the mid-animation position, so the scrolls chase each other and
+ *    land short. The symptom: a partially-obscured tile that only the
+ *    LT/RT page-scroll fully reveals.
+ *
+ * This instead computes an exact delta against the real scroll container
+ * with a fixed margin. Because the target is absolute (element edge +
+ * margin), re-firing mid-animation simply recomputes the same correct
+ * destination and converges instead of drifting.
+ *
+ * Both axes are handled independently so horizontal shelves still get
+ * scroll-into-view (the old `scrollIntoView` covered the inline axis too).
+ */
+function ensureElementVisible(el: HTMLElement) {
+  // Clears the 5px focus outline (3px ring + 2px offset) and leaves a
+  // comfortable gap so a focused tile never sits flush to the edge.
+  const MARGIN = 32;
+
+  const isScrollable = (
+    node: HTMLElement,
+    axis: "y" | "x",
+  ): boolean => {
+    const style = window.getComputedStyle(node);
+    const overflow = axis === "y" ? style.overflowY : style.overflowX;
+    const overflows =
+      axis === "y"
+        ? node.scrollHeight > node.clientHeight
+        : node.scrollWidth > node.clientWidth;
+    return (
+      overflows &&
+      (overflow === "auto" || overflow === "scroll" || overflow === "overlay")
+    );
+  };
+
+  const findContainer = (axis: "y" | "x"): HTMLElement | null => {
+    let node = el.parentElement;
+    while (node) {
+      if (isScrollable(node, axis)) return node;
+      node = node.parentElement;
+    }
+    return null;
+  };
+
+  const elRect = el.getBoundingClientRect();
+
+  // Vertical — the common case (game grids, settings lists).
+  const vContainer = findContainer("y");
+  if (vContainer) {
+    const c = vContainer.getBoundingClientRect();
+    let dy = 0;
+    if (elRect.top < c.top + MARGIN) {
+      dy = elRect.top - c.top - MARGIN;
+    } else if (elRect.bottom > c.bottom - MARGIN) {
+      dy = elRect.bottom - c.bottom + MARGIN;
+    }
+    if (dy !== 0) vContainer.scrollBy({ top: dy, behavior: "smooth" });
+  }
+
+  // Horizontal — for shelf/carousel layouts.
+  const hContainer = findContainer("x");
+  if (hContainer) {
+    const c = hContainer.getBoundingClientRect();
+    let dx = 0;
+    if (elRect.left < c.left + MARGIN) {
+      dx = elRect.left - c.left - MARGIN;
+    } else if (elRect.right > c.right - MARGIN) {
+      dx = elRect.right - c.right + MARGIN;
+    }
+    if (dx !== 0) hContainer.scrollBy({ left: dx, behavior: "smooth" });
+  }
+}
+
 function applyFocus(element: FocusableElement | null, fromGroupCycle = false) {
   const prev = currentFocused.value;
   if (prev !== element) {
@@ -359,8 +442,16 @@ function applyFocus(element: FocusableElement | null, fromGroupCycle = false) {
     // Play focus feedback sound
     useBpAudio().play("focus");
 
-    const scrollBlock = fromGroupCycle ? "center" : "nearest";
-    element.el.scrollIntoView({ block: scrollBlock, behavior: "smooth" });
+    if (fromGroupCycle) {
+      // Group cycle is a large context jump (e.g. nav rail → content) —
+      // centering the landing element reads best there.
+      element.el.scrollIntoView({ block: "center", behavior: "smooth" });
+    } else {
+      // Normal D-pad navigation: bring the element fully into view with a
+      // margin only when it isn't already — deterministic, race-free, and
+      // doesn't vertically jolt the grid on purely horizontal moves.
+      ensureElementVisible(element.el);
+    }
 
     currentGroup.value = element.group;
 

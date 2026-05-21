@@ -560,219 +560,13 @@
       <!-- Saves — gated by dev mode (also guarded here as a belt-and-braces
            in case activeTab is briefly still 'saves' when dev mode flips
            off, before the watcher resets it). -->
-      <div
+      <BpmGameSavesTab
         v-else-if="activeTab === 'saves' && devMode.enabled.value"
-        class="space-y-4"
-      >
-        <!-- Unified save list: merges local + cloud saves -->
-        <div v-if="mergedSaves.length > 0" class="space-y-2">
-          <div
-            v-for="item in mergedSaves"
-            :key="item.filename"
-            class="flex items-center gap-4 bg-zinc-900/50 rounded-xl p-4"
-          >
-            <!-- Icon based on file type -->
-            <div class="size-10 rounded-lg flex items-center justify-center flex-shrink-0"
-              :style="{ backgroundColor: saveTypeColor(item.filename).bg }"
-            >
-              <svg class="size-5" :style="{ color: saveTypeColor(item.filename).text }" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path v-if="item.filename.endsWith('.srm')" stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375" />
-                <path v-else-if="item.filename.endsWith('.png')" stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0022.5 18.75V5.25A2.25 2.25 0 0020.25 3H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21z" />
-                <path v-else stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-              </svg>
-            </div>
-
-            <!-- Info -->
-            <div class="flex-1 min-w-0">
-              <p class="text-sm font-medium text-zinc-200 truncate">{{ item.filename }}</p>
-              <p class="text-xs text-zinc-500">
-                {{ saveTypeLabel(item.filename) }}
-                <template v-if="item.local">&middot; {{ formatSaveSize(item.local.size) }} &middot; {{ formatTimeAgo(new Date(item.local.modified * 1000).toISOString()) }}</template>
-              </p>
-              <!-- Sync status badges -->
-              <div class="flex gap-2 mt-1">
-                <span v-if="item.local" class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-green-900/30 text-green-400">
-                  Local
-                </span>
-                <span v-if="item.cloud" class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400">
-                  Cloud &middot; {{ formatSaveSize(item.cloud.size) }}
-                </span>
-                <span v-if="!item.local && item.cloud" class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-yellow-900/30 text-yellow-400">
-                  Cloud only — download to play
-                </span>
-              </div>
-            </div>
-
-            <!-- Actions -->
-            <div class="flex items-center gap-2 flex-shrink-0">
-              <button
-                v-if="item.local"
-                :ref="(el: any) => registerAction(el, { onSelect: () => requestUpload(item.local!) })"
-                class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-blue-900/20 text-blue-400 hover:bg-blue-900/30"
-                @click="requestUpload(item.local!)"
-              >
-                {{ cloudSyncStatus[item.filename] === 'uploading' ? 'Syncing...' : (item.cloud ? 'Re-sync' : 'Sync to Cloud') }}
-              </button>
-              <button
-                v-if="item.cloud"
-                :ref="(el: any) => registerAction(el, { onSelect: () => requestDownload(item.filename, item.cloud!.saveType) })"
-                class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-green-900/20 text-green-400 hover:bg-green-900/30"
-                @click="requestDownload(item.filename, item.cloud!.saveType)"
-              >
-                {{ cloudSyncStatus[item.filename] === 'downloading' ? 'Downloading...' : 'Download' }}
-              </button>
-              <button
-                v-if="item.local"
-                :ref="(el: any) => registerAction(el, { onSelect: () => deleteSave(item.local!) })"
-                class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-red-900/20 text-red-400 hover:bg-red-900/30"
-                @click="deleteSave(item.local!)"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- PC Game saves via Ludusavi -->
-        <div v-if="pcSaves.length > 0" class="mt-6">
-          <div class="flex items-center justify-between mb-3">
-            <h4 class="text-sm font-semibold" style="color: var(--bpm-muted)">PC GAME SAVES (via Ludusavi)</h4>
-            <div class="flex gap-2">
-              <button
-                :ref="(el: any) => registerAction(el, { onSelect: backupPcSaves })"
-                class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-blue-900/20 text-blue-400 hover:bg-blue-900/30"
-                @click="backupPcSaves"
-              >
-                {{ pcSaveStatus === 'backing-up' ? 'Backing up...' : 'Backup All' }}
-              </button>
-              <button
-                :ref="(el: any) => registerAction(el, { onSelect: restorePcSaves })"
-                class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-green-900/20 text-green-400 hover:bg-green-900/30"
-                @click="restorePcSaves"
-              >
-                {{ pcSaveStatus === 'restoring' ? 'Restoring...' : 'Restore' }}
-              </button>
-            </div>
-          </div>
-          <!-- Grouped save slots -->
-          <div class="space-y-3">
-            <div
-              v-for="group in pcSaveGroups"
-              :key="group.name"
-              class="rounded-xl overflow-hidden"
-              style="background-color: var(--bpm-surface)"
-            >
-              <!-- Primary save row — info area + action buttons laid out as a flex row -->
-              <div class="flex items-center gap-4 p-4">
-                <!-- Save icon + info (focusable for expand toggle) -->
-                <div
-                  class="flex items-center gap-4 flex-1 min-w-0 cursor-pointer"
-                  :ref="(el: any) => registerAction(el, { onSelect: () => { if (group.backups.length > 0) group.expanded = !group.expanded; } })"
-                  @click="() => { if (group.backups.length > 0) group.expanded = !group.expanded; }"
-                >
-                  <div class="size-10 rounded-lg flex items-center justify-center flex-shrink-0"
-                    :style="{ backgroundColor: group.type === 'settings' ? 'rgba(156,163,175,0.15)' : 'rgba(34,197,94,0.15)' }"
-                  >
-                    <svg v-if="group.type === 'settings'" class="size-5 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                    <svg v-else class="size-5 text-green-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375" />
-                    </svg>
-                  </div>
-                  <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-zinc-200">{{ group.label }}</p>
-                    <p class="text-xs text-zinc-500">
-                      {{ group.primary ? pcSaveFileName(group.primary.path) : group.name }}
-                      <template v-if="group.primary && group.primary.size > 0"> &middot; {{ formatSaveSize(group.primary.size) }}</template>
-                      <template v-if="group.backups.length > 0"> &middot; {{ group.backups.length }} backup{{ group.backups.length !== 1 ? 's' : '' }}</template>
-                    </p>
-                  </div>
-                </div>
-                <!-- Action buttons — each independently focusable -->
-                <div class="flex items-center gap-2 flex-shrink-0">
-                  <span v-if="pcCloudStatus[group.name]" class="text-xs px-2 py-0.5 rounded-full"
-                    :class="pcCloudStatus[group.name] === 'synced' ? 'bg-green-900/20 text-green-400' : pcCloudStatus[group.name] === 'cloud-only' ? 'bg-blue-900/20 text-blue-400' : 'bg-zinc-800 text-zinc-500'"
-                  >
-                    {{ pcCloudStatus[group.name] === 'synced' ? 'Synced' : pcCloudStatus[group.name] === 'cloud-only' ? 'Cloud' : pcCloudStatus[group.name] === 'cloud-newer' ? 'Cloud newer' : 'Local newer' }}
-                  </span>
-                  <button
-                    v-if="group.primary && pcSyncStatus[group.name] !== 'uploading'"
-                    :ref="(el: any) => registerAction(el, { onSelect: () => uploadPcSave(group) })"
-                    class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-blue-900/20 text-blue-400 hover:bg-blue-900/30"
-                    @click.stop="uploadPcSave(group)"
-                  >
-                    Upload
-                  </button>
-                  <span v-else-if="pcSyncStatus[group.name] === 'uploading'" class="text-xs text-blue-400 animate-pulse">Uploading...</span>
-                  <button
-                    v-if="hasPcCloudSave(group.name) && pcSyncStatus[group.name] !== 'downloading'"
-                    :ref="(el: any) => registerAction(el, { onSelect: () => downloadPcSave(group) })"
-                    class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-green-900/20 text-green-400 hover:bg-green-900/30"
-                    @click.stop="downloadPcSave(group)"
-                  >
-                    Download
-                  </button>
-                  <span v-else-if="pcSyncStatus[group.name] === 'downloading'" class="text-xs text-green-400 animate-pulse">Downloading...</span>
-                </div>
-              </div>
-
-              <!-- Expandable backups -->
-              <div v-if="group.expanded && group.backups.length > 0" class="border-t px-4 pb-3 pt-2 space-y-1" style="border-color: var(--bpm-border)">
-                <div
-                  v-for="backup in group.backups"
-                  :key="backup.path"
-                  class="flex items-center gap-3 py-1.5 pl-14"
-                >
-                  <div class="size-5 rounded flex items-center justify-center flex-shrink-0" style="background-color: rgba(234,179,8,0.1)">
-                    <svg class="size-3 text-yellow-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-                    </svg>
-                  </div>
-                  <span class="text-xs text-zinc-400 truncate">{{ pcSaveFileName(backup.path) }}</span>
-                  <span v-if="backup.size > 0" class="text-xs text-zinc-600 flex-shrink-0">{{ formatSaveSize(backup.size) }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div v-if="!ludusaviAvailable && isNativeGame" class="mt-4 p-4 rounded-xl" style="background-color: var(--bpm-surface)">
-          <div class="flex items-center justify-between">
-            <div>
-              <p class="text-sm font-medium" style="color: var(--bpm-text)">PC Save Management</p>
-              <p class="text-xs mt-0.5" style="color: var(--bpm-muted)">
-                Drop uses Ludusavi to detect and back up PC game saves. Install it to enable save management for this game.
-              </p>
-            </div>
-            <button
-              :ref="(el: any) => registerAction(el, { onSelect: doInstallLudusavi })"
-              class="px-4 py-2 text-sm font-medium rounded-lg flex-shrink-0 ml-4"
-              :style="{ backgroundColor: 'var(--bpm-accent-hex)', color: 'var(--bpm-accent-text)' }"
-              :disabled="ludusaviInstalling"
-              @click="doInstallLudusavi"
-            >
-              {{ ludusaviInstalling ? 'Installing...' : 'Install Ludusavi' }}
-            </button>
-          </div>
-        </div>
-
-        <p v-if="mergedSaves.length === 0 && pcSaves.length === 0 && !savesLoading" class="text-zinc-500 text-center py-8 text-sm">
-          <template v-if="isNativeGame && !ludusaviAvailable">
-            <!-- Ludusavi prompt handles this case above -->
-          </template>
-          <template v-else-if="isNativeGame && ludusaviAvailable">
-            No saves detected by Ludusavi for this game.
-          </template>
-          <template v-else>
-            No save data found for this game. Play the game to create saves.
-          </template>
-        </p>
-        <p v-if="savesLoading" class="text-zinc-500 text-center py-8 text-sm">
-          Loading saves...
-        </p>
-      </div>
+        :saves="saves"
+        :is-native-game="isNativeGame"
+        :register-action="registerAction"
+        :format-time-ago="formatTimeAgo"
+      />
     </div>
 
     <!-- Recommended games -->
@@ -863,16 +657,16 @@
 
     <!-- Cloud sync confirmation -->
     <BigPictureDialog
-      :visible="confirmSyncAction !== null"
-      :title="confirmSyncAction?.type === 'upload' ? 'Replace Cloud Save?' : 'Replace Local Save?'"
-      :message="confirmSyncAction?.type === 'upload'
-        ? `This will replace the cloud version of '${confirmSyncAction?.filename}' with your local copy. A backup of the current cloud version will be saved automatically.`
-        : `This will replace your local copy of '${confirmSyncAction?.filename}' with the cloud version. A backup of your current local save will be created automatically.`"
-      :confirm-label="confirmSyncAction?.type === 'upload' ? 'Replace Cloud Save' : 'Replace Local Save'"
+      :visible="saves.confirmSyncAction.value !== null"
+      :title="saves.confirmSyncAction.value?.type === 'upload' ? 'Replace Cloud Save?' : 'Replace Local Save?'"
+      :message="saves.confirmSyncAction.value?.type === 'upload'
+        ? `This will replace the cloud version of '${saves.confirmSyncAction.value?.filename}' with your local copy. A backup of the current cloud version will be saved automatically.`
+        : `This will replace your local copy of '${saves.confirmSyncAction.value?.filename}' with the cloud version. A backup of your current local save will be created automatically.`"
+      :confirm-label="saves.confirmSyncAction.value?.type === 'upload' ? 'Replace Cloud Save' : 'Replace Local Save'"
       cancel-label="Cancel"
       :destructive="false"
-      @confirm="confirmSync"
-      @cancel="confirmSyncAction = null"
+      @confirm="saves.confirmSync"
+      @cancel="saves.confirmSyncAction.value = null"
     />
 
     <!-- On-screen keyboard for creating new shelf -->
@@ -1041,14 +835,8 @@ import {
   type VersionOption,
 } from "~/composables/game";
 import { serverUrl } from "~/composables/use-server-fetch";
-import type {
-  AspectRatio,
-  ControllerType,
-  QualityPreset,
-  Game,
-  GameStatus,
-  GameVersion,
-} from "~/types";
+import { renderMarkdown } from "~/composables/render-markdown";
+import type { Game, GameStatus, GameVersion } from "~/types";
 
 function objectUrl(id: string): string {
   return serverUrl(`api/v1/object/${id}`);
@@ -1080,7 +868,6 @@ const tabRefs: Record<string, HTMLElement | null> = {};
 const tabIndicatorStyle = ref({ left: "0", width: "0" });
 const launchError = ref<string | null>(null);
 const diagnosticsRan = ref(false);
-const isStreaming = ref(false);
 
 // Dev mode gates Streaming + Cloud Saves UI on this page (the Saves tab,
 // the Stream-from-device entries in the play menu, and the Ludusavi
@@ -1090,182 +877,27 @@ const isStreaming = ref(false);
 const devMode = useDevMode();
 
 // ── Streaming ─────────────────────────────────────────────────────────────
-const {
-  checkSunshine,
-  startSunshine,
-  startStreamingSession,
-  markSessionReady,
-  registerGame,
-  stopStreamingSession,
-  stopAllHostSessions,
-  sendHeartbeat,
-  listRemoteSessions,
-  getConnectionInfo,
-  sendPin,
-  requestStream,
-  killMoonlight,
-  listDevices,
-  remoteInstall,
-} = useStreaming();
-
+// Receiver-side streaming + cross-device discovery lives in
+// `use-bpm-game-streaming.ts` — decomposed out of this page. The composable
+// owns every interval and tears them down in `dispose()`.
+import { useBpmGameStreaming } from "~/composables/bigpicture/use-bpm-game-streaming";
 import type { ClientDevice } from "~/composables/useStreaming";
 
-let activeStreamSessionId: string | null = null;
-let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
-let moonlightWatchInterval: ReturnType<typeof setInterval> | null = null;
-
-// ── Remote stream discovery (client/receiver side) ────────────────────────
-const availableStream = ref<any>(null);
-let streamPollInterval: ReturnType<typeof setInterval> | null = null;
-// Session ID of a stream we requested (waiting for host to fulfill)
-const pendingRequestSessionId = ref<string | null>(null);
-// Granular streaming phase for the loading indicator
-type StreamingPhase = "requesting" | "host-preparing" | "connecting" | "streaming" | "ending" | null;
-const streamingPhase = ref<StreamingPhase>(null);
-const streamingPhaseLabel = computed(() => {
-  switch (streamingPhase.value) {
-    case "requesting": return "Waiting for host...";
-    case "host-preparing": return "Host starting Sunshine...";
-    case "connecting": return "Connecting to stream...";
-    case "streaming": return "Streaming";
-    case "ending": return "Ending stream...";
-    default: return "";
-  }
-});
-
-async function pollRemoteSessions() {
-  try {
-    const sessions = await listRemoteSessions();
-    // Find an active session for this game (Ready/Starting/Streaming)
-    const found = sessions.find(
-      (s: any) =>
-        s.game?.id === gameId &&
-        (s.status === "Ready" || s.status === "Starting" || s.status === "Streaming"),
-    ) ?? null;
-    availableStream.value = found;
-
-    // Update streaming phase based on session status
-    if (pendingRequestSessionId.value && found) {
-      if (found.status === "Starting") {
-        streamingPhase.value = "host-preparing";
-      }
-    }
-
-    // If we have a pending request and a session just became Ready, auto-connect
-    if (pendingRequestSessionId.value && found && found.status === "Ready") {
-      devLog("event", "[BPM:STREAM] Our requested session is now Ready! Auto-connecting...");
-      streamingPhase.value = "connecting";
-      pendingRequestSessionId.value = null;
-      isStreaming.value = false;
-      await connectToRemoteStream();
-    }
-  } catch {
-    // Silently ignore poll errors
-  }
-}
-
-async function connectToRemoteStream() {
-  if (!availableStream.value) return;
-  try {
-    const sessionId = availableStream.value.id;
-    const info = await getConnectionInfo(sessionId);
-    devLog("event", "[BPM:STREAM] Connection info:", JSON.stringify(info));
-    const host = info.hostLocalIp || info.hostExternalIp;
-    if (!host) {
-      launchError.value = "No host IP available for streaming";
-      return;
-    }
-    // Launch Moonlight pointed at the host
-    const port = info.sunshinePort || 47989;
-    devLog("event", `[BPM:STREAM] Launching Moonlight → ${host}:${port}`);
-    await invoke("launch_moonlight", { host, port, pin: info.pairingPin ?? null, appName: info.game?.mName ?? null });
-    activeStreamSessionId = sessionId;
-    isStreaming.value = true;
-    streamingPhase.value = "streaming";
-    streamGuard = false;
-
-    // Start the Rust-side session watcher — this is the authoritative kill
-    // mechanism and keeps running even if the Vue component unmounts.
-    invoke("watch_moonlight_session", { sessionId }).catch((e: any) => {
-      console.warn("[BPM:STREAM] Failed to start Rust-side session watcher:", e);
-    });
-
-    // Restore normal poll interval
-    if (streamPollInterval) clearInterval(streamPollInterval);
-    streamPollInterval = setInterval(pollRemoteSessions, 15_000);
-
-    // Start watching for session end — when the host stops the session, kill Moonlight
-    if (moonlightWatchInterval) clearInterval(moonlightWatchInterval);
-    moonlightWatchInterval = setInterval(async () => {
-      try {
-        const sessions = await listRemoteSessions();
-        const current = sessions.find((s: any) => s.id === sessionId);
-        // If the session is gone or stopped, kill Moonlight and clean up
-        if (!current || current.status === "Stopped") {
-          devLog("event", "[BPM:STREAM] Session ended on host side — killing Moonlight");
-          if (moonlightWatchInterval) {
-            clearInterval(moonlightWatchInterval);
-            moonlightWatchInterval = null;
-          }
-          try {
-            await killMoonlight();
-          } catch (e) {
-            console.warn("[BPM:STREAM] Failed to kill Moonlight:", e);
-          }
-          isStreaming.value = false;
-          streamingPhase.value = null;
-          activeStreamSessionId = null;
-          availableStream.value = null;
-        }
-      } catch {
-        // Silently ignore poll errors
-      }
-    }, 5_000);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error("[BPM:STREAM] Failed to connect to stream:", msg);
-    launchError.value = `Stream connect failed: ${msg}`;
-    streamGuard = false;
-  }
-}
-
-// ── Device list & action menu ────────────────────────────────────────────
-const devices = ref<ClientDevice[]>([]);
-// Deduplicate by name+platform, keeping the most recently connected entry
-const otherDevices = computed(() => {
-  const others = devices.value.filter((d) => !d.isSelf);
-  const byKey = new Map<string, ClientDevice>();
-  for (const d of others) {
-    const key = `${d.name}::${d.platform}`;
-    const existing = byKey.get(key);
-    if (!existing || d.lastConnected > existing.lastConnected) {
-      byKey.set(key, d);
-    }
-  }
-  return [...byKey.values()];
-});
-// Devices that have this game installed (can stream from). Empty when dev
-// mode is off so the play menu's "Stream from {device}" rows disappear and
-// `playMenuItemCount` collapses cleanly.
-const streamableDevices = computed(() =>
-  devMode.enabled.value
-    ? otherDevices.value.filter((d) => d.hasGame === true)
-    : [],
+const streaming = useBpmGameStreaming(
+  gameId,
+  version,
+  devMode.enabled,
+  (msg) => { launchError.value = msg; },
+  (msg) => showInfoToast(msg),
 );
-// Devices that definitively do NOT have this game installed (can install on).
-// Strict `=== false` check — devices that haven't reported (`hasGame ===
-// undefined`) are treated as unknown and excluded from BOTH lists rather
-// than defaulted into the installable bucket, which previously caused
-// already-installed games to show an "Install on X" entry.
-const installableDevices = computed(() => otherDevices.value.filter((d) => d.hasGame === false));
-
-async function loadDevices() {
-  try {
-    devices.value = await listDevices(gameId);
-  } catch {
-    devices.value = [];
-  }
-}
+const {
+  isStreaming,
+  streamingPhase,
+  streamingPhaseLabel,
+  streamableDevices,
+  installableDevices,
+  stopStreaming,
+} = streaming;
 
 const playMenuOpen = ref(false);
 const playMenuFocus = ref(0);
@@ -1307,13 +939,11 @@ function selectPlayMenuAction(index: number) {
     launchGame();
   } else if (index <= streamableDevices.value.length) {
     // Stream from device at index-1
-    const device = streamableDevices.value[index - 1];
-    streamFromDevice(device);
+    streaming.streamFromDevice(streamableDevices.value[index - 1]);
   } else {
     // Install on device
     const deviceIdx = index - 1 - streamableDevices.value.length;
-    const device = installableDevices.value[deviceIdx];
-    installOnDevice(device);
+    streaming.installOnDevice(installableDevices.value[deviceIdx]);
   }
 }
 
@@ -1322,29 +952,7 @@ function selectInstallMenuAction(index: number) {
   if (index === 0) {
     downloadGame();
   } else {
-    const device = installableDevices.value[index - 1];
-    installOnDevice(device);
-  }
-}
-
-async function streamFromDevice(device: ClientDevice) {
-  // Request a stream from this specific device
-  devLog("event", `[BPM:STREAM] Requesting stream from device: ${device.name} (${device.id})`);
-  streamGame(device.id);
-}
-
-async function installOnDevice(device: ClientDevice) {
-  devLog("event", `[BPM:STREAM] Remote install on device: ${device.name} (${device.id})`);
-  try {
-    await remoteInstall(gameId, device.id);
-    // Success: a short confirmation toast (not the Launch-Failed dialog).
-    showInfoToast(
-      `Install requested on ${device.name}. The download will start automatically when that device picks it up.`,
-    );
-    devLog("event", `[BPM:STREAM] Remote install requested on ${device.name}`);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    launchError.value = `Remote install failed: ${msg}`;
+    streaming.installOnDevice(installableDevices.value[index - 1]);
   }
 }
 
@@ -1379,148 +987,6 @@ function unwirePlayMenuGamepad() {
   _playMenuUnsubs.length = 0;
 }
 
-let streamGuard = false;
-
-/**
- * Request a stream from another device (push-based flow).
- * 1. Creates a "Requested" session on the server
- * 2. Polls faster (every 3s) waiting for a host to pick it up
- * 3. When the session becomes "Ready", auto-launches Moonlight
- */
-async function streamGame(targetClientId?: string) {
-  devLog("event", "[BPM:STREAM] streamGame() called — requesting remote stream, target:", targetClientId ?? "any");
-  if (streamGuard) return;
-  streamGuard = true;
-  isStreaming.value = true;
-  streamingPhase.value = "requesting";
-  try {
-    // Request a stream from another device (or a specific one).
-    // Send this device's per-game config (widescreen, quality, etc.) so the
-    // host PC applies the Deck's settings when launching the game.
-    const gameConfigJson = version.value?.userConfiguration
-      ? JSON.stringify(version.value.userConfiguration)
-      : undefined;
-    devLog("event", "[BPM:STREAM] Sending stream request for gameId:", gameId, "config:", gameConfigJson);
-    const sessionId = await requestStream(gameId, targetClientId, gameConfigJson);
-    pendingRequestSessionId.value = sessionId;
-    devLog("event", "[BPM:STREAM] Stream requested, session:", sessionId);
-
-    // Speed up polling while waiting for the host to accept
-    if (streamPollInterval) clearInterval(streamPollInterval);
-    streamPollInterval = setInterval(pollRemoteSessions, 3_000);
-
-    // Set a timeout — if no host picks it up within 60 seconds, give up
-    setTimeout(() => {
-      if (pendingRequestSessionId.value === sessionId) {
-        console.warn("[BPM:STREAM] Stream request timed out — no host responded");
-        pendingRequestSessionId.value = null;
-        isStreaming.value = false;
-        streamingPhase.value = null;
-        streamGuard = false;
-        launchError.value = "No host responded to the stream request. Make sure Drop is running on your PC.";
-        // Restore normal poll interval
-        if (streamPollInterval) clearInterval(streamPollInterval);
-        streamPollInterval = setInterval(pollRemoteSessions, 15_000);
-      }
-    }, 60_000);
-  } catch (e) {
-    const errMsg = e instanceof Error ? e.message : String(e);
-    console.error("[BPM:STREAM] Stream request failed:", errMsg);
-    launchError.value = `Stream request failed: ${errMsg}`;
-    isStreaming.value = false;
-    streamingPhase.value = null;
-    streamGuard = false;
-  }
-}
-
-/**
- * Stop the current streaming session — works for both requester and host sides.
- * - If we have a pending request (we're the Deck), cancel the server session.
- * - Also stops all host-side sessions (if we're the PC).
- */
-async function stopStreaming() {
-  devLog("event", "[BPM:STREAM] stopStreaming() called");
-  streamingPhase.value = "ending";
-  try {
-    // Cancel pending request session if we were waiting
-    if (pendingRequestSessionId.value) {
-      devLog("event", "[BPM:STREAM] Cancelling pending request:", pendingRequestSessionId.value);
-      try {
-        await stopStreamingSession(pendingRequestSessionId.value);
-      } catch (e) {
-        console.warn("[BPM:STREAM] Failed to stop requested session:", e);
-      }
-      pendingRequestSessionId.value = null;
-    }
-
-    // If we have an active host session ID, stop it
-    if (activeStreamSessionId) {
-      try {
-        await stopStreamingSession(activeStreamSessionId);
-      } catch (e) {
-        console.warn("[BPM:STREAM] Failed to stop active session:", e);
-      }
-      activeStreamSessionId = null;
-    }
-
-    // Stop all host-side sessions (heartbeats + Sunshine)
-    try {
-      const stopped = await stopAllHostSessions();
-      if (stopped > 0) {
-        devLog("event", `[BPM:STREAM] Stopped ${stopped} host session(s)`);
-      }
-    } catch (e) {
-      console.warn("[BPM:STREAM] Failed to stop host sessions:", e);
-    }
-
-    // Also stop any active/visible server-side sessions for this game
-    // (catches sessions from before the cancellation code was deployed)
-    try {
-      const sessions = await listRemoteSessions();
-      for (const s of sessions) {
-        if (s.status !== "Stopped") {
-          devLog("event", `[BPM:STREAM] Stopping server session ${s.id} (status: ${s.status})`);
-          try {
-            await stopStreamingSession(s.id);
-          } catch {
-            // May fail if we're not the host — that's ok
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("[BPM:STREAM] Failed to clean up server sessions:", e);
-    }
-
-    // Kill Moonlight if running (receiver side)
-    try {
-      await killMoonlight();
-    } catch (e) {
-      console.warn("[BPM:STREAM] Failed to kill Moonlight:", e);
-    }
-
-    // Clear heartbeat interval
-    if (heartbeatInterval) {
-      clearInterval(heartbeatInterval);
-      heartbeatInterval = null;
-    }
-
-    // Clear Moonlight watch interval
-    if (moonlightWatchInterval) {
-      clearInterval(moonlightWatchInterval);
-      moonlightWatchInterval = null;
-    }
-
-    // Restore normal poll interval
-    if (streamPollInterval) clearInterval(streamPollInterval);
-    streamPollInterval = setInterval(pollRemoteSessions, 15_000);
-  } finally {
-    isStreaming.value = false;
-    streamingPhase.value = null;
-    streamGuard = false;
-    availableStream.value = null;
-  }
-}
-
 /** Run launch diagnostics and log to console for debug capture */
 async function runDiagnostics() {
   if (diagnosticsRan.value) return;
@@ -1550,63 +1016,11 @@ const registerTab = useBpFocusableGroup("content");
 const gamepad = useGamepad();
 const _unsubs: (() => void)[] = [];
 
-// ── Markdown rendering (H fix) ──────────────────────────────────────────
-const renderedDescription = computed(() => {
-  if (!game.value?.mDescription) return "";
-  return renderMarkdown(game.value.mDescription);
-});
-
-/**
- * Lightweight markdown → HTML renderer for game descriptions.
- * Handles: headings, bold, italic, links, lists, paragraphs.
- */
-function renderMarkdown(md: string): string {
-  let html = md
-    // Escape HTML entities
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    // Headings (## heading)
-    .replace(/^### (.+)$/gm, "<h3>$1</h3>")
-    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
-    .replace(/^# (.+)$/gm, "<h1>$1</h1>")
-    // Bold (**text** or __text__)
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/__(.+?)__/g, "<strong>$1</strong>")
-    // Italic (*text* or _text_)
-    .replace(/\*(.+?)\*/g, "<em>$1</em>")
-    .replace(/_(.+?)_/g, "<em>$1</em>")
-    // Images ![alt](url) — must come before links to avoid ![...] matching [...]
-    .replace(
-      /!\[([^\]]*)\]\(([^)]+)\)/g,
-      (_m: string, alt: string, url: string) => {
-        // Rewrite relative URLs (starting with /) through the server proxy
-        const src = url.startsWith("/") ? serverUrl(url.slice(1)) : url;
-        return `<img src="${src}" alt="${alt}" class="rounded-lg max-w-full my-2" loading="lazy" />`;
-      },
-    )
-    // Links [text](url)
-    .replace(
-      /\[([^\]]+)\]\(([^)]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener" class="text-blue-400 hover:underline">$1</a>',
-    )
-    // Unordered lists (- item or * item)
-    .replace(/^[\-\*] (.+)$/gm, "<li>$1</li>")
-    // Horizontal rules (--- or ***)
-    .replace(/^[\-\*]{3,}$/gm, '<hr class="border-zinc-700 my-4">')
-    // Paragraphs (double newlines)
-    .replace(/\n\n+/g, "</p><p>")
-    // Single newlines → line breaks
-    .replace(/\n/g, "<br>");
-
-  // Wrap list items in <ul>
-  html = html.replace(
-    /(<li>.*?<\/li>)+/gs,
-    '<ul class="list-disc pl-6 space-y-1">$&</ul>',
-  );
-
-  return `<p>${html}</p>`;
-}
+// ── Markdown rendering ──────────────────────────────────────────────────
+// `renderMarkdown` is the shared helper in `composables/render-markdown.ts`.
+const renderedDescription = computed(() =>
+  game.value?.mDescription ? renderMarkdown(game.value.mDescription) : "",
+);
 
 // ── Game type detection ─────────────────────────────────────────────────
 const isEmulatedGame = computed(() => {
@@ -1627,25 +1041,7 @@ const isWindowsGame = computed(() => {
   return versionOptions.value?.some((v) => v.platform?.toLowerCase() === "windows") ?? false;
 });
 
-// ── Controller & Quality presets ─────────────────────────────────────────
-const controllerOptions: { label: string; value: ControllerType | null }[] = [
-  { label: "Auto", value: null },
-  { label: "Xbox (A=South)", value: "Xbox" },
-  { label: "Nintendo (A=East)", value: "Nintendo" },
-];
-const qualityOptions: { label: string; value: QualityPreset | null }[] = [
-  { label: "Auto", value: null },
-  { label: "Low", value: "Low" },
-  { label: "Med", value: "Medium" },
-  { label: "High", value: "High" },
-  { label: "Ultra", value: "Ultra" },
-];
-
-const selectedController = ref<ControllerType | null>(null);
-const selectedQuality = ref<QualityPreset | null>(null);
-const aspectRatio = ref<AspectRatio>("Standard");
-const crtShaderEnabled = ref(false);
-
+// ── Settings + info toasts ───────────────────────────────────────────────
 const settingsToast = ref("");
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -1668,100 +1064,35 @@ function showInfoToast(msg: string) {
   infoToastTimer = setTimeout(() => { infoToast.value = ""; }, 5000);
 }
 
-async function saveUserConfig() {
-  const ver = version.value;
-  if (!ver) return;
-  try {
-    const currentConfig = ver.userConfiguration ?? {
-      launchTemplate: "{}",
-      overrideProtonPath: null,
-      enableUpdates: false,
-    };
-    const config = {
-      ...currentConfig,
-      controllerType: selectedController.value,
-      qualityPreset: selectedQuality.value,
-      widescreen: aspectRatio.value,
-      crtShader: crtShaderEnabled.value,
-    };
-    await invoke("update_game_configuration", {
-      gameId: gameId,
-      options: config,
-    });
-  } catch (e) {
-    console.error("Failed to save config:", e);
-    launchError.value = `Failed to save settings: ${e instanceof Error ? e.message : String(e)}`;
-  }
-}
+// ── Per-game emulator/launch presets ─────────────────────────────────────
+// Controller/quality/aspect/CRT presets + persistence live in
+// `use-bpm-game-config.ts` — decomposed out of this page. `applyProfileName`
+// here closes the options menu before delegating to the composable.
+import { useBpmGameConfig } from "~/composables/bigpicture/use-bpm-game-config";
 
-function setController(value: ControllerType | null) {
-  selectedController.value = value;
-  saveUserConfig();
-  const label = controllerOptions.find((o) => o.value === value)?.label ?? "Auto";
-  showSettingsToast(`Controller: ${label}`);
-}
+const gameConfig = useBpmGameConfig(
+  gameId,
+  version,
+  showSettingsToast,
+  (msg) => { launchError.value = msg; },
+);
+const {
+  selectedController,
+  selectedQuality,
+  aspectRatio,
+  crtShaderEnabled,
+  controllerLabel,
+  qualityLabel,
+  aspectLabel,
+  cycleController,
+  cycleQuality,
+  toggleWidescreen,
+  toggleCrtShader,
+} = gameConfig;
 
-function setQuality(value: QualityPreset | null) {
-  selectedQuality.value = value;
-  saveUserConfig();
-  const label = qualityOptions.find((o) => o.value === value)?.label ?? "Auto";
-  showSettingsToast(`Quality: ${label}`);
-}
-
-function cycleController() {
-  const values = controllerOptions.map((o) => o.value);
-  const idx = values.indexOf(selectedController.value);
-  const next = values[(idx + 1) % values.length];
-  setController(next);
-}
-
-function cycleQuality() {
-  const values = qualityOptions.map((o) => o.value);
-  const idx = values.indexOf(selectedQuality.value);
-  const next = values[(idx + 1) % values.length];
-  setQuality(next);
-}
-
-const controllerLabel = computed(() => {
-  const match = controllerOptions.find((o) => o.value === selectedController.value);
-  return match?.label ?? "Auto";
-});
-
-const qualityLabel = computed(() => {
-  const match = qualityOptions.find((o) => o.value === selectedQuality.value);
-  return match?.label ?? "Auto";
-});
-
-const ASPECT_CYCLE: AspectRatio[] = ["Standard", "Wide16_9", "Wide16_10"];
-const aspectLabel = computed(() => {
-  switch (aspectRatio.value) {
-    case "Wide16_9": return "16:9";
-    case "Wide16_10": return "16:10";
-    default: return "4:3";
-  }
-});
-
-function toggleWidescreen() {
-  const idx = ASPECT_CYCLE.indexOf(aspectRatio.value);
-  aspectRatio.value = ASPECT_CYCLE[(idx + 1) % ASPECT_CYCLE.length];
-  saveUserConfig();
-  showSettingsToast(`Aspect Ratio: ${aspectLabel.value}`);
-}
-
-function toggleCrtShader() {
-  crtShaderEnabled.value = !crtShaderEnabled.value;
-  saveUserConfig();
-  showSettingsToast(`CRT Shader: ${crtShaderEnabled.value ? "On" : "Off"}`);
-}
-
-async function applyProfileName() {
+function applyProfileName() {
   showOptions.value = false;
-  try {
-    const msg = await invoke<string>("configure_game_emulator", { gameId });
-    devLog("launch", "[EMU]", msg);
-  } catch (e) {
-    console.error("[EMU] Failed to apply profile:", e);
-  }
+  gameConfig.applyProfileName();
 }
 
 // ── Options menu: gamepad-navigable list ──────────────────────────────────
@@ -2117,581 +1448,28 @@ function formatTimeAgo(dateStr: string): string {
   return `${Math.floor(diff / 604800)}w ago`;
 }
 
-// ── Save state management ─────────────────────────────────────────────────
-interface SaveFile {
-  filename: string;
-  size: number;
-  modified: number;
-  save_type: string;
-}
-const gameSaves = ref<SaveFile[]>([]);
-const savesLoading = ref(false);
+// ── Save data (emulator + cloud + PC/Ludusavi) ───────────────────────────
+// All save logic — local saves, cloud sync, PC-game saves via Ludusavi,
+// the merged view, and the formatters — lives in `use-bpm-game-saves.ts`,
+// decomposed out of this page. The Saves-tab markup is the
+// <BpmGameSavesTab> component, which takes this `saves` object as a prop.
+import { useBpmGameSaves } from "~/composables/bigpicture/use-bpm-game-saves";
+import BpmGameSavesTab from "~/components/bigpicture/game-detail/BpmGameSavesTab.vue";
 
-async function fetchSaves() {
-  savesLoading.value = true;
-  try {
-    const saves: SaveFile[] = await invoke("list_game_saves", { gameId });
-    gameSaves.value = saves;
-  } catch {
-    gameSaves.value = [];
-  } finally {
-    savesLoading.value = false;
-  }
-}
+const saves = useBpmGameSaves(
+  gameId,
+  computed(() => game.value?.mName),
+  isNativeGame,
+  (msg) => { launchError.value = msg; },
+);
 
-async function deleteSave(save: SaveFile) {
-  try {
-    await invoke("delete_game_save", {
-      gameId,
-      filename: save.filename,
-      saveType: save.save_type,
-    });
-    gameSaves.value = gameSaves.value.filter((s) => s.filename !== save.filename);
-  } catch (e) {
-    console.error("[BPM:GAME] Failed to delete save:", e);
-    launchError.value = `Failed to delete save: ${e instanceof Error ? e.message : String(e)}`;
-  }
-}
-
-// ── Ludusavi PC game saves ─────────────────────────────────────────────────
-interface LudusaviFile { path: string; size: number; modified: number }
-const pcSaves = ref<LudusaviFile[]>([]);
-const pcSaveStatus = ref("");
-const ludusaviAvailable = ref(false);
-const ludusaviInstalling = ref(false);
-
-async function doInstallLudusavi() {
-  ludusaviInstalling.value = true;
-  try {
-    await invoke("install_ludusavi");
-    ludusaviAvailable.value = true;
-    // Now fetch PC saves since Ludusavi is installed
-    await fetchPcSaves();
-  } catch (e) {
-    console.error("[BPM:GAME] Ludusavi install failed:", e);
-    launchError.value = `Ludusavi install failed: ${e instanceof Error ? e.message : String(e)}`;
-  } finally {
-    ludusaviInstalling.value = false;
-  }
-}
-
-async function fetchPcSaves() {
-  try {
-    ludusaviAvailable.value = await invoke("check_ludusavi");
-    if (!ludusaviAvailable.value || !game.value) return;
-
-    const result: { files: LudusaviFile[]; game_name: string } = await invoke("list_pc_game_saves", {
-      gameId,
-      gameName: game.value.mName,
-    });
-    pcSaves.value = result.files;
-  } catch {
-    pcSaves.value = [];
-  }
-}
-
-async function backupPcSaves() {
-  if (!game.value) return;
-  pcSaveStatus.value = "backing-up";
-  try {
-    const backupPath: string = await invoke("backup_pc_game_saves", {
-      gameId,
-      gameName: game.value.mName,
-    });
-    // Upload the backup to cloud
-    // For now, just show success
-    launchError.value = null;
-    devLog("state", "[BPM:GAME] Ludusavi backup at:", backupPath);
-  } catch (e) {
-    launchError.value = `Backup failed: ${e instanceof Error ? e.message : String(e)}`;
-  } finally {
-    pcSaveStatus.value = "";
-  }
-}
-
-async function restorePcSaves() {
-  pcSaveStatus.value = "restoring";
-  try {
-    // Look for existing backup
-    const backupPath = `${await invoke("get_temp_dir")}drop-ludusavi-${gameId}`.replace(/\\/g, "/");
-    await invoke("restore_pc_game_saves", { backupPath });
-  } catch (e) {
-    launchError.value = `Restore failed: ${e instanceof Error ? e.message : String(e)}`;
-  } finally {
-    pcSaveStatus.value = "";
-  }
-}
-
-// Group PC saves into save slots with their backups
-interface PcSaveGroup {
-  name: string;
-  label: string;
-  type: "save" | "settings" | "other";
-  primary: LudusaviFile | null;
-  backups: LudusaviFile[];
-  expanded: boolean;
-}
-
-const pcSaveGroups = ref<PcSaveGroup[]>([]);
-
-watch(pcSaves, (saves) => {
-  const filtered = saves.filter((f) => {
-    const lower = f.path.toLowerCase();
-    if (lower.includes("crashreportclient")) return false;
-    if (lower.includes("uecc-windows-")) return false;
-    if (lower.endsWith(".log") || lower.endsWith(".tmp")) return false;
-    return true;
-  });
-
-  // Group: find primary saves and attach their backups
-  const groups = new Map<string, PcSaveGroup>();
-
-  // Use case-insensitive keys to avoid duplicates on Windows
-  for (const file of filtered) {
-    const filename = pcSaveFileName(file.path);
-    const lower = filename.toLowerCase();
-    const key = lower; // case-insensitive grouping key
-
-    // Determine if this is a backup of another file
-    const backupMatch = lower.match(/^(.+?)_backup\d*\.(\w+)$/);
-    if (backupMatch) {
-      const parentKey = `${backupMatch[1]}.${backupMatch[2]}`;
-      const existing = groups.get(parentKey);
-      if (existing) {
-        existing.backups.push(file);
-      } else {
-        const displayName = filename.replace(/_backup\d*/, "");
-        groups.set(parentKey, {
-          name: displayName,
-          label: displayName.replace(/_/g, " ").replace(/\.\w+$/, ""),
-          type: "save",
-          primary: null,
-          backups: [file],
-          expanded: false,
-        });
-      }
-      continue;
-    }
-
-    // Determine type
-    const isSettings = lower.endsWith(".ini") || lower.endsWith(".cfg");
-    const type = isSettings ? "settings" as const : "save" as const;
-
-    const existing = groups.get(key);
-    if (existing) {
-      // Keep the version with more data (larger file or first seen)
-      if (!existing.primary || file.size > existing.primary.size) {
-        existing.primary = file;
-      }
-      existing.type = type;
-      existing.label = isSettings ? "Settings" : filename.replace(/_/g, " ").replace(/\.\w+$/, "");
-    } else {
-      groups.set(key, {
-        name: filename,
-        label: isSettings ? "Settings" : filename.replace(/_/g, " ").replace(/\.\w+$/, ""),
-        type,
-        primary: file,
-        backups: [],
-        expanded: false,
-      });
-    }
-  }
-
-  // Sort: saves first, then settings
-  pcSaveGroups.value = [...groups.values()].sort((a, b) => {
-    const typeOrder = (t: string) => t === "save" ? 0 : t === "settings" ? 2 : 1;
-    return typeOrder(a.type) - typeOrder(b.type);
-  });
-}, { immediate: true });
-
-// Filter and format PC saves — hide crash reports, show just filenames
-const filteredPcSaves = computed(() => {
-  return pcSaves.value
-    .filter((f) => {
-      const lower = f.path.toLowerCase();
-      // Hide crash report files and temp files
-      if (lower.includes("crashreportclient")) return false;
-      if (lower.includes("uecc-windows-")) return false;
-      if (lower.endsWith(".log")) return false;
-      if (lower.endsWith(".tmp")) return false;
-      return true;
-    })
-    .sort((a, b) => {
-      // Save files first, then config, then others
-      const typeOrder = (p: string) => {
-        const l = p.toLowerCase();
-        if (l.endsWith(".sav") || l.endsWith(".save") || l.includes("savegame")) return 0;
-        if (l.endsWith(".ini") || l.endsWith(".cfg")) return 2;
-        return 1;
-      };
-      const diff = typeOrder(a.path) - typeOrder(b.path);
-      if (diff !== 0) return diff;
-      return b.size - a.size; // Larger files first within same type
-    });
-});
-
-function pcSaveFileName(fullPath: string): string {
-  // Extract just the filename from the full path
-  const parts = fullPath.replace(/\\/g, "/").split("/");
-  return parts[parts.length - 1] || fullPath;
-}
-
-function pcSaveFileType(fullPath: string): string {
-  const lower = fullPath.toLowerCase();
-  if (lower.endsWith(".sav")) return "Game Save";
-  if (lower.includes("backup")) return "Auto Backup";
-  if (lower.endsWith(".ini") || lower.endsWith(".cfg")) return "Settings";
-  if (lower.endsWith(".json")) return "Data";
-  return "Save Data";
-}
-
-function pcSaveFileColor(fullPath: string): { bg: string; text: string } {
-  const lower = fullPath.toLowerCase();
-  if (lower.endsWith(".sav") || lower.endsWith(".save")) {
-    if (lower.includes("backup")) return { bg: "rgba(234,179,8,0.15)", text: "#eab308" }; // yellow for backups
-    return { bg: "rgba(34,197,94,0.15)", text: "#22c55e" }; // green for saves
-  }
-  if (lower.endsWith(".ini") || lower.endsWith(".cfg")) return { bg: "rgba(156,163,175,0.15)", text: "#9ca3af" }; // grey for config
-  return { bg: "rgba(168,85,247,0.15)", text: "#a855f7" }; // purple for other
-}
-
-// ── Cloud saves ───────────────────────────────────────────────────────────
-interface CloudSaveEntry {
-  id: string;
-  filename: string;
-  saveType: string;
-  size: number;
-  clientModifiedAt: string;
-  uploadedAt: string;
-}
-const cloudSaves = ref<CloudSaveEntry[]>([]);
-const cloudSyncStatus = ref<Record<string, string>>({});
-
-async function fetchCloudSaves() {
-  try {
-    const url = serverUrl(`api/v1/client/saves/list?gameId=${gameId}`);
-    const resp = await fetch(url);
-    if (resp.ok) {
-      cloudSaves.value = await resp.json();
-    }
-  } catch { /* non-critical */ }
-}
-
-// Confirmation state for cloud sync
-const confirmSyncAction = ref<{ type: "upload" | "download"; save: SaveFile | null; filename: string; saveType: string } | null>(null);
-
-function requestUpload(save: SaveFile) {
-  // Check if cloud version already exists
-  const hasCloud = cloudSaves.value.some((c) => c.filename === save.filename);
-  if (hasCloud) {
-    confirmSyncAction.value = { type: "upload", save, filename: save.filename, saveType: save.save_type };
-  } else {
-    doUpload(save);
-  }
-}
-
-function requestDownload(filename: string, saveType: string) {
-  // Check if local version already exists
-  const hasLocal = gameSaves.value.some((s) => s.filename === filename);
-  if (hasLocal) {
-    confirmSyncAction.value = { type: "download", save: null, filename, saveType };
-  } else {
-    doDownload(filename, saveType);
-  }
-}
-
-function confirmSync() {
-  if (!confirmSyncAction.value) return;
-  const action = confirmSyncAction.value;
-  confirmSyncAction.value = null;
-  if (action.type === "upload" && action.save) {
-    doUpload(action.save);
-  } else if (action.type === "download") {
-    doDownload(action.filename, action.saveType);
-  }
-}
-
-async function doUpload(save: SaveFile) {
-  cloudSyncStatus.value[save.filename] = "uploading";
-  try {
-    // Before overwriting, create a backup with .bak suffix in cloud
-    const existingCloud = cloudSaves.value.find((c) => c.filename === save.filename);
-    if (existingCloud) {
-      // Download the existing cloud version as a backup
-      const backupUrl = serverUrl(`api/v1/client/saves/download?id=${existingCloud.id}`);
-      const backupResp = await fetch(backupUrl);
-      if (backupResp.ok) {
-        const backupData = await backupResp.json();
-        // Upload backup with .bak suffix
-        await fetch(serverUrl("api/v1/client/saves/upload"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            gameId,
-            filename: save.filename + ".bak",
-            saveType: save.save_type,
-            data: backupData.data,
-            clientModifiedAt: existingCloud.clientModifiedAt,
-          }),
-        });
-      }
-    }
-
-    // Read local file as base64 via Tauri
-    const base64Data: string = await invoke("read_save_file", {
-      gameId,
-      filename: save.filename,
-      saveType: save.save_type,
-    });
-
-    // Upload to server
-    const resp = await fetch(serverUrl("api/v1/client/saves/upload"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        gameId,
-        filename: save.filename,
-        saveType: save.save_type,
-        data: base64Data,
-        clientModifiedAt: new Date(save.modified * 1000).toISOString(),
-      }),
-    });
-    if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
-
-    await fetchCloudSaves();
-  } catch (e) {
-    console.error("[BPM:GAME] Cloud save upload failed:", e);
-    launchError.value = `Upload failed: ${e instanceof Error ? e.message : String(e)}`;
-  } finally {
-    delete cloudSyncStatus.value[save.filename];
-  }
-}
-
-async function doDownload(filename: string, saveType: string) {
-  const cloudEntry = cloudSaves.value.find((c) => c.filename === filename);
-  if (!cloudEntry) return;
-
-  cloudSyncStatus.value[filename] = "downloading";
-  try {
-    // Before overwriting local, create a backup of the local file
-    const localSave = gameSaves.value.find((s) => s.filename === filename);
-    if (localSave) {
-      try {
-        const localData: string = await invoke("read_save_file", {
-          gameId,
-          filename: localSave.filename,
-          saveType: localSave.save_type,
-        });
-        // Write backup locally with .bak suffix
-        await invoke("write_save_file", {
-          gameId,
-          filename: filename + ".bak",
-          saveType,
-          data: localData,
-        });
-      } catch {
-        // Backup failed — continue anyway
-      }
-    }
-
-    // Download from server
-    const url = serverUrl(`api/v1/client/saves/download?id=${cloudEntry.id}`);
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
-    const { data } = await resp.json();
-
-    // Write to local file via Tauri
-    await invoke("write_save_file", {
-      gameId,
-      filename,
-      saveType,
-      data,
-    });
-
-    // Refresh local saves list
-    await fetchSaves();
-  } catch (e) {
-    console.error("[BPM:GAME] Cloud save download failed:", e);
-    launchError.value = `Download failed: ${e instanceof Error ? e.message : String(e)}`;
-  } finally {
-    delete cloudSyncStatus.value[filename];
-  }
-}
-
-// ── Merged save view (local + cloud) ──────────────────────────────────────
-interface MergedSave {
-  filename: string;
-  local: SaveFile | null;
-  cloud: CloudSaveEntry | null;
-}
-
-const mergedSaves = computed((): MergedSave[] => {
-  const map = new Map<string, MergedSave>();
-
-  // Add local saves
-  for (const save of gameSaves.value) {
-    map.set(save.filename, { filename: save.filename, local: save, cloud: null });
-  }
-
-  // Merge cloud saves
-  for (const cloud of cloudSaves.value) {
-    const existing = map.get(cloud.filename);
-    if (existing) {
-      existing.cloud = cloud;
-    } else {
-      map.set(cloud.filename, { filename: cloud.filename, local: null, cloud });
-    }
-  }
-
-  // Sort: .srm first, then .state, then .png. Within each group, newest first.
-  return [...map.values()].sort((a, b) => {
-    const extOrder = (f: string) => f.endsWith('.srm') ? 0 : f.endsWith('.state') ? 1 : 2;
-    const diff = extOrder(a.filename) - extOrder(b.filename);
-    if (diff !== 0) return diff;
-    const aTime = a.local?.modified ?? 0;
-    const bTime = b.local?.modified ?? 0;
-    return bTime - aTime;
-  });
-});
-
-function saveTypeLabel(filename: string): string {
-  if (filename.endsWith('.srm')) return 'Game Progress (Battery Save)';
-  if (filename.endsWith('.state.png')) return 'Save State Screenshot';
-  if (filename.endsWith('.state')) return 'Save State (Exact Position)';
-  if (filename.endsWith('.sav')) return 'Game Save';
-  return 'Save File';
-}
-
-function saveTypeColor(filename: string): { bg: string; text: string } {
-  if (filename.endsWith('.srm')) return { bg: 'rgba(34,197,94,0.15)', text: '#22c55e' };
-  if (filename.endsWith('.state.png')) return { bg: 'rgba(168,85,247,0.15)', text: '#a855f7' };
-  if (filename.endsWith('.state')) return { bg: 'rgba(59,130,246,0.15)', text: '#3b82f6' };
-  return { bg: 'rgba(156,163,175,0.15)', text: '#9ca3af' };
-}
-
-function formatSaveSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-// ── Per-save cloud sync for PC saves ─────────────────────────────────────
-const pcSyncStatus = ref<Record<string, string>>({});
-const pcCloudSaves = ref<Record<string, CloudSaveEntry>>({});
-const pcCloudStatus = ref<Record<string, string>>({});
-
-function refreshPcCloudStatus() {
-  const map: Record<string, CloudSaveEntry> = {};
-  for (const cloud of cloudSaves.value) {
-    if (cloud.filename.startsWith("pc:")) {
-      const groupName = cloud.filename.slice(3);
-      map[groupName.toLowerCase()] = cloud;
-    }
-  }
-  pcCloudSaves.value = map;
-
-  const status: Record<string, string> = {};
-  for (const group of pcSaveGroups.value) {
-    const key = group.name.toLowerCase();
-    const cloud = map[key];
-    if (!cloud) continue;
-    if (!group.primary) {
-      status[group.name] = "cloud-only";
-    } else {
-      const localModified = group.primary.modified * 1000;
-      const cloudModified = new Date(cloud.clientModifiedAt).getTime();
-      if (Math.abs(localModified - cloudModified) < 2000) {
-        status[group.name] = "synced";
-      } else if (cloudModified > localModified) {
-        status[group.name] = "cloud-newer";
-      } else {
-        status[group.name] = "local-newer";
-      }
-    }
-  }
-  pcCloudStatus.value = status;
-}
-
-watch(cloudSaves, refreshPcCloudStatus, { immediate: true });
-watch(pcSaveGroups, refreshPcCloudStatus);
-
-// Helper to check if a cloud save exists for a PC save group (avoids Map.has() reactivity issues in templates)
-function hasPcCloudSave(groupName: string): boolean {
-  return groupName.toLowerCase() in pcCloudSaves.value;
-}
-
-async function uploadPcSave(group: PcSaveGroup) {
-  if (!group.primary || !game.value) return;
-  pcSyncStatus.value[group.name] = "uploading";
-  try {
-    const base64Data: string = await invoke("read_pc_save_file", {
-      filePath: group.primary.path,
-    });
-
-    const cloudFilename = `pc:${group.name}`;
-    const resp = await fetch(serverUrl("api/v1/client/saves/upload"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        gameId,
-        filename: cloudFilename,
-        saveType: "save",
-        data: base64Data,
-        clientModifiedAt: new Date(group.primary.modified * 1000).toISOString(),
-      }),
-    });
-    if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
-
-    await fetchCloudSaves();
-    devLog("state", "[BPM:GAME] PC save uploaded:", group.name);
-  } catch (e) {
-    console.error("[BPM:GAME] PC save upload failed:", e);
-    launchError.value = `Upload failed: ${e instanceof Error ? e.message : String(e)}`;
-  } finally {
-    delete pcSyncStatus.value[group.name];
-  }
-}
-
-async function downloadPcSave(group: PcSaveGroup) {
-  const key = group.name.toLowerCase();
-  const cloudEntry = pcCloudSaves.value[key];
-  if (!cloudEntry) return;
-
-  pcSyncStatus.value[group.name] = "downloading";
-  try {
-    const url = serverUrl(`api/v1/client/saves/download?id=${cloudEntry.id}`);
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
-    const { data } = await resp.json();
-
-    if (!group.primary) {
-      launchError.value = "No local path known for this save — cannot restore.";
-      return;
-    }
-
-    await invoke("write_pc_save_file", {
-      filePath: group.primary.path,
-      data,
-    });
-
-    await fetchPcSaves();
-    devLog("state", "[BPM:GAME] PC save downloaded:", group.name);
-  } catch (e) {
-    console.error("[BPM:GAME] PC save download failed:", e);
-    launchError.value = `Download failed: ${e instanceof Error ? e.message : String(e)}`;
-  } finally {
-    delete pcSyncStatus.value[group.name];
-  }
-}
-
-// Load saves when the saves tab is selected
-watch(() => activeTab.value, (tab) => {
-  if (tab === "saves") {
-    if (gameSaves.value.length === 0) fetchSaves();
-    fetchCloudSaves();
-    if (isNativeGame.value) fetchPcSaves();
-  }
-});
+// Load saves when the saves tab is selected.
+watch(
+  () => activeTab.value,
+  (tab) => {
+    if (tab === "saves") saves.loadAll();
+  },
+);
 
 // ── Recommended games ──────────────────────────────────────────────────
 interface RecommendedGame {
@@ -2901,17 +1679,9 @@ onMounted(async () => {
       statusRef.value = r.status;
       version.value = r.version?.value ?? null;
       devLog("state", "[BPM:GAME] Game loaded:", r.game.mName, "| Status:", r.status?.value);
-      if (version.value?.userConfiguration) {
-        selectedController.value = version.value.userConfiguration.controllerType ?? null;
-        selectedQuality.value = version.value.userConfiguration.qualityPreset ?? null;
-        // widescreen used to be `boolean | AspectRatio` and the code below
-        // still handled the legacy true/false shape. The type is now just
-        // AspectRatio (Standard | Wide16_9 | Wide16_10), so we only need
-        // a null guard for forward-compat with malformed server payloads.
-        const ws = version.value.userConfiguration.widescreen;
-        aspectRatio.value = ws ?? "Standard";
-        crtShaderEnabled.value = version.value.userConfiguration.crtShader ?? false;
-      }
+      // Seed the preset refs (controller/quality/aspect/CRT) from the
+      // freshly-loaded version — see use-bpm-game-config.ts.
+      gameConfig.syncFromVersion(version.value);
     })
     .catch((e) => console.error("[BPM:GAME] useGame FAILED:", e));
 
@@ -2962,11 +1732,9 @@ function _onResize() {
 }
 onMounted(() => {
   window.addEventListener("resize", _onResize);
-  // Load other devices for the dropdown
-  loadDevices();
-  // Start polling for remote streaming sessions (receiver side)
-  pollRemoteSessions();
-  streamPollInterval = setInterval(pollRemoteSessions, 15_000);
+  // Load other devices for the dropdown + start receiver-side stream polling.
+  streaming.loadDevices();
+  streaming.startPolling();
 });
 
 onUnmounted(() => {
@@ -2975,9 +1743,8 @@ onUnmounted(() => {
   unwireOptionsGamepad();
   if (showOptions.value) focusNav.releaseInputLock(optionsLockId);
   window.removeEventListener("resize", _onResize);
-  // Clean up streaming
-  if (streamPollInterval) { clearInterval(streamPollInterval); streamPollInterval = null; }
-  if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+  // Tear down every streaming interval owned by the composable.
+  streaming.dispose();
 });
 
 function dismissLaunchError() {
@@ -3084,10 +1851,9 @@ async function killGame() {
   try {
     await invoke("kill_game", { id: gameId });
     // If we were streaming, stop everything (heartbeats, Sunshine, server sessions)
-    if (isStreaming.value || activeStreamSessionId) {
+    if (streaming.hasActiveStream) {
       await stopStreaming();
     }
-    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
   } catch (e) {
     console.error("Failed to stop game:", e);
   }

@@ -101,7 +101,14 @@ impl DropData {
     pub fn write(&self) {
         let manifest_raw = match pot::to_vec(&self) {
             Ok(data) => data,
-            Err(_) => return,
+            Err(e) => {
+                // Previously this error was swallowed silently. A failure
+                // here means the .dropdata marker is not refreshed, which
+                // can make a complete install look partial to the next
+                // scan — worth a log line.
+                error!("failed to serialize .dropdata for {}: {e}", self.game_id);
+                return;
+            }
         };
 
         let mut file = match File::create(self.base_path.join(DROPDATA_PATH)) {

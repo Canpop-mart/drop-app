@@ -8,9 +8,8 @@ use bitcode::{Encode, Decode};
 use crate::{
     error::RemoteAccessError,
     goldberg::{self, EmulatorInfo},
-    requests::{generate_url, make_authenticated_get, make_authenticated_post},
+    requests::{generate_url, remote_request, remote_request_ok, RemoteRequest},
     cache::{cache_object, get_cached_object},
-    utils::{bounded_json, DEFAULT_JSON_CAP_BYTES},
 };
 
 /// Prefix for all achievement debug logs — makes grep/filter easy.
@@ -117,18 +116,7 @@ pub async fn fetch_achievement_config(
         )],
         &[],
     )?;
-    let response = make_authenticated_get(url).await?;
-
-    if response.status() != 200 {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!("{TAG} Config fetch failed for {game_id}: {status} — {text}");
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to fetch achievement config: {status}"
-        )));
-    }
-
-    let data: AchievementConfigResponse = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
+    let data: AchievementConfigResponse = remote_request(RemoteRequest::get(url)).await?;
     debug!(
         "{TAG} Config for {game_id}: {} achievements, {} external links, {} already unlocked",
         data.achievements.len(),
@@ -168,18 +156,8 @@ pub async fn report_achievements(
         &[],
     )?;
     let body = AchievementReportBody { achievements };
-    let response = make_authenticated_post(url, &body).await?;
-
-    if response.status() != 200 {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!("{TAG} Report failed for {game_id}: {status} — {text}");
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to report achievements: {status} - {text}"
-        )));
-    }
-
-    let data: AchievementReportResponse = bounded_json(response, DEFAULT_JSON_CAP_BYTES).await?;
+    let data: AchievementReportResponse =
+        remote_request(RemoteRequest::post(url, &body)).await?;
     info!("{TAG} Server recorded {} achievements for {game_id}", data.recorded);
     Ok(data)
 }
@@ -218,31 +196,15 @@ async fn poll_ra(game_id: &str) -> Vec<RAPollUnlock> {
     #[derive(Serialize)]
     struct Empty {}
 
-    match make_authenticated_post(url, &Empty {}).await {
-        Ok(response) => {
-            let status = response.status();
-            if status != 200 {
-                warn!("{TAG} RA poll returned status {status} for game {game_id}");
-                if let Ok(text) = response.text().await {
-                    warn!("{TAG} RA poll error body: {text}");
-                }
-                return Vec::new();
+    match remote_request::<RAPollResponse, _>(RemoteRequest::post(url, &Empty {})).await {
+        Ok(data) => {
+            if !data.newly_unlocked.is_empty() {
+                info!(
+                    "{TAG} RA poll found {} new unlocks for {game_id}",
+                    data.newly_unlocked.len()
+                );
             }
-            match response.json::<RAPollResponse>().await {
-                Ok(data) => {
-                    if !data.newly_unlocked.is_empty() {
-                        info!(
-                            "{TAG} RA poll found {} new unlocks for {game_id}",
-                            data.newly_unlocked.len()
-                        );
-                    }
-                    data.newly_unlocked
-                }
-                Err(e) => {
-                    warn!("{TAG} Failed to parse RA poll response: {e}");
-                    Vec::new()
-                }
-            }
+            data.newly_unlocked
         }
         Err(e) => {
             warn!("{TAG} RA poll request failed for {game_id}: {e}");
@@ -261,17 +223,7 @@ pub async fn notify_session_end(game_id: &str) -> Result<(), RemoteAccessError> 
     // Empty body — the server identifies user via client auth
     #[derive(Serialize)]
     struct Empty {}
-    let response = make_authenticated_post(url, &Empty {}).await?;
-
-    if response.status() != 200 {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        warn!("Session-end sync failed: {status} - {text}");
-        return Err(RemoteAccessError::UnparseableResponse(format!(
-            "Failed to notify session end: {status} - {text}"
-        )));
-    }
-
+    remote_request_ok(RemoteRequest::post(url, &Empty {})).await?;
     info!("Session-end sync completed for game {}", game_id);
     Ok(())
 }
@@ -453,8 +405,21 @@ pub async fn poll_achievements(
     // Only re-fetch config every 3 cycles (45 seconds), reuse cache otherwise
     const CONFIG_CACHE_DURATION_SECS: u64 = 45;
 
+    // A fixed-cadence interval rather than `sleep(15s)` at the end of each
+    // cycle: `sleep` would make the real period `15s + poll_duration`, so the
+    // interval would drift slower the slower the server is. `interval` ticks
+    // on a fixed 15s grid. `MissedTickBehavior::Skip` means that if one poll
+    // cycle ever overruns 15s, the missed ticks are dropped — the next poll
+    // waits for the next grid point instead of firing back-to-back, so polls
+    // can never stack up.
+    let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(15));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // The first `tick()` returns immediately; consume it so the loop's first
+    // real poll still happens ~15s in, matching the previous behaviour.
+    ticker.tick().await;
+
     loop {
-        // Wait 15 seconds or until cancelled
+        // Wait for the next 15s tick or until cancelled
         tokio::select! {
             _ = cancel.notified() => {
                 // On session end, do one final check for Goldberg mode
@@ -494,7 +459,7 @@ pub async fn poll_achievements(
                 info!("{TAG} Achievement polling stopped for game {game_id}");
                 return;
             }
-            _ = tokio::time::sleep(tokio::time::Duration::from_secs(15)) => {}
+            _ = ticker.tick() => {}
         }
 
         match &mode {

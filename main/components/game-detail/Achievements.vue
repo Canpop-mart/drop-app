@@ -1,0 +1,176 @@
+<template>
+  <div class="bg-zinc-800/50 rounded-xl p-6 backdrop-blur-sm">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-xl font-display font-semibold text-zinc-100">
+        Achievements
+      </h2>
+    </div>
+
+    <!-- ROM hash status banner (RetroAchievements). -->
+    <div
+      v-if="romHashResult?.status === 'Mismatch'"
+      class="mb-4 rounded-lg bg-amber-500/10 p-3 outline outline-1 outline-amber-500/20"
+    >
+      <p class="text-sm font-medium text-amber-400 mb-1">
+        ROM not recognised by RetroAchievements
+      </p>
+      <p class="text-xs text-zinc-400 mb-2">
+        Your ROM hash
+        (<code class="text-zinc-300"
+          >{{ romHashResult.rom_hash?.slice(0, 12) }}…</code
+        >) doesn't match any known hash. Achievements won't track until the
+        ROM is patched or replaced.
+      </p>
+      <div
+        v-if="romHashResult.expected_hashes?.some((h) => h.patchUrl)"
+        class="flex flex-wrap gap-2"
+      >
+        <a
+          v-for="h in romHashResult.expected_hashes?.filter((h) => h.patchUrl)"
+          :key="h.hash"
+          :href="h.patchUrl"
+          target="_blank"
+          class="inline-flex items-center gap-1 rounded bg-amber-500/20 px-2 py-0.5 text-xs text-amber-300 hover:bg-amber-500/30 transition-colors"
+        >
+          Patch: {{ h.label || h.hash.slice(0, 8) }}
+        </a>
+      </div>
+    </div>
+    <div
+      v-else-if="romHashResult?.status === 'Match'"
+      class="mb-4 rounded-lg bg-emerald-500/10 p-2 outline outline-1 outline-emerald-500/20"
+    >
+      <p class="text-xs text-emerald-400">
+        ROM verified — matches RetroAchievements
+        <span v-if="romHashResult.matched_label" class="text-zinc-400">
+          ({{ romHashResult.matched_label }})
+        </span>
+      </p>
+    </div>
+    <div
+      v-else-if="romHashResult?.status === 'Error'"
+      class="mb-4 rounded-lg bg-red-500/10 p-2 outline outline-1 outline-red-500/20"
+    >
+      <p class="text-xs text-red-400">
+        Hash check failed: {{ romHashResult.message }}
+      </p>
+    </div>
+
+    <!-- Loading / empty / list. -->
+    <div v-if="loading" class="flex justify-center py-4">
+      <div
+        class="w-5 h-5 border-2 border-zinc-600 border-t-zinc-100 rounded-full animate-spin"
+      />
+    </div>
+    <div
+      v-else-if="achievements.length === 0"
+      class="flex flex-col items-center justify-center text-center py-4"
+    >
+      <TrophyIcon class="size-10 text-zinc-600 mb-2" />
+      <p class="text-zinc-500 text-sm">No achievements available</p>
+    </div>
+    <div
+      v-else
+      class="space-y-2 max-h-80 overflow-y-auto custom-scrollbar pr-1"
+    >
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs text-zinc-400">
+          {{ unlockedCount }} / {{ achievements.length }} unlocked
+        </span>
+        <div
+          class="flex-1 ml-3 h-1.5 bg-zinc-700 rounded-full overflow-hidden"
+        >
+          <div
+            class="h-full bg-yellow-500 rounded-full transition-all"
+            :style="{ width: `${unlockedPercent}%` }"
+          />
+        </div>
+      </div>
+      <div
+        v-for="ach in achievements"
+        :key="ach.id"
+        class="flex items-center gap-3 py-2 px-2 rounded-lg hover:bg-zinc-700/30 transition-colors"
+      >
+        <img
+          v-if="ach.iconUrl"
+          :src="ach.iconUrl"
+          :class="[
+            'size-9 rounded shrink-0',
+            ach.unlocked ? '' : 'grayscale opacity-50',
+          ]"
+        />
+        <div
+          v-else
+          :class="[
+            'size-9 rounded shrink-0 bg-zinc-700/50 flex items-center justify-center',
+            ach.unlocked ? '' : 'opacity-50',
+          ]"
+        >
+          <TrophyIcon class="size-5 text-zinc-500" />
+        </div>
+        <div class="flex-1 min-w-0">
+          <p
+            :class="[
+              'text-sm font-medium truncate',
+              ach.unlocked ? 'text-zinc-100' : 'text-zinc-500',
+            ]"
+          >
+            {{ ach.title }}
+          </p>
+          <p class="text-xs text-zinc-500 truncate">
+            {{ ach.description }}
+          </p>
+        </div>
+        <div v-if="ach.unlocked" class="shrink-0">
+          <CheckCircleIcon class="size-4 text-yellow-500" />
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+/**
+ * Achievements tab for the library game-detail page: the RetroAchievements
+ * ROM-hash status banner and the achievement list. Purely presentational;
+ * data + reset action come from `useGameStats` on the parent.
+ */
+import { CheckCircleIcon, TrophyIcon } from "@heroicons/vue/24/solid";
+import type {
+  AchievementData,
+  RomHashResult,
+} from "~/composables/game-detail/use-game-stats";
+
+const props = defineProps<{
+  achievements: AchievementData[];
+  loading: boolean;
+  unlockedCount: number;
+  romHashResult: RomHashResult | null;
+}>();
+
+const unlockedPercent = computed(() =>
+  props.achievements.length > 0
+    ? (props.unlockedCount / props.achievements.length) * 100
+    : 0,
+);
+</script>
+
+<style scoped>
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(82 82 91) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgb(82 82 91);
+  border-radius: 3px;
+}
+</style>

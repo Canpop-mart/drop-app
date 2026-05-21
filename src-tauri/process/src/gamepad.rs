@@ -1,15 +1,30 @@
 //! Gamepad input polling via the `gilrs` crate.
 //!
-//! Spawns a dedicated thread that polls connected controllers at ~60Hz and
-//! emits normalised Tauri events to the Vue frontend:
+//! ## Status: DORMANT — not wired into the running app.
+//!
+//! [`start_polling`] is **not called**. The call site in
+//! `src-tauri/src/lib.rs` is commented out (see the `feat: Steam Deck native
+//! support` commit): Big Picture Mode now reads controllers entirely in the
+//! Vue layer via the browser Web Gamepad API (`main/composables/gamepad.ts`),
+//! because gilrs's WGI (Windows Gaming Input) backend intermittently fails to
+//! deliver input for controllers detected as generic HID devices.
+//!
+//! Nothing in the Vue layer listens for the `gamepad_*` events below — so
+//! while this module still compiles (it is `pub`, hence no dead-code warning)
+//! it emits into the void. It is retained as a ready fallback should the
+//! webview Gamepad API ever prove insufficient (e.g. background input while
+//! the webview is unfocused). **Do not rely on it for live input, and do not
+//! "fix" frontend input bugs here — the live path is `gamepad.ts`.**
+//!
+//! When polling, it spawns one dedicated thread that polls connected
+//! controllers at ~60Hz and emits normalised Tauri events:
 //!
 //! - `gamepad_button`  — button press / release
 //! - `gamepad_axis`    — analog stick / trigger movement
 //! - `gamepad_connected` / `gamepad_disconnected` — hot-plug events
 //!
 //! Uses **state-based polling** instead of gilrs events because the WGI
-//! (Windows Gaming Input) backend often fails to deliver events for
-//! controllers detected as generic HID devices.
+//! backend often fails to deliver events for generic HID devices.
 
 use gilrs::{Axis, Button, GamepadId, Gilrs};
 use log::{debug, info, warn};
@@ -22,6 +37,29 @@ use tauri::{AppHandle, Emitter};
 
 const STICK_DEAD_ZONE: f32 = 0.15;
 const AXIS_CHANGE_THRESHOLD: f32 = 0.05;
+
+/// How often (in ~60Hz frames) to re-emit every connected gamepad's current
+/// axis values, even when nothing changed.
+///
+/// ## Why a delta filter needs a heartbeat
+///
+/// `gamepad_axis` events are only emitted on a *change* exceeding
+/// [`AXIS_CHANGE_THRESHOLD`] (a delta filter — without it a held stick would
+/// flood the bus at 60Hz). Any consumer that *caches* the last value it saw
+/// is then exposed to a stale-cache hazard: if a stick settles after a move
+/// such that the final step toward rest is below the threshold, the last
+/// emitted (non-zero) value is never superseded and the consumer's cache
+/// stays pinned away from the stick's true position indefinitely.
+///
+/// A periodic re-emit bounds that staleness: a settled / drifting stick
+/// reliably reports its true value at least every `AXIS_HEARTBEAT_FRAMES`.
+///
+/// NOTE: this is defensive hardening for *this module's* (currently dormant —
+/// see the module docs) event consumers. It does **not** address the live
+/// BPM scroll-to-top bug: that bug is in `main/composables/gamepad.ts`, which
+/// is an independent Web Gamepad API implementation with the exact same
+/// delta-filter-without-heartbeat flaw and is the file that must be fixed.
+const AXIS_HEARTBEAT_FRAMES: u64 = 30;
 
 
 // ── Event payloads ───────────────────────────────────────────────────────────
@@ -231,6 +269,14 @@ fn poll_loop(app_handle: AppHandle) {
                 let cid = gamepad_id_to_u32(id);
                 info!("[GAMEPAD] Controller disconnected: id {cid}");
                 known_connected.insert(id, false);
+                // Drop this controller's diff state. Otherwise a reconnect
+                // (gilrs reuses the GamepadId) inherits stale prev values:
+                // a button still recorded as "pressed" would suppress the
+                // first real press, and a stale axis value would suppress
+                // the first real movement until it happened to cross the
+                // change threshold.
+                prev_buttons.retain(|(k_cid, _), _| *k_cid != cid);
+                prev_axes.retain(|(k_cid, _), _| *k_cid != cid);
                 let _ = app_handle.emit(
                     "gamepad_disconnected",
                     GamepadConnectionEvent {
@@ -272,13 +318,19 @@ fn poll_loop(app_handle: AppHandle) {
             }
 
             // ── Axes ─────────────────────────────────────────────────
+            // Emit on a real change (delta filter — keeps a moving stick
+            // from flooding the bus) OR on the periodic heartbeat (so the
+            // frontend's cached value can never go stale against a settled
+            // / drifting stick — see AXIS_HEARTBEAT_FRAMES).
+            let axis_heartbeat = frame_count % AXIS_HEARTBEAT_FRAMES == 0;
             for &axis in ALL_AXES {
                 let raw = gamepad.value(axis);
                 let filtered = apply_dead_zone(raw);
                 let key = (cid, axis);
                 let prev = prev_axes.get(&key).copied().unwrap_or(0.0);
 
-                if (filtered - prev).abs() >= AXIS_CHANGE_THRESHOLD {
+                let changed = (filtered - prev).abs() >= AXIS_CHANGE_THRESHOLD;
+                if changed || axis_heartbeat {
                     prev_axes.insert(key, filtered);
 
                     let name = axis_name(axis);
@@ -314,9 +366,10 @@ fn poll_loop(app_handle: AppHandle) {
                     }
                 }
                 info!(
-                    "[GAMEPAD] Diag frame={} events={} connected={} pressed=[{}] axes=[{}]",
+                    "[GAMEPAD] Diag frame={} events={} cid={} connected={} pressed=[{}] axes=[{}]",
                     frame_count,
                     event_count,
+                    cid,
                     gamepad.is_connected(),
                     pressed_list.join(", "),
                     axis_list.join(", "),

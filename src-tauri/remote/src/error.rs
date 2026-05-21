@@ -19,16 +19,43 @@ pub struct DropServerError {
     // pub url: String,
 }
 
+/// One coherent taxonomy for everything that can go wrong when talking to the
+/// Drop server. The variants below are grouped so callers can branch on the
+/// *class* of failure rather than string-matching:
+///
+/// * **Network / transport** — `FetchError`, `FetchErrorLegacy`, `FetchErrorWS`,
+///   `Timeout`. Transient: the shared `remote_request` helper retries these
+///   before they ever reach a caller.
+/// * **Auth** — `Unauthorized` (401/403 / missing credentials). The user must
+///   re-authenticate; retrying will not help.
+/// * **Server-side** — `ServerError { status, message }` for any non-2xx the
+///   server returned with a parseable body, `ServerUnavailable` for 5xx/429
+///   that survived all retries. Distinguishable from a local parse failure.
+/// * **Parse** — `UnparseableResponse`, `ParsingError` (URL), `ResponseTooLarge`.
+/// * **State / config** — the remainder.
 #[derive(Debug, SerializeDisplay)]
 pub enum RemoteAccessError {
     FetchErrorLegacy(Arc<reqwest::Error>),
     FetchError(Arc<reqwest_middleware::Error>),
     FetchErrorWS(Arc<reqwest_websocket::Error>),
+    /// The request exceeded its deadline after all retries — distinct from a
+    /// generic transport error so the UI can say "slow connection".
+    Timeout,
     ParsingError(ParseError),
     InvalidEndpoint,
     HandshakeFailed(String),
     GameNotFound(String),
     InvalidResponse(DropServerError),
+    /// The server returned a non-2xx status. `status` is the HTTP code so
+    /// callers can distinguish auth (401/403), client (4xx) and server (5xx)
+    /// failures without re-parsing a string.
+    ServerError { status: u16, message: String },
+    /// The server is unreachable or returned 5xx/429 on every retry. Retrying
+    /// later may succeed; the request itself was well-formed.
+    ServerUnavailable(String),
+    /// Authentication failed or credentials are missing — the user must
+    /// re-authenticate. Retrying with the same credentials will not help.
+    Unauthorized,
     UnparseableResponse(String),
     ManifestDownloadFailed(StatusCode, String),
     OutOfSync,
@@ -37,6 +64,35 @@ pub enum RemoteAccessError {
     NoDepots,
     FailedDownload,
     ResponseTooLarge(u64),
+}
+
+impl RemoteAccessError {
+    /// True for failures that a retry could plausibly fix — transient
+    /// transport errors, timeouts, and server unavailability (5xx/429).
+    /// Auth, parse and 4xx errors are *not* retryable.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            RemoteAccessError::Timeout | RemoteAccessError::ServerUnavailable(_) => true,
+            RemoteAccessError::FetchError(e) => e.is_timeout() || e.is_connect() || e.is_request(),
+            RemoteAccessError::FetchErrorLegacy(e) => {
+                e.is_timeout() || e.is_connect() || e.is_request()
+            }
+            RemoteAccessError::FetchErrorWS(_) => true,
+            _ => false,
+        }
+    }
+
+    /// True when the failure means the user must re-authenticate.
+    pub fn is_auth_error(&self) -> bool {
+        match self {
+            RemoteAccessError::Unauthorized | RemoteAccessError::OutOfSync => true,
+            RemoteAccessError::ServerError { status, .. } => *status == 401 || *status == 403,
+            RemoteAccessError::InvalidResponse(e) => {
+                e.status_code == 401 || e.status_code == 403
+            }
+            _ => false,
+        }
+    }
 }
 
 impl Display for RemoteAccessError {
@@ -118,6 +174,22 @@ impl Display for RemoteAccessError {
                     .source()
                     .map(std::string::ToString::to_string)
                     .unwrap_or("Unknown error".to_string())
+            ),
+            RemoteAccessError::Timeout => write!(
+                f,
+                "The request to the Drop server timed out. Your connection may be slow or the server under heavy load — please try again."
+            ),
+            RemoteAccessError::ServerError { status, message } => write!(
+                f,
+                "The Drop server returned an error ({status}): {message}"
+            ),
+            RemoteAccessError::ServerUnavailable(detail) => write!(
+                f,
+                "The Drop server is currently unavailable ({detail}). Please try again in a few moments."
+            ),
+            RemoteAccessError::Unauthorized => write!(
+                f,
+                "Your session is no longer valid. Please sign in to Drop again."
             ),
             RemoteAccessError::ParsingError(parse_error) => {
                 write!(f, "{parse_error}")

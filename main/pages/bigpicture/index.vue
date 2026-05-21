@@ -1755,7 +1755,7 @@ import BpmAchievementToast from "~/components/bigpicture/BpmAchievementToast.vue
 import BpmLaunchScreen from "~/components/bigpicture/BpmLaunchScreen.vue";
 import BpmBoxArtOverlay from "~/components/bigpicture/BpmBoxArtOverlay.vue";
 import { devLog } from "~/composables/dev-mode";
-import { parseStatus, deduplicatedInvoke } from "~/composables/game";
+import { deduplicatedInvoke } from "~/composables/game";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { useQueueState } from "~/composables/downloads";
@@ -1768,32 +1768,29 @@ import { useBpmIdle } from "~/composables/bp-idle";
 import { useBpmAmbient } from "~/composables/bp-ambient";
 import { useBpmWelcome } from "~/composables/bp-welcome";
 import { useBpmCursors } from "~/composables/bp-cursors";
-import type { Game, GameStatus, RawGameStatus } from "~/types";
 
 definePageMeta({ layout: "bigpicture" });
 
-interface RecentGameEntry {
-  game: Game;
-  status: GameStatus;
-  // Cached at load time so templates don't have to type-narrow the
-  // discriminated GameStatus union every time. `playtimeSeconds` comes
-  // straight from the playtime/recent endpoint, not from `status` —
-  // GameStatus tracks install/launch state, not history.
-  installed: boolean;
-  playtimeSeconds: number;
-}
+// Home-screen data layer (recently-played list + spotlight pick) lives in
+// `use-bpm-home-data.ts` — decomposed out of this page. Theme-specific
+// focus tracking and the per-console markup stay here.
+import {
+  useBpmHomeData,
+  formatHomePlaytime,
+} from "~/composables/bigpicture/use-bpm-home-data";
 
-interface RecentGameResponse {
-  gameId: string;
-  gameName: string;
-  coverObjectId: string | null;
-  lastPlayedAt: string;
-  totalPlaytimeSeconds: number;
-}
+const homeData = useBpmHomeData();
+const {
+  recentGames,
+  loading,
+  gameNames,
+  spotlightOverride,
+  spotlightGame,
+  otherGames,
+  installedGames,
+} = homeData;
 
 const theme = ref<string>("steam");
-const recentGames = ref<RecentGameEntry[]>([]);
-const loading = ref(true);
 
 // User profile for themes that show profile info (Xbox, etc.)
 const appState = useAppState();
@@ -1807,7 +1804,6 @@ const registerTile = useBpFocusableGroup("content");
 const registerQuickLink = useBpFocusableGroup("content");
 const router = useRouter();
 const route = useRoute();
-const gameNames = ref<Record<string, { name: string; coverUrl?: string }>>({});
 const accentColor = ref<string>("#3b82f6");
 
 // ── Hide titles setting ───────────────────────────────────────────────
@@ -1916,21 +1912,6 @@ const queueState = useQueueState();
 const queue = computed(() => queueState.value?.queue ?? []);
 const activeDownloads = computed(() => queue.value.filter((item) => item.status !== "Completed"));
 
-// Spotlight: on mount we try to land on a random game the user has marked
-// as a favorite (via their profile showcase). If the user has no
-// favorites, or none of them are in the recently-played list (so we have
-// no GameStatus for them), we fall back to the most-recent entry.
-const spotlightOverride = ref<RecentGameEntry | null>(null);
-const spotlightGame = computed(
-  () => spotlightOverride.value ?? recentGames.value[0] ?? null,
-);
-const otherGames = computed(() => {
-  const spotlightId = spotlightGame.value?.game.id;
-  if (!spotlightId) return recentGames.value.slice(1);
-  return recentGames.value.filter((e) => e.game.id !== spotlightId);
-});
-const installedGames = computed(() => recentGames.value.filter((e) => e.installed));
-
 function prefetchGame(gameId: string) {
   deduplicatedInvoke("fetch_game", { gameId }).catch(() => {});
 }
@@ -1944,166 +1925,17 @@ function navigateToGame(gameId: string) {
   });
 }
 
-function formatPlaytime(seconds: number): string {
-  if (seconds < 3600) {
-    const minutes = Math.round(seconds / 60);
-    return `${minutes}m`;
-  }
-  const hours = Math.round(seconds / 3600);
-  return `${hours}h`;
-}
+// `formatPlaytime` is the shared `formatHomePlaytime` helper.
+const formatPlaytime = formatHomePlaytime;
 
-async function loadRecentGames() {
-  try {
-    const url = serverUrl("api/v1/client/playtime/recent");
-    devLog("state","[BPM:HOME] Fetching recent games from:", url);
-    const response = await fetch(url);
-    if (!response.ok) {
-      console.error("[BPM:HOME] Recent games fetch failed:", response.status, response.statusText);
-      recentGames.value = [];
-      return;
-    }
-    const recentData = await response.json() as RecentGameResponse[];
-    devLog("state","[BPM:HOME] Got recent games data:", JSON.stringify(recentData).slice(0, 200));
-
-    if (!Array.isArray(recentData)) {
-      console.warn("[BPM:HOME] Recent games response is not an array:", typeof recentData);
-      recentGames.value = [];
-      return;
-    }
-
-    const gamesToLoad = recentData.slice(0, 20);
-    const entries: RecentGameEntry[] = [];
-
-    for (const gameData of gamesToLoad) {
-      try {
-        const statusData: RawGameStatus = await invoke("fetch_game_status", { id: gameData.gameId });
-        // The playtime/recent payload carries only id/name/cover, but the
-        // home page's tiles only ever read those three fields plus
-        // playtime/installed (cached on the entry below). Cast through
-        // `unknown` to make the partial-Game shape explicit — a fuller
-        // Game would require a second fetch per tile we don't need.
-        const game = {
-          id: gameData.gameId,
-          mName: gameData.gameName,
-          mCoverObjectId: gameData.coverObjectId,
-          mTaglineUrl: null,
-          mReleaseDate: null,
-          mPlatformId: null,
-          mSummary: null,
-          mBackgroundUrl: null,
-          mPublisher: null,
-          mGenre: null,
-        } as unknown as Game;
-
-        const status = parseStatus(statusData);
-        entries.push({
-          game,
-          status,
-          installed: status.type === "Installed",
-          playtimeSeconds: gameData.totalPlaytimeSeconds,
-        });
-      } catch (e) {
-        console.error(`Failed to load recent game ${gameData.gameId}:`, e);
-      }
-    }
-
-    recentGames.value = entries;
-
-    for (const item of queue.value) {
-      if (!gameNames.value[item.meta.id]) {
-        try {
-          const gameFetch = await useGame(item.meta.id);
-          gameNames.value[item.meta.id] = {
-            name: gameFetch.game.mName,
-            coverUrl: gameFetch.game.mCoverObjectId
-              ? serverUrl(`api/v1/object/${gameFetch.game.mCoverObjectId}`)
-              : undefined,
-          };
-        } catch {
-          // Game data not available
-        }
-      }
-    }
-  } catch (e) {
-    console.error("[BPM:HOME] Failed to fetch recent games:", e);
-  } finally {
-    loading.value = false;
-  }
-}
-
-devLog("state","[BPM:HOME] Active theme:", theme.value);
-
-async function pickRandomFavoriteSpotlight() {
-  devLog("state",`[BPM:HOME] Spotlight: pickRandomFavoriteSpotlight() called, recentGames=${recentGames.value.length}`);
-  if (!recentGames.value.length) {
-    devLog("state","[BPM:HOME] Spotlight: no recent games, skipping randomize");
-    return;
-  }
-
-  const topId = recentGames.value[0]?.game.id;
-
-  // First preference: a random game the user has favorited that's in the
-  // recent list (so we have a GameStatus for the installed/playtime UI).
-  // Also: if the *only* matching favorite is the top-of-list game, there's
-  // no visible change vs. no-override, so we fall through to a random
-  // non-top pick rather than "select" the same game the user was already
-  // going to see.
-  try {
-    const userId = appState.value?.user?.id;
-    if (userId) {
-      const url = serverUrl(`api/v1/user/${userId}/showcase`);
-      const resp = await fetch(url);
-      if (resp.ok) {
-        const data: { items?: Array<{ type: string; gameId: string | null }> } = await resp.json();
-        const favoriteIds = new Set(
-          (data.items ?? [])
-            .filter((i) => i.type === "FavoriteGame" && i.gameId)
-            .map((i) => i.gameId as string),
-        );
-        devLog("state",
-          `[BPM:HOME] Spotlight: found ${favoriteIds.size} favorite(s), ${recentGames.value.length} recent game(s)`,
-        );
-        const favCandidates = recentGames.value.filter((e) => favoriteIds.has(e.game.id));
-        // Prefer favorites that aren't already the most-recent entry.
-        const nonTopFavs = favCandidates.filter((e) => e.game.id !== topId);
-        const pool = nonTopFavs.length > 0 ? nonTopFavs : favCandidates;
-        if (pool.length) {
-          const pick = pool[Math.floor(Math.random() * pool.length)];
-          spotlightOverride.value = pick;
-          devLog("state",`[BPM:HOME] Spotlight: picked favorite → ${pick.game.mName}`);
-          return;
-        }
-        devLog("state","[BPM:HOME] Spotlight: no favorited games in recent list, falling back to random recent");
-      } else {
-        console.warn("[BPM:HOME] Spotlight: showcase fetch failed:", resp.status);
-      }
-    } else {
-      devLog("state","[BPM:HOME] Spotlight: no user id, falling back to random recent");
-    }
-  } catch (e) {
-    console.warn("[BPM:HOME] Spotlight: showcase fetch error, falling back to random recent:", e);
-  }
-
-  // Fallback: random recent game, excluding index 0 so the spotlight
-  // actually changes. Math.random() * length could land on 0, which would
-  // be indistinguishable from "no override" — the user complained about
-  // this exact behaviour ("still just selects The Alters").
-  if (recentGames.value.length > 1) {
-    const idx = 1 + Math.floor(Math.random() * (recentGames.value.length - 1));
-    spotlightOverride.value = recentGames.value[idx];
-    devLog("state",`[BPM:HOME] Spotlight: picked random recent (idx=${idx}) → ${recentGames.value[idx].game.mName}`);
-  } else {
-    devLog("state","[BPM:HOME] Spotlight: only one recent game, nothing to randomize");
-  }
-}
+devLog("state", "[BPM:HOME] Active theme:", theme.value);
 
 onMounted(async () => {
-  devLog("state","[BPM:HOME] onMounted fired — loading recent games & randomising spotlight");
-  await loadRecentGames();
+  devLog("state", "[BPM:HOME] onMounted fired — loading recent games & randomising spotlight");
+  await homeData.loadRecentGames(queue.value);
   // Fire-and-forget: if favorites resolve quickly the spotlight swaps to a
   // random favorite; otherwise the default (most-recent) shows first.
-  pickRandomFavoriteSpotlight();
+  homeData.pickRandomFavoriteSpotlight();
   if (!focusNav.restoreFocusSnapshot(route.path)) {
     focusNav.autoFocusContent("content");
   }
@@ -2116,8 +1948,8 @@ watch(
   () => route.path,
   (to, from) => {
     if (to === "/bigpicture" && from !== "/bigpicture") {
-      devLog("state","[BPM:HOME] Re-entered home page — re-randomising spotlight");
-      pickRandomFavoriteSpotlight();
+      devLog("state", "[BPM:HOME] Re-entered home page — re-randomising spotlight");
+      homeData.pickRandomFavoriteSpotlight();
     }
   },
 );

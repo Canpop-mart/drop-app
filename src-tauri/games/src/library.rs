@@ -16,6 +16,7 @@ use tauri::AppHandle;
 use utils::app_emit;
 
 use crate::state::{GameStatusManager, GameStatusWithTransient};
+use crate::status::{StatusKind, transition_from_db};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FetchGameStruct {
@@ -89,6 +90,7 @@ pub fn set_partially_installed_db(
     app_handle: Option<&AppHandle>,
     configuration: UserConfiguration,
 ) {
+    transition_from_db(db_lock, &meta.id, StatusKind::PartiallyInstalled);
     db_lock.applications.transient_statuses.remove(meta);
     db_lock.applications.game_statuses.insert(
         meta.id.clone(),
@@ -117,6 +119,7 @@ pub fn set_partially_installed_db(
 pub fn uninstall_game_logic(meta: DownloadableMetadata, app_handle: &AppHandle) {
     debug!("triggered uninstall for agent");
     let mut db_handle = borrow_db_mut_checked();
+    transition_from_db(&db_handle, &meta.id, StatusKind::Uninstalling);
     db_handle
         .applications
         .transient_statuses
@@ -150,6 +153,7 @@ pub fn uninstall_game_logic(meta: DownloadableMetadata, app_handle: &AppHandle) 
             error!("{e}");
         }
         let mut db_handle = borrow_db_mut_checked();
+        transition_from_db(&db_handle, &meta.id, StatusKind::Remote);
         db_handle.applications.transient_statuses.remove(&meta);
         db_handle
             .applications
@@ -233,6 +237,11 @@ pub async fn on_game_complete(
     };
 
     let mut db_handle = borrow_db_mut_checked();
+    transition_from_db(
+        &db_handle,
+        &meta.id,
+        StatusKind::from_persistent(&status),
+    );
     db_handle
         .applications
         .game_statuses

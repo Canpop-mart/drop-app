@@ -44,10 +44,10 @@ static RETRY_COUNT: usize = 3;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadInformation {
-    file_list: HashMap<String, String>,
-    manifests: HashMap<String, Manifest>,
-    install_size: u64,
-    download_size: u64,
+    pub file_list: HashMap<String, String>,
+    pub manifests: HashMap<String, Manifest>,
+    pub install_size: u64,
+    pub download_size: u64,
 }
 
 pub struct GameDownloadAgent {
@@ -454,12 +454,10 @@ impl GameDownloadAgent {
         Ok(true)
     }
 
-    #[allow(dead_code)]
+    /// Mark the game as `Validating` in the DB and notify the frontend, so
+    /// the user sees the post-download verification phase rather than a
+    /// silent gap before the install is confirmed.
     fn setup_validate(&self, app_handle: &AppHandle) {
-        self.setup_progress();
-
-        self.control_flag.set(DownloadThreadControlFlag::Go);
-
         let status = ApplicationTransientStatus::Validating {
             version_id: self.metadata.version.clone(),
         };
@@ -469,67 +467,75 @@ impl GameDownloadAgent {
             .applications
             .transient_statuses
             .insert(self.metadata(), status.clone());
+        drop(db_lock);
         push_game_update(app_handle, &self.metadata().id, None, (None, Some(status)));
     }
 
-    pub fn validate(&self, _app_handle: &AppHandle) -> Result<bool, ApplicationDownloadError> {
-        /*
+    /// Post-install validation — the gate the LWIW incident proved was
+    /// missing. Re-derives ground truth from disk (file presence, file
+    /// sizes, per-chunk SHA-256) and compares it to the server manifest.
+    ///
+    /// Returns:
+    ///   - `Ok(true)`  — every manifest file is present at the right size
+    ///                   and every chunk hashes correctly. The caller may
+    ///                   transition the game to `Installed`.
+    ///   - `Err(ValidationFailed)` — the install does not match the
+    ///                   manifest. A `bool` of `false` is deliberately NOT
+    ///                   returned here: in the download manager loop `false`
+    ///                   means "re-run download", which for a genuinely
+    ///                   incomplete upstream (the LWIW case) would loop
+    ///                   forever. An error surfaces a clear message to the
+    ///                   user and aborts the install instead.
+    pub fn validate(&self, app_handle: &AppHandle) -> Result<bool, ApplicationDownloadError> {
         self.setup_validate(app_handle);
 
-        let buckets = lock!(self.buckets);
-        let contexts: Vec<DropValidateContext> = buckets
-            .clone()
-            .into_iter()
-            .flat_map(|e| -> Vec<DropValidateContext> { e.into() })
-            .collect();
-        let max_download_threads = borrow_db_checked().settings.max_download_threads;
+        let install_dir = self.dropdata.base_path.clone();
+        info!(
+            "running post-install validation for {} at {}",
+            self.metadata.id,
+            install_dir.display()
+        );
 
-        info!("{} validation contexts", contexts.len());
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(max_download_threads)
-            .build()
-            .unwrap_or_else(|_| {
-                panic!("failed to build thread pool with {max_download_threads} threads")
-            });
+        let result = {
+            let dl_info = lock!(self.dl_info);
+            let dl_info = dl_info
+                .as_ref()
+                .ok_or(ApplicationDownloadError::NotInitialized)?;
+            crate::downloads::validate::validate_install(dl_info, &install_dir)
+        };
 
-        let invalid_chunks = Arc::new(boxcar::Vec::new());
-        pool.scope(|scope| {
-            for (index, context) in contexts.iter().enumerate() {
-                let current_progress = self.progress.get(index);
-                let progress_handle = ProgressHandle::new(current_progress, self.progress.clone());
-                let invalid_chunks_scoped = invalid_chunks.clone();
-                let sender = self.sender.clone();
-
-                scope.spawn(move |_| {
-                    match validate_game_chunk(context, &self.control_flag, progress_handle) {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            invalid_chunks_scoped.push(context.checksum.clone());
-                        }
-                        Err(e) => {
-                            error!("{e}");
-                            send!(sender, DownloadManagerSignal::Error(e));
-                        }
-                    }
-                });
+        match result {
+            crate::downloads::validate::ValidationResult::Valid => {
+                info!("validation succeeded for {}", self.metadata.id);
+                Ok(true)
             }
-        });
-
-        // If there are any contexts left which are false
-        if !invalid_chunks.is_empty() {
-            info!("validation of game id {} failed", self.id);
-
-            for context in invalid_chunks.iter() {
-                self.dropdata.set_context(context.1.clone(), false);
+            crate::downloads::validate::ValidationResult::Incomplete {
+                missing,
+                mismatched,
+            } => {
+                let summary = crate::downloads::validate::ValidationResult::Incomplete {
+                    missing: missing.clone(),
+                    mismatched: mismatched.clone(),
+                }
+                .describe();
+                error!(
+                    "validation failed for {}: {} missing, {} mismatched — install will NOT be marked Installed",
+                    self.metadata.id,
+                    missing.len(),
+                    mismatched.len()
+                );
+                // Demote to PartiallyInstalled so the user can retry/resume
+                // rather than being left with a phantom "Installed" game.
+                set_partially_installed(
+                    &self.metadata(),
+                    self.dropdata.base_path.display().to_string(),
+                    Some(app_handle),
+                    self.configuration.clone(),
+                );
+                self.dropdata.write();
+                Err(ApplicationDownloadError::ValidationFailed(summary))
             }
-
-            self.dropdata.write();
-
-            return Ok(false);
         }
-         */
-
-        Ok(true)
     }
 
     pub fn cancel(&self, app_handle: &AppHandle) {

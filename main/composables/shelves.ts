@@ -1,9 +1,14 @@
 /**
- * Shelves composable — manages user collections (shelves) for the BPM library.
- * Wraps the server collection API via server:// protocol.
+ * Shelves composable — manages user collections (shelves), shared across
+ * both the BPM and desktop library views. Wraps the server collection API
+ * via the server:// protocol.
+ *
+ * State pattern: `useState`-keyed singleton. `shelves` is a server-data
+ * cache, so it follows the same convention as the app's other shared
+ * caches (`downloads`, `compat-summary`, `proton`) rather than a
+ * module-level `ref` — see `docs/audit/desktop-frontend-2026.md`.
  */
 
-import { ref } from "vue";
 import { serverUrl } from "./use-server-fetch";
 
 export interface Shelf {
@@ -20,9 +25,6 @@ export interface Shelf {
     };
   }>;
 }
-
-const shelves = ref<Shelf[]>([]);
-const loading = ref(false);
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(serverUrl(path), {
@@ -44,6 +46,10 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export function useShelves() {
+  // Keyed singletons — every caller shares one cache + loading flag.
+  const shelves = useState<Shelf[]>("shelves", () => []);
+  const loading = useState<boolean>("shelves-loading", () => false);
+
   async function fetchShelves() {
     loading.value = true;
     try {

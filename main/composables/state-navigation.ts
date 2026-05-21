@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { AppStatus, type AppState } from "~/types";
 import { useListen } from "./useListen";
 import { devLog } from "./dev-mode";
+import type { VersionOption } from "./game";
 
 export function setupHooks() {
   const router = useRouter();
@@ -32,44 +33,56 @@ export function setupHooks() {
     );
   });
 
-  // Handle remote install requests from other devices
-  useListen<{ gameId: string; gameName: string; sessionId: string }>(
-    "remote-install-request",
-    async (event) => {
-      const payload = event.payload;
-      devLog("state",
-        "[REMOTE-INSTALL] Received request to install:",
-        payload.gameName,
-        payload.gameId,
-      );
-      try {
-        const versions: any[] = await invoke("fetch_game_version_options", {
-          gameId: payload.gameId,
-        });
-        if (versions && versions.length > 0) {
-          const vo = versions[0];
-          await invoke("download_game", {
-            gameId: payload.gameId,
-            versionId: vo.versionId,
-            installDir: 0,
-            targetPlatform: vo.platform,
-            enableUpdates: true,
-          });
-          devLog("state",
-            "[REMOTE-INSTALL] Download started for:",
-            payload.gameName,
+  // Handle remote install requests from other devices.
+  //
+  // Gated behind dev mode: the UI that triggers these events (BPM library
+  // "Install on {device}" play-menu rows) is also dev-mode-only, so under
+  // normal use this listener never fires. We still register it inside the
+  // gate so a stale server-side push doesn't start a surprise download on
+  // a user who's never opted in. Toggling dev mode on requires a page
+  // refresh to wire the listener — acceptable, since dev mode is
+  // configured before triggering remote installs anyway.
+  const devMode = useDevMode();
+  if (devMode.enabled.value) {
+    useListen<{ gameId: string; gameName: string; sessionId: string }>(
+      "remote-install-request",
+      async (event) => {
+        const payload = event.payload;
+        devLog("state",
+          "[REMOTE-INSTALL] Received request to install:",
+          payload.gameName,
+          payload.gameId,
+        );
+        try {
+          const versions = await invoke<VersionOption[]>(
+            "fetch_game_version_options",
+            { gameId: payload.gameId },
           );
-        } else {
-          console.warn(
-            "[REMOTE-INSTALL] No versions available for:",
-            payload.gameId,
-          );
+          if (versions && versions.length > 0) {
+            const vo = versions[0];
+            await invoke("download_game", {
+              gameId: payload.gameId,
+              versionId: vo.versionId,
+              installDir: 0,
+              targetPlatform: vo.platform,
+              enableUpdates: true,
+            });
+            devLog("state",
+              "[REMOTE-INSTALL] Download started for:",
+              payload.gameName,
+            );
+          } else {
+            console.warn(
+              "[REMOTE-INSTALL] No versions available for:",
+              payload.gameId,
+            );
+          }
+        } catch (e) {
+          console.warn("[REMOTE-INSTALL] Failed to start download:", e);
         }
-      } catch (e) {
-        console.warn("[REMOTE-INSTALL] Failed to start download:", e);
-      }
-    },
-  );
+      },
+    );
+  }
 
   // This is for errors that (we think) aren't our fault
   useListen<string>("launch_external_error", (event) => {
@@ -113,7 +126,8 @@ export function initialNavigation(state: ReturnType<typeof useAppState>) {
     case AppStatus.ServerUnavailable:
       // Offline mode: if the server is unreachable but we have cached data
       // (user was previously signed in), go to the library so installed games
-      // can still be launched. Only show the error page if there's no user data.
+      // can still be launched. The home dashboard needs `/playtime/recent`
+      // which requires the server, so library is the better fallback.
       if (state.value.user) {
         router.push("/library");
       } else {
@@ -121,6 +135,10 @@ export function initialNavigation(state: ReturnType<typeof useAppState>) {
       }
       break;
     default:
-      router.push("/library");
+      // Signed in with the server reachable — land on the store. The
+      // standalone home dashboard was removed because it duplicated the
+      // store's Featured tab; users seeking the "what's new" view land
+      // there directly.
+      router.push("/store");
   }
 }

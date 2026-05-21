@@ -7,17 +7,15 @@ use std::{
 };
 
 use aes::cipher::{KeyIvInit as _, StreamCipher as _};
-use anyhow::Error;
 use chrono::Utc;
 use log::{debug, error, info, warn};
 use url::Url;
 
 use crate::{
     db::{DATA_ROOT_DIR, DB, KEY_IV},
-    models::{
-        self,
-        data::{Database, DatabaseVersionSerializable},
-    },
+    error::{DatabaseError, DatabaseResult},
+    migrations::{self, VersionedDatabase, VersionedDatabaseRef},
+    models::{self, data::Database},
 };
 
 type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
@@ -96,7 +94,7 @@ impl DatabaseInterface {
         }
     }
 
-    pub fn open_at_path(db_path: &Path) -> Result<Option<DatabaseInterface>, Error> {
+    pub fn open_at_path(db_path: &Path) -> DatabaseResult<Option<DatabaseInterface>> {
         if !db_path.exists() {
             return Ok(None);
         };
@@ -107,14 +105,22 @@ impl DatabaseInterface {
 
         let database_data = String::from_utf8(database_data)?;
 
-        let database_data: DatabaseVersionSerializable = ron::from_str(&database_data)?;
+        // Parse into the versioned envelope, then migrate forward to the
+        // schema version this build understands. A schema bump therefore
+        // never breaks an existing client's DB — see `crate::migrations`.
+        let envelope: VersionedDatabase = ron::from_str(&database_data)?;
+        let database = migrations::migrate_to_latest(envelope)?;
+
         Ok(Some(DatabaseInterface {
-            data: RwLock::new(database_data.0),
+            data: RwLock::new(database),
             path: db_path.to_path_buf(),
         }))
     }
 
-    pub fn create_at_path(db_path: &Path, database: Database) -> Result<DatabaseInterface, Error> {
+    pub fn create_at_path(
+        db_path: &Path,
+        database: Database,
+    ) -> DatabaseResult<DatabaseInterface> {
         Self::write_to_path(db_path, &database)?;
         Ok(DatabaseInterface {
             data: RwLock::new(database),
@@ -124,10 +130,14 @@ impl DatabaseInterface {
 
     /// Serialize and encrypt the database to disk from a reference, avoiding a full clone.
     ///
+    /// Always writes the current [`crate::migrations::SCHEMA_VERSION`].
     /// Uses atomic write (temp file + rename) to prevent corruption if the
     /// process is killed mid-write.
-    fn write_to_path(db_path: &Path, database: &Database) -> Result<(), Error> {
-        let mut database_data = DatabaseVersionSerializable::serialize_ref_to_ron(database)?.into_bytes();
+    fn write_to_path(db_path: &Path, database: &Database) -> DatabaseResult<()> {
+        // Serialise through the versioned envelope (zero-copy via reference)
+        // so the on-disk file is always tagged with its schema version.
+        let mut database_data =
+            ron::to_string(&VersionedDatabaseRef::V1 { database })?.into_bytes();
 
         let (key, iv) = *KEY_IV;
         let mut cipher = Aes128Ctr64LE::new(&key.into(), &iv.into());
@@ -174,14 +184,33 @@ impl DatabaseInterface {
     }
 }
 
-// TODO: Make the error relelvant rather than just assume that it's a Deserialize error
+/// Recover from a database file that could not be loaded.
+///
+/// The error is now a typed [`DatabaseError`], so the log distinguishes a
+/// corrupt payload from an I/O fault. In every case the unreadable file is
+/// renamed aside (never deleted) and a fresh database is created — the
+/// `prev_database` pointer lets the UI tell the user where the backup went.
 fn handle_invalid_database(
-    error: Error,
+    error: DatabaseError,
     db_path: PathBuf,
     games_base_dir: PathBuf,
     cache_dir: PathBuf,
-) -> Result<DatabaseInterface, Error> {
-    warn!("{error:?}");
+) -> DatabaseResult<DatabaseInterface> {
+    match &error {
+        DatabaseError::Io(_) => {
+            warn!("database could not be read due to an I/O error: {error}")
+        }
+        DatabaseError::InvalidUtf8(_) | DatabaseError::Deserialize(_) => {
+            warn!("database file is corrupt, backing it up and starting fresh: {error}")
+        }
+        DatabaseError::UnsupportedVersion { .. } => {
+            warn!("database schema is unsupported by this build: {error}")
+        }
+        DatabaseError::MigrationFailed { .. } => {
+            warn!("database migration failed, backing up the original: {error}")
+        }
+        DatabaseError::Serialize(_) => warn!("database error: {error}"),
+    }
     let new_path = {
         let time = Utc::now().timestamp();
         let mut base = db_path.clone();

@@ -4,7 +4,7 @@ use client::compat::{COMPAT_INFO, UMU_LAUNCHER_EXECUTABLE};
 use database::{
     Database, DownloadableMetadata, GameVersion, db::DATA_ROOT_DIR, platform::Platform,
 };
-use log::{debug, info, warn};
+use log::{info, warn};
 
 use crate::{error::ProcessError, parser::ParsedCommand, process_manager::ProcessHandler};
 

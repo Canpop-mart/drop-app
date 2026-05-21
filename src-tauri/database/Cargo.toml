@@ -13,7 +13,11 @@ keyring = { version = "3.6.3", features = ["apple-native", "crypto-rust", "linux
 log = "0.4.28"
 rand = "0.9.2"
 ron = "0.12.0"
-serde = "1.0.228"
+# `derive` is required for the `#[derive(Serialize/Deserialize)]` used
+# throughout models.rs / migrations.rs / debug.rs. It was previously only
+# present via workspace feature unification, so `cargo check -p database`
+# in isolation failed to find the derive macros.
+serde = { version = "1.0.228", features = ["derive"] }
 serde_with = "3.15.0"
 url = "2.5.7"
 whoami = "1.6.1"

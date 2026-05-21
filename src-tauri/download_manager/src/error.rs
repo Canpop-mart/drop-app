@@ -36,13 +36,17 @@ pub enum ApplicationDownloadError {
     NotInitialized,
     Communication(RemoteAccessError),
     DiskFull(u64, u64),
-    #[allow(dead_code)]
     Checksum,
     Lock,
     IoError(Arc<io::Error>),
     DownloadError(RemoteAccessError),
     InvalidCommand,
     ChannelBroken(String),
+    /// Post-install validation found the on-disk install does not match the
+    /// manifest. The string is a human-readable, actionable summary naming
+    /// what is missing or mismatched. An install in this state must NOT be
+    /// marked `Installed`.
+    ValidationFailed(String),
 }
 
 impl Display for ApplicationDownloadError {
@@ -74,6 +78,13 @@ impl Display for ApplicationDownloadError {
             ApplicationDownloadError::InvalidCommand => write!(f, "Invalid command state"),
             ApplicationDownloadError::ChannelBroken(msg) => {
                 write!(f, "Internal channel broken: {msg}")
+            }
+            ApplicationDownloadError::ValidationFailed(details) => {
+                write!(
+                    f,
+                    "Install verification failed: {details}. The download did not \
+                     complete correctly — re-download the game to repair it."
+                )
             }
         }
     }

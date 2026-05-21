@@ -40,53 +40,10 @@ pub mod data {
         }
     }
 
-    #[derive(Serialize, Deserialize)]
-    enum DatabaseVersionEnum {
-        V0_4_0 { database: v1::Database },
-    }
-
-    #[derive(Serialize)]
-    enum DatabaseVersionEnumRef<'a> {
-        V0_4_0 { database: &'a v1::Database },
-    }
-
-    pub struct DatabaseVersionSerializable(pub(crate) Database);
-
-    impl DatabaseVersionSerializable {
-        /// Serialize from a reference without cloning the database.
-        pub fn serialize_ref<S>(database: &Database, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
-            DatabaseVersionEnumRef::V0_4_0 { database }.serialize(serializer)
-        }
-
-        /// Serialize the database to a RON string from a reference, avoiding a full clone.
-        pub fn serialize_ref_to_ron(database: &Database) -> Result<String, ron::Error> {
-            ron::to_string(&DatabaseVersionEnumRef::V0_4_0 { database })
-        }
-    }
-
-    impl Serialize for DatabaseVersionSerializable {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
-            // Always serialize to latest version (zero-copy via reference)
-            DatabaseVersionSerializable::serialize_ref(&self.0, serializer)
-        }
-    }
-
-    impl<'de> Deserialize<'de> for DatabaseVersionSerializable {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            Ok(match DatabaseVersionEnum::deserialize(deserializer)? {
-                DatabaseVersionEnum::V0_4_0 { database } => DatabaseVersionSerializable(database),
-            })
-        }
-    }
+    // The on-disk version envelope and migration chain now live in
+    // `crate::migrations` (see `VersionedDatabase` / `migrate_to_latest`).
+    // `interface.rs` serialises/deserialises through that module so every
+    // schema bump goes through one documented place.
 
     mod v1 {
         use serde_with::serde_as;

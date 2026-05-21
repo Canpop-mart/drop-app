@@ -157,7 +157,11 @@ pub async fn setup() -> (AppStatus, Option<User>) {
     if auth.is_some() {
         let user_result = match fetch_user().await {
             Ok(data) => data,
-            Err(RemoteAccessError::FetchError(_)) => {
+            // Network-class failures (transport error after retries, timeout,
+            // or the server being unreachable) mean "go offline and use the
+            // cached user" — they are not an auth problem.
+            Err(e) if e.is_retryable() => {
+                warn!("could not reach server during setup, going offline: {e}");
                 let user = get_cached_object::<User>("user").ok();
                 return (AppStatus::Offline, user);
             }

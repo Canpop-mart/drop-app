@@ -25,7 +25,18 @@ struct MemoryCacheEntry {
 static MEMORY_CACHE: Lazy<Arc<Mutex<HashMap<String, MemoryCacheEntry>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
+/// Hard cap on the in-memory cache. When full, expired entries are dropped
+/// first and, if still full, 25% of entries are evicted — so memory use is
+/// bounded regardless of how many distinct objects are fetched.
 const MAX_MEMORY_CACHE_SIZE: usize = 100;
+
+/// Default time-to-live for a cached entry, in seconds (24 hours).
+///
+/// Applied to the *in-memory* cache: a hit older than this is treated as a
+/// miss and re-fetched. The *disk* copy has no TTL — it is overwritten on the
+/// next successful fetch and otherwise serves as an indefinite offline
+/// fallback (see `docs/audit/remote-comms-2026.md` for the unbounded-disk note).
+const DEFAULT_CACHE_TTL_SECS: u64 = 60 * 60 * 24;
 
 #[macro_export]
 macro_rules! offline {
@@ -88,8 +99,8 @@ pub fn cache_object_db<D: Encode>(
     // Write to disk
     write_sync(&database.cache_dir, key, bytes.clone()).map_err(RemoteAccessError::Cache)?;
 
-    // Write to memory cache with default 24 hour expiry
-    let expiry = get_sys_time_in_secs() + 60 * 60 * 24;
+    // Write to memory cache with the default TTL
+    let expiry = get_sys_time_in_secs() + DEFAULT_CACHE_TTL_SECS;
     store_in_memory_cache(key.to_string(), bytes, expiry);
 
     Ok(())
@@ -147,7 +158,7 @@ pub fn get_cached_object_db<D: DecodeOwned>(
         bitcode::decode::<D>(&bytes).map_err(|e| RemoteAccessError::Cache(io::Error::other(e)))?;
 
     // Store in memory cache for future hits
-    let expiry = get_sys_time_in_secs() + 60 * 60 * 24; // Default 24 hour expiry
+    let expiry = get_sys_time_in_secs() + DEFAULT_CACHE_TTL_SECS;
     store_in_memory_cache(key.to_string(), bytes, expiry);
 
     Ok(data)
@@ -195,7 +206,7 @@ impl TryFrom<Response<Vec<u8>>> for ObjectCache {
                 .map_err(CacheError::ParseError)?
                 .to_owned(),
             body: value.body().clone(),
-            expiry: get_sys_time_in_secs() + 60 * 60 * 24,
+            expiry: get_sys_time_in_secs() + DEFAULT_CACHE_TTL_SECS,
         })
     }
 }

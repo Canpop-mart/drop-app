@@ -8,7 +8,7 @@
 #![deny(clippy::all)]
 
 use std::{
-    env, fs::File, io::Write, panic::PanicHookInfo, path::Path, str::FromStr,
+    env, fs::File, io::Write, panic::PanicHookInfo, str::FromStr,
     sync::nonpoison::Mutex, time::SystemTime,
 };
 
@@ -20,7 +20,8 @@ use ::client::{
 };
 use ::download_manager::DownloadManagerWrapper;
 use ::games::scan::scan_install_dirs;
-use ::process::ProcessManagerWrapper;
+use ::games::status::reconcile_on_startup;
+use ::process::{ProcessManagerWrapper, process_manager::ProcessManager};
 use ::remote::{
     auth::{self, HandshakeRequestBody, HandshakeResponse, generate_authorization_header},
     cache::clear_cached_object,
@@ -30,7 +31,7 @@ use ::remote::{
     utils::{DROP_APP_HANDLE, DROP_CLIENT_ASYNC},
 };
 use database::{
-    DB, GameDownloadStatus, borrow_db_checked, borrow_db_mut_checked, db::DATA_ROOT_DIR,
+    DB, borrow_db_checked, borrow_db_mut_checked, db::DATA_ROOT_DIR,
 };
 use log::{LevelFilter, debug, info, warn};
 use log4rs::{
@@ -132,6 +133,22 @@ async fn setup(handle: AppHandle) -> AppState {
     let session_type = SessionType::detect();
     info!("detected session type: {:?}", session_type);
 
+    // Repair impossible / stuck game states left by a prior crash BEFORE the
+    // disk scan runs. The transient-status map is `#[serde(skip)]`, so a
+    // crash mid-`Validating`/`Downloading`/`Uninstalling` already drops the
+    // transient layer on load — what reconciliation fixes is the *persistent*
+    // status disagreeing with the filesystem (e.g. a half-finished uninstall
+    // that deleted files but left the directory, or a vanished install dir).
+    {
+        let mut db_handle = borrow_db_mut_checked();
+        reconcile_on_startup(&mut db_handle);
+        // Belt-and-braces: clear any game still flagged `Running`. The
+        // transient map is `#[serde(skip)]` so this is normally empty, but a
+        // future change that accidentally persists it must not leave a game
+        // un-launchable (stuck `Running`) forever.
+        ProcessManager::reconcile_running_processes(&mut db_handle);
+    }
+
     scan_install_dirs();
 
     if !is_set_up {
@@ -147,43 +164,32 @@ async fn setup(handle: AppHandle) -> AppState {
 
     let (app_status, user) = auth::setup().await;
 
-    let missing_games = {
-        let db_handle = borrow_db_checked();
-        db_handle
-            .applications
-            .game_statuses
-            .iter()
-            .filter_map(|(game_id, status)| match status {
-                GameDownloadStatus::Remote {} => None,
-                GameDownloadStatus::Installed { install_dir, .. } => {
-                    if !Path::new(install_dir).exists() {
-                        Some(game_id.clone())
-                    } else {
-                        None
-                    }
-                }
-            })
-            .collect::<Vec<_>>()
-    };
-
-    info!("detected games missing: {missing_games:?}");
-
-    let mut db_handle = borrow_db_mut_checked();
-    for game_id in missing_games {
-        db_handle
-            .applications
-            .game_statuses
-            .entry(game_id)
-            .and_modify(|v| *v = GameDownloadStatus::Remote {});
-    }
-
-    drop(db_handle);
+    // Note: games whose install directory has vanished are already handled
+    // by `reconcile_on_startup` above (it demotes them to `Remote`), so the
+    // old ad-hoc missing-games sweep here has been removed.
 
     debug!("finished setup!");
 
     // Sync autostart state
     if let Err(e) = sync_autostart_on_startup(&handle) {
         warn!("failed to sync autostart state: {e}");
+    }
+
+    // Drain any playtime stops that failed to reach the server last time
+    // (network out at exit, force-quit before the async stop task finished,
+    // etc). Gated on signed-in status because the requests will 401 without
+    // auth — if we're signed out we leave the queue intact for next launch.
+    // Spawned async so a slow drain doesn't delay the rest of app startup.
+    if matches!(
+        app_status,
+        AppStatus::SignedIn | AppStatus::SignedInNeedsReauth
+    ) {
+        tauri::async_runtime::spawn(async {
+            let (succ, fail) = ::remote::playtime::drain_pending_stops().await;
+            if succ + fail > 0 {
+                info!("playtime stop queue drained: {succ} ok, {fail} deferred");
+            }
+        });
     }
 
     AppState {

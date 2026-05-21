@@ -210,6 +210,14 @@ function tone(
   env.connect(out);
   osc.start(t);
   osc.stop(t + dur + 0.01);
+  // Leak fix: a stopped oscillator stays wired into the graph (osc → env →
+  // out) until GC traces it. Over a long BPM session that's hundreds of
+  // dead nodes the GC must walk. Disconnect both on `ended` so the graph
+  // is reclaimed immediately.
+  osc.onended = () => {
+    osc.disconnect();
+    env.disconnect();
+  };
 }
 
 /** Pitch-sweeping tone (for whoosh effects) */
@@ -239,6 +247,11 @@ function sweep(
   env.connect(out);
   osc.start(t);
   osc.stop(t + dur + 0.01);
+  // Leak fix — see tone(): disconnect the stopped node graph.
+  osc.onended = () => {
+    osc.disconnect();
+    env.disconnect();
+  };
 }
 
 /** Filtered noise burst (for click/snap sounds) */
@@ -277,6 +290,13 @@ function noise(
   env.connect(out);
   src.start(t);
   src.stop(t + dur + 0.01);
+  // Leak fix — see tone(): a stopped buffer source plus its filter and
+  // gain stay wired into the graph until GC. Disconnect all three on end.
+  src.onended = () => {
+    src.disconnect();
+    filt.disconnect();
+    env.disconnect();
+  };
 }
 
 /** Delayed tone (for multi-note sequences) */
