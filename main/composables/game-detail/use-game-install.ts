@@ -33,6 +33,10 @@ export function useGameInstall(game: Game) {
 
   /** Open the modal and load version options + install dirs. */
   async function openInstallFlow() {
+    // Breadcrumbs surface in the desktop dev console — if the install
+    // button "does nothing", the absence/presence of these pinpoints
+    // where the flow dies.
+    console.log(`[install] openInstallFlow() called for game ${game.id}`);
     installFlowOpen.value = true;
     versionOptions.value = undefined;
     installDirs.value = undefined;
@@ -42,8 +46,23 @@ export function useGameInstall(game: Game) {
       versionOptions.value = await invoke("fetch_game_version_options", {
         gameId: game.id,
       });
+      console.log(
+        `[install] fetch_game_version_options -> ${
+          Array.isArray(versionOptions.value)
+            ? `${versionOptions.value.length} option(s)`
+            : String(versionOptions.value)
+        }`,
+      );
       installDirs.value = await invoke("fetch_download_dir_stats");
+      console.log(
+        `[install] fetch_download_dir_stats -> ${
+          Array.isArray(installDirs.value)
+            ? `${installDirs.value.length} dir(s)`
+            : String(installDirs.value)
+        }`,
+      );
     } catch (error) {
+      console.error("[install] openInstallFlow failed:", error);
       installError.value = String(error);
       versionOptions.value = null;
     }
@@ -52,8 +71,7 @@ export function useGameInstall(game: Game) {
   /** Human-readable label for a version option (used by the picker). */
   function formatVersionOptionText(index: number): string | undefined {
     if (!versionOptions.value) return undefined;
-    const versionOption =
-      versionOptions.value[Math.max(index, 0)];
+    const versionOption = versionOptions.value[Math.max(index, 0)];
     const template = `${
       versionOption.displayName || versionOption.versionPath
     } on ${versionOption.platform}, ${formatKilobytes(
@@ -64,6 +82,7 @@ export function useGameInstall(game: Game) {
 
   /** Queue the selected version (and any enabled dependencies) for download. */
   async function install() {
+    console.log("[install] install() invoked");
     try {
       if (!versionOptions.value) {
         throw new Error("Versions have not been loaded");
@@ -79,6 +98,10 @@ export function useGameInstall(game: Game) {
           .filter((v) => !installDepsDisabled.value[v.versionId])
           .map((v) => ({ gameId: v.gameId, versionId: v.versionId })),
       ];
+      console.log(
+        `[install] queueing ${downloads.length} download(s) on platform ` +
+          `${versionOption.platform}, installDir index ${installDir.value}`,
+      );
 
       for (const dl of downloads) {
         await invoke("download_game", {
@@ -88,10 +111,12 @@ export function useGameInstall(game: Game) {
           targetPlatform: versionOption.platform,
           enableUpdates: isLatest,
         });
+        console.log(`[install] download_game queued: version ${dl.versionId}`);
       }
 
       installFlowOpen.value = false;
     } catch (error) {
+      console.error("[install] install() failed:", error);
       installError.value = String(error);
     } finally {
       installLoading.value = false;

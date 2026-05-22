@@ -57,8 +57,7 @@
 
       <!-- Body — two-column layout: left for description + gallery, right
            for the action panel + metadata. Sticky right sidebar keeps the
-           install CTA visible while the user scrolls through the
-           description. -->
+           CTA visible while the user scrolls through the description. -->
       <div class="px-10 xl:px-14 py-8 grid lg:grid-cols-[1fr_320px] gap-8">
         <!-- Left column -->
         <div class="space-y-8 min-w-0">
@@ -142,29 +141,41 @@
             </div>
           </div>
 
-          <!-- Primary CTA — install if remote, jump to library otherwise.
-               Install/launch flow lives on the library detail page, so
-               every action button just navigates the user there. This
-               avoids duplicating the queue/version/progress UI. -->
+          <!-- Primary CTA — the store is a discovery surface, so the action
+               here is "Add to Library", never "Install". Installing happens
+               on /library/[id] once the game is in the user's library. -->
           <button
-            class="w-full inline-flex items-center justify-center gap-2 rounded-md px-4 py-3 text-sm font-semibold transition-colors"
-            :class="
-              isInstalled
-                ? 'bg-green-600 text-white hover:bg-green-500'
-                : 'bg-blue-600 text-white hover:bg-blue-500'
-            "
-            @click="goToLibraryDetail"
+            v-if="inLibrary === false"
+            class="w-full inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-60"
+            :disabled="libraryActionLoading"
+            @click="addToLibrary"
           >
-            <PlayIcon v-if="isInstalled" class="size-4" />
-            <ArrowDownTrayIcon v-else class="size-4" />
-            {{ ctaLabel }}
+            <PlusIcon class="size-4" />
+            {{ libraryActionLoading ? "Adding…" : "Add to Library" }}
           </button>
+          <NuxtLink
+            v-else-if="inLibrary === true"
+            :to="`/library/${gameId}`"
+            class="w-full inline-flex items-center justify-center gap-2 rounded-md bg-green-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-green-500"
+          >
+            <CheckIcon class="size-4" />
+            View in Library
+          </NuxtLink>
+          <div
+            v-else
+            class="w-full rounded-md bg-zinc-800 px-4 py-3 text-center text-sm text-zinc-500"
+          >
+            Checking library…
+          </div>
 
           <p
-            v-if="ctaSubtext"
-            class="text-xs text-zinc-500 text-center -mt-2"
+            v-if="inLibrary === true"
+            class="-mt-2 text-center text-xs text-zinc-500"
           >
-            {{ ctaSubtext }}
+            In your library — open it to install.
+          </p>
+          <p v-if="libraryError" class="-mt-2 text-center text-xs text-red-400">
+            {{ libraryError }}
           </p>
 
           <!-- Metadata block — short description, tags, type, etc. The
@@ -222,33 +233,31 @@
  * from /library/[id] which is the install/launch management surface.
  *
  * Click flow:
- *   - Click a tile on /store     → /store/[id] (this page)
- *   - Click a tile on /library   → /library/[id] (management page)
- *   - Click the primary CTA here → /library/[id] (install or launch)
+ *   - Click a tile on /store  → /store/[id] (this page)
+ *   - "Add to Library" here   → adds the game to the user's default
+ *                                collection (their library)
+ *   - "View in Library" here  → /library/[id], where install/launch lives
  *
- * Why two pages: the library page is dense with queue/version/progress
- * controls and Tauri install plumbing. None of that belongs in front of a
- * user who's still deciding whether to install. The store page strips
- * that down to "what is this game" + a single action button that hops to
- * the library page when they're ready to act.
+ * The store is a discovery surface: you ADD a game to your library here,
+ * then install it from the library page. Installing never happens on the
+ * store page.
  */
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
-  ArrowDownTrayIcon,
+  CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  PlayIcon,
+  PlusIcon,
 } from "@heroicons/vue/24/outline";
 import { micromark } from "micromark";
 import { useGame } from "~/composables/game";
+import { useServerApi, type StoreGame } from "~/composables/use-server-api";
 import {
-  useServerApi,
-  type StoreGame,
-} from "~/composables/use-server-api";
-import { rewriteDescriptionImages } from "~/composables/use-server-fetch";
-import type { Game, GameStatus } from "~/types";
-import { InstalledType } from "~/types";
+  rewriteDescriptionImages,
+  serverUrl,
+} from "~/composables/use-server-fetch";
+import type { Game } from "~/types";
 
 const route = useRoute();
 const router = useRouter();
@@ -259,82 +268,86 @@ const gameId = computed(() => route.params.id?.toString() ?? "");
 useHead({ title: "Store" });
 
 const gameRef = ref<Game | null>(null);
-const statusRef = ref<GameStatus | null>(null);
 const storeMeta = ref<StoreGame | null>(null);
 const currentImage = ref(0);
 
-// Game descriptions are authored in Markdown and may embed
-// server-relative image URLs. Render to HTML via micromark, then rewrite
-// image `src` attributes to absolute server:// URLs — the same pipeline
-// the library detail page uses, so a description renders identically on
-// both surfaces. Empty string until the game loads.
+// Library membership — `null` while still checking, then `true` / `false`.
+const inLibrary = ref<boolean | null>(null);
+const libraryActionLoading = ref(false);
+const libraryError = ref<string | null>(null);
+
+// Game descriptions are authored in Markdown and may embed server-relative
+// image URLs. Render to HTML via micromark, then rewrite image `src`
+// attributes to absolute server:// URLs — the same pipeline the library
+// detail page uses. Empty string until the game loads.
 const htmlDescription = computed(() =>
   gameRef.value?.mDescription
     ? rewriteDescriptionImages(micromark(gameRef.value.mDescription))
     : "",
 );
 
-/** Pull the Tauri-side game data (basic Game) + status. */
+/** Pull the Tauri-side game data. */
 async function load() {
   if (!gameId.value) return;
   try {
     const data = await useGame(gameId.value);
     gameRef.value = data.game;
-    statusRef.value = data.status.value;
   } catch (e) {
     console.warn("[store/[id]] failed to load game:", e);
   }
 }
 
-/** Best-effort fetch of store metadata (tags, isEmulated, etc.). The
- *  server has no per-id store endpoint, so we name-search and pick the
- *  match. Failures are non-fatal — the page still works without tags. */
+/** Best-effort store metadata (tags, isEmulated). The server has no
+ *  per-id store endpoint, so we name-search and pick the match. Failures
+ *  are non-fatal — the page still works without tags. */
 async function loadStoreMeta() {
   if (!gameRef.value) return;
   try {
-    const res = await api.store.browse({
-      q: gameRef.value.mName,
-      take: 5,
-    });
+    const res = await api.store.browse({ q: gameRef.value.mName, take: 5 });
     storeMeta.value = res.results.find((g) => g.id === gameId.value) ?? null;
   } catch (e) {
     console.warn("[store/[id]] failed to load store meta:", e);
   }
 }
 
-const isInstalled = computed(() => {
-  const s = statusRef.value;
-  return (
-    s?.type === "Installed" &&
-    s.install_type.type === InstalledType.Installed
-  );
-});
-
-const ctaLabel = computed(() => {
-  const s = statusRef.value;
-  if (!s) return "Install";
-  if (s.type === "Installed") {
-    if (s.install_type.type === InstalledType.Installed) return "Play";
-    if (s.install_type.type === InstalledType.SetupRequired)
-      return "Finish setup";
-    return "Continue install";
+/**
+ * Determine whether this game is already in the user's library — i.e. in
+ * their default collection. Mirrors the BPM game page's membership check.
+ */
+async function checkInLibrary() {
+  if (!gameId.value) return;
+  try {
+    const res = await fetch(serverUrl("api/v1/collection/default"));
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const collection = await res.json();
+    const entries: Array<{ gameId: string }> = collection.entries ?? [];
+    inLibrary.value = entries.some((e) => e.gameId === gameId.value);
+  } catch (e) {
+    console.warn("[store/[id]] failed to check library membership:", e);
+    // Couldn't confirm — assume not added so the user can still try.
+    inLibrary.value = false;
   }
-  if (s.type === "Queued") return "View in queue";
-  if (s.type === "Downloading" || s.type === "Updating" || s.type === "Validating")
-    return "View progress";
-  if (s.type === "Running") return "Running...";
-  if (s.type === "Uninstalling") return "Uninstalling...";
-  return "Install";
-});
+}
 
-const ctaSubtext = computed(() => {
-  if (isInstalled.value) return "Opens in your library";
-  if (statusRef.value?.type === "Installed") return "Setup required";
-  return null;
-});
-
-function goToLibraryDetail() {
-  router.push(`/library/${gameId.value}`);
+/** Add this game to the user's library (their default collection). */
+async function addToLibrary() {
+  if (libraryActionLoading.value || inLibrary.value) return;
+  libraryActionLoading.value = true;
+  libraryError.value = null;
+  try {
+    const res = await fetch(serverUrl("api/v1/collection/default/entry"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: gameId.value }),
+    });
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    inLibrary.value = true;
+  } catch (e) {
+    console.error("[store/[id]] add to library failed:", e);
+    libraryError.value = "Couldn't add to library — please try again.";
+  } finally {
+    libraryActionLoading.value = false;
+  }
 }
 
 function nextImage() {
@@ -353,18 +366,22 @@ function prevImage() {
 
 onMounted(async () => {
   await load();
-  // Run the store metadata fetch in parallel so the page paints fast.
+  // Run the store metadata + library-membership fetches in parallel so
+  // the page paints fast.
   loadStoreMeta();
+  checkInLibrary();
 });
 
 // Watch gameId for navigation between different store/[id] pages without
 // a full remount (e.g. clicking a related game tile in the future).
 watch(gameId, async () => {
   gameRef.value = null;
-  statusRef.value = null;
   storeMeta.value = null;
   currentImage.value = 0;
+  inLibrary.value = null;
+  libraryError.value = null;
   await load();
   loadStoreMeta();
+  checkInLibrary();
 });
 </script>

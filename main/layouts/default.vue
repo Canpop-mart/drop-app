@@ -74,6 +74,10 @@
         </div>
       </template>
     </NuxtErrorBoundary>
+
+    <!-- Dev console overlay — captures console output + uncaught errors
+         when dev mode is on. Toggle with Ctrl+` or the corner button. -->
+    <DebugConsole />
   </div>
 </template>
 
