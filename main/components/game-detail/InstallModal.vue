@@ -1,6 +1,20 @@
 <template>
-  <ModalTemplate v-model="install.installFlowOpen.value">
-    <template #default>
+  <Teleport to="body">
+    <div
+      v-if="install.installFlowOpen.value"
+      class="fixed inset-0 z-[10000] overflow-y-auto bg-zinc-950/75"
+      @click.self="install.installFlowOpen.value = false"
+    >
+      <div
+        class="flex min-h-full items-start justify-center p-4 text-center sm:items-center sm:p-0"
+        @click.self="install.installFlowOpen.value = false"
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          class="relative w-full rounded-lg bg-zinc-900 text-left shadow-xl sm:my-8 sm:max-w-lg"
+        >
+          <div class="space-y-4 px-4 pb-4 pt-5 sm:p-6 sm:pb-4">
       <div class="sm:flex sm:items-start">
         <div class="mt-3 text-center sm:mt-0 sm:text-left">
           <h3 class="text-base font-semibold text-zinc-100">
@@ -300,8 +314,10 @@
           </div>
         </div>
       </div>
-    </template>
-    <template #buttons>
+          </div>
+          <div
+            class="rounded-b-lg bg-zinc-800 px-4 py-3 sm:flex sm:flex-row-reverse sm:gap-x-2 sm:px-6"
+          >
       <LoadingButton
         @click="install.install()"
         :disabled="
@@ -320,8 +336,11 @@
       >
         Cancel
       </button>
-    </template>
-  </ModalTemplate>
+          </div>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -330,6 +349,11 @@
  * picker, install-directory selector, optional-dependency toggles, and the
  * compat panel. All state + the `download_game` calls come from a
  * `useGameInstall` instance, passed in as `install` so the parent owns it.
+ *
+ * The shell is a plain `<Teleport to="body">` + `v-if` overlay, not the
+ * shared Headless UI `ModalTemplate`: that `Dialog` mounted under
+ * `tauri dev` but never appeared in the packaged WebView2 build, so this
+ * modal owns its own backdrop, z-index, and Escape / click-outside close.
  */
 import {
   Listbox,
@@ -348,9 +372,20 @@ import type { Game } from "~/types";
 import type { GameCompatSummary } from "~/composables/use-compat-summary";
 import type { useGameInstall } from "~/composables/game-detail/use-game-install";
 
-defineProps<{
+const props = defineProps<{
   game: Game;
   install: ReturnType<typeof useGameInstall>;
   gameCompat: GameCompatSummary | undefined;
 }>();
+
+/** Close on Escape — this modal is a plain teleported overlay (no Headless
+ *  UI Dialog), so it carries its own keyboard handling. */
+function onModalKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape" && props.install.installFlowOpen.value) {
+    props.install.installFlowOpen.value = false;
+  }
+}
+
+onMounted(() => window.addEventListener("keydown", onModalKeydown));
+onUnmounted(() => window.removeEventListener("keydown", onModalKeydown));
 </script>
