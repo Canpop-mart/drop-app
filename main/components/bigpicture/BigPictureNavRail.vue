@@ -59,6 +59,7 @@ import {
   Square3Stack3DIcon,
   ShoppingBagIcon,
   ChatBubbleLeftRightIcon,
+  MegaphoneIcon,
   NewspaperIcon,
   Cog6ToothIcon,
   ArrowDownTrayIcon,
@@ -109,6 +110,11 @@ const navItems = [
     route: "/bigpicture/community",
     icon: ChatBubbleLeftRightIcon,
     label: "Community",
+  },
+  {
+    route: "/bigpicture/requests",
+    icon: MegaphoneIcon,
+    label: "Requests",
   },
   {
     route: "/bigpicture/news",

@@ -192,6 +192,17 @@ async fn setup(handle: AppHandle) -> AppState {
         });
     }
 
+    // Restore the download queue from disk so a crash mid-queue doesn't
+    // wipe what the user had pending. Only run when fully signed in —
+    // `GameDownloadAgent::new` fetches manifests over authenticated HTTPS
+    // and would fail across every entry otherwise. NeedsReauth is treated
+    // as "not yet usable" rather than retrying every restart and failing.
+    if matches!(app_status, AppStatus::SignedIn) {
+        tauri::async_runtime::spawn(async {
+            crate::downloads::restore_pending_queue().await;
+        });
+    }
+
     AppState {
         status: app_status,
         user,

@@ -116,6 +116,12 @@ impl ProcessManager<'_> {
             .ok_or(err)?;
 
         let mut exe_command = ParsedCommand::parse(emulator_launch_config.command.clone())?;
+        // Inject a fullscreen flag for known standalone emulators (Ryujinx,
+        // Yuzu/Suyu, Cemu, standalone PCSX2). RetroArch is configured through
+        // `configure_retroarch_for_game` and uses retroarch.cfg's
+        // `video_fullscreen` key instead — its launcher is filtered out below
+        // so we don't double-inject.
+        inject_emulator_fullscreen_flag(&mut exe_command);
         exe_command
             .env
             .extend(std::mem::take(&mut target_command.env));
@@ -304,5 +310,54 @@ fn open_append_or_null(path: &std::path::Path) -> std::process::Stdio {
     match std::fs::OpenOptions::new().create(true).append(true).open(path) {
         Ok(file) => std::process::Stdio::from(file),
         Err(_) => std::process::Stdio::null(),
+    }
+}
+
+/// Inject the emulator-specific fullscreen flag into the launch command for
+/// known standalone emulators. RetroArch is deliberately excluded — its
+/// fullscreen toggle lives in retroarch.cfg (`video_fullscreen`) and is
+/// handled by the per-game UserConfiguration path in `configure_retroarch_for_game`.
+///
+/// Matched by the basename of the executable (case-insensitive `contains`)
+/// so symlinks, version-suffixed binaries, and AppImage wrappers all hit
+/// the same branch. Skips injection if any common fullscreen-style flag is
+/// already present, so a server-side launch command that already specifies
+/// `--fullscreen` / `-fullscreen` / `-f` doesn't end up with a duplicate.
+fn inject_emulator_fullscreen_flag(exe_command: &mut ParsedCommand) {
+    let exe_lower = std::path::Path::new(&exe_command.command)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_lowercase)
+        .unwrap_or_default();
+
+    // RetroArch is handled elsewhere — explicitly opt out so the rest of the
+    // matching can use cheap `contains` checks without false positives.
+    if exe_lower.contains("retroarch") {
+        return;
+    }
+
+    let flag: &str = if exe_lower.contains("ryujinx") {
+        "--fullscreen"
+    } else if exe_lower.contains("yuzu") || exe_lower.contains("suyu") {
+        "-f"
+    } else if exe_lower.contains("cemu") {
+        "-f"
+    } else if exe_lower.contains("pcsx2") {
+        // Standalone PCSX2 (the libretro core path doesn't hit this branch —
+        // it goes through RetroArch).
+        "--fullscreen"
+    } else {
+        return;
+    };
+
+    let already_fullscreen = exe_command.args.iter().any(|a| {
+        let a = a.as_str();
+        a == "--fullscreen" || a == "-fullscreen" || a == "-f" || a == flag
+    });
+    if !already_fullscreen {
+        // Prepend so it lands before the `{rom}` placeholder / appended ROM
+        // path — argument order matters for some emulators that parse
+        // positionally.
+        exe_command.args.insert(0, flag.to_string());
     }
 }

@@ -75,6 +75,15 @@ export function useGameConfig(game: Game, version: Ref<GameVersion | undefined>)
     }
   });
 
+  // Per-game fullscreen for emulated games. Backend stores Option<bool>:
+  // `null` = no explicit pref (RetroArch default = on). For the UI we
+  // collapse "null" and "true" into "on" so users see a simple on/off
+  // toggle; clicking it always writes an explicit boolean.
+  const fullscreen = ref<boolean>(
+    (version.value?.userConfiguration as { fullscreen?: boolean | null })
+      ?.fullscreen ?? true,
+  );
+
   async function saveUserConfig() {
     if (!version.value) return;
     try {
@@ -85,6 +94,7 @@ export function useGameConfig(game: Game, version: Ref<GameVersion | undefined>)
           controllerType: selectedController.value,
           qualityPreset: selectedQuality.value,
           widescreen: aspectRatio.value,
+          fullscreen: fullscreen.value,
         },
       });
     } catch (e) {
@@ -108,6 +118,11 @@ export function useGameConfig(game: Game, version: Ref<GameVersion | undefined>)
     saveUserConfig();
   }
 
+  function toggleFullscreen() {
+    fullscreen.value = !fullscreen.value;
+    saveUserConfig();
+  }
+
   /** Push the user's profile name into a Goldberg/Steam-emu game. */
   async function applyProfileName() {
     try {
@@ -127,9 +142,11 @@ export function useGameConfig(game: Game, version: Ref<GameVersion | undefined>)
     selectedQuality,
     aspectRatio,
     aspectLabel,
+    fullscreen,
     setController,
     setQuality,
     toggleWidescreen,
+    toggleFullscreen,
     applyProfileName,
   };
 }

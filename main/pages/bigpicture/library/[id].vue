@@ -816,6 +816,7 @@ import { devLog } from "~/composables/dev-mode";
 import BpmSaveConflictDialog from "~/components/bigpicture/BpmSaveConflictDialog.vue";
 import BpmRetroArchCheatsheet from "~/components/bigpicture/BpmRetroArchCheatsheet.vue";
 import { invoke } from "@tauri-apps/api/core";
+import { platform } from "@tauri-apps/plugin-os";
 import { useListen } from "~/composables/useListen";
 import {
   PlayIcon,
@@ -1084,11 +1085,19 @@ const {
   controllerLabel,
   qualityLabel,
   aspectLabel,
+  protonLabel,
+  protonOptions,
   cycleController,
   cycleQuality,
   toggleWidescreen,
   toggleCrtShader,
+  cycleProton,
 } = gameConfig;
+
+// Proton override is only meaningful for Windows games launched on a Linux
+// host — on Windows / macOS the `fetch_proton_paths` Tauri command isn't
+// registered and the override field is ignored by the launcher.
+const isLinuxHost = computed(() => platform() === "linux");
 
 function applyProfileName() {
   showOptions.value = false;
@@ -1138,6 +1147,25 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
       id: "profile",
       label: "Set Account Name",
       action: applyProfileName,
+    });
+  }
+
+  // Per-game Proton override. Linux host only; surfaced only when there's
+  // more than the default option (i.e. at least one auto-discovered or
+  // user-added Proton path), so we don't clutter the menu with a cycler
+  // that has nothing to cycle through on systems without Proton-GE etc.
+  if (
+    isNativeGame.value &&
+    isWindowsGame.value &&
+    status.value?.type === "Installed" &&
+    isLinuxHost.value &&
+    protonOptions.value.length > 1
+  ) {
+    items.push({
+      id: "proton",
+      label: "Proton Version",
+      valueLabel: protonLabel.value,
+      action: cycleProton,
     });
   }
 

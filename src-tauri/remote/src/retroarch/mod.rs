@@ -41,7 +41,7 @@ pub mod ra;
 pub mod shaders;
 
 use database::models::data::{AspectRatio, ControllerType, UserConfiguration};
-use log::{info, warn};
+use log::{error, info, warn};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -160,18 +160,45 @@ pub fn configure_retroarch_for_game(
     // ── Write the main config (used by --appendconfig) ───────────────────
     let cfg_path = emu_root.join("retroarch.cfg");
     info!("[RETROARCH] Writing retroarch.cfg ({} keys) to {}", overrides.len(), cfg_path.display());
-    cfg::patch_retroarch_cfg_with_deletions(&cfg_path, &overrides, controllers::STALE_INPUT_KEYS);
+    // Treat a primary-cfg write failure as a hard abort: previously this was
+    // a silent `warn!` and the launch proceeded against whatever stale or
+    // half-written cfg was on disk, which surfaced as the "game starts and
+    // then freezes mysteriously" pattern. Returning None aborts the RA
+    // configuration; the caller falls back to launching against the raw
+    // RetroArch install instead of pretending our patches landed.
+    if let Err(e) = cfg::patch_retroarch_cfg_with_deletions(
+        &cfg_path,
+        &overrides,
+        controllers::STALE_INPUT_KEYS,
+    ) {
+        error!(
+            "[RETROARCH] Failed to write retroarch.cfg ({e}) — aborting RA configuration to avoid launching against stale settings"
+        );
+        return None;
+    }
 
     // Also write to the AppImage portable $HOME so our settings are the BASE
     // config, not just an --appendconfig overlay (critical on Steam Deck).
+    // This one is a copy of the primary write — if it fails we keep going,
+    // because the `--appendconfig` overlay path is still in effect.
     let appimage_config_dir = discovery::find_appimage_config_dir(&emu_root);
     if let Some(ai_cfg_dir) = &appimage_config_dir {
         if let Err(e) = fs::create_dir_all(ai_cfg_dir) {
             warn!("[RETROARCH] Failed to create AppImage config dir {}: {e}", ai_cfg_dir.display());
         } else {
             let ai_cfg_path = ai_cfg_dir.join("retroarch.cfg");
-            cfg::patch_retroarch_cfg_with_deletions(&ai_cfg_path, &overrides, controllers::STALE_INPUT_KEYS);
-            info!("[RETROARCH] Also wrote config to AppImage home: {}", ai_cfg_path.display());
+            if let Err(e) = cfg::patch_retroarch_cfg_with_deletions(
+                &ai_cfg_path,
+                &overrides,
+                controllers::STALE_INPUT_KEYS,
+            ) {
+                warn!(
+                    "[RETROARCH] Failed to write AppImage config copy at {} ({e}) — primary config was written, continuing",
+                    ai_cfg_path.display()
+                );
+            } else {
+                info!("[RETROARCH] Also wrote config to AppImage home: {}", ai_cfg_path.display());
+            }
         }
     }
 
@@ -386,6 +413,16 @@ fn apply_user_config(
         info!("[RETROARCH] Aspect ratio: {:?} (video_scale_integer forced off)", cfg.widescreen);
     }
 
+    // Fullscreen toggle. apply_video_input_overrides set `video_fullscreen =
+    // true` unconditionally as the system default; if the user explicitly
+    // opted into windowed mode we flip it here. `video_windowed_fullscreen`
+    // (set on Gamescope) is harmless when video_fullscreen is false, so we
+    // don't touch it.
+    if cfg.fullscreen == Some(false) {
+        overrides.insert("video_fullscreen", "false".into());
+        info!("[RETROARCH] User opted out of fullscreen — launching windowed");
+    }
+
     // CRT shader.
     let high_res_3d = rom_path.map(cores::rom_implies_high_res_3d_core).unwrap_or(false);
     if cfg.crt_shader {
@@ -433,12 +470,28 @@ fn write_core_options(
     }
 
     info!("[RETROARCH] Writing core options ({} keys) to {}", core_overrides.len(), core_opts_path.display());
-    cfg::patch_retroarch_cfg(&core_opts_path, &core_overrides);
+    // Core-options write is best-effort — RetroArch falls back to per-core
+    // defaults if the file is missing, so a failure here means quality preset
+    // / widescreen hack just won't apply for this launch. Surface it loud
+    // (`error!`) so the user can correlate "preset I picked didn't take"
+    // with the log, but don't abort the launch over it.
+    if let Err(e) = cfg::patch_retroarch_cfg(&core_opts_path, &core_overrides) {
+        error!(
+            "[RETROARCH] Failed to write core options at {} ({e}) — quality preset and widescreen hack will fall back to core defaults",
+            core_opts_path.display()
+        );
+    }
 
     if let Some(ai_cfg_dir) = appimage_config_dir {
         let ai_core_opts = ai_cfg_dir.join("retroarch-core-options.cfg");
-        cfg::patch_retroarch_cfg(&ai_core_opts, &core_overrides);
-        info!("[RETROARCH] Also wrote core options to AppImage home: {}", ai_core_opts.display());
+        if let Err(e) = cfg::patch_retroarch_cfg(&ai_core_opts, &core_overrides) {
+            warn!(
+                "[RETROARCH] Failed to write AppImage core-options copy at {} ({e}) — primary copy was written, continuing",
+                ai_core_opts.display()
+            );
+        } else {
+            info!("[RETROARCH] Also wrote core options to AppImage home: {}", ai_core_opts.display());
+        }
     }
 }
 

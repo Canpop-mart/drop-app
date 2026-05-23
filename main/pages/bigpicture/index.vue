@@ -429,7 +429,7 @@
                         {{ entry.game.mName.charAt(0).toUpperCase() }}
                       </span>
                     </div>
-                    <BpmBoxArtOverlay :theme-id="theme" />
+                    <BpmBoxArtOverlay v-if="showBoxArtOverlays" :theme-id="theme" />
                   </div>
                   <p
                     v-if="!hideTitles"
@@ -575,7 +575,7 @@
                         {{ entry.game.mName.charAt(0).toUpperCase() }}
                       </span>
                     </div>
-                    <BpmBoxArtOverlay :theme-id="theme" />
+                    <BpmBoxArtOverlay v-if="showBoxArtOverlays" :theme-id="theme" />
                   </div>
                   <!-- Channel label -->
                   <p
@@ -749,7 +749,7 @@
                     >
                       {{ entry.game.mName.charAt(0).toUpperCase() }}
                     </div>
-                    <BpmBoxArtOverlay :theme-id="theme" />
+                    <BpmBoxArtOverlay v-if="showBoxArtOverlays" :theme-id="theme" />
                   </div>
                   <!-- Game name below icon -->
                   <p
@@ -944,7 +944,7 @@
                         {{ entry.game.mName.charAt(0).toUpperCase() }}
                       </span>
                     </div>
-                    <BpmBoxArtOverlay :theme-id="theme" />
+                    <BpmBoxArtOverlay v-if="showBoxArtOverlays" :theme-id="theme" />
                   </div>
                   <p
                     v-if="!hideTitles"
@@ -1164,7 +1164,7 @@
                           {{ entry.game.mName.charAt(0).toUpperCase() }}
                         </span>
                       </div>
-                      <BpmBoxArtOverlay :theme-id="theme" />
+                      <BpmBoxArtOverlay v-if="showBoxArtOverlays" :theme-id="theme" />
                     </div>
                     <!-- Game name -->
                     <p
@@ -1299,7 +1299,7 @@
                         {{ entry.game.mName.charAt(0).toUpperCase() }}
                       </span>
                     </div>
-                    <BpmBoxArtOverlay :theme-id="theme" />
+                    <BpmBoxArtOverlay v-if="showBoxArtOverlays" :theme-id="theme" />
                   </div>
                   <p
                     v-if="!hideTitles"
@@ -1423,7 +1423,7 @@
                         {{ entry.game.mName.charAt(0).toUpperCase() }}
                       </span>
                     </div>
-                    <BpmBoxArtOverlay :theme-id="theme" />
+                    <BpmBoxArtOverlay v-if="showBoxArtOverlays" :theme-id="theme" />
                   </div>
                   <p
                     v-if="!hideTitles"
@@ -1534,7 +1534,7 @@
                         {{ entry.game.mName.charAt(0).toUpperCase() }}
                       </span>
                     </div>
-                    <BpmBoxArtOverlay :theme-id="theme" />
+                    <BpmBoxArtOverlay v-if="showBoxArtOverlays" :theme-id="theme" />
                   </div>
                   <p
                     v-if="!hideTitles"
@@ -1689,7 +1689,7 @@
                           {{ entry.game.mName.charAt(0).toUpperCase() }}
                         </span>
                       </div>
-                      <BpmBoxArtOverlay :theme-id="theme" />
+                      <BpmBoxArtOverlay v-if="showBoxArtOverlays" :theme-id="theme" />
                     </div>
                     <p
                       v-if="!hideTitles"
@@ -1811,6 +1811,25 @@ const hideTitles = ref(
   typeof localStorage !== "undefined"
     ? localStorage.getItem("drop:hideTitles") === "true"
     : false,
+);
+
+// ── Cover overlay toggle ──────────────────────────────────────────────
+// Reads the `bpm:boxArtOverlay` key the BPM settings page writes. The
+// CustomEvent listener picks up live changes so toggling the setting
+// updates the home-page tiles immediately, without a route bounce.
+const showBoxArtOverlays = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("bpm:boxArtOverlay") !== "false"
+    : true,
+);
+function onBoxArtOverlayChange(e: Event) {
+  showBoxArtOverlays.value = (e as CustomEvent<boolean>).detail !== false;
+}
+onMounted(() =>
+  window.addEventListener("bpm:boxArtOverlay", onBoxArtOverlayChange),
+);
+onUnmounted(() =>
+  window.removeEventListener("bpm:boxArtOverlay", onBoxArtOverlayChange),
 );
 
 // ── Theme-specific focus tracking ──────────────────────────────────────

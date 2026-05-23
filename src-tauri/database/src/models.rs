@@ -20,6 +20,7 @@ pub mod data {
     pub type DownloadableMetadata = v1::DownloadableMetadata;
     pub type DownloadType = v1::DownloadType;
     pub type DatabaseApplications = v1::DatabaseApplications;
+    pub type PendingQueueEntry = v1::PendingQueueEntry;
     pub type UserConfiguration = v1::UserConfiguration;
     pub type MangoHudPreset = v1::MangoHudPreset;
     pub type ControllerType = v1::ControllerType;
@@ -63,6 +64,7 @@ pub mod data {
                 widescreen: AspectRatio::Standard,
                 mangohud: None,
                 crt_shader: false,
+                fullscreen: None,
             }
         }
 
@@ -219,6 +221,12 @@ pub mod data {
             pub quality_preset: Option<QualityPreset>,
             #[serde(default)]
             pub widescreen: AspectRatio,
+            /// Per-game fullscreen toggle for emulated games. `None` = use
+            /// the RetroArch default (fullscreen on); `Some(false)` =
+            /// explicit window mode. Old DBs that pre-date this field
+            /// deserialize to `None` via `#[serde(default)]`.
+            #[serde(default)]
+            pub fullscreen: Option<bool>,
             /// MangoHud performance overlay (Linux only)
             #[serde(default)]
             pub mangohud: Option<MangoHudPreset>,
@@ -442,6 +450,21 @@ pub mod data {
             }
         }
 
+        /// Persisted snapshot of one queued download. The live `Queue`
+        /// (in download_manager::util::queue) holds just `DownloadableMetadata`
+        /// in order, but to recreate a `GameDownloadAgent` on startup we also
+        /// need the install dir the user picked and whether updates were
+        /// enabled — neither of which survives in `DownloadableMetadata`
+        /// itself. `DatabaseApplications::pending_queue` stores these in
+        /// insertion order; mutations to the live queue mirror onto it.
+        #[derive(Debug, Serialize, Deserialize, Clone)]
+        #[serde(rename_all = "camelCase")]
+        pub struct PendingQueueEntry {
+            pub meta: DownloadableMetadata,
+            pub install_dir: usize,
+            pub enable_updates: bool,
+        }
+
         #[serde_as]
         #[derive(Serialize, Clone, Deserialize, Default)]
         #[serde(rename_all = "camelCase")]
@@ -455,6 +478,13 @@ pub mod data {
 
             pub additional_proton_paths: Vec<String>,
             pub default_proton_path: Option<String>,
+
+            /// Downloads queued but not yet completed. Persisted so a crash
+            /// or relaunch restores the queue rather than wiping it.
+            /// `#[serde(default)]` keeps DBs written by older builds (which
+            /// lacked this field) loadable.
+            #[serde(default)]
+            pub pending_queue: Vec<PendingQueueEntry>,
 
             #[serde(skip)]
             pub transient_statuses: HashMap<DownloadableMetadata, ApplicationTransientStatus>,
@@ -489,6 +519,7 @@ pub mod data {
                     transient_statuses: HashMap::new(),
                     additional_proton_paths: Vec::new(),
                     default_proton_path: None,
+                    pending_queue: Vec::new(),
                 },
                 prev_database,
                 base_url: String::new(),

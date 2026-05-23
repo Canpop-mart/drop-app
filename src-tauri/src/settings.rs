@@ -217,10 +217,10 @@ pub enum PackageFormat {
 #[tauri::command]
 pub fn detect_package_format() -> PackageFormat {
     #[cfg(target_os = "windows")]
-    { return PackageFormat::WindowsInstaller; }
+    { PackageFormat::WindowsInstaller }
 
     #[cfg(target_os = "macos")]
-    { return PackageFormat::MacOsBundle; }
+    { PackageFormat::MacOsBundle }
 
     #[cfg(target_os = "linux")]
     {

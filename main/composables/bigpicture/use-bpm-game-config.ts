@@ -19,6 +19,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { platform } from "@tauri-apps/plugin-os";
 import { devLog } from "~/composables/dev-mode";
 import type {
   AspectRatio,
@@ -26,6 +27,13 @@ import type {
   GameVersion,
   QualityPreset,
 } from "~/types";
+
+/**
+ * One picker entry for the Proton cycler. `path: null` represents "fall
+ * back to the app-level default"; concrete paths come from drop-app's
+ * `fetch_proton_paths` Tauri command (auto-discovered + user-added).
+ */
+type BpmProtonOption = { label: string; path: string | null };
 
 export const BPM_CONTROLLER_OPTIONS: {
   label: string;
@@ -61,6 +69,35 @@ export function useBpmGameConfig(
   const selectedQuality = ref<QualityPreset | null>(null);
   const aspectRatio = ref<AspectRatio>("Standard");
   const crtShaderEnabled = ref(false);
+  const selectedProtonPath = ref<string | null>(null);
+
+  // Proton override picker: list starts with just "Default" so it works on
+  // Windows/macOS hosts (where `fetch_proton_paths` is a Linux-only Tauri
+  // command and would just throw). On Linux we hydrate it on init.
+  const protonOptions = ref<BpmProtonOption[]>([
+    { label: "Default", path: null },
+  ]);
+
+  async function loadProtonPaths() {
+    // Linux-only — the Tauri command is `#[cfg(target_os = "linux")]`.
+    if (platform() !== "linux") return;
+    try {
+      const result = await invoke<{
+        autodiscovered: Array<{ name: string; path: string }>;
+        custom: Array<{ name: string; path: string }>;
+      }>("fetch_proton_paths");
+      const options: BpmProtonOption[] = [{ label: "Default", path: null }];
+      for (const p of result.autodiscovered) {
+        options.push({ label: p.name, path: p.path });
+      }
+      for (const p of result.custom) {
+        options.push({ label: `${p.name} (custom)`, path: p.path });
+      }
+      protonOptions.value = options;
+    } catch (e) {
+      console.warn("[BPM:GAME-CONFIG] fetch_proton_paths failed:", e);
+    }
+  }
 
   /**
    * Seed the preset refs from a freshly-loaded `GameVersion`. Called by the
@@ -74,6 +111,7 @@ export function useBpmGameConfig(
     // AspectRatio. Keep a null guard for forward-compat with malformed data.
     aspectRatio.value = ver.userConfiguration.widescreen ?? "Standard";
     crtShaderEnabled.value = ver.userConfiguration.crtShader ?? false;
+    selectedProtonPath.value = ver.userConfiguration.overrideProtonPath ?? null;
   }
 
   async function saveUserConfig() {
@@ -93,6 +131,7 @@ export function useBpmGameConfig(
           qualityPreset: selectedQuality.value,
           widescreen: aspectRatio.value,
           crtShader: crtShaderEnabled.value,
+          overrideProtonPath: selectedProtonPath.value,
         },
       });
     } catch (e) {
@@ -144,6 +183,24 @@ export function useBpmGameConfig(
     showToast(`CRT Shader: ${crtShaderEnabled.value ? "On" : "Off"}`);
   }
 
+  /**
+   * Cycle through available Proton versions (incl. "Default" at index 0).
+   * Sticky on the Deck: a user with a library of fussy Windows games can
+   * walk Select-button down the row until they find a Proton that runs
+   * the game, without leaving Game Mode to edit settings.
+   */
+  function cycleProton() {
+    const paths = protonOptions.value.map((o) => o.path);
+    // indexOf returns -1 if the current saved value is no longer in the
+    // list (e.g. a Proton path was removed) — incrementing -1 lands on
+    // index 0 ("Default"), which is the desired fallback.
+    const idx = paths.indexOf(selectedProtonPath.value);
+    const nextIdx = (idx + 1) % paths.length;
+    selectedProtonPath.value = paths[nextIdx];
+    saveUserConfig();
+    showToast(`Proton: ${protonOptions.value[nextIdx].label}`);
+  }
+
   /** Push the user's profile name into a Goldberg/Steam-emu game. */
   async function applyProfileName() {
     try {
@@ -174,15 +231,28 @@ export function useBpmGameConfig(
         return "4:3";
     }
   });
+  const protonLabel = computed(
+    () =>
+      protonOptions.value.find((o) => o.path === selectedProtonPath.value)
+        ?.label ?? "Default",
+  );
+
+  // Kick off the Linux Proton-path fetch eagerly — no `await` here so the
+  // composable returns synchronously and the BPM page can mount; the
+  // `protonOptions` ref updates reactively when the fetch resolves.
+  loadProtonPaths();
 
   return {
     selectedController,
     selectedQuality,
     aspectRatio,
     crtShaderEnabled,
+    selectedProtonPath,
+    protonOptions,
     controllerLabel,
     qualityLabel,
     aspectLabel,
+    protonLabel,
     syncFromVersion,
     saveUserConfig,
     setController,
@@ -191,6 +261,7 @@ export function useBpmGameConfig(
     cycleQuality,
     toggleWidescreen,
     toggleCrtShader,
+    cycleProton,
     applyProfileName,
   };
 }

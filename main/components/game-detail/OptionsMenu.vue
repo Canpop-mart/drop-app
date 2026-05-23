@@ -103,6 +103,27 @@
             </div>
           </MenuItem>
 
+          <!-- Fullscreen on launch — emulated (RetroArch) games only.
+               Defaults to on; users who'd rather windowed flip this off. -->
+          <MenuItem v-if="config.isEmulatedGame.value" as="div" disabled>
+            <div class="w-full px-4 py-2 text-sm text-zinc-300">
+              <div class="flex justify-between items-center">
+                <span>Fullscreen</span>
+                <button
+                  class="px-2.5 py-0.5 rounded-md text-xs font-medium transition-colors"
+                  :class="
+                    config.fullscreen.value
+                      ? 'bg-green-600 text-white'
+                      : 'bg-zinc-700 text-zinc-300'
+                  "
+                  @click.stop="config.toggleFullscreen()"
+                >
+                  {{ config.fullscreen.value ? "On" : "Off" }}
+                </button>
+              </div>
+            </div>
+          </MenuItem>
+
           <div class="border-t border-zinc-800 my-1" />
 
           <MenuItem v-if="hasAchievements" v-slot="{ active }">
@@ -117,6 +138,21 @@
             >
               Reset Achievements
               <TrophyIcon class="size-5 text-yellow-500" />
+            </button>
+          </MenuItem>
+
+          <MenuItem v-slot="{ active }">
+            <button
+              @click="$emit('remove-from-library')"
+              :class="[
+                active
+                  ? 'bg-zinc-800 text-zinc-100 outline-none'
+                  : 'text-zinc-400',
+                'w-full px-4 py-2 text-sm inline-flex justify-between',
+              ]"
+            >
+              Remove from Library
+              <TrashIcon class="size-5 text-red-500" />
             </button>
           </MenuItem>
         </div>
@@ -141,6 +177,7 @@ import { Cog6ToothIcon } from "@heroicons/vue/24/outline";
 import {
   AdjustmentsHorizontalIcon,
   SparklesIcon,
+  TrashIcon,
   TrophyIcon,
   UserIcon,
 } from "@heroicons/vue/24/solid";
@@ -157,5 +194,6 @@ defineProps<{
 
 defineEmits<{
   (e: "reset-achievements"): void;
+  (e: "remove-from-library"): void;
 }>();
 </script>

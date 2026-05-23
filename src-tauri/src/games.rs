@@ -1329,20 +1329,20 @@ fn scan_common_save_locations(game_name: &str, app_id: Option<&str>) -> Vec<Ludu
                 search_dirs.push(appdata_roaming.join(name));
             }
             // %AppData%/../LocalLow/ — check both direct and under company subfolders
-            if let Some(appdata) = dirs::data_dir() {
-                if let Some(parent) = appdata.parent() {
-                    let local_low = parent.join("LocalLow");
-                    search_dirs.push(local_low.join(name));
+            if let Some(appdata) = dirs::data_dir()
+                && let Some(parent) = appdata.parent()
+            {
+                let local_low = parent.join("LocalLow");
+                search_dirs.push(local_low.join(name));
 
-                    // Unity games: LocalLow/<CompanyName>/<GameName>/
-                    // Scan all subdirs of LocalLow for a folder matching the game name
-                    if let Ok(entries) = std::fs::read_dir(&local_low) {
-                        for entry in entries.flatten() {
-                            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                                let sub = entry.path().join(name);
-                                if sub.exists() {
-                                    search_dirs.push(sub);
-                                }
+                // Unity games: LocalLow/<CompanyName>/<GameName>/
+                // Scan all subdirs of LocalLow for a folder matching the game name
+                if let Ok(entries) = std::fs::read_dir(&local_low) {
+                    for entry in entries.flatten() {
+                        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                            let sub = entry.path().join(name);
+                            if sub.exists() {
+                                search_dirs.push(sub);
                             }
                         }
                     }
@@ -1359,13 +1359,13 @@ fn scan_common_save_locations(game_name: &str, app_id: Option<&str>) -> Vec<Ludu
             search_dirs.push(docs.join("My Games").join(game_name));
         }
         // Steam userdata saves: %ProgramFiles(x86)%/Steam/userdata/*/
-        if let Some(id) = app_id {
-            if let Ok(program_files) = std::env::var("ProgramFiles(x86)") {
-                let userdata = Path::new(&program_files).join("Steam").join("userdata");
-                if let Ok(entries) = std::fs::read_dir(&userdata) {
-                    for entry in entries.flatten() {
-                        search_dirs.push(entry.path().join(id).join("remote"));
-                    }
+        if let Some(id) = app_id
+            && let Ok(program_files) = std::env::var("ProgramFiles(x86)")
+        {
+            let userdata = Path::new(&program_files).join("Steam").join("userdata");
+            if let Ok(entries) = std::fs::read_dir(&userdata) {
+                for entry in entries.flatten() {
+                    search_dirs.push(entry.path().join(id).join("remote"));
                 }
             }
         }

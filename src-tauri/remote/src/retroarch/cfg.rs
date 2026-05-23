@@ -36,18 +36,29 @@ pub fn extract_cfg_key(line: &str) -> Option<&str> {
 /// Reads an existing `retroarch.cfg`, applies `overrides`, and writes it back.
 /// Creates the file if it does not exist. Only keys present in `overrides`
 /// are touched; everything else is preserved verbatim.
-pub fn patch_retroarch_cfg(cfg_path: &Path, overrides: &HashMap<&str, String>) {
-    patch_retroarch_cfg_with_deletions(cfg_path, overrides, &[]);
+pub fn patch_retroarch_cfg(
+    cfg_path: &Path,
+    overrides: &HashMap<&str, String>,
+) -> std::io::Result<()> {
+    patch_retroarch_cfg_with_deletions(cfg_path, overrides, &[])
 }
 
 /// Like [`patch_retroarch_cfg`] but also removes any line whose key appears
 /// in `delete_keys`. Used to clean up stale settings from older Drop versions
 /// (e.g. an empty `joypad_autoconfig_dir` that triggers fallback warnings).
+///
+/// Returns the underlying `fs::write` error if the rewrite fails. Callers
+/// are expected to treat that as a hard failure — previously a write error
+/// here was silently warn-logged and the launch continued against stale or
+/// half-written config, which produced "RA launches and then mysteriously
+/// freezes" reports. The orchestrator now aborts RA configuration when this
+/// returns Err, so the game either launches with the patches we intended or
+/// the user sees a visible failure rather than a degraded random one.
 pub fn patch_retroarch_cfg_with_deletions(
     cfg_path: &Path,
     overrides: &HashMap<&str, String>,
     delete_keys: &[&str],
-) {
+) -> std::io::Result<()> {
     let existing = fs::read_to_string(cfg_path).unwrap_or_default();
 
     let mut found_keys: HashMap<&str, bool> = overrides.keys().map(|k| (*k, false)).collect();
@@ -82,9 +93,7 @@ pub fn patch_retroarch_cfg_with_deletions(
 
     let content = lines.join("\n") + "\n";
 
-    if let Err(e) = fs::write(cfg_path, &content) {
-        warn!("[RETROARCH] Failed to write config {}: {e}", cfg_path.display());
-    } else {
-        debug!("[RETROARCH] Wrote config to {}", cfg_path.display());
-    }
+    fs::write(cfg_path, &content)?;
+    debug!("[RETROARCH] Wrote config to {}", cfg_path.display());
+    Ok(())
 }

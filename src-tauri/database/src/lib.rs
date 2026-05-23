@@ -14,5 +14,5 @@ pub use interface::{borrow_db_checked, borrow_db_mut_checked};
 pub use migrations::SCHEMA_VERSION;
 pub use models::data::{
     ApplicationTransientStatus, Database, DatabaseApplications, DatabaseAuth, DownloadType,
-    DownloadableMetadata, GameDownloadStatus, GameVersion, Settings,
+    DownloadableMetadata, GameDownloadStatus, GameVersion, PendingQueueEntry, Settings,
 };

@@ -1,7 +1,8 @@
 use std::{path::PathBuf, sync::Arc};
 
 use database::{
-    DownloadType, DownloadableMetadata, GameDownloadStatus, borrow_db_checked,
+    DownloadType, DownloadableMetadata, GameDownloadStatus, PendingQueueEntry, borrow_db_checked,
+    borrow_db_mut_checked,
     models::data::{InstalledGameType, UserConfiguration},
     platform::Platform,
 };
@@ -9,14 +10,23 @@ use download_manager::{
     DOWNLOAD_MANAGER, downloadable::Downloadable, error::ApplicationDownloadError,
 };
 use games::downloads::download_agent::GameDownloadAgent;
+use log::{info, warn};
 
-#[tauri::command]
-pub async fn download_game(
+/// Shared core for `download_game` (Tauri command) and `restore_pending_queue`
+/// (startup recovery). Creates a `GameDownloadAgent` from the persisted shape
+/// and queues it through the same path either caller would take.
+///
+/// `persist` controls whether the entry is appended to
+/// `DatabaseApplications::pending_queue`: `true` for fresh Tauri-command
+/// calls, `false` during restore (the entry's already there — re-appending
+/// would duplicate it on every relaunch).
+async fn enqueue_game_impl(
     game_id: String,
     version_id: String,
     target_platform: Platform,
     install_dir: usize,
     enable_updates: bool,
+    persist: bool,
 ) -> Result<(), ApplicationDownloadError> {
     let sender = { DOWNLOAD_MANAGER.get_sender().clone() };
 
@@ -53,7 +63,7 @@ pub async fn download_game(
     };
 
     let game_download_agent = GameDownloadAgent::new(
-        meta,
+        meta.clone(),
         base_dir,
         sender,
         DOWNLOAD_MANAGER.clone_depot_manager(),
@@ -69,7 +79,76 @@ pub async fn download_game(
         .await
         .map_err(|e| ApplicationDownloadError::ChannelBroken(e.to_string()))?;
 
+    if persist {
+        let mut db = borrow_db_mut_checked();
+        db.applications.pending_queue.push(PendingQueueEntry {
+            meta,
+            install_dir,
+            enable_updates,
+        });
+    }
+
     Ok(())
+}
+
+#[tauri::command]
+pub async fn download_game(
+    game_id: String,
+    version_id: String,
+    target_platform: Platform,
+    install_dir: usize,
+    enable_updates: bool,
+) -> Result<(), ApplicationDownloadError> {
+    enqueue_game_impl(
+        game_id,
+        version_id,
+        target_platform,
+        install_dir,
+        enable_updates,
+        true,
+    )
+    .await
+}
+
+/// On startup, re-queue any downloads that were still pending at last
+/// crash/exit. Each entry is fed back through the same `enqueue_game_impl`
+/// path the Tauri command uses, just without re-persisting (the entry's
+/// already in `pending_queue`). A per-entry failure is logged and skipped
+/// so one broken game can't take the whole restore down.
+///
+/// Called from `lib.rs::setup` after auth confirms the user is signed in —
+/// without a working token, `GameDownloadAgent::new` would fail to fetch
+/// manifests from the server and the restore would all-fail anyway.
+pub async fn restore_pending_queue() {
+    let entries: Vec<PendingQueueEntry> = {
+        let db = borrow_db_checked();
+        db.applications.pending_queue.clone()
+    };
+
+    if entries.is_empty() {
+        return;
+    }
+
+    info!(
+        "restoring {} pending download(s) from last session",
+        entries.len()
+    );
+
+    for entry in entries {
+        let label = format!("{}@{}", entry.meta.id, entry.meta.version);
+        if let Err(e) = enqueue_game_impl(
+            entry.meta.id,
+            entry.meta.version,
+            entry.meta.target_platform,
+            entry.install_dir,
+            entry.enable_updates,
+            false,
+        )
+        .await
+        {
+            warn!("could not restore queued download {}: {:?}", label, e);
+        }
+    }
 }
 
 #[tauri::command]

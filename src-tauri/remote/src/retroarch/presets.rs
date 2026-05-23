@@ -156,6 +156,32 @@ pub fn apply_core_quality_options(overrides: &mut HashMap<&str, String>, quality
     overrides.insert("dolphin_anti_aliasing", quoted(dolphin_aa));
     overrides.insert("dolphin_efb_access_enable", quoted(dolphin_efb_copy));
 
+    // Additional Dolphin (GameCube / Wii) image-quality knobs — Wii in
+    // particular needs more than just EFB scale to look right at modern
+    // resolutions:
+    //   * anisotropic filtering — keeps oblique-angle textures sharp at
+    //     higher internal resolutions; scales with the preset.
+    //   * force_texture_filtering — smooths nearest-neighbour textures
+    //     (skipped on Low to preserve original-look perf).
+    //   * progressive scan — Wii outputs 480p; forcing it on avoids
+    //     interlace artifacts that PAL/JP titles ship with by default.
+    let dolphin_aniso = match quality {
+        QualityPreset::Low => "1x",
+        QualityPreset::Medium => "2x",
+        QualityPreset::High => "4x",
+        QualityPreset::Ultra => "16x",
+    };
+    overrides.insert("dolphin_anisotropic_filtering", quoted(dolphin_aniso));
+    overrides.insert(
+        "dolphin_force_texture_filtering",
+        quoted(if matches!(quality, QualityPreset::Low) {
+            "disabled"
+        } else {
+            "enabled"
+        }),
+    );
+    overrides.insert("dolphin_progressive_scan", "\"enabled\"".into());
+
     // PPSSPP — texture filtering + scaling.
     let ppsspp_texfilter = match quality {
         QualityPreset::Low | QualityPreset::Medium => "Auto",

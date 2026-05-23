@@ -184,12 +184,72 @@ fn write_remap_file(remap_dir: &Path, core_name: &str, content: &str) {
     }
 }
 
+/// RetroArch hotkey buttons we deliberately do NOT bind. Autoconfig profiles
+/// regularly assign these (Home → menu_toggle, Select → screenshot, Back →
+/// rewind, etc.), and because we patch retroarch.cfg without explicitly
+/// nullifying them they end up active in-game — producing the "I pressed
+/// some random button and a shortcut fired I didn't ask for / multiple ways
+/// to activate the same thing" pattern users report. Setting each to "nul"
+/// in our cfg overrides the autoconfig-assigned value.
+///
+/// We do NOT nullify the actions we bind ourselves (`exit_emulator`,
+/// `save_state`, `load_state`, `toggle_fast_forward`, `state_slot_*`,
+/// `enable_hotkey`) — those are reasserted below.
+const UNUSED_HOTKEY_BUTTONS: &[&str] = &[
+    "input_menu_toggle_btn",
+    "input_menu_toggle_axis",
+    "input_pause_toggle_btn",
+    "input_pause_toggle_axis",
+    "input_screenshot_btn",
+    "input_screenshot_axis",
+    "input_reset_btn",
+    "input_reset_axis",
+    "input_rewind_btn",
+    "input_rewind_axis",
+    "input_grab_mouse_toggle_btn",
+    "input_audio_mute_btn",
+    "input_volume_up_btn",
+    "input_volume_down_btn",
+    "input_movie_record_toggle_btn",
+    "input_disk_eject_toggle_btn",
+    "input_disk_next_btn",
+    "input_disk_prev_btn",
+    "input_cheat_toggle_btn",
+    "input_cheat_index_plus_btn",
+    "input_cheat_index_minus_btn",
+    "input_shader_toggle_btn",
+    "input_shader_next_btn",
+    "input_shader_prev_btn",
+    "input_recording_toggle_btn",
+    "input_streaming_toggle_btn",
+    "input_runahead_toggle_btn",
+    "input_ai_service_btn",
+    "input_vrr_runloop_toggle_btn",
+    "input_fps_toggle_btn",
+    "input_overlay_next_btn",
+    "input_netplay_game_watch_btn",
+    "input_netplay_flip_players_btn",
+];
+
 /// Inserts keyboard + controller hotkey bindings into `overrides`.
 ///
 /// Keyboard hotkeys work on all platforms. Controller combos hold R3 + a
 /// button; the button indices differ by input driver, so the binding set is
 /// `cfg`-gated by OS.
+///
+/// Anything in `UNUSED_HOTKEY_BUTTONS` is nullified so autoconfig profiles
+/// can't sneak in a binding for it — without that step a controller's
+/// Home / Select / Back / Touchpad would still trigger menu_toggle /
+/// screenshot / rewind under whatever pad-specific autoconfig file
+/// matches, even though we never set those keys ourselves.
 pub fn apply_hotkey_bindings(overrides: &mut HashMap<&str, String>) {
+    // Step 1: block autoconfig from claiming hotkey buttons we don't use.
+    // Has to land BEFORE the explicit binds below so they win for the
+    // buttons we *do* claim.
+    for key in UNUSED_HOTKEY_BUTTONS {
+        overrides.insert(key, "nul".into());
+    }
+
     // Keyboard hotkeys — explicit so they survive a base config that disables
     // them: Escape=quit, F2=save, F4=load, Space=fast-forward.
     overrides.insert("input_exit_emulator", "escape".into());
@@ -224,7 +284,10 @@ pub fn apply_hotkey_bindings(overrides: &mut HashMap<&str, String>) {
         overrides.insert("input_toggle_fast_forward_axis", "+5".into()); // RT axis
         // XInput DPad isn't buttons — use F6/F7 keyboard for slot nav.
     }
-    info!("[RETROARCH] Applied hotkey bindings (keyboard + R3 controller combos)");
+    info!(
+        "[RETROARCH] Applied hotkey bindings (keyboard + R3 controller combos; {} unused hotkey buttons nullified)",
+        UNUSED_HOTKEY_BUTTONS.len()
+    );
 }
 
 /// Config keys to delete on every patch — stale settings from older Drop

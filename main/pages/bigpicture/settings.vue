@@ -221,6 +221,28 @@
                 </button>
               </div>
 
+              <!-- Cover Overlays — platform-themed box-art overlays
+                   (Wii, GameCube, DS, PS2, …) drawn over home-page tiles. -->
+              <div
+                :ref="(el: any) => registerContent(el, { onSelect: () => toggleEffect('bpm:boxArtOverlay') })"
+                class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-3"
+              >
+                <div>
+                  <p class="font-medium text-zinc-200 text-sm">Cover Overlays</p>
+                  <p class="text-zinc-500 text-xs mt-0.5">Platform-themed game cover overlays</p>
+                </div>
+                <button
+                  class="w-11 h-6 rounded-full transition-colors relative shrink-0 ml-3"
+                  :class="boxArtOverlayEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+                  @click.stop="toggleEffect('bpm:boxArtOverlay')"
+                >
+                  <div
+                    class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+                    :class="boxArtOverlayEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+                  />
+                </button>
+              </div>
+
               <!-- Screensaver -->
               <div
                 :ref="(el: any) => registerContent(el, { onSelect: () => toggleEffect('bpm:screensaver') })"
@@ -1198,6 +1220,22 @@ const crtEnabled = ref(
     : false,
 );
 
+// Default ON — keeps the existing look for users who never opened
+// settings. The home page reads the same key and listens for the
+// `bpm:boxArtOverlay` CustomEvent (below) so toggling here updates
+// the live home-page tiles without a route bounce.
+const boxArtOverlayEnabled = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("bpm:boxArtOverlay") !== "false"
+    : true,
+);
+watch(boxArtOverlayEnabled, (val) => {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("bpm:boxArtOverlay", { detail: val }),
+    );
+  }
+});
 
 const screensaverEnabled = ref(
   typeof localStorage !== "undefined"
@@ -1210,6 +1248,7 @@ const screensaverEnabled = ref(
 const effectRefs: Record<string, Ref<boolean>> = {
   "bpm:animBg": animBgEnabled,
   "bpm:crtFilter": crtEnabled,
+  "bpm:boxArtOverlay": boxArtOverlayEnabled,
   "bpm:screensaver": screensaverEnabled,
 };
 

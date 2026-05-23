@@ -127,6 +127,22 @@ impl DownloadManagerBuilder {
         meta: &DownloadableMetadata,
     ) {
         self.download_queue.pop_front();
+        // Mirror the pop into the persisted `pending_queue` so a crash
+        // doesn't restore a download that already finished/errored. Match
+        // by metadata equality, which is `(id, download_type)` per the
+        // PartialEq impl on DownloadableMetadata — exactly what the live
+        // queue uses for membership.
+        {
+            let mut db = database::borrow_db_mut_checked();
+            if let Some(pos) = db
+                .applications
+                .pending_queue
+                .iter()
+                .position(|e| &e.meta == meta)
+            {
+                db.applications.pending_queue.remove(pos);
+            }
+        }
         if self.download_agent_registry.remove(meta).is_none() {
             warn!("Attempted to remove download agent for {:?} but it was not in the registry", meta);
         }
@@ -449,6 +465,20 @@ impl DownloadManagerBuilder {
             self.set_status(DownloadManagerStatus::Empty);
 
             self.download_queue.pop_front();
+            // Mirror the pop into the persisted `pending_queue` — otherwise
+            // a cancel-then-crash leaves the entry to be restored on the
+            // next launch.
+            {
+                let mut db = database::borrow_db_mut_checked();
+                if let Some(pos) = db
+                    .applications
+                    .pending_queue
+                    .iter()
+                    .position(|e| &e.meta == meta)
+                {
+                    db.applications.pending_queue.remove(pos);
+                }
+            }
 
             self.cleanup_current_download().await;
             self.download_agent_registry.remove(meta);
@@ -459,6 +489,18 @@ impl DownloadManagerBuilder {
             if let Some(index) = index {
                 download_agent.on_cancelled(&self.app_handle);
                 let _ = self.download_queue.edit().remove(index);
+                // Same pending_queue mirror as the front-of-queue path.
+                {
+                    let mut db = database::borrow_db_mut_checked();
+                    if let Some(pos) = db
+                        .applications
+                        .pending_queue
+                        .iter()
+                        .position(|e| &e.meta == meta)
+                    {
+                        db.applications.pending_queue.remove(pos);
+                    }
+                }
                 let removed = self.download_agent_registry.remove(meta);
                 debug!(
                     "removed {:?} from queue {:?}",

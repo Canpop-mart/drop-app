@@ -7,6 +7,7 @@
       :config="config"
       :has-achievements="stats.achievements.value.length > 0"
       @reset-achievements="resetConfirmOpen = true"
+      @remove-from-library="removeConfirmOpen = true"
     />
 
     <!-- Banner, title, action buttons, stat bar. -->
@@ -170,6 +171,57 @@
     </div>
   </Transition>
 
+  <!-- Remove-from-library confirmation. -->
+  <Transition
+    enter-active-class="ease-out duration-200"
+    enter-from-class="opacity-0"
+    enter-to-class="opacity-100"
+    leave-active-class="ease-in duration-150"
+    leave-from-class="opacity-100"
+    leave-to-class="opacity-0"
+  >
+    <div
+      v-if="removeConfirmOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      @click.self="removeConfirmOpen = false"
+    >
+      <div
+        class="w-full max-w-sm rounded-xl bg-zinc-900 border border-zinc-700 shadow-2xl"
+      >
+        <div class="px-6 py-5">
+          <h3 class="text-base font-semibold font-display text-zinc-100">
+            Remove from Library
+          </h3>
+          <p class="mt-2 text-sm text-zinc-400">
+            Remove
+            <span class="text-zinc-200 font-medium">{{ game.mName }}</span>
+            from your library? Your local install isn't touched, but the
+            game won't appear in your library again until you re-add it
+            from the store.
+          </p>
+          <p v-if="removeError" class="mt-2 text-sm text-red-400">
+            {{ removeError }}
+          </p>
+        </div>
+        <div class="flex justify-end gap-3 border-t border-zinc-700 px-6 py-4">
+          <button
+            @click="removeConfirmOpen = false"
+            class="rounded-md px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            @click="executeRemoveFromLibrary"
+            :disabled="removeBusy"
+            class="rounded-md px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 transition-colors"
+          >
+            {{ removeBusy ? "Removing..." : "Remove" }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+
   <!-- Cloud save conflict resolution. -->
   <SaveConflictDialog
     v-model="saveConflictOpen"
@@ -231,6 +283,9 @@ const config = useGameConfig(game, version);
 // ── Modal / tab UI state ─────────────────────────────────────────────────
 const configureModalOpen = ref(false);
 const resetConfirmOpen = ref(false);
+const removeConfirmOpen = ref(false);
+const removeBusy = ref(false);
+const removeError = ref<string | undefined>();
 
 const detailTabs = [
   { label: "About", value: "about" },
@@ -247,6 +302,35 @@ function goToQueue() {
 async function executeResetAchievements() {
   const ok = await stats.resetAchievements();
   if (ok) resetConfirmOpen.value = false;
+}
+
+/**
+ * Remove the current game from the user's library. Mirrors the BPM detail
+ * page (DELETE /api/v1/collection/default/entry with `{ id }` body). Local
+ * install state is untouched server-side — the user is just dropping the
+ * collection entry. Route back to /library on success so the now-missing
+ * page doesn't 404 on its own data.
+ */
+async function executeRemoveFromLibrary() {
+  removeBusy.value = true;
+  removeError.value = undefined;
+  try {
+    const resp = await fetch(serverUrl("api/v1/collection/default/entry"), {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: game.id }),
+    });
+    if (!resp.ok) {
+      removeError.value = `Server returned ${resp.status} ${resp.statusText}`;
+      return;
+    }
+    removeConfirmOpen.value = false;
+    router.push("/library");
+  } catch (e) {
+    removeError.value = String(e);
+  } finally {
+    removeBusy.value = false;
+  }
 }
 
 // ── Compat test result summary ───────────────────────────────────────────

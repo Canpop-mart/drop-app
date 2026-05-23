@@ -80,7 +80,7 @@ fn set_display_resolution(width: u32, height: u32) -> Result<(u32, u32), String>
         new_mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
 
         let result = ChangeDisplaySettingsW(&mut new_mode, CDS_FULLSCREEN);
-        if result == DISP_CHANGE_SUCCESSFUL as i32 {
+        if result == DISP_CHANGE_SUCCESSFUL {
             info!("[DISPLAY] Changed resolution from {}x{} to {}x{}", old_width, old_height, width, height);
             Ok((old_width, old_height))
         } else {
@@ -1017,13 +1017,11 @@ async fn install_moonlight() -> Result<PathBuf, String> {
             Ok(exe)
         } else {
             // Try to find it in a subdirectory
-            for entry in std::fs::read_dir(&install_dir).map_err(|e| format!("{e}"))? {
-                if let Ok(entry) = entry {
-                    let candidate = entry.path().join("Moonlight.exe");
-                    if candidate.exists() {
-                        info!("[MOONLIGHT] Installed to {}", candidate.display());
-                        return Ok(candidate);
-                    }
+            for entry in std::fs::read_dir(&install_dir).map_err(|e| format!("{e}"))?.flatten() {
+                let candidate = entry.path().join("Moonlight.exe");
+                if candidate.exists() {
+                    info!("[MOONLIGHT] Installed to {}", candidate.display());
+                    return Ok(candidate);
                 }
             }
             Err("Moonlight.exe not found after extraction".to_string())
