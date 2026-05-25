@@ -43,7 +43,10 @@ pub mod scan;
 
 // Re-export every public item so existing `remote::save_sync::*` call sites in
 // the `process` crate (and elsewhere) keep compiling without edits.
-pub use api::{bulk_download, check_sync, upload_changed_saves};
+pub use api::{
+    bulk_download, check_sync, delete_cloud_save, download_cloud_save, list_cloud_saves,
+    upload_changed_saves,
+};
 pub use conflict::{apply_conflict_resolutions, extract_conflicts, snapshot_hashes};
 pub use manifest::{
     load_manifest, manifest_path, save_manifest, update_manifest_after_sync,

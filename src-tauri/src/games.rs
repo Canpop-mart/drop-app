@@ -732,6 +732,41 @@ pub fn read_pc_save_file(file_path: String) -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(&data))
 }
 
+/// List cloud saves for a game (current user). Routes through Rust so the
+/// JWT/cert auth — the only auth `defineClientEventHandler` accepts — is
+/// used; the `server://` Tauri protocol injects a `Bearer <web_token>`
+/// instead, which those endpoints 403.
+#[tauri::command]
+pub async fn list_cloud_saves(
+    game_id: String,
+) -> Result<Vec<remote::save_sync::CloudSaveMeta>, String> {
+    remote::save_sync::list_cloud_saves(&game_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Download one cloud save by id; return the decoded bytes as base64 so
+/// the frontend can forward them to `write_save_file` / `write_pc_save_file`
+/// without a second round-trip.
+#[tauri::command]
+pub async fn download_cloud_save(id: String) -> Result<String, String> {
+    let bytes = remote::save_sync::download_cloud_save(&id)
+        .await
+        .map_err(|e| e.to_string())?;
+    use base64::Engine;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
+/// Soft-delete one cloud save by id. Server records a tombstone keyed on
+/// the deleting device so other clients delete their local copy on next
+/// sync.
+#[tauri::command]
+pub async fn delete_cloud_save(id: String) -> Result<(), String> {
+    remote::save_sync::delete_cloud_save(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Resolve a PC cloud save back to its real on-disk location and write it.
 ///
 /// The frontend's per-game Cloud Saves panel hits this for `saveType == "pc"`

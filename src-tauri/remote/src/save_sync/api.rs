@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::RemoteAccessError;
 use crate::requests::{generate_url, remote_request, RemoteRequest};
 
-use super::{machine_name, LocalSaveFile, SyncCheckResponse};
+use super::{machine_name, CloudSaveMeta, LocalSaveFile, SyncCheckResponse};
 
 /// Cloud save sync responses can include large binary blobs (base64). Allow
 /// up to 512 MiB to cover archives built from many large PC save files.
@@ -231,4 +231,78 @@ pub async fn upload_changed_saves(
     }
 
     Ok((uploaded_count, errors))
+}
+
+// ── Per-save endpoints (used by the per-game Cloud Saves panel) ────────
+//
+// These three are functionally the same shape as the launch-time sync but
+// scoped to one save at a time. They live in the same module so the panel
+// gets the same JWT/cert auth (via `remote_request`) the launch flow uses
+// — the `defineClientEventHandler` server endpoints reject `Bearer
+// <web_token>` from the `server://` Tauri protocol, which is why the panel
+// can't talk to them directly via `useServerApi()`.
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OneDownloadResponse {
+    #[allow(dead_code)]
+    filename: String,
+    #[allow(dead_code)]
+    save_type: String,
+    /// base64-encoded payload
+    data: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteBody {
+    id: String,
+    uploaded_from: String,
+}
+
+/// List active (non-tombstoned) cloud saves for a game, current user.
+pub async fn list_cloud_saves(
+    game_id: &str,
+) -> Result<Vec<CloudSaveMeta>, RemoteAccessError> {
+    let url = generate_url(
+        &["/api/v1/client/saves/list"],
+        &[("gameId", game_id)],
+    )?;
+    let saves: Vec<CloudSaveMeta> = remote_request(RemoteRequest::get(url)).await?;
+    Ok(saves)
+}
+
+/// Download one cloud save by its id. Returns raw decoded bytes.
+pub async fn download_cloud_save(id: &str) -> Result<Vec<u8>, RemoteAccessError> {
+    let url = generate_url(
+        &["/api/v1/client/saves/download"],
+        &[("id", id)],
+    )?;
+    let res: OneDownloadResponse =
+        remote_request(RemoteRequest::get(url).with_json_cap(SAVE_SYNC_RESPONSE_CAP)).await?;
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(&res.data)
+        .map_err(|e| RemoteAccessError::UnparseableResponse(format!("base64 decode: {e}")))
+}
+
+/// Soft-delete one cloud save by id. The server records a tombstone with
+/// `deletedFrom = machine_name()` so other devices delete their local
+/// copy on next sync.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteResponse {
+    #[allow(dead_code)]
+    #[serde(default)]
+    deleted: bool,
+}
+
+pub async fn delete_cloud_save(id: &str) -> Result<(), RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/saves/delete"], &[])?;
+    let body = DeleteBody {
+        id: id.to_string(),
+        uploaded_from: machine_name(),
+    };
+    let _: DeleteResponse = remote_request(RemoteRequest::post(url, &body)).await?;
+    Ok(())
 }

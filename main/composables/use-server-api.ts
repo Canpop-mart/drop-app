@@ -5,6 +5,7 @@
  * Phase 6 — provides typed fetch wrappers for all BPM-relevant endpoints.
  */
 
+import { invoke } from "@tauri-apps/api/core";
 import { serverUrl } from "./use-server-fetch";
 
 // ── Store types ─────────────────────────────────────────────────────────────
@@ -374,25 +375,34 @@ export function useServerApi() {
     },
 
     saves: {
+      // The cloud-save endpoints under /api/v1/client/saves/ use
+      // defineClientEventHandler on the server, which requires the
+      // desktop client's JWT/cert auth — NOT the Bearer <web_token>
+      // that the `server://` Tauri protocol injects on `apiFetch`.
+      // We route through Tauri commands so the request gets signed
+      // with the right credentials (the same path the launch-time
+      // sync already uses).
+
       /** List cloud saves for a game (current user only). */
       list: (gameId: string) =>
-        apiFetch<CloudSaveListEntry[]>(
-          `api/v1/client/saves/list?gameId=${encodeURIComponent(gameId)}`,
-        ),
+        invoke<CloudSaveListEntry[]>("list_cloud_saves", { gameId }),
 
-      /** Download one cloud save by its id. Returns base64-encoded bytes. */
-      download: (id: string) =>
-        apiFetch<CloudSaveDownload>(
-          `api/v1/client/saves/download?id=${encodeURIComponent(id)}`,
-        ),
+      /**
+       * Download one cloud save by its id. Returns base64-encoded bytes
+       * wrapped in `{ data }` so existing call sites that destructure
+       * `const { data } = await api.saves.download(...)` keep working.
+       */
+      download: async (id: string): Promise<CloudSaveDownload> => {
+        const data = await invoke<string>("download_cloud_save", { id });
+        // filename/saveType were only ever used as a sanity echo by
+        // callers — they pass them in from the list entry. Leave them
+        // empty here; if a future caller needs them, switch the Rust
+        // command to return the full struct.
+        return { filename: "", saveType: "", data };
+      },
 
       /** Delete one cloud save by its id. */
-      delete: (id: string) =>
-        apiFetch<{ deleted: true }>("api/v1/client/saves/delete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id }),
-        }),
+      delete: (id: string) => invoke<void>("delete_cloud_save", { id }),
     },
 
     news: {
