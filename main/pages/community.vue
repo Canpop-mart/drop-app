@@ -7,6 +7,19 @@
       </p>
     </div>
 
+    <!-- Weekly recap carousel — hidden when server returns no slides -->
+    <CommunityWeeklyRecap
+      :slides="weeklyRecap"
+      @go-to-game="goToGame"
+      @go-to-user="goToUser"
+    />
+
+    <!-- Drop Time Machine — anniversary card, sibling of weekly recap. Hidden when null. -->
+    <CommunityTimeMachine :event="timeMachine" />
+
+    <!-- Personal weekly quest — hidden if endpoint returns null -->
+    <CommunityWeeklyChallenge :challenge="weeklyChallenge" />
+
     <!-- Stats row -->
     <section v-if="stats" class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
       <div
@@ -24,6 +37,15 @@
       </div>
     </section>
 
+    <!-- Around right now — hidden when no one's playing -->
+    <CommunityNowPlayingStrip :entries="nowPlaying" @go-to-game="goToGame" />
+
+    <!-- Game roulette — always rendered; component handles its own empty state. -->
+    <CommunityRoulette
+      :cover-pool="rouletteCoverPool"
+      @select="onRouletteSelect"
+    />
+
     <div class="grid grid-cols-1 lg:grid-cols-[2fr,1fr] gap-8">
       <!-- Activity feed -->
       <section>
@@ -37,75 +59,18 @@
           Loading activity...
         </div>
         <div
-          v-else-if="activity.length === 0"
+          v-else-if="clusteredActivity.length === 0"
           class="text-sm text-zinc-500 py-10 text-center"
         >
           No recent activity to show.
         </div>
         <div v-else class="space-y-2">
-          <div
-            v-for="(item, i) in activity"
-            :key="`${item.type}-${item.timestamp}-${i}`"
-            class="flex items-start gap-x-3 rounded-xl bg-zinc-800/50 backdrop-blur-sm p-3 ring-1 ring-zinc-700/40 hover:ring-blue-500/40 transition-colors"
-          >
-            <img
-              v-if="item.user.profilePictureObjectId"
-              :src="objectUrl(item.user.profilePictureObjectId)"
-              class="size-10 rounded-full object-cover shrink-0"
-            />
-            <div
-              v-else
-              class="size-10 rounded-full bg-zinc-700 flex items-center justify-center shrink-0"
-            >
-              <UserIcon class="size-5 text-zinc-500" />
-            </div>
-            <div class="flex-1 min-w-0">
-              <p class="text-sm text-zinc-300">
-                <span class="font-medium text-zinc-100">{{
-                  item.user.displayName || item.user.username
-                }}</span>
-                <template v-if="item.type === 'session'">
-                  played
-                  <button
-                    class="font-medium text-blue-400 hover:text-blue-300 transition-colors"
-                    @click="goToGame(item.game.id)"
-                  >
-                    {{ item.game.mName }}
-                  </button>
-                  <template v-if="item.data.duration">
-                    for {{ formatPlaytime(item.data.duration) }}
-                  </template>
-                </template>
-                <template v-else-if="item.type === 'achievement'">
-                  unlocked
-                  <span class="font-medium text-yellow-400">
-                    {{ item.data.achievement?.title }}
-                  </span>
-                  in
-                  <button
-                    class="font-medium text-blue-400 hover:text-blue-300 transition-colors"
-                    @click="goToGame(item.game.id)"
-                  >
-                    {{ item.game.mName }}
-                  </button>
-                </template>
-                <template v-else-if="item.type === 'request'">
-                  requested
-                  <span class="font-medium text-purple-400">{{
-                    item.data.request?.title
-                  }}</span>
-                </template>
-              </p>
-              <p class="text-xs text-zinc-500 mt-0.5">
-                {{ formatLastPlayed(item.timestamp) }}
-              </p>
-            </div>
-            <img
-              v-if="item.game.mCoverObjectId && item.type !== 'request'"
-              :src="objectUrl(item.game.mCoverObjectId)"
-              class="h-14 w-10 rounded object-cover shrink-0 hidden sm:block"
-            />
-          </div>
+          <CommunityActivityRow
+            v-for="cluster in clusteredActivity"
+            :key="cluster.key"
+            :cluster="cluster"
+            @go-to-game="goToGame"
+          />
         </div>
       </section>
 
@@ -150,8 +115,19 @@
               <UserIcon class="size-3.5 text-zinc-500" />
             </div>
             <div class="flex-1 min-w-0">
-              <p class="text-sm font-medium text-zinc-200 truncate">
-                {{ entry.user.displayName || entry.user.username }}
+              <p
+                class="text-sm font-medium text-zinc-200 truncate flex items-center gap-1"
+              >
+                <span class="truncate">{{
+                  entry.user.displayName || entry.user.username
+                }}</span>
+                <span
+                  v-if="mvp && entry.user.id === mvp.userId"
+                  :title="mvpTooltip"
+                  class="text-yellow-400 shrink-0 cursor-help"
+                  aria-label="Today's MVP"
+                  >👑</span
+                >
               </p>
               <p class="text-[10px] text-zinc-500">
                 {{ entry.playtimeHours.toLocaleString() }}h ·
@@ -179,12 +155,14 @@ import {
   type CommunityStats,
   type CommunityActivityItem,
   type LeaderboardUser,
+  type NowPlayingEntry,
+  type WeeklyRecapSlide,
+  type MvpToday,
+  type TimeMachineEvent,
+  type WeeklyChallenge,
 } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
-import {
-  formatPlaytime,
-  formatLastPlayed,
-} from "~/composables/use-recent-games";
+import { clusterActivity } from "~/composables/use-community-clusters";
 
 useHead({ title: "Community" });
 
@@ -194,8 +172,47 @@ const api = useServerApi();
 const stats = ref<CommunityStats | null>(null);
 const activity = ref<CommunityActivityItem[]>([]);
 const leaderboard = ref<LeaderboardUser[]>([]);
+const nowPlaying = ref<NowPlayingEntry[]>([]);
+const weeklyRecap = ref<WeeklyRecapSlide[]>([]);
+const mvp = ref<MvpToday | null>(null);
+const timeMachine = ref<TimeMachineEvent | null>(null);
+const weeklyChallenge = ref<WeeklyChallenge | null>(null);
 const activityLoading = ref(true);
 const leaderboardLoading = ref(true);
+
+const clusteredActivity = computed(() => clusterActivity(activity.value));
+
+// Cover pool for the roulette spin animation — covers from anything we
+// already loaded for other surfaces, so we don't pay an extra fetch just
+// to make the wheel look populated. De-duped + capped at 40.
+const rouletteCoverPool = computed(() => {
+  const pool = new Set<string>();
+  for (const a of activity.value) {
+    if (a.game?.mCoverObjectId) pool.add(a.game.mCoverObjectId);
+  }
+  for (const n of nowPlaying.value) {
+    if (n.game?.coverObjectId) pool.add(n.game.coverObjectId);
+  }
+  return [...pool].slice(0, 40);
+});
+
+function onRouletteSelect(payload: { gameId: string; owned: boolean }) {
+  // The roulette card has its own router.push; we only need to side-
+  // effect the metadata prefetch so the destination page hydrates fast.
+  // (Mirrors goToGame's invoke() pattern; safe to no-op on failure.)
+  invoke("fetch_game", { gameId: payload.gameId }).catch(() => {});
+}
+
+const mvpTooltip = computed(() => {
+  if (!mvp.value) return "";
+  // Crude session count: server doesn't return it directly, but the
+  // weight model (seconds + unlocks*600) means the tooltip is best
+  // expressed in human terms — hours played + unlocks.
+  const hours = Math.max(1, Math.round(mvp.value.sessionSeconds / 3600));
+  const playLabel =
+    mvp.value.sessionSeconds === 0 ? "no playtime" : `${hours}h playtime`;
+  return `Today's MVP — ${playLabel} · ${mvp.value.achievementsUnlocked} achievement${mvp.value.achievementsUnlocked === 1 ? "" : "s"}`;
+});
 
 const statCards = computed(() => [
   {
@@ -237,18 +254,25 @@ function goToGame(gameId: string) {
   router.push(`/store/${gameId}`);
 }
 
+function goToUser(_userId: string) {
+  // The native desktop client doesn't currently surface per-user profile
+  // pages; we just no-op here so weekly-recap slides that link to a user
+  // don't blow up. The BPM surface and the server-rendered iframe
+  // surface both have their own profile routes.
+}
+
 function rankColor(rank: number): string {
   if (rank === 1)
     return "bg-yellow-500/20 text-yellow-300 ring-1 ring-yellow-500/40";
-  if (rank === 2)
-    return "bg-zinc-400/20 text-zinc-200 ring-1 ring-zinc-400/40";
+  if (rank === 2) return "bg-zinc-400/20 text-zinc-200 ring-1 ring-zinc-400/40";
   if (rank === 3)
     return "bg-orange-700/30 text-orange-300 ring-1 ring-orange-700/40";
   return "bg-zinc-700/50 text-zinc-400";
 }
 
 onMounted(() => {
-  // Three independent fetches in parallel — none of them block the others.
+  // Independent fetches in parallel — each soft-fails so a single broken
+  // endpoint can't blank the whole page.
   api.community
     .stats()
     .then((s) => (stats.value = s))
@@ -265,5 +289,31 @@ onMounted(() => {
     .then((d) => (leaderboard.value = d.playtime))
     .catch((e) => console.warn("[community] leaderboard failed:", e))
     .finally(() => (leaderboardLoading.value = false));
+
+  api.community
+    .nowPlaying()
+    .then((n) => (nowPlaying.value = n))
+    .catch((e) => console.warn("[community] now-playing failed:", e));
+
+  api.community
+    .weeklyRecap()
+    .then((w) => (weeklyRecap.value = w))
+    .catch((e) => console.warn("[community] weekly-recap failed:", e));
+
+  // MVP + Time Machine — both soft-fail to no UI render.
+  api.community
+    .mvpToday()
+    .then((m) => (mvp.value = m))
+    .catch((e) => console.warn("[community] mvp-today failed:", e));
+
+  api.community
+    .timeMachine()
+    .then((t) => (timeMachine.value = t))
+    .catch((e) => console.warn("[community] time-machine failed:", e));
+
+  api.community
+    .weeklyChallenge()
+    .then((w) => (weeklyChallenge.value = w))
+    .catch((e) => console.warn("[community] weekly-challenge failed:", e));
 });
 </script>

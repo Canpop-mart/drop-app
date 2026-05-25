@@ -99,6 +99,126 @@ export interface LeaderboardUser {
   gamesOwned: number;
 }
 
+// Per-game community surfaces. Agent C owns the server endpoints
+// (`/api/v1/community/game/:gameId/{players,activity,firsts}`). All three
+// soft-fail at call sites — if any endpoint hasn't shipped yet, the UI
+// degrades to an empty / "no data" state rather than an error.
+
+export interface GamePlayerEntry {
+  userId: string;
+  displayName: string;
+  avatarObjectId: string | null;
+  playtimeSeconds: number;
+  achievementsUnlocked: number;
+  achievementsTotal: number;
+}
+
+export interface GameAchievementFirst {
+  achievementId: string;
+  achievementName: string;
+  achievementIconUrl: string;
+  userId: string;
+  displayName: string;
+  unlockedAt: string;
+}
+
+export interface NowPlayingEntry {
+  userId: string;
+  displayName: string;
+  avatarObjectId: string | null;
+  game: {
+    id: string;
+    name: string;
+    coverObjectId: string | null;
+  };
+  startedAt: string;
+}
+
+export interface WeeklyRecapSlide {
+  kind: string;
+  title: string;
+  subtitle: string;
+  gameId: string | null;
+  userId: string | null;
+}
+
+// ── Community: roulette & weekly-challenge ─────────────────────────────────
+
+export type RouletteSource = "rediscovery" | "library" | "social";
+
+export interface RouletteResult {
+  game: {
+    id: string;
+    name: string;
+    coverObjectId: string | null;
+    bannerObjectId: string | null;
+  };
+  source: RouletteSource;
+  /** Optional context for "social" picks — names of friends who play it. */
+  alsoPlayedBy?: Array<{
+    userId: string;
+    displayName: string;
+    avatarObjectId: string | null;
+  }>;
+}
+
+export type WeeklyChallengeKind =
+  | "play_hours"
+  | "unlock_count"
+  | "play_variety"
+  | "rediscover"
+  | "marathon"
+  | "night_owl"
+  | "new_to_you"
+  | "genre_focus"
+  | "fresh_drop";
+
+export interface WeeklyChallenge {
+  kind: WeeklyChallengeKind;
+  title: string;
+  description: string;
+  /** Target the caller is striving for. */
+  targetValue: number;
+  /** Caller's own progress toward `targetValue`. */
+  currentValue: number;
+  /** Caller's progress as a 0–100 integer (capped). */
+  percentComplete: number;
+  /** True when `currentValue >= targetValue`. */
+  completed: boolean;
+  weekStart: string;
+  weekEnd: string;
+  daysRemaining: number;
+}
+
+/**
+ * "Tonight's MVP" — once-per-day pick of the user with the most activity
+ * today (score = today_session_seconds + today_unlocks * 600). The
+ * front-end uses this to drop a small crown next to the MVP's row in the
+ * playtime leaderboard; null means no one's played yet today.
+ */
+export interface MvpToday {
+  userId: string;
+  displayName: string;
+  avatarObjectId: string | null;
+  score: number;
+  sessionSeconds: number;
+  achievementsUnlocked: number;
+  asOf: string;
+}
+
+/**
+ * "Drop Time Machine" — one "this day in history" event surfaced as a
+ * compact card on the community page. Server returns null when no
+ * candidates exist at any of the 30/90/180/365-day anniversary levels.
+ */
+export interface TimeMachineEvent {
+  kind: "anniversary_session" | "anniversary_first_play" | "anniversary_unlock";
+  daysAgo: number;
+  user: { id: string; displayName: string; avatarObjectId: string | null };
+  game: { id: string; name: string; coverObjectId: string | null };
+  detail: string;
+}
+
 // ── Profile types ──────────────────────────────────────────────────────────
 
 export interface UserProfile {
@@ -263,28 +383,28 @@ export function useServerApi() {
       /** Search/browse the store. */
       /** List all libraries (for filter UI). */
       libraries: () =>
-        apiFetch<Array<{ id: string; name: string }>>(
-          "api/v1/store/libraries",
-        ),
+        apiFetch<Array<{ id: string; name: string }>>("api/v1/store/libraries"),
 
       /** Search/browse the store. */
-      browse: (params: {
-        skip?: number;
-        take?: number;
-        q?: string;
-        tags?: string;
-        platform?: string;
-        library?: string;
-        sort?:
-          | "default"
-          | "newest"
-          | "recent"
-          | "updated"
-          | "name"
-          | "relevance"
-          | "random";
-        order?: "asc" | "desc";
-      } = {}) => {
+      browse: (
+        params: {
+          skip?: number;
+          take?: number;
+          q?: string;
+          tags?: string;
+          platform?: string;
+          library?: string;
+          sort?:
+            | "default"
+            | "newest"
+            | "recent"
+            | "updated"
+            | "name"
+            | "relevance"
+            | "random";
+          order?: "asc" | "desc";
+        } = {},
+      ) => {
         const qs = new URLSearchParams();
         if (params.skip) qs.set("skip", String(params.skip));
         if (params.take) qs.set("take", String(params.take));
@@ -317,6 +437,78 @@ export function useServerApi() {
         apiFetch<{ playtime: LeaderboardUser[] }>(
           "api/v1/community/leaderboard",
         ),
+      nowPlaying: () =>
+        apiFetch<NowPlayingEntry[]>("api/v1/community/now-playing"),
+      weeklyRecap: () =>
+        apiFetch<WeeklyRecapSlide[]>("api/v1/community/weekly-recap"),
+
+      /**
+       * "Spin to pick" — server-side roulette over the caller's library
+       * with a social-discovery fallback. Returns one game (or null) so
+       * the UI can settle on a single result. Soft-fail on the front-end.
+       */
+      roulette: () =>
+        apiFetch<RouletteResult | null>("api/v1/community/roulette"),
+
+      /**
+       * The current week's personal quest plus the *caller's* live
+       * progress. The same prompt is shown to every user on the server
+       * (one `WeeklyChallenge` row per week), but `currentValue` /
+       * `percentComplete` / `completed` are scoped to the caller. The
+       * endpoint creates the row on first GET of a new week. Returns
+       * null when no quest can be constructed (e.g. `genre_focus` on a
+       * tag-empty server).
+       */
+      weeklyChallenge: () =>
+        apiFetch<WeeklyChallenge | null>("api/v1/community/weekly-challenge"),
+
+      /**
+       * "Tonight's MVP" — at most one user, picked once per day by score
+       * (today's play seconds + today's unlocks * 600). Returns null when
+       * nobody has activity yet today. Soft-fail to no crown.
+       */
+      mvpToday: () => apiFetch<MvpToday | null>("api/v1/community/mvp-today"),
+
+      /**
+       * Drop Time Machine — one "this day in history" event picked at
+       * random from 30/90/180/365 day anniversaries. Returns null when
+       * there are no eligible events. Soft-fail to hidden card.
+       */
+      timeMachine: () =>
+        apiFetch<TimeMachineEvent | null>("api/v1/community/time-machine"),
+
+      /**
+       * Server users with any playtime on this game, ranked by playtime desc.
+       * Powers the "Friends X of 6" tile and the leaderboard inside the
+       * per-game Community tab. Owned by Agent C — soft-fail to empty list.
+       */
+      gamePlayers: (gameId: string) =>
+        apiFetch<GamePlayerEntry[]>(`api/v1/community/game/${gameId}/players`),
+
+      /**
+       * Activity feed (sessions + achievement unlocks) filtered to a single
+       * game across all users on this Drop instance. Mirrors the shape of
+       * the global activity endpoint so the same row template can be reused.
+       *
+       * Backed by the existing `community/activity` endpoint with an optional
+       * `?gameId=` filter — the server-side agent extended the existing
+       * handler rather than create a new endpoint (the spec preferred the
+       * extension to avoid endpoint proliferation).
+       */
+      gameActivity: (gameId: string, limit = 20) =>
+        apiFetch<CommunityActivityItem[]>(
+          `api/v1/community/activity?gameId=${encodeURIComponent(gameId)}&limit=${limit}`,
+        ),
+
+      /**
+       * Per-achievement "first to unlock on this server" tracking. Used by
+       * BOTH the per-game Community tab (horizontal scroll) and the existing
+       * Achievements tab (gold ring + caption on the affected rows).
+       */
+      gameFirsts: (gameId: string) =>
+        apiFetch<GameAchievementFirst[]>(
+          `api/v1/community/game/${gameId}/firsts`,
+        ),
     },
 
     profile: {
@@ -335,7 +527,11 @@ export function useServerApi() {
         apiFetch<UserShowcase>(`api/v1/user/${id}/showcase`),
 
       /** Update profile fields (display name, bio, theme). */
-      update: (data: { displayName?: string; bio?: string; profileTheme?: string }) =>
+      update: (data: {
+        displayName?: string;
+        bio?: string;
+        profileTheme?: string;
+      }) =>
         apiFetch<void>("api/v1/user/profile", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -346,10 +542,13 @@ export function useServerApi() {
       uploadAvatar: async (file: File) => {
         const form = new FormData();
         form.append("file", file);
-        return apiFetch<{ profilePictureObjectId: string }>("api/v1/user/avatar", {
-          method: "POST",
-          body: form,
-        });
+        return apiFetch<{ profilePictureObjectId: string }>(
+          "api/v1/user/avatar",
+          {
+            method: "POST",
+            body: form,
+          },
+        );
       },
 
       /** Upload banner image. Returns new object ID. */
@@ -363,7 +562,15 @@ export function useServerApi() {
       },
 
       /** Update showcase items. */
-      updateShowcase: (items: Array<{ type: string; gameId: string | null; itemId: string | null; title: string; data: any }>) =>
+      updateShowcase: (
+        items: Array<{
+          type: string;
+          gameId: string | null;
+          itemId: string | null;
+          title: string;
+          data: any;
+        }>,
+      ) =>
         apiFetch<void>("api/v1/user/showcase", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -406,13 +613,15 @@ export function useServerApi() {
     },
 
     news: {
-      list: (params: {
-        limit?: number;
-        skip?: number;
-        order?: "asc" | "desc";
-        tags?: string;
-        search?: string;
-      } = {}) => {
+      list: (
+        params: {
+          limit?: number;
+          skip?: number;
+          order?: "asc" | "desc";
+          tags?: string;
+          search?: string;
+        } = {},
+      ) => {
         const qs = new URLSearchParams();
         if (params.limit) qs.set("limit", String(params.limit));
         if (params.skip) qs.set("skip", String(params.skip));

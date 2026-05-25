@@ -163,6 +163,32 @@ pub fn delete_local_pc_save_for_tombstone(
 
 // ── Ludusavi PC save scanning ──────────────────────────────────────────
 
+/// Filenames that Ludusavi will sometimes report (typically via
+/// Unity-engine `<home>/AppData/LocalLow/<Company>/<Product>` directory
+/// matches tagged as "config") but which are NEVER actual save data:
+///
+/// * `Player.log` / `Player-prev.log` — Unity's per-run diagnostic log files
+///   that Unity rewrites on every launch.  Hashes change every session even
+///   when the user didn't save anything, so they pollute the cloud save
+///   panel and waste bandwidth.
+///
+/// Matching is case-insensitive (Windows) but only against the *exact*
+/// basename — we deliberately do not filter on substrings or extensions
+/// because real saves sometimes have `.log` in their name and there is no
+/// reliable heuristic beyond a tiny denylist.  When in doubt, keep the file.
+const PC_SAVE_BASENAME_DENYLIST: &[&str] = &["Player.log", "Player-prev.log"];
+
+/// Returns `true` if `path`'s basename matches one of the well-known
+/// non-save filenames in [`PC_SAVE_BASENAME_DENYLIST`].
+fn is_pc_save_denylisted(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    PC_SAVE_BASENAME_DENYLIST
+        .iter()
+        .any(|deny| name.eq_ignore_ascii_case(deny))
+}
+
 /// Find the Ludusavi binary (bundled in Drop's tools dir, or on PATH).
 fn find_ludusavi() -> Option<PathBuf> {
     let tools = dirs::data_dir()?.join("drop").join("tools");
@@ -300,6 +326,16 @@ pub fn scan_pc_saves(
                     if !path.is_file() {
                         continue;
                     }
+                    // Drop known non-save files (Unity diagnostic logs etc.)
+                    // that Ludusavi's directory-wildcard manifest entries pick
+                    // up alongside the real save data.
+                    if is_pc_save_denylisted(&path) {
+                        info!(
+                            "[SAVE-SYNC] Skipping denylisted PC save file: {}",
+                            path.display()
+                        );
+                        continue;
+                    }
                     let size = file_data.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
                     let hash = match md5_file(&path) {
                         Ok(h) => h,
@@ -394,6 +430,9 @@ pub fn find_pc_save_destination(
             if let Some(game_files) = game_data.get("files").and_then(|f| f.as_object()) {
                 for (file_path, _file_data) in game_files {
                     let path = PathBuf::from(file_path);
+                    if is_pc_save_denylisted(&path) {
+                        continue;
+                    }
                     if let Some(name) = path.file_name().and_then(|n| n.to_str())
                         && basenames_equal(name, basename)
                     {

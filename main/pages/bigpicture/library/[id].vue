@@ -370,6 +370,12 @@
       </div>
     </div>
 
+    <!-- Friends tile — Server users who've played this game. Sits between
+         the stats row and the tab strip, mirroring the desktop layout. -->
+    <div v-if="game" class="px-8 pt-3">
+      <GameFriendsTile :game-id="gameId" :players="gamePlayers" />
+    </div>
+
     <!-- Content tabs -->
     <div class="px-8 pt-4">
       <div class="relative flex items-center gap-1 border-b border-zinc-800/50">
@@ -475,6 +481,7 @@
               v-if="achievement.iconUrl"
               :src="achievement.iconUrl"
               class="size-12 rounded-lg bg-zinc-800"
+              :class="gameFirstsMap[achievement.id] ? 'ring-2 ring-yellow-500/70' : ''"
               referrerpolicy="no-referrer"
               loading="lazy"
               @error="onAchievementIconError"
@@ -482,6 +489,7 @@
             <div
               v-if="!achievement.iconUrl"
               class="size-12 rounded-lg bg-zinc-800 flex items-center justify-center"
+              :class="gameFirstsMap[achievement.id] ? 'ring-2 ring-yellow-500/70' : ''"
             >
               <TrophyIcon
                 class="size-6"
@@ -495,6 +503,13 @@
               <p class="text-sm text-zinc-500 truncate">
                 {{ achievement.description }}
               </p>
+              <!-- Server-first badge — only renders when this achievement
+                   was first-unlocked on this server by a known user. -->
+              <GameAchievementFirstBadge
+                v-if="gameFirstsMap[achievement.id]"
+                :first="gameFirstsMap[achievement.id]"
+                class="mt-1"
+              />
               <!-- Rarity bar -->
               <div v-if="achievement.rarity != null" class="flex items-center gap-2 mt-1.5">
                 <div class="flex-1 h-1 bg-zinc-800 rounded-full overflow-hidden">
@@ -557,6 +572,16 @@
           No screenshots available.
         </p>
       </div>
+      <!-- Community — leaderboard + activity + firsts. Shared component
+           between desktop and BPM; the page just threads in the
+           pre-fetched players/firsts lists. -->
+      <GameCommunityTab
+        v-else-if="activeTab === 'community'"
+        :game-id="gameId"
+        :players="gamePlayers"
+        :firsts="gameFirsts"
+      />
+
       <!-- Saves — gated by dev mode (also guarded here as a belt-and-braces
            in case activeTab is briefly still 'saves' when dev mode flips
            off, before the watcher resets it). -->
@@ -1423,6 +1448,7 @@ const tabs = computed(() => {
     { label: "Achievements", value: "achievements" },
     { label: "Details", value: "details" },
     { label: "Gallery", value: "gallery" },
+    { label: "Community", value: "community" },
   ];
   if (devMode.enabled.value) {
     list.push({ label: "Saves", value: "saves" });
@@ -1493,6 +1519,39 @@ function formatTimeAgo(dateStr: string): string {
 import { useBpmGameSaves } from "~/composables/bigpicture/use-bpm-game-saves";
 import BpmGameSavesTab from "~/components/bigpicture/game-detail/BpmGameSavesTab.vue";
 import BpmCloudSavesPanel from "~/components/bigpicture/BpmCloudSavesPanel.vue";
+
+// ── Community surfaces ───────────────────────────────────────────────────
+// Per-game players + first-to-unlock are fetched once and shared between
+// the Friends tile, the Community tab body, and the Achievements list
+// (which gets a gold-ring border around any achievement someone unlocked
+// first on this server). All three soft-fail to empty.
+import GameFriendsTile from "~/components/GameFriendsTile.vue";
+import GameCommunityTab from "~/components/GameCommunityTab.vue";
+import GameAchievementFirstBadge from "~/components/GameAchievementFirstBadge.vue";
+import {
+  useServerApi,
+  type GamePlayerEntry,
+  type GameAchievementFirst,
+} from "~/composables/use-server-api";
+
+const communityApi = useServerApi();
+const gamePlayers = ref<GamePlayerEntry[]>([]);
+const gameFirsts = ref<GameAchievementFirst[]>([]);
+const gameFirstsMap = computed(() => {
+  const m: Record<string, GameAchievementFirst> = {};
+  for (const f of gameFirsts.value) m[f.achievementId] = f;
+  return m;
+});
+onMounted(() => {
+  communityApi.community
+    .gamePlayers(gameId)
+    .then((p) => (gamePlayers.value = p))
+    .catch(() => (gamePlayers.value = []));
+  communityApi.community
+    .gameFirsts(gameId)
+    .then((f) => (gameFirsts.value = f))
+    .catch(() => (gameFirsts.value = []));
+});
 
 const saves = useBpmGameSaves(
   gameId,

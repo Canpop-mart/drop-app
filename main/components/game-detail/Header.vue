@@ -145,6 +145,57 @@
             />
           </div>
         </div>
+
+        <!-- Friends — server-mates who've played this game. Lives inline
+             with the other stats now (previously sat in its own row
+             below the stat bar, which made the page feel cluttered).
+             Clicking it jumps the user to the Community tab where the
+             full leaderboard lives. -->
+        <div
+          v-if="players && players.length > 0"
+          class="w-px h-4 bg-zinc-600"
+        />
+        <button
+          v-if="players"
+          type="button"
+          class="group flex items-center gap-2 text-sm rounded-md px-1.5 py-1 -mx-1.5 -my-1 hover:bg-zinc-700/40 transition-colors"
+          @click="$emit('open-community')"
+        >
+          <UsersIcon class="size-4 text-zinc-400 shrink-0" />
+          <!-- "Friends Played" disambiguates the stat — the bare "Friends 0"
+               on Date Everything! read like "you have no friends" rather
+               than "no friends have played this yet". Past tense matches
+               the data semantics (any historical playtime > 0). -->
+          <span class="text-zinc-400">Friends Played</span>
+          <span class="text-zinc-100 font-medium">
+            {{ players.length }}
+          </span>
+          <div
+            v-if="players.length > 0"
+            class="flex -space-x-1.5 ml-0.5"
+          >
+            <template v-for="p in players.slice(0, 3)" :key="p.userId">
+              <img
+                v-if="p.avatarObjectId"
+                :src="`/api/v1/object/${p.avatarObjectId}`"
+                class="size-5 rounded-full ring-2 ring-zinc-800 object-cover bg-zinc-700"
+                referrerpolicy="no-referrer"
+              />
+              <div
+                v-else
+                class="size-5 rounded-full ring-2 ring-zinc-800 bg-zinc-700 flex items-center justify-center text-[10px] font-semibold text-zinc-300"
+              >
+                {{ (p.displayName || "?")[0] }}
+              </div>
+            </template>
+            <div
+              v-if="players.length > 3"
+              class="size-5 rounded-full ring-2 ring-zinc-800 bg-zinc-700 flex items-center justify-center text-[10px] font-semibold text-zinc-300"
+            >
+              +{{ players.length - 3 }}
+            </div>
+          </div>
+        </button>
       </div>
     </div>
   </div>
@@ -165,10 +216,12 @@ import {
   CheckCircleIcon,
   ClockIcon,
   TrophyIcon,
+  UsersIcon,
   WrenchIcon,
 } from "@heroicons/vue/24/solid";
 import { InstalledType } from "~/types";
 import type { Game, GameStatus, GameVersion } from "~/types";
+import type { GamePlayerEntry } from "~/composables/use-server-api";
 import {
   formatLastPlayed,
   formatPlaytime,
@@ -183,6 +236,12 @@ const props = defineProps<{
   statsLoading: boolean;
   gameStats: GameStatsData;
   devMode: ReturnType<typeof useDevMode>;
+  // Server-mates who've played this game (any playtime > 0 or any
+  // achievement unlocked). `null` while loading; empty array == nobody.
+  // The header renders an inline Friends stat + click target only when
+  // this is non-empty — for solo games the slot stays hidden so the
+  // stat bar doesn't gain a permanently-zero row.
+  players?: GamePlayerEntry[] | null;
 }>();
 
 defineEmits<{
@@ -194,6 +253,9 @@ defineEmits<{
   (e: "options"): void;
   (e: "resume"): void;
   (e: "compat-result", outcome: unknown): void;
+  // Emitted when the inline Friends stat is clicked — the page should
+  // switch to the Community tab where the full leaderboard lives.
+  (e: "open-community"): void;
 }>();
 
 const achievementPercent = computed(() => {

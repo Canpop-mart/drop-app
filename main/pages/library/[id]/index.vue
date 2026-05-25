@@ -10,7 +10,9 @@
       @remove-from-library="removeConfirmOpen = true"
     />
 
-    <!-- Banner, title, action buttons, stat bar. -->
+    <!-- Banner, title, action buttons, stat bar (now includes the Friends
+         pill as an inline 4th stat — was previously a standalone tile
+         below the stat bar, which made the page feel cluttered). -->
     <GameDetailHeader
       :game="game"
       :status="status"
@@ -19,6 +21,7 @@
       :stats-loading="stats.statsLoading.value"
       :game-stats="stats.gameStats"
       :dev-mode="devMode"
+      :players="gamePlayers"
       @install="installCtl.openInstallFlow()"
       @launch="launchCtl.launch()"
       @queue="goToQueue()"
@@ -27,12 +30,16 @@
       @options="configureModalOpen = true"
       @resume="launchCtl.resumeDownload()"
       @compat-result="onCompatTestResult"
+      @open-community="activeDetailTab = 'community'"
     />
 
-    <!-- Tabbed content — About / Gallery / Achievements. Mirrors the BPM
-         detail page so desktop users get the same per-tab depth. -->
+    <!-- Tabbed content — About / Gallery / Achievements / Community /
+         Cloud Saves. Cloud Saves used to sit perma-visible below the
+         tabbed area, which made the page noisy on games you don't have
+         saves for; promoting it to a tab keeps the surface available
+         without competing for space. -->
     <div class="relative z-10">
-      <div class="mt-8 w-full bg-zinc-900 px-8">
+      <div class="mt-6 w-full bg-zinc-900 px-8">
         <div class="flex items-center gap-1 border-b border-zinc-700/50">
           <button
             v-for="tab in detailTabs"
@@ -74,21 +81,30 @@
             :game-name="game.mName"
           />
 
-          <!-- Achievements — ROM hash banner + list. -->
+          <!-- Achievements — ROM hash banner + list. Receives the firsts
+               map so each "server first" achievement renders a gold-ring
+               icon + caption. -->
           <GameDetailAchievements
             v-else-if="activeDetailTab === 'achievements'"
             :achievements="stats.achievements.value"
             :loading="stats.achievementsLoading.value"
             :unlocked-count="stats.achievementsUnlocked.value"
             :rom-hash-result="stats.romHashResult.value"
+            :firsts-map="gameFirstsMap"
           />
-        </div>
 
-        <!-- Cloud Saves — list, restore, delete. Sits below the tabbed
-             content so it stays accessible across tabs but doesn't compete
-             with the page's primary information. -->
-        <div class="mt-6 pb-6">
-          <CloudSavesPanel :game-id="game.id" />
+          <!-- Community — leaderboard + activity + firsts. -->
+          <GameCommunityTab
+            v-else-if="activeDetailTab === 'community'"
+            :game-id="game.id"
+            :players="gamePlayers"
+            :firsts="gameFirsts"
+          />
+
+          <CloudSavesPanel
+            v-else-if="activeDetailTab === 'saves'"
+            :game-id="game.id"
+          />
         </div>
       </div>
     </div>
@@ -258,6 +274,11 @@ import { useGameInstall } from "~/composables/game-detail/use-game-install";
 import { useGameLaunch } from "~/composables/game-detail/use-game-launch";
 import { useGameStats } from "~/composables/game-detail/use-game-stats";
 import { useGameConfig } from "~/composables/game-detail/use-game-config";
+import {
+  useServerApi,
+  type GamePlayerEntry,
+  type GameAchievementFirst,
+} from "~/composables/use-server-api";
 import type { SaveConflict } from "~/types/save-sync";
 
 const route = useRoute();
@@ -298,9 +319,38 @@ const detailTabs = [
   { label: "About", value: "about" },
   { label: "Gallery", value: "gallery" },
   { label: "Achievements", value: "achievements" },
+  { label: "Community", value: "community" },
+  { label: "Cloud Saves", value: "saves" },
 ] as const;
 const activeDetailTab =
   ref<(typeof detailTabs)[number]["value"]>("about");
+
+// ── Community surfaces ───────────────────────────────────────────────────
+// Per-game players + first-to-unlock are fetched once at the page level
+// and threaded into both the Friends tile (above the tabs), the Community
+// tab body, and the Achievements tab (which uses the firsts map to mark
+// achievements with a gold ring). Soft-fail to empty arrays so a missing
+// Agent C endpoint doesn't blank the page.
+const api = useServerApi();
+const gamePlayers = ref<GamePlayerEntry[]>([]);
+const gameFirsts = ref<GameAchievementFirst[]>([]);
+
+const gameFirstsMap = computed(() => {
+  const m: Record<string, GameAchievementFirst> = {};
+  for (const f of gameFirsts.value) m[f.achievementId] = f;
+  return m;
+});
+
+onMounted(() => {
+  api.community
+    .gamePlayers(game.id)
+    .then((p) => (gamePlayers.value = p))
+    .catch(() => (gamePlayers.value = []));
+  api.community
+    .gameFirsts(game.id)
+    .then((f) => (gameFirsts.value = f))
+    .catch(() => (gameFirsts.value = []));
+});
 
 function goToQueue() {
   router.push("/queue");

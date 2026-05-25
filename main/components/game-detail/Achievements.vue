@@ -97,6 +97,7 @@
           :class="[
             'size-9 rounded shrink-0',
             ach.unlocked ? '' : 'grayscale opacity-50',
+            firsts[ach.id] ? 'ring-2 ring-yellow-500/70' : '',
           ]"
         />
         <div
@@ -104,6 +105,7 @@
           :class="[
             'size-9 rounded shrink-0 bg-zinc-700/50 flex items-center justify-center',
             ach.unlocked ? '' : 'opacity-50',
+            firsts[ach.id] ? 'ring-2 ring-yellow-500/70' : '',
           ]"
         >
           <TrophyIcon class="size-5 text-zinc-500" />
@@ -120,6 +122,13 @@
           <p class="text-xs text-zinc-500 truncate">
             {{ ach.description }}
           </p>
+          <!-- Server-first badge — only renders when this achievement
+               appears in the firsts map. Uses the shared component. -->
+          <GameAchievementFirstBadge
+            v-if="firsts[ach.id]"
+            :first="firsts[ach.id]"
+            class="mt-0.5"
+          />
         </div>
         <div v-if="ach.unlocked" class="shrink-0">
           <CheckCircleIcon class="size-4 text-yellow-500" />
@@ -136,17 +145,27 @@
  * data + reset action come from `useGameStats` on the parent.
  */
 import { CheckCircleIcon, TrophyIcon } from "@heroicons/vue/24/solid";
+import GameAchievementFirstBadge from "~/components/GameAchievementFirstBadge.vue";
 import type {
   AchievementData,
   RomHashResult,
 } from "~/composables/game-detail/use-game-stats";
+import type { GameAchievementFirst } from "~/composables/use-server-api";
 
 const props = defineProps<{
   achievements: AchievementData[];
   loading: boolean;
   unlockedCount: number;
   romHashResult: RomHashResult | null;
+  /** Map of achievementId -> "first to unlock" record. Provided by the
+   *  page-level fetch of `community.gameFirsts(gameId)`. Defaults to {} so
+   *  the badge logic is a no-op when the endpoint hasn't shipped. */
+  firstsMap?: Record<string, GameAchievementFirst>;
 }>();
+
+const firsts = computed<Record<string, GameAchievementFirst>>(
+  () => props.firstsMap ?? {},
+);
 
 const unlockedPercent = computed(() =>
   props.achievements.length > 0
