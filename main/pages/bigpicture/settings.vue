@@ -738,6 +738,73 @@
         </div>
       </div>
 
+      <!-- ═══════ Cloud Saves ═══════ -->
+      <div
+        v-if="activeSection === 'cloudsaves'"
+        class="space-y-5 max-w-xl"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          Cloud Saves
+        </h3>
+        <p class="text-sm text-zinc-400">
+          Choose whether Drop syncs save files with your server and how this
+          device shows up in conflict prompts.
+        </p>
+
+        <!-- Sync toggle -->
+        <div
+          :ref="
+            (el: any) =>
+              registerContent(el, {
+                onSelect: () => toggleCloudSaves(),
+              })
+          "
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4"
+          @click="toggleCloudSaves()"
+        >
+          <div class="min-w-0 pr-4">
+            <p class="font-medium text-zinc-200 text-sm">
+              Sync saves to the cloud
+            </p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Upload and restore save files between devices using your Drop
+              server. Turn off to keep saves on this device only.
+            </p>
+          </div>
+          <button
+            class="w-12 h-7 rounded-full transition-colors relative shrink-0 ml-4"
+            :class="cloudSavesEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+            @click.stop="toggleCloudSaves()"
+          >
+            <div
+              class="absolute top-0.5 size-6 rounded-full bg-white shadow transition-transform"
+              :class="cloudSavesEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+            />
+          </button>
+        </div>
+
+        <!-- Device name input -->
+        <div class="bg-zinc-900/50 rounded-xl p-4 space-y-3">
+          <div>
+            <p class="font-medium text-zinc-200 text-sm">This device's name</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Shown in the conflict dialog as the machine a save came from.
+              Leave blank to use your computer's name.
+            </p>
+          </div>
+          <input
+            v-model="deviceName"
+            :ref="(el: any) => registerContent(el, {})"
+            type="text"
+            maxlength="64"
+            :placeholder="hostnamePlaceholder"
+            class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            @change="saveDeviceName"
+          />
+          <p v-if="cloudSavesSaved" class="text-xs text-green-400">Saved.</p>
+        </div>
+      </div>
+
       <!-- ═══════ Streaming ═══════ -->
       <div
         v-if="activeSection === 'streaming'"
@@ -970,6 +1037,7 @@ import { useBpmTheme, themes, type ThemeId } from "~/composables/bp-theme";
 import { useDeckMode } from "~/composables/deck-mode";
 import { useUiZoom } from "~/composables/ui-zoom";
 import { useDevMode, devLog, type DevCategory } from "~/composables/dev-mode";
+import { hostname } from "@tauri-apps/plugin-os";
 import { type Ref } from "vue";
 
 definePageMeta({ layout: "bigpicture" });
@@ -1070,6 +1138,7 @@ const sections = computed(() => {
   ];
   const tail = [
     { label: "Achievements", value: "achievements" },
+    { label: "Cloud Saves", value: "cloudsaves" },
     // Streaming is gated behind dev mode until the Sunshine/Moonlight flow
     // is hardened — see the Developer section below for the toggle.
     ...(dev.enabled.value
@@ -1191,6 +1260,70 @@ async function saveStreamingCredentials() {
   } catch (e) {
     console.error("[BPM:SETTINGS] Failed to save streaming credentials:", e);
   }
+}
+
+// ── Cloud saves ─────────────────────────────────────────────────────────────
+// Two settings live here: a master sync toggle and a friendly per-device
+// label shown in the cloud save conflict dialog. The backend (settings.rs)
+// already accepts cloudSavesEnabled (bool) and deviceName (string | null);
+// we just persist whatever the user types. When deviceName is blank the
+// backend falls back to the raw OS hostname.
+
+const cloudSavesEnabled = ref(true);
+const deviceName = ref("");
+const cloudSavesSaved = ref(false);
+const hostnamePlaceholder = ref("Auto-detected");
+
+onMounted(async () => {
+  try {
+    const settings = await invoke<Record<string, any>>("fetch_settings");
+    if (typeof settings.cloudSavesEnabled === "boolean") {
+      cloudSavesEnabled.value = settings.cloudSavesEnabled;
+    }
+    if (typeof settings.deviceName === "string") {
+      deviceName.value = settings.deviceName;
+    }
+  } catch {
+    // Defaults are fine if fetch fails.
+  }
+
+  // Surface the OS hostname as the input placeholder so the user knows
+  // what they'd inherit by leaving the field blank.
+  try {
+    const h = await hostname();
+    if (h && h.trim().length > 0) {
+      hostnamePlaceholder.value = h;
+    }
+  } catch {
+    // Keep "Auto-detected" fallback.
+  }
+});
+
+async function persistCloudSaves() {
+  try {
+    const trimmed = deviceName.value.trim();
+    await invoke("update_settings", {
+      newSettings: {
+        cloudSavesEnabled: cloudSavesEnabled.value,
+        // Send null when blank so the backend stores `None` and falls
+        // back to the OS hostname in the conflict UI.
+        deviceName: trimmed.length === 0 ? null : trimmed,
+      },
+    });
+    cloudSavesSaved.value = true;
+    setTimeout(() => { cloudSavesSaved.value = false; }, 1500);
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save cloud save settings:", e);
+  }
+}
+
+function toggleCloudSaves() {
+  cloudSavesEnabled.value = !cloudSavesEnabled.value;
+  void persistCloudSaves();
+}
+
+function saveDeviceName() {
+  void persistCloudSaves();
 }
 
 // ── Haptic feedback ─────────────────────────────────────────────────────────

@@ -20,6 +20,21 @@ pub enum ProgressType {
     Disk,
 }
 
+/// Sample interval (~250 ms) × this size = effective smoothing window.
+/// 20 samples ≈ 5 s of history — long enough that a single TCP burst (where
+/// the kernel socket buffer drains into one read of ~200 MB) washes out of
+/// the displayed average within a few seconds, short enough that the
+/// reading still tracks the real rate.
+const SPEED_WINDOW_SAMPLES: usize = 20;
+
+/// Hard cap on any single speed sample, in KB/s. 5 GB/s is well above
+/// any realistic disk + network combination Drop will ever see; anything
+/// past this is a measurement artefact (a burst read attributing several
+/// hundred MB to a sub-second window) and would drag the average to
+/// nonsense values. Clamp at the sample boundary so the rolling average
+/// stays meaningful.
+const SPEED_SAMPLE_CLAMP_KBS: usize = 5_000_000;
+
 #[derive(Clone, Debug)]
 pub struct ProgressObject {
     progress_type: ProgressType,
@@ -28,7 +43,7 @@ pub struct ProgressObject {
     start: Arc<Mutex<Instant>>,
     sender: Sender<DownloadManagerSignal>,
     bytes_last_update: Arc<AtomicUsize>,
-    rolling: RollingProgressWindow<1000>,
+    rolling: RollingProgressWindow<SPEED_WINDOW_SAMPLES>,
 }
 
 #[derive(Clone)]
@@ -128,19 +143,29 @@ impl ProgressObject {
 }
 
 pub fn spawn_update(progress: &Arc<ProgressObject>) {
+    // Many parallel chunk readers all call this on every read. Without the
+    // CAS below, every reader would observe `time_since_last_update > 250ms`
+    // and spawn calculate_update before any of them could update the
+    // timestamp. Only the first one would see the real bytes delta via
+    // bytes_last_update.swap(); the rest would record ~0 KB/s into the
+    // rolling window, diluting the displayed average by ~1/N. The CAS
+    // ensures exactly one task wins each window.
+    let now = Instant::now();
     let last_update_time = LAST_UPDATE_TIME.load(Ordering::SeqCst);
-    let time_since_last_update = Instant::now()
-        .duration_since(last_update_time)
-        .as_millis_f64();
+    let time_since_last_update = now.duration_since(last_update_time).as_millis_f64();
     if time_since_last_update < 250.0 {
+        return;
+    }
+    if LAST_UPDATE_TIME
+        .compare_exchange(last_update_time, now, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return;
     }
     tauri::async_runtime::spawn(calculate_update(progress.clone(), time_since_last_update));
 }
 
 pub async fn calculate_update(progress: Arc<ProgressObject>, time_since_last_update: f64) {
-    LAST_UPDATE_TIME.swap(Instant::now(), Ordering::SeqCst);
-
     let current_bytes_downloaded = progress.sum();
     let max = progress.get_max();
     let bytes_at_last_update = progress
@@ -150,11 +175,18 @@ pub async fn calculate_update(progress: Arc<ProgressObject>, time_since_last_upd
     let bytes_since_last_update =
         current_bytes_downloaded.saturating_sub(bytes_at_last_update) as f64;
 
-    let kilobytes_per_second = bytes_since_last_update / time_since_last_update;
+    // bytes / ms == KB / s (since 1 KB == 1000 B and 1 s == 1000 ms).
+    let kilobytes_per_second = (bytes_since_last_update / time_since_last_update) as usize;
+
+    // Clamp before pushing into the rolling window — a single absurd sample
+    // (TCP burst, clock skew, anything we didn't anticipate) shouldn't be
+    // allowed to drag the displayed average to a nonsense number. Realistic
+    // sustained speed has its own ceiling from the network and disk.
+    let clamped = kilobytes_per_second.min(SPEED_SAMPLE_CLAMP_KBS);
 
     let bytes_remaining = max.saturating_sub(current_bytes_downloaded); // bytes
 
-    progress.update_window(kilobytes_per_second as usize);
+    progress.update_window(clamped);
     push_update(&progress, bytes_remaining).await;
 }
 

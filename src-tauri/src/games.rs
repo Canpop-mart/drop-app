@@ -732,6 +732,74 @@ pub fn read_pc_save_file(file_path: String) -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(&data))
 }
 
+/// Resolve a PC cloud save back to its real on-disk location and write it.
+///
+/// The frontend's per-game Cloud Saves panel hits this for `saveType == "pc"`
+/// entries. The cloud filename comes back as `"pc/<basename>"`; we strip the
+/// prefix, look up the game name from the cache, compute the Wine prefix the
+/// same way the launch pipeline does (Linux host + Windows target +
+/// `$DATA_ROOT/pfx/{game_id}` exists), and ask Ludusavi where that basename
+/// would live on disk. Then `write_downloaded_pc_save` (which already
+/// handles `.bak` backups and missing parent dirs) does the write.
+///
+/// Errors are user-facing — they end up in the panel's per-row toast.
+#[tauri::command]
+pub fn restore_pc_cloud_save(
+    game_id: String,
+    filename: String,
+    data: String,
+) -> Result<String, String> {
+    use base64::Engine;
+
+    let basename = filename
+        .strip_prefix("pc/")
+        .ok_or_else(|| format!("Not a PC cloud save filename: {filename:?}"))?;
+
+    let game_name = remote::cache::get_cached_object::<games::library::Game>(&format!(
+        "game/{game_id}"
+    ))
+    .map(|g| g.m_name)
+    .map_err(|_| {
+        "Game metadata not cached on this device. Open the game's library page once, then retry."
+            .to_string()
+    })?;
+
+    // Wine prefix lookup mirrors `compute_wine_prefix_for` in launch.rs
+    // (private there, intentionally duplicated here to keep the launch flow
+    // contained). Only relevant on Linux; on other hosts the prefix is None
+    // and Ludusavi uses its default scan locations.
+    #[cfg(target_os = "linux")]
+    let wine_prefix = {
+        let installed = database::borrow_db_checked()
+            .applications
+            .installed_game_version
+            .get(&game_id)
+            .map(|meta| meta.target_platform);
+        match installed {
+            Some(database::platform::Platform::Windows) => {
+                let pfx = database::db::DATA_ROOT_DIR.join("pfx").join(&game_id);
+                if pfx.is_dir() { Some(pfx) } else { None }
+            }
+            _ => None,
+        }
+    };
+    #[cfg(not(target_os = "linux"))]
+    let wine_prefix: Option<std::path::PathBuf> = None;
+
+    let dest = remote::save_sync::find_pc_save_destination(
+        &game_name,
+        basename,
+        wine_prefix.as_deref(),
+    )?;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&data)
+        .map_err(|e| format!("Invalid base64: {e}"))?;
+
+    let written = remote::save_sync::write_downloaded_pc_save(&filename, &bytes, Some(&dest))?;
+    Ok(written.display().to_string())
+}
+
 /// Write base64-encoded data to a PC save file at its full path.
 /// Used for restoring individual cloud saves to their original location.
 #[tauri::command]

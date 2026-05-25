@@ -33,6 +33,15 @@ use super::{
 pub type DownloadAgent = Arc<Box<dyn Downloadable + Send + Sync>>;
 pub type CurrentProgressObject = Arc<Mutex<Option<Arc<ProgressObject>>>>;
 
+/// How long a pause/cancel/resume drain waits for the prior chunk thread to
+/// exit before force-aborting. The chunk reader checks the pause flag on
+/// every 1 MB read (download_logic.rs), so a healthy drain finishes in well
+/// under a second. The remaining budget is for a network read that's mid-
+/// flight when pause fires — once it returns (or the socket dies), the flag
+/// check exits cleanly. A genuinely stuck network read past this window
+/// gets the task aborted so the UI doesn't sit on "Pausing…" indefinitely.
+const DRAIN_TIMEOUT_SECS: u64 = 5;
+
 /*
 
 Welcome to the download manager, the most overengineered, glorious piece of bullshit.
@@ -154,7 +163,7 @@ impl DownloadManagerBuilder {
     async fn cleanup_current_download(&mut self) {
         self.active_control_flag = None;
         *lock!(self.progress) = None;
-        self.drain_previous_download(30).await;
+        self.drain_previous_download(DRAIN_TIMEOUT_SECS).await;
     }
 
     /// Wait for the prior download thread (if any) to exit. If it doesn't
@@ -162,12 +171,13 @@ impl DownloadManagerBuilder {
     /// thread drained on its own, false if it had to be aborted.
     ///
     /// Rationale: on pause, the thread's in-flight chunk futures keep
-    /// running until the next control-flag check. With `max_download_threads`
-    /// parallel chunks downloading large files, this drain can easily exceed
-    /// the prior 4s cap. When the drain times out silently, a following
-    /// resume sees stale agent state (status=Downloading, flag=Stop) and
-    /// bails out — the user clicks resume but nothing happens, needing a
-    /// second click after the orphaned thread eventually dies on its own.
+    /// running until the next control-flag check. The chunk reader checks
+    /// the flag on every 1 MB read buffer (download_logic.rs), so a drain
+    /// normally completes within ~hundreds of ms — well under the cap. A
+    /// genuinely stuck chunk (slow server, network stall) gets force-aborted
+    /// rather than blocking the UI; the partial bytes on disk are harmless
+    /// because the chunk isn't marked complete in `.dropdata` and will be
+    /// re-downloaded on resume.
     async fn drain_previous_download(&mut self, timeout_secs: u64) -> bool {
         let handle = {
             let mut download_thread_lock = lock!(self.current_download_thread);
@@ -195,7 +205,7 @@ impl DownloadManagerBuilder {
         if let Some(current_flag) = &self.active_control_flag {
             current_flag.set(DownloadThreadControlFlag::Stop);
         }
-        self.drain_previous_download(30).await
+        self.drain_previous_download(DRAIN_TIMEOUT_SECS).await
     }
 
     async fn manage_queue(mut self) -> Result<(), ()> {
@@ -274,7 +284,7 @@ impl DownloadManagerBuilder {
         //   - no active flag → fresh start, nothing to drain.
         match self.active_control_flag.as_ref().map(|f| f.get()) {
             Some(DownloadThreadControlFlag::Stop) => {
-                self.drain_previous_download(30).await;
+                self.drain_previous_download(DRAIN_TIMEOUT_SECS).await;
             }
             Some(DownloadThreadControlFlag::Go) => {
                 debug!("Go received while download already active — ignoring");

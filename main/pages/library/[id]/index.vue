@@ -83,6 +83,13 @@
             :rom-hash-result="stats.romHashResult.value"
           />
         </div>
+
+        <!-- Cloud Saves — list, restore, delete. Sits below the tabbed
+             content so it stays accessible across tabs but doesn't compete
+             with the page's primary information. -->
+        <div class="mt-6 pb-6">
+          <CloudSavesPanel :game-id="game.id" />
+        </div>
       </div>
     </div>
   </div>

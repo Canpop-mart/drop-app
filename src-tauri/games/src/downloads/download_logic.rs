@@ -139,6 +139,19 @@ pub async fn download_game_chunk(
 
         let mut remaining = file.length;
         while remaining > 0 {
+            // Check the pause flag on every read buffer (1 MB) rather than
+            // only at file boundaries. Without this, pausing a chunk that
+            // contains one large file (the common case) takes until the
+            // entire file finishes before the chunk actually stops — which
+            // for a 200 MB file on a 10 MB/s connection is a 20-second
+            // pause delay. The chunk's partial bytes already on disk are
+            // harmless: it isn't marked complete in .dropdata, so on
+            // resume it re-downloads from byte 0 and overwrites them.
+            if control_flag.get() == DownloadThreadControlFlag::Stop {
+                download_progress.set(0);
+                disk_progress.set(0);
+                return Ok(false);
+            }
             let amount = stream_reader.read(&mut read_buf[0..remaining.min(READ_BUF_LEN)]).await?;
             download_progress.add(amount);
             remaining -= amount;

@@ -110,6 +110,57 @@ pub fn write_downloaded_save(
     Ok(dest)
 }
 
+/// Delete a local emulator save (or save state) in response to a server
+/// tombstone, after backing it up to `<file>.<ext>.bak`. Returns:
+///   * `Ok(Some(path))` — the deleted file's original path,
+///   * `Ok(None)`       — no local copy existed (nothing to do),
+///   * `Err(msg)`       — backup or delete failed.
+///
+/// Mirrors [`write_downloaded_save`]'s backup convention so a user who
+/// regrets a cross-device delete can recover the bytes manually.
+pub fn delete_local_emu_save_for_tombstone(
+    emu_root: &Path,
+    game_id: &str,
+    filename: &str,
+) -> Result<Option<PathBuf>, String> {
+    let saves_base = emu_root.join("drop-saves").join(game_id);
+    // The server tombstone doesn't tell us "save" vs "state"; try both.
+    for subdir in &["saves", "states"] {
+        let candidate = saves_base.join(subdir).join(filename);
+        if candidate.is_file() {
+            let bak = candidate.with_extension(format!(
+                "{}.bak",
+                candidate.extension().unwrap_or_default().to_string_lossy()
+            ));
+            let _ = fs::copy(&candidate, &bak);
+            fs::remove_file(&candidate)
+                .map_err(|e| format!("Failed to delete tombstoned save {}: {e}", candidate.display()))?;
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
+}
+
+/// Delete a PC save in response to a server tombstone. The caller passes the
+/// resolved local path (from the manifest / `pc_save_paths` map); we don't
+/// re-scan because the file may have been already deleted by the user on this
+/// machine too. Backs up to `<file>.<ext>.bak` before unlinking.
+pub fn delete_local_pc_save_for_tombstone(
+    original_path: &Path,
+) -> Result<bool, String> {
+    if !original_path.is_file() {
+        return Ok(false);
+    }
+    let bak = original_path.with_extension(format!(
+        "{}.bak",
+        original_path.extension().unwrap_or_default().to_string_lossy()
+    ));
+    let _ = fs::copy(original_path, &bak);
+    fs::remove_file(original_path)
+        .map_err(|e| format!("Failed to delete tombstoned PC save {}: {e}", original_path.display()))?;
+    Ok(true)
+}
+
 // ── Ludusavi PC save scanning ──────────────────────────────────────────
 
 /// Find the Ludusavi binary (bundled in Drop's tools dir, or on PATH).
@@ -136,8 +187,16 @@ fn find_ludusavi() -> Option<PathBuf> {
 
 /// Scan PC game saves using Ludusavi.
 /// `game_name` is the display name to search for; `steam_app_id` is optional.
+/// `wine_prefix`, when supplied, is passed to Ludusavi via `--wine-prefix`
+/// so it scans Drop's per-game Wine prefix in addition to its default
+/// scan locations (Steam compatdata, Lutris, Heroic). On native Linux
+/// games (and on Windows hosts) pass `None` to keep the default behaviour.
 /// Returns files as `LocalSaveFile` with save_type = "pc".
-pub fn scan_pc_saves(game_name: &str, steam_app_id: Option<&str>) -> Vec<LocalSaveFile> {
+pub fn scan_pc_saves(
+    game_name: &str,
+    steam_app_id: Option<&str>,
+    wine_prefix: Option<&Path>,
+) -> Vec<LocalSaveFile> {
     let ludusavi = match find_ludusavi() {
         Some(p) => p,
         None => {
@@ -159,11 +218,32 @@ pub fn scan_pc_saves(game_name: &str, steam_app_id: Option<&str>) -> Vec<LocalSa
     });
 
     let search_name = resolved_name.as_deref().unwrap_or(game_name);
-    info!("[SAVE-SYNC] Ludusavi scanning for '{}'", search_name);
+    let wine_prefix_str = wine_prefix.map(|p| p.to_string_lossy().to_string());
+    if let Some(p) = wine_prefix_str.as_deref() {
+        info!("[SAVE-SYNC] Ludusavi scanning for '{}' (wine prefix: {})", search_name, p);
+    } else {
+        info!("[SAVE-SYNC] Ludusavi scanning for '{}'", search_name);
+    }
 
-    // Run "backup --preview --api <name>" to discover save files
+    // Build args once; injected `--wine-prefix <path>` precedes the game
+    // name so it applies to the backup subcommand.
+    let build_args = |name: &str| -> Vec<String> {
+        let mut args: Vec<String> = vec![
+            "backup".into(),
+            "--preview".into(),
+            "--api".into(),
+        ];
+        if let Some(p) = wine_prefix_str.as_deref() {
+            args.push("--wine-prefix".into());
+            args.push(p.to_string());
+        }
+        args.push(name.to_string());
+        args
+    };
+
+    // Run "backup --preview --api [--wine-prefix <path>] <name>"
     let output = std::process::Command::new(&ludusavi)
-        .args(["backup", "--preview", "--api", search_name])
+        .args(build_args(search_name))
         .output();
 
     // Retry with the original name if resolved name found nothing
@@ -175,7 +255,7 @@ pub fn scan_pc_saves(game_name: &str, steam_app_id: Option<&str>) -> Vec<LocalSa
                     game_name
                 );
                 std::process::Command::new(&ludusavi)
-                    .args(["backup", "--preview", "--api", game_name])
+                    .args(build_args(game_name))
                     .output()
             } else {
                 output
@@ -260,6 +340,74 @@ pub fn scan_pc_saves(game_name: &str, steam_app_id: Option<&str>) -> Vec<LocalSa
 
     info!("[SAVE-SYNC] Ludusavi found {} PC save files", files.len());
     files
+}
+
+/// Resolve the on-disk destination path for a PC save by basename, using
+/// Ludusavi's catalogue. Unlike [`scan_pc_saves`], this does NOT filter on
+/// `path.is_file()` — Ludusavi may report a path even when the file does
+/// not yet exist locally (typical when restoring to a fresh device after
+/// the game has been launched once, so the Wine prefix exists but the save
+/// hasn't been written yet by the game).
+///
+/// Returns `Ok(path)` for the first match, `Err(string)` if Ludusavi can't
+/// be found / fails / has no match. Matching is exact-basename, case-
+/// sensitive on Unix and case-insensitive on Windows.
+pub fn find_pc_save_destination(
+    game_name: &str,
+    basename: &str,
+    wine_prefix: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let ludusavi = find_ludusavi()
+        .ok_or_else(|| "Ludusavi is not installed on this device".to_string())?;
+
+    let wine_prefix_str = wine_prefix.map(|p| p.to_string_lossy().to_string());
+    let mut args: Vec<String> = vec!["backup".into(), "--preview".into(), "--api".into()];
+    if let Some(p) = wine_prefix_str.as_deref() {
+        args.push("--wine-prefix".into());
+        args.push(p.to_string());
+    }
+    args.push(game_name.to_string());
+
+    let output = std::process::Command::new(&ludusavi)
+        .args(&args)
+        .output()
+        .map_err(|e| format!("Failed to run Ludusavi: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Ludusavi error: {}", stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|e| format!("Failed to parse Ludusavi output: {e}"))?;
+
+    let basenames_equal = |a: &str, b: &str| -> bool {
+        if cfg!(target_os = "windows") {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    };
+
+    if let Some(games) = json.get("games").and_then(|g| g.as_object()) {
+        for (_name, game_data) in games {
+            if let Some(game_files) = game_data.get("files").and_then(|f| f.as_object()) {
+                for (file_path, _file_data) in game_files {
+                    let path = PathBuf::from(file_path);
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                        && basenames_equal(name, basename)
+                    {
+                        return Ok(path);
+                    }
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "Ludusavi knows {game_name:?} but found no save matching {basename:?}. \
+         Launch the game once on this device so its saves are populated, then try again."
+    ))
 }
 
 /// Write a downloaded PC save file back to its original location.

@@ -144,4 +144,9 @@ export type Settings = {
   maxDownloadThreads: number;
   forceOffline: boolean;
   globalMangohud?: MangoHudPreset | null;
+  /** Master toggle for cloud save sync. Defaults to true. */
+  cloudSavesEnabled?: boolean;
+  /** Friendly per-device label shown in the cloud save conflict UI.
+   * When null/empty, the backend falls back to the OS hostname. */
+  deviceName?: string | null;
 };

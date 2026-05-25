@@ -25,9 +25,16 @@ pub async fn quit(app: tauri::AppHandle) {
 
 pub async fn cleanup_and_exit(app: &AppHandle) {
     debug!("cleaning up and exiting application");
-    match DOWNLOAD_MANAGER.ensure_terminated().await {
-        Ok(()) => debug!("download manager terminated correctly"),
-        Err(_) => error!("download manager failed to terminate correctly"),
+    // Cap the graceful drain so a download stuck in kernel-mode I/O
+    // (Windows AV/filter drivers can stall socket close + file flush) does
+    // not pin the process forever. If the drain doesn't complete in 5s,
+    // fall through to app.exit() — Tauri's runtime drop forces tokio task
+    // aborts and the OS reclaims handles on process termination.
+    let drain = DOWNLOAD_MANAGER.ensure_terminated();
+    match tokio::time::timeout(std::time::Duration::from_secs(5), drain).await {
+        Ok(Ok(())) => debug!("download manager terminated correctly"),
+        Ok(Err(_)) => error!("download manager failed to terminate correctly"),
+        Err(_) => error!("download manager drain timed out after 5s; exiting anyway"),
     }
 
     app.exit(0);

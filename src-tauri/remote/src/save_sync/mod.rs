@@ -49,7 +49,9 @@ pub use manifest::{
     load_manifest, manifest_path, save_manifest, update_manifest_after_sync,
 };
 pub use scan::{
-    md5_file, scan_emu_saves, scan_pc_saves, write_downloaded_pc_save, write_downloaded_save,
+    delete_local_emu_save_for_tombstone, delete_local_pc_save_for_tombstone,
+    find_pc_save_destination, md5_file, scan_emu_saves, scan_pc_saves,
+    write_downloaded_pc_save, write_downloaded_save,
 };
 
 // ── Manifest types (persisted to disk between sessions) ────────────────
@@ -103,6 +105,27 @@ pub struct LocalSaveFile {
 pub struct SyncCheckResponse {
     pub actions: Vec<SyncAction>,
     pub cloud_only: Vec<CloudSaveMeta>,
+    /// Saves the user deleted from another device. The local copy should be
+    /// removed (after a `.bak` backup, same pattern as `write_downloaded_save`).
+    /// Defaults to empty when an older server omits the key, so the client
+    /// keeps working against pre-T5 servers.
+    #[serde(default)]
+    pub tombstones: Vec<Tombstone>,
+}
+
+/// A cross-device delete record. Surfaces in `SyncCheckResponse.tombstones`
+/// when the user soft-deleted a save from another device; this client should
+/// delete its local copy.
+#[derive(Deserialize, Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tombstone {
+    pub filename: String,
+    /// ISO 8601 timestamp of the soft-delete.
+    pub deleted_at: String,
+    /// Hostname / friendly device name that initiated the delete.
+    /// May be empty.
+    #[serde(default)]
+    pub deleted_from: String,
 }
 
 #[derive(Deserialize, Debug, Clone, Serialize)]
@@ -176,8 +199,16 @@ pub struct PreLaunchSyncResult {
 
 // ── Shared helpers ─────────────────────────────────────────────────────
 
-/// Get the local machine hostname for `uploadedFrom`.
+/// Get the device label for `uploadedFrom`. Prefers the user-configured
+/// friendly name from settings (e.g. "Marts Desktop", "Steam Deck") and
+/// falls back to the raw hostname when it is unset or blank.
 pub fn machine_name() -> String {
+    if let Some(name) = database::borrow_db_checked().settings.device_name.as_ref() {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
     gethostname::gethostname()
         .into_string()
         .unwrap_or_else(|_| "unknown".into())

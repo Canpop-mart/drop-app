@@ -1,15 +1,14 @@
+// Sass module load — must come before any other rule in the file (Sass spec).
+// bpm-themes scopes everything under `[class*="bpm-theme-"]` with !important,
+// so its rules win over Tailwind utilities regardless of source order.
+@use "./bpm-themes";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /* Console theme fonts from Google Fonts */
 @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Nunito+Sans:wght@400;600;700&family=Press+Start+2P&family=Raleway:wght@400;600;700;800&display=swap');
-
-// Sass deprecates @import (warning) but @use must precede every other rule
-// in the file — including @tailwind and the @import url(...) above. Moving
-// it up would mean restructuring the whole file's load order. Keep @import
-// for now and quiet the warning when Dart Sass 3.0 is actually imminent.
-@import "./bpm-themes.scss";
 
 html,
 body {

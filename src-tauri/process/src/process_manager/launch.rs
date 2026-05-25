@@ -428,6 +428,7 @@ impl ProcessManager<'_> {
         // snapshot the exit path diffs against to know what to upload.
         let save_snapshot = self.run_pre_launch_save_sync(
             &game_id,
+            &meta.target_platform,
             &effective_cwd,
             streaming,
         );
@@ -601,9 +602,21 @@ impl ProcessManager<'_> {
     fn run_pre_launch_save_sync(
         &self,
         game_id: &str,
+        target_platform: &Platform,
         effective_cwd: &Option<String>,
         streaming: bool,
     ) -> Option<crate::process_manager::SaveSyncSnapshot> {
+        // Global cloud-save toggle (settings.cloud_saves_enabled). When the
+        // user has cloud sync disabled we skip the entire pre-launch path —
+        // no scan, no Ludusavi, no network. The returned `None` also wires
+        // through to the exit path so post-exit upload is skipped too.
+        if !database::borrow_db_checked().settings.cloud_saves_enabled {
+            log::info!(
+                "[SAVE-SYNC] cloud_saves_enabled=false — skipping pre-launch sync for {game_id}"
+            );
+            return None;
+        }
+
         if let Some(emu_dir) = effective_cwd {
             let _ = self.app_handle.emit("launch_trace", serde_json::json!({
                 "step": "7c_save_sync_start", "game_id": game_id,
@@ -628,11 +641,26 @@ impl ProcessManager<'_> {
         )
         .ok()
         .map(|g| g.m_name)?;
+
+        // Only feed Ludusavi a `--wine-prefix` when we know one applies:
+        // Linux host + Windows target. The prefix is created at launch time
+        // (see process_handlers.rs), so on first sync it may not yet exist —
+        // in that case we omit it and let Ludusavi fall back to defaults.
+        let wine_prefix = compute_wine_prefix_for(game_id, target_platform);
+
         let _ = self.app_handle.emit("launch_trace", serde_json::json!({
-            "step": "7d_pc_save_sync_start", "game_id": game_id, "game_name": &game_name,
+            "step": "7d_pc_save_sync_start",
+            "game_id": game_id,
+            "game_name": &game_name,
+            "wine_prefix": wine_prefix.as_ref().map(|p| p.to_string_lossy().to_string()),
         }));
-        let snap =
-            save_sync_mod::sync_pc_saves(&self.app_handle, game_id, &game_name, streaming);
+        let snap = save_sync_mod::sync_pc_saves(
+            &self.app_handle,
+            game_id,
+            &game_name,
+            wine_prefix,
+            streaming,
+        );
         let _ = self.app_handle.emit("launch_trace", serde_json::json!({
             "step": "7d_pc_save_sync_done",
             "game_id": game_id,
@@ -640,6 +668,36 @@ impl ProcessManager<'_> {
         }));
         snap
     }
+}
+
+/// Compute the Wine prefix path to feed to Ludusavi, if applicable.
+///
+/// Returns `Some(path)` only when ALL of the following hold:
+///   * Host OS is Linux.
+///   * Target platform is Windows (Drop's UMU/Proton launchers).
+///   * The prefix directory actually exists on disk — the prefix is
+///     created lazily at launch time by [`crate::process_handlers`], so
+///     a first-time sync (e.g. immediately after install) may legitimately
+///     have nothing there yet. In that case we return `None` and Ludusavi
+///     falls back to its default scan locations.
+#[cfg(target_os = "linux")]
+fn compute_wine_prefix_for(
+    game_id: &str,
+    target_platform: &Platform,
+) -> Option<PathBuf> {
+    if !matches!(target_platform, Platform::Windows) {
+        return None;
+    }
+    let pfx = database::db::DATA_ROOT_DIR.join("pfx").join(game_id);
+    if pfx.is_dir() { Some(pfx) } else { None }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn compute_wine_prefix_for(
+    _game_id: &str,
+    _target_platform: &Platform,
+) -> Option<PathBuf> {
+    None
 }
 
 /// Everything `build_command` produces — the spawnable `Command` plus the

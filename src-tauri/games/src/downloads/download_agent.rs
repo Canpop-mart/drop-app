@@ -324,10 +324,19 @@ impl GameDownloadAgent {
 
         let mut outputs = Vec::new();
 
+        // Persist each successful chunk to .dropdata immediately. The old
+        // code only wrote dropdata after every chunk finished, so a crash /
+        // force-quit / power loss with 9.5/10 GB downloaded re-downloaded
+        // the entire 9.5 GB on resume. Each write is small (a few KB of
+        // bincode) and sits well below the per-chunk download cost, so the
+        // I/O is negligible compared to the bandwidth saved on resume.
+        let dropdata = &self.dropdata;
         let mut handle_output =
             |value: Result<Option<String>, ApplicationDownloadError>| match value {
                 Ok(value) => {
                     if let Some(chunk_id) = value {
+                        dropdata.set_context(chunk_id.clone(), true);
+                        dropdata.write();
                         outputs.push(chunk_id);
                     }
                     Ok(())
@@ -423,12 +432,32 @@ impl GameDownloadAgent {
             }
         }
 
+        // Collect failures without bailing early. The old code did
+        // `handle_output(value)?` which aborted on the first chunk that
+        // exhausted its retries — cancelling every other in-flight chunk
+        // in FuturesUnordered. With incremental persistence (above), the
+        // completed chunks survive, but cancelling the in-flight ones
+        // throws away minutes of bandwidth that would have succeeded.
+        // Let everything drain, then surface the combined error so the
+        // user retries against a much smaller remaining set.
+        let mut errors: Vec<ApplicationDownloadError> = Vec::new();
         while let Some(value) = chunk_completions.next().await {
-            handle_output(value)?
+            if let Err(e) = handle_output(value) {
+                errors.push(e);
+            }
         }
 
         for completed_chunk in outputs {
             completed_chunks.insert(completed_chunk, true);
+        }
+
+        if let Some(first) = errors.into_iter().next() {
+            // Pause was a legitimate exit (chunks return Ok(false), not Err),
+            // so any errors here are real failures. Surface the first — the
+            // outer manager logs and removes the agent; the user retries from
+            // the queue UI, and incremental persistence means we restart
+            // from `completed_chunks.len()` chunks ahead of where we were.
+            return Err(first);
         }
 
         let drop_data_chunks = completed_chunks

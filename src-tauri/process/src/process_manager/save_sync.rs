@@ -174,6 +174,7 @@ pub fn sync_emulator_saves(
         game_name: None,
         pre_hashes: pre_hashes.clone(),
         pc_save_paths: HashMap::new(),
+        wine_prefix: None,
     };
 
     let sync_result = match block_with_timeout(
@@ -224,6 +225,11 @@ pub fn sync_emulator_saves(
         }
     }
 
+    // Apply server tombstones: saves the user deleted from another device
+    // get removed locally (with a `.bak` backup). Runs AFTER downloads so a
+    // race where the same filename is on both lists still ends up deleted.
+    apply_emu_tombstones(emu_path, game_id, &sync_result.tombstones);
+
     // Re-scan post-download and persist the manifest.
     let updated = remote::save_sync::scan_emu_saves(emu_path, game_id);
     let mut manifest = remote::save_sync::load_manifest(game_id);
@@ -238,19 +244,28 @@ pub fn sync_emulator_saves(
         game_name: None,
         pre_hashes: remote::save_sync::snapshot_hashes(&updated),
         pc_save_paths: HashMap::new(),
+        wine_prefix: None,
     })
 }
 
 /// Pre-launch sync for a **PC/native** game discovered via Ludusavi.
-/// `game_name` is the display name Ludusavi keys on. Returns `None` if the
-/// game has no discoverable saves.
+/// `game_name` is the display name Ludusavi keys on.
+/// `wine_prefix`, when present, is forwarded to Ludusavi via `--wine-prefix`
+/// so saves under Drop's per-game prefix are visible (Linux host launching
+/// a Windows-target game). Returns `None` if the game has no discoverable
+/// saves.
 pub fn sync_pc_saves(
     app: &AppHandle,
     game_id: &str,
     game_name: &str,
+    wine_prefix: Option<PathBuf>,
     streaming: bool,
 ) -> Option<SaveSyncSnapshot> {
-    let pc_saves = remote::save_sync::scan_pc_saves(game_name, None);
+    let pc_saves = remote::save_sync::scan_pc_saves(
+        game_name,
+        None,
+        wine_prefix.as_deref(),
+    );
     if pc_saves.is_empty() {
         return None;
     }
@@ -267,6 +282,7 @@ pub fn sync_pc_saves(
         game_name: Some(game_name.to_string()),
         pre_hashes: pre_hashes.clone(),
         pc_save_paths: pc_paths.clone(),
+        wine_prefix: wine_prefix.clone(),
     };
 
     let sync_result = match block_with_timeout(
@@ -307,7 +323,16 @@ pub fn sync_pc_saves(
         }
     }
 
-    let updated = remote::save_sync::scan_pc_saves(game_name, None);
+    // Apply server tombstones for PC saves. Resolve the local path via the
+    // pre-launch scan map; if the filename isn't known locally, there's
+    // nothing to delete and we just log.
+    apply_pc_tombstones(&pc_paths, &sync_result.tombstones);
+
+    let updated = remote::save_sync::scan_pc_saves(
+        game_name,
+        None,
+        wine_prefix.as_deref(),
+    );
     let mut manifest = remote::save_sync::load_manifest(game_id);
     remote::save_sync::update_manifest_after_sync(&mut manifest, &updated, &sync_result);
     let _ = remote::save_sync::save_manifest(&manifest);
@@ -321,7 +346,89 @@ pub fn sync_pc_saves(
             .iter()
             .map(|f| (f.filename.clone(), f.path.clone()))
             .collect(),
+        wine_prefix,
     })
+}
+
+/// Apply server-issued tombstones for an emulator game. For each tombstone
+/// we back up the local file to `<file>.<ext>.bak` and unlink it. Errors are
+/// logged but don't abort the sync — best-effort, the next sync-check will
+/// surface the same tombstones if anything went wrong.
+fn apply_emu_tombstones(
+    emu_path: &std::path::Path,
+    game_id: &str,
+    tombstones: &[remote::save_sync::Tombstone],
+) {
+    if tombstones.is_empty() {
+        return;
+    }
+    info!(
+        "[SAVE-SYNC] Applying {} tombstones for emulator game {game_id}",
+        tombstones.len()
+    );
+    for t in tombstones {
+        match remote::save_sync::delete_local_emu_save_for_tombstone(
+            emu_path,
+            game_id,
+            &t.filename,
+        ) {
+            Ok(Some(path)) => info!(
+                "[SAVE-SYNC] Tombstone: deleted local save {} (deleted from '{}' at {})",
+                path.display(),
+                t.deleted_from,
+                t.deleted_at
+            ),
+            Ok(None) => info!(
+                "[SAVE-SYNC] Tombstone: no local copy of {} to delete",
+                t.filename
+            ),
+            Err(e) => warn!(
+                "[SAVE-SYNC] Tombstone: failed to delete {}: {e}",
+                t.filename
+            ),
+        }
+    }
+}
+
+/// Apply server tombstones for PC saves. Resolves each filename via the
+/// pre-scan path map; filenames the local scan didn't see are logged and
+/// skipped (the user may have already deleted them on this machine).
+fn apply_pc_tombstones(
+    pc_paths: &HashMap<String, PathBuf>,
+    tombstones: &[remote::save_sync::Tombstone],
+) {
+    if tombstones.is_empty() {
+        return;
+    }
+    info!(
+        "[SAVE-SYNC] Applying {} PC tombstones",
+        tombstones.len()
+    );
+    for t in tombstones {
+        let Some(orig) = pc_paths.get(&t.filename) else {
+            info!(
+                "[SAVE-SYNC] PC tombstone: no local copy of {} (deleted from '{}'), skipping",
+                t.filename, t.deleted_from
+            );
+            continue;
+        };
+        match remote::save_sync::delete_local_pc_save_for_tombstone(orig) {
+            Ok(true) => info!(
+                "[SAVE-SYNC] PC tombstone: deleted {} (deleted from '{}' at {})",
+                orig.display(),
+                t.deleted_from,
+                t.deleted_at
+            ),
+            Ok(false) => info!(
+                "[SAVE-SYNC] PC tombstone: {} already gone",
+                orig.display()
+            ),
+            Err(e) => warn!(
+                "[SAVE-SYNC] PC tombstone: failed to delete {}: {e}",
+                orig.display()
+            ),
+        }
+    }
 }
 
 /// Shared conflict path for both emulator and PC syncs: extract conflicts,

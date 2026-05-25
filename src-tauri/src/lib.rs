@@ -310,6 +310,7 @@ pub fn run() {
             write_save_file,
             read_pc_save_file,
             write_pc_save_file,
+            restore_pc_cloud_save,
             list_pc_game_saves,
             backup_pc_game_saves,
             restore_pc_game_saves,
@@ -599,7 +600,19 @@ pub fn run() {
                                     .expect("Failed to show window");
                             }
                             "quit" => {
-                                app.exit(0);
+                                // Route through cleanup_and_exit instead of
+                                // app.exit(0) directly. The old path left
+                                // active chunk downloads with open sockets
+                                // and file handles when Tauri started
+                                // tearing down the runtime — on Windows
+                                // that can leave the process pinned in
+                                // kernel-mode I/O waits, so Task Manager
+                                // End Task is unable to terminate it and
+                                // the user has to reboot.
+                                let app = app.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    crate::client::cleanup_and_exit(&app).await;
+                                });
                             }
 
                             _ => {

@@ -43,6 +43,7 @@
 <script setup lang="ts">
 import {
   ArrowDownTrayIcon,
+  CloudIcon,
   CodeBracketIcon,
   CubeIcon,
   HomeIcon,
@@ -100,6 +101,12 @@ const navigation = computed(() => [
     route: "/settings/achievements",
     prefix: "/settings/achievements",
     icon: TrophyIcon,
+  },
+  {
+    label: "Cloud Saves",
+    route: "/settings/cloudsaves",
+    prefix: "/settings/cloudsaves",
+    icon: CloudIcon,
   },
   // Streaming is gated behind dev mode until the Sunshine/Moonlight flow is
   // hardened for end users — see /settings/developer.

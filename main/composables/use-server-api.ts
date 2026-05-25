@@ -197,6 +197,26 @@ export interface UserShowcase {
   items: ShowcaseItem[];
 }
 
+// ── Cloud-save types ────────────────────────────────────────────────────────
+
+export interface CloudSaveListEntry {
+  id: string;
+  filename: string;
+  saveType: string;
+  size: number;
+  dataHash?: string;
+  uploadedFrom?: string | null;
+  clientModifiedAt: string;
+  uploadedAt: string;
+}
+
+export interface CloudSaveDownload {
+  filename: string;
+  saveType: string;
+  /** Base64-encoded raw bytes of the save. */
+  data: string;
+}
+
 // ── News types ──────────────────────────────────────────────────────────────
 
 export interface NewsArticle {
@@ -254,7 +274,14 @@ export function useServerApi() {
         tags?: string;
         platform?: string;
         library?: string;
-        sort?: "default" | "newest" | "recent" | "name" | "relevance" | "random";
+        sort?:
+          | "default"
+          | "newest"
+          | "recent"
+          | "updated"
+          | "name"
+          | "relevance"
+          | "random";
         order?: "asc" | "desc";
       } = {}) => {
         const qs = new URLSearchParams();
@@ -344,6 +371,28 @@ export function useServerApi() {
 
       /** Get the current user's own profile. */
       me: () => apiFetch<UserProfile>("api/v1/user"),
+    },
+
+    saves: {
+      /** List cloud saves for a game (current user only). */
+      list: (gameId: string) =>
+        apiFetch<CloudSaveListEntry[]>(
+          `api/v1/client/saves/list?gameId=${encodeURIComponent(gameId)}`,
+        ),
+
+      /** Download one cloud save by its id. Returns base64-encoded bytes. */
+      download: (id: string) =>
+        apiFetch<CloudSaveDownload>(
+          `api/v1/client/saves/download?id=${encodeURIComponent(id)}`,
+        ),
+
+      /** Delete one cloud save by its id. */
+      delete: (id: string) =>
+        apiFetch<{ deleted: true }>("api/v1/client/saves/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        }),
     },
 
     news: {

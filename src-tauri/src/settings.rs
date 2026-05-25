@@ -74,6 +74,8 @@ const ALLOWED_SETTINGS_KEYS: &[&str] = &[
     "sunshinePassword",
     "raUsername",
     "raToken",
+    "cloudSavesEnabled",
+    "deviceName",
 ];
 
 /// Max length accepted for free-form string settings. Prevents a rogue

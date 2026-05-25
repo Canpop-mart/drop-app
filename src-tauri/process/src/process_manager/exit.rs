@@ -235,12 +235,28 @@ fn spawn_post_exit_sync(
 /// Upload whatever saves changed during the session, comparing against the
 /// pre-launch snapshot, then update the local manifest.
 async fn upload_changed_saves_for(snap: &crate::process_manager::SaveSyncSnapshot) {
+    // Belt-and-braces gate. The pre-launch path already short-circuits when
+    // cloud_saves_enabled=false (no snapshot is produced), so this branch is
+    // normally unreachable — but if a snapshot was created and the user
+    // toggled the setting off mid-session, we honour that here too.
+    if !database::borrow_db_checked().settings.cloud_saves_enabled {
+        info!(
+            "[SAVE-SYNC] cloud_saves_enabled=false — skipping post-exit upload for {}",
+            snap.game_id
+        );
+        return;
+    }
+
     let mut current_saves = Vec::new();
     if let Some(emu_root) = &snap.emu_root {
         current_saves.extend(remote::save_sync::scan_emu_saves(emu_root, &snap.game_id));
     }
     if let Some(name) = &snap.game_name {
-        current_saves.extend(remote::save_sync::scan_pc_saves(name, None));
+        current_saves.extend(remote::save_sync::scan_pc_saves(
+            name,
+            None,
+            snap.wine_prefix.as_deref(),
+        ));
     }
 
     match remote::save_sync::upload_changed_saves(

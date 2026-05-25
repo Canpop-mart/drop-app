@@ -90,6 +90,10 @@ pub struct SaveSyncSnapshot {
     pub pre_hashes: HashMap<String, String>,
     /// Map of filename → original disk path (for PC saves from Ludusavi).
     pub pc_save_paths: HashMap<String, PathBuf>,
+    /// Drop's per-game Wine prefix (Linux + Windows-target games only).
+    /// Passed to Ludusavi via `--wine-prefix` so the exit-path re-scan can
+    /// see saves under Drop's prefix, not just Steam/Lutris/Heroic defaults.
+    pub wine_prefix: Option<PathBuf>,
 }
 
 /// One launchable configuration of a game, surfaced to the frontend so the

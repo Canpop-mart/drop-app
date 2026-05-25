@@ -322,6 +322,16 @@ pub mod data {
             /// via Debug.
             #[serde(default)]
             pub ra_token: String,
+            /// Global on/off switch for cloud save sync. When false, the
+            /// pre-launch sync check and post-exit upload are both skipped.
+            /// Defaults to true so existing users keep their current behaviour.
+            #[serde(default = "default_true")]
+            pub cloud_saves_enabled: bool,
+            /// Friendly per-device label shown in the cloud save conflict UI
+            /// (`uploadedFrom`). When `None` or empty, falls back to the raw
+            /// hostname. Defaults to `None` for new installs.
+            #[serde(default)]
+            pub device_name: Option<String>,
         }
 
         // Manual Debug impl: redact the Sunshine password so it never leaks
@@ -351,12 +361,18 @@ pub mod data {
                             "<redacted>"
                         },
                     )
+                    .field("cloud_saves_enabled", &self.cloud_saves_enabled)
+                    .field("device_name", &self.device_name)
                     .finish()
             }
         }
 
         fn default_sunshine_username() -> String {
             "sunshine".to_string()
+        }
+
+        fn default_true() -> bool {
+            true
         }
 
         impl Default for Settings {
@@ -370,6 +386,8 @@ pub mod data {
                     sunshine_password: String::new(),
                     ra_username: String::new(),
                     ra_token: String::new(),
+                    cloud_saves_enabled: default_true(),
+                    device_name: None,
                 }
             }
         }

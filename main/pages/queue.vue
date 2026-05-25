@@ -1,36 +1,79 @@
 <template>
   <div class="bg-zinc-950 p-4 min-h-full space-y-4">
+    <!-- Header: pause/resume + speed stats + history graph -->
     <div
-      class="h-16 overflow-hidden relative rounded-xl flex flex-row border border-zinc-900"
+      class="h-16 overflow-hidden relative rounded-xl flex flex-row items-stretch border border-zinc-900 bg-zinc-900"
     >
-      <div
-        class="bg-zinc-900 z-10 w-32 flex flex-col gap-x-2 font-display items-left justify-center pl-2"
+      <button
+        v-if="queue.queue.length > 0"
+        @click="togglePause"
+        :disabled="transitioning !== null"
+        :aria-label="isPaused ? 'Resume downloads' : 'Pause downloads'"
+        class="w-16 flex-shrink-0 z-10 flex items-center justify-center border-r border-zinc-800 transition-colors disabled:cursor-wait"
+        :class="
+          transitioning !== null
+            ? 'bg-zinc-800 text-zinc-500'
+            : isPaused
+              ? 'bg-green-600 hover:bg-green-500 text-white'
+              : 'hover:bg-zinc-800 text-zinc-200'
+        "
       >
-        <span class="font-bold text-zinc-100"
-          >{{ formatKilobytes(stats.speed) }}B/s</span
-        >
-        <span class="text-xs text-zinc-400"
-          >{{ formatTime(stats.time) }} left</span
-        >
+        <ArrowPathIcon v-if="transitioning !== null" class="size-6 animate-spin" />
+        <PlayIcon v-else-if="isPaused" class="size-6" />
+        <PauseIcon v-else class="size-6" />
+      </button>
+      <div
+        class="z-10 flex flex-col justify-center px-3 min-w-[140px] font-display"
+      >
+        <span class="font-bold text-zinc-100">
+          {{ headerPrimary }}
+        </span>
+        <span class="text-xs text-zinc-400">
+          {{ headerSecondary }}
+        </span>
       </div>
-      <div
-        class="absolute inset-0 h-full flex flex-row items-end justify-end space-x-[1px]"
-      >
+      <div class="flex-1 relative">
         <div
-          v-for="bar in speedHistory"
-          :style="{ height: `${(bar / speedMax) * 100}%` }"
-          class="w-[3px] bg-blue-600 rounded-t-full"
-        />
+          class="absolute inset-0 h-full flex flex-row items-end justify-end space-x-[1px] pointer-events-none"
+        >
+          <div
+            v-for="bar in speedHistory"
+            :style="{ height: `${(bar / speedMax) * 100}%` }"
+            class="w-[3px] bg-blue-600 rounded-t-full"
+          />
+        </div>
       </div>
     </div>
     <draggable v-model="queue.queue" @end="onEnd">
-      <template #item="{ element }: ListIterable">
+      <template #item="{ element, index: qIdx }: ListIterable">
         <li
           v-if="games[element.meta.id]"
           :key="element.meta.id"
           class="mb-4 bg-zinc-900 rounded-lg flex flex-row justify-between gap-x-6 py-5 px-4"
+          :class="{ 'opacity-60': isCancelling(element.meta.id) }"
         >
           <div class="w-full flex items-center max-w-md gap-x-4 relative">
+            <div
+              v-if="queue.queue.length > 1"
+              class="flex flex-col gap-1 flex-shrink-0 z-10"
+            >
+              <button
+                :disabled="qIdx === 0 || isCancelling(element.meta.id)"
+                aria-label="Move up in queue"
+                class="size-6 inline-flex items-center justify-center rounded bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                @click.stop="reorderDownload(qIdx, qIdx - 1)"
+              >
+                <ChevronUpIcon class="size-4" />
+              </button>
+              <button
+                :disabled="qIdx === queue.queue.length - 1 || isCancelling(element.meta.id)"
+                aria-label="Move down in queue"
+                class="size-6 inline-flex items-center justify-center rounded bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                @click.stop="reorderDownload(qIdx, qIdx + 1)"
+              >
+                <ChevronDownIcon class="size-4" />
+              </button>
+            </div>
             <img
               class="size-24 flex-none bg-zinc-800 object-cover rounded"
               :src="games[element.meta.id].cover"
@@ -51,7 +94,7 @@
           <div class="flex shrink-0 items-center gap-x-4">
             <div class="hidden sm:flex sm:flex-col sm:items-end">
               <p class="text-md text-zinc-500 uppercase font-display font-bold">
-                {{ element.status }}
+                {{ itemStatusLabel(element) }}
               </p>
               <div
                 v-if="element.dl_progress"
@@ -99,8 +142,22 @@
                 ><ServerIcon class="size-5"
               /></span>
             </div>
-            <button @click="() => cancelGame(element.meta)" class="group">
+            <button
+              @click="() => cancelGame(element.meta)"
+              :disabled="isCancelling(element.meta.id)"
+              :aria-label="
+                isCancelling(element.meta.id)
+                  ? 'Cancelling download'
+                  : 'Cancel download'
+              "
+              class="group disabled:cursor-wait"
+            >
+              <ArrowPathIcon
+                v-if="isCancelling(element.meta.id)"
+                class="size-8 flex-none text-zinc-400 animate-spin"
+              />
               <XMarkIcon
+                v-else
                 class="transition size-8 flex-none text-zinc-600 group-hover:text-zinc-300"
                 aria-hidden="true"
               />
@@ -120,7 +177,16 @@
 </template>
 
 <script setup lang="ts">
-import { ServerIcon, XMarkIcon, CloudIcon } from "@heroicons/vue/20/solid";
+import {
+  ServerIcon,
+  XMarkIcon,
+  CloudIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
+  PlayIcon,
+  PauseIcon,
+  ArrowPathIcon,
+} from "@heroicons/vue/20/solid";
 import { invoke } from "@tauri-apps/api/core";
 import { type DownloadableMetadata, type Game, type GameStatus } from "~/types";
 
@@ -141,7 +207,65 @@ const speedMax = computed(() => {
 });
 const previousGameId = useState<string | undefined>("previous_game");
 
-type ListIterable = { element: (typeof queue.value.queue)[0] };
+const isPaused = computed(() => queue.value?.status === "Paused");
+
+// Optimistic transition state. The backend's drain (download_manager_builder.rs)
+// can take a few seconds between the user clicking Pause/Resume and the queue
+// status flipping — without local feedback, the UI looks frozen. We set this
+// to "pausing"/"resuming" on click and clear it as soon as the queue status
+// reaches the expected terminal state. A safety timeout clears it after 8s
+// so a stuck backend can't permanently disable the button.
+const transitioning = ref<"pausing" | "resuming" | null>(null);
+let transitionTimer: ReturnType<typeof setTimeout> | null = null;
+function startTransition(kind: "pausing" | "resuming") {
+  transitioning.value = kind;
+  if (transitionTimer) clearTimeout(transitionTimer);
+  transitionTimer = setTimeout(() => {
+    transitioning.value = null;
+    transitionTimer = null;
+  }, 8000);
+}
+function clearTransitionIfMatches(targetStatus: "Paused" | "Downloading") {
+  if (transitioning.value === null) return;
+  const expected =
+    transitioning.value === "pausing" ? "Paused" : "Downloading";
+  if (expected === targetStatus) {
+    transitioning.value = null;
+    if (transitionTimer) {
+      clearTimeout(transitionTimer);
+      transitionTimer = null;
+    }
+  }
+}
+
+// Same idea for cancel — between clicking X and the queue item disappearing,
+// we want a visible spinner. Track per-meta-id so multiple cancels look right.
+const cancelling = ref<Set<string>>(new Set());
+function isCancelling(id: string): boolean {
+  return cancelling.value.has(id);
+}
+const cancelTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+const headerPrimary = computed(() => {
+  if (transitioning.value === "pausing") return "Pausing…";
+  if (transitioning.value === "resuming") return "Resuming…";
+  if (isPaused.value) return "Paused";
+  return `${formatKilobytes(stats.value.speed)}B/s`;
+});
+const headerSecondary = computed(() => {
+  if (transitioning.value !== null) return "working on it";
+  if (isPaused.value) return "click ▶ to resume";
+  return `${formatTime(stats.value.time)} left`;
+});
+
+function itemStatusLabel(el: (typeof queue.value.queue)[number]): string {
+  if (isCancelling(el.meta.id)) return "Cancelling…";
+  if (transitioning.value === "pausing") return "Pausing…";
+  if (transitioning.value === "resuming") return "Resuming…";
+  return el.status;
+}
+
+type ListIterable = { element: (typeof queue.value.queue)[0]; index: number };
 
 const games: Ref<{
   [key: string]: { game: Game; status: Ref<GameStatus>; cover: string };
@@ -176,6 +300,23 @@ function checkReset(v: QueueState) {
 watch(queue, (v) => {
   loadGamesForQueue(v);
   checkReset(v);
+
+  // Clear pause/resume transition once the backend agrees.
+  if (v?.status === "Paused") clearTransitionIfMatches("Paused");
+  else if (v?.status === "Downloading") clearTransitionIfMatches("Downloading");
+
+  // Clear cancel state for any items that have left the queue.
+  const liveIds = new Set(v.queue.map((q) => q.meta.id));
+  for (const id of cancelling.value) {
+    if (!liveIds.has(id)) {
+      cancelling.value.delete(id);
+      const t = cancelTimers.get(id);
+      if (t) {
+        clearTimeout(t);
+        cancelTimers.delete(id);
+      }
+    }
+  }
 });
 
 watch(stats, (v) => {
@@ -209,8 +350,54 @@ async function onEnd(event: { oldIndex: number; newIndex: number }) {
   });
 }
 
+async function reorderDownload(oldIndex: number, newIndex: number) {
+  if (newIndex < 0 || newIndex >= queue.value.queue.length) return;
+  try {
+    await invoke("move_download_in_queue", { oldIndex, newIndex });
+  } catch (e) {
+    console.error("Failed to reorder download:", e);
+  }
+}
+
+async function togglePause() {
+  if (transitioning.value !== null) return;
+  try {
+    if (isPaused.value) {
+      startTransition("resuming");
+      await invoke("resume_downloads");
+    } else {
+      startTransition("pausing");
+      await invoke("pause_downloads");
+    }
+  } catch (e) {
+    transitioning.value = null;
+    if (transitionTimer) {
+      clearTimeout(transitionTimer);
+      transitionTimer = null;
+    }
+    console.error("Failed to toggle pause:", e);
+  }
+}
+
 async function cancelGame(meta: DownloadableMetadata) {
-  await invoke("cancel_game", { meta });
+  if (cancelling.value.has(meta.id)) return;
+  cancelling.value.add(meta.id);
+  // Safety: if the queue never updates (backend wedged), drop the spinner
+  // after 8s so the user can try again.
+  const t = setTimeout(() => {
+    cancelling.value.delete(meta.id);
+    cancelTimers.delete(meta.id);
+  }, 8000);
+  cancelTimers.set(meta.id, t);
+
+  try {
+    await invoke("cancel_game", { meta });
+  } catch (e) {
+    cancelling.value.delete(meta.id);
+    clearTimeout(t);
+    cancelTimers.delete(meta.id);
+    console.error("Failed to cancel download:", e);
+  }
 }
 
 function formatTime(seconds: number): string {
@@ -229,4 +416,10 @@ function formatTime(seconds: number): string {
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m`;
 }
+
+onUnmounted(() => {
+  if (transitionTimer) clearTimeout(transitionTimer);
+  for (const t of cancelTimers.values()) clearTimeout(t);
+  cancelTimers.clear();
+});
 </script>

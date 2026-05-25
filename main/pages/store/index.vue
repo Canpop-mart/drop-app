@@ -492,7 +492,13 @@ const browseLoading = ref(false);
 const searchInput = ref("");
 const searchQuery = ref("");
 const heroIndex = ref(0);
-const browseSort = ref<"default" | "newest" | "name" | "recent">("default");
+// "Newest" was dropped: it sorted by Game.mReleased (the metadata provider's
+// original release date) which gives wrong answers for remakes/remasters
+// and isn't what users actually want here. The two useful axes are
+// "Recently added" (Game.created — when admins added it to this Drop) and
+// "Recently updated" (max version.created — when the catalogue last changed
+// for this game). Default to Recently added.
+const browseSort = ref<"recent" | "updated" | "name">("recent");
 
 // ── Filter state ──────────────────────────────────────────────────────────
 //
@@ -523,10 +529,13 @@ const emulatedOptions = [
   { label: "ROM", value: "rom" as const },
 ];
 
+// Each chip maps 1:1 onto a column / aggregate on the server.
+//   recent  = Game.created            → "added to this Drop"
+//   updated = max(versions.created)   → "catalogue entry last changed"
+//   name    = Game.mName              → alphabetical
 const sortOptions = [
-  { label: "Default", value: "default" as const },
-  { label: "Newest", value: "newest" as const },
-  { label: "Recently updated", value: "recent" as const },
+  { label: "Recently added", value: "recent" as const },
+  { label: "Recently updated", value: "updated" as const },
   { label: "A–Z", value: "name" as const },
 ];
 
@@ -775,8 +784,12 @@ async function loadFeaturedData() {
         .trending(7, 7)
         .then((d) => d.results)
         .catch(() => [] as TrendingGame[]),
+      // "Recently Added" shelf — sort by Game.created (when admins added
+       // it here), not Game.mReleased. The mReleased-based "newest" sort
+       // gave wrong answers because metadata providers report a remaster's
+       // original 2011 release date for its 2023 re-release, etc.
       api.store
-        .browse({ sort: "newest", take: 14 })
+        .browse({ sort: "recent", take: 14 })
         .then((d) => d.results)
         .catch(() => [] as StoreGame[]),
     ]);

@@ -569,6 +569,15 @@
       />
     </div>
 
+    <!-- Cloud Saves — list / restore / delete. Lives outside the tab strip
+         so it stays visible on every tab, parallel to the desktop layout. -->
+    <div class="px-8 pb-6">
+      <BpmCloudSavesPanel
+        :game-id="gameId"
+        :register-action="registerAction"
+      />
+    </div>
+
     <!-- Recommended games -->
     <div v-if="recommendedGames.length > 0" class="px-8 pb-6">
       <h3 class="text-sm font-semibold mb-3" style="color: var(--bpm-muted)">YOU MIGHT ALSO LIKE</h3>
@@ -1483,6 +1492,7 @@ function formatTimeAgo(dateStr: string): string {
 // <BpmGameSavesTab> component, which takes this `saves` object as a prop.
 import { useBpmGameSaves } from "~/composables/bigpicture/use-bpm-game-saves";
 import BpmGameSavesTab from "~/components/bigpicture/game-detail/BpmGameSavesTab.vue";
+import BpmCloudSavesPanel from "~/components/bigpicture/BpmCloudSavesPanel.vue";
 
 const saves = useBpmGameSaves(
   gameId,
