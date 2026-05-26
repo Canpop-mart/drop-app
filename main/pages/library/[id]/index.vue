@@ -21,7 +21,7 @@
       :stats-loading="stats.statsLoading.value"
       :game-stats="stats.gameStats"
       :dev-mode="devMode"
-      :players="gamePlayers"
+      :players="friendsExcludingMe"
       @install="installCtl.openInstallFlow()"
       @launch="launchCtl.launch()"
       @queue="goToQueue()"
@@ -61,45 +61,80 @@
         </div>
 
         <div class="pt-6 pb-2">
-          <!-- About — the rendered description. -->
+          <!-- About — description + gallery, both as collapsible
+               sections.  Gallery used to live as its own tab; folded
+               into About now since the two are sibling "background
+               about the game" surfaces. -->
           <div
             v-if="activeDetailTab === 'about'"
-            class="bg-zinc-800/50 rounded-xl backdrop-blur-sm overflow-hidden"
+            class="space-y-4"
           >
-            <div class="px-6 py-5">
+            <CollapsibleSection title="Description">
               <div
                 v-html="htmlDescription"
                 class="prose prose-invert prose-blue max-w-none"
               />
-            </div>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              v-if="game.mImageCarouselObjectIds.length > 0"
+              title="Gallery"
+              :badge="`${game.mImageCarouselObjectIds.length} images`"
+            >
+              <GameDetailGallery
+                :image-ids="game.mImageCarouselObjectIds"
+                :game-name="game.mName"
+              />
+            </CollapsibleSection>
           </div>
 
-          <!-- Gallery — image carousel + fullscreen viewer. -->
-          <GameDetailGallery
-            v-else-if="activeDetailTab === 'gallery'"
-            :image-ids="game.mImageCarouselObjectIds"
-            :game-name="game.mName"
-          />
-
-          <!-- Achievements — ROM hash banner + list. Receives the firsts
-               map so each "server first" achievement renders a gold-ring
-               icon + caption. -->
-          <GameDetailAchievements
-            v-else-if="activeDetailTab === 'achievements'"
-            :achievements="stats.achievements.value"
-            :loading="stats.achievementsLoading.value"
-            :unlocked-count="stats.achievementsUnlocked.value"
-            :rom-hash-result="stats.romHashResult.value"
-            :firsts-map="gameFirstsMap"
-          />
-
-          <!-- Community — leaderboard + activity + firsts. -->
-          <GameCommunityTab
+          <!-- Community — two-column layout.  Main column holds the
+               achievement list (the meat of the tab); the sidebar
+               column carries the wider community signal (leaderboard
+               + first-to-unlock + recent activity).  Every section is
+               a collapsible so users can fold away what they don't
+               want to see. -->
+          <div
             v-else-if="activeDetailTab === 'community'"
-            :game-id="game.id"
-            :players="gamePlayers"
-            :firsts="gameFirsts"
-          />
+            class="grid xl:grid-cols-[1fr_360px] gap-4"
+          >
+            <div class="min-w-0 space-y-4">
+              <CollapsibleSection
+                title="Achievements"
+                :badge="
+                  stats.achievements.value.length > 0
+                    ? `${stats.achievementsUnlocked.value} / ${stats.achievements.value.length}`
+                    : undefined
+                "
+              >
+                <GameDetailAchievements
+                  :achievements="stats.achievements.value"
+                  :loading="stats.achievementsLoading.value"
+                  :unlocked-count="stats.achievementsUnlocked.value"
+                  :rom-hash-result="stats.romHashResult.value"
+                  :firsts-map="gameFirstsMap"
+                />
+              </CollapsibleSection>
+            </div>
+            <aside class="space-y-4 min-w-0">
+              <CollapsibleSection
+                title="Leaderboard"
+                :badge="
+                  gamePlayers.length > 0
+                    ? `${gamePlayers.length} ${
+                        gamePlayers.length === 1 ? 'player' : 'players'
+                      }`
+                    : undefined
+                "
+              >
+                <GameCommunityTab
+                  :game-id="game.id"
+                  :players="gamePlayers"
+                  :firsts="gameFirsts"
+                />
+              </CollapsibleSection>
+            </aside>
+          </div>
 
           <CloudSavesPanel
             v-else-if="activeDetailTab === 'saves'"
@@ -315,10 +350,13 @@ const removeConfirmOpen = ref(false);
 const removeBusy = ref(false);
 const removeError = ref<string | undefined>();
 
+// Achievements + community used to be two separate tabs; they're now
+// stacked under "Community" since the achievement list is itself a
+// community signal (your progress vs server firsts). Gallery used to
+// be its own tab too but is now folded into About as a sibling
+// collapsible.
 const detailTabs = [
   { label: "About", value: "about" },
-  { label: "Gallery", value: "gallery" },
-  { label: "Achievements", value: "achievements" },
   { label: "Community", value: "community" },
   { label: "Cloud Saves", value: "saves" },
 ] as const;
@@ -341,6 +379,20 @@ const gameFirstsMap = computed(() => {
   return m;
 });
 
+// Track the current user's id so we can drop ourselves from the
+// "Friends Played" tile — "friends" doesn't include "me". The community
+// leaderboard (which DOES include the caller) keeps the full list.
+const myUserId = ref<string | null>(null);
+
+// Same list with the caller filtered out — drives the Friends Played
+// header chip. Empty until `myUserId` resolves, at which point the
+// computed re-runs and the chip count drops by one if needed.
+const friendsExcludingMe = computed(() =>
+  myUserId.value
+    ? gamePlayers.value.filter((p) => p.userId !== myUserId.value)
+    : gamePlayers.value,
+);
+
 onMounted(() => {
   api.community
     .gamePlayers(game.id)
@@ -350,6 +402,12 @@ onMounted(() => {
     .gameFirsts(game.id)
     .then((f) => (gameFirsts.value = f))
     .catch(() => (gameFirsts.value = []));
+  // Resolve `me` once; soft-fail because the page works without it
+  // (the friends chip just won't strip the caller from its count).
+  api.profile
+    .me()
+    .then((me) => (myUserId.value = me.id))
+    .catch(() => (myUserId.value = null));
 });
 
 function goToQueue() {

@@ -11,8 +11,11 @@
     </div>
 
     <template v-else>
-      <!-- Hero banner — falls back to cover-on-gradient when no banner. -->
-      <div class="relative w-full aspect-[21/8] overflow-hidden">
+      <!-- Hero banner — slimmer (21:9, matches the store-index hero
+           ratio) so the body content sits above the fold on standard
+           laptop displays. Falls back to a flat gradient when no
+           banner is provided. -->
+      <div class="relative w-full aspect-[21/9] overflow-hidden">
         <img
           v-if="gameRef.mBannerObjectId"
           :src="useObject(gameRef.mBannerObjectId)"
@@ -23,15 +26,19 @@
           v-else
           class="absolute inset-0 bg-gradient-to-br from-zinc-800 to-zinc-900"
         />
+        <!-- Softer gradient masks. The bottom drop is the heaviest
+             (so the title is always readable), the side drop is
+             lighter so banner art shows through on the right. -->
         <div
-          class="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/60 to-transparent"
+          class="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/40 to-transparent"
         />
         <div
-          class="absolute inset-0 bg-gradient-to-r from-zinc-950/80 via-transparent to-transparent"
+          class="absolute inset-0 bg-gradient-to-r from-zinc-950/60 via-transparent to-transparent"
         />
 
-        <!-- Back button — top-left, matches the gear icon position on the
-             library detail page so the muscle-memory transfer is clean. -->
+        <!-- Back button — top-left, matches the gear icon position on
+             the library detail page so the muscle-memory transfer
+             is clean. -->
         <button
           class="absolute top-4 left-4 z-10 rounded-lg p-2 bg-zinc-900/60 backdrop-blur-sm text-zinc-100 hover:bg-zinc-900/80 transition-colors"
           @click="router.back()"
@@ -39,10 +46,13 @@
           <ArrowLeftIcon class="size-5" />
         </button>
 
-        <!-- Title block over the banner. -->
-        <div class="absolute bottom-0 inset-x-0 p-10 max-w-5xl">
+        <!-- Title block. Dropped from 5xl → 4xl so it has more
+             breathing room beside the short description. Padded
+             right so it doesn't fight any future top-right hero
+             chrome. -->
+        <div class="absolute bottom-0 inset-x-0 p-8 sm:p-10 max-w-5xl">
           <h1
-            class="text-5xl font-display font-bold text-zinc-100 drop-shadow-lg mb-2"
+            class="text-4xl font-display font-bold text-zinc-100 drop-shadow-lg mb-2"
           >
             {{ gameRef.mName }}
           </h1>
@@ -118,6 +128,7 @@
               v-html="htmlDescription"
             />
           </section>
+
         </div>
 
         <!-- Right column — action panel + metadata. Sticky on lg+ so it
@@ -221,6 +232,124 @@
               </p>
             </div>
           </div>
+
+          <!-- Achievements — sidebar variant. The previous full-width
+               version dominated the page; here a denser 4-col grid sits
+               beside the cover/CTA stack, leaving the main column for
+               description + gallery. -->
+          <div
+            v-if="achievementsLoading || achievements.length > 0"
+            class="rounded-xl bg-zinc-900/50 ring-1 ring-zinc-800/60 p-4 space-y-3"
+          >
+            <div class="flex items-baseline justify-between">
+              <p class="text-zinc-500 uppercase tracking-widest text-[10px]">
+                Achievements
+              </p>
+              <span
+                v-if="achievements.length > 0"
+                class="text-[11px] text-zinc-400 tabular-nums"
+              >
+                {{ unlockedCount }} / {{ achievements.length }}
+              </span>
+            </div>
+
+            <!-- Progress bar — slimmer than the main-column variant so
+                 it sits cleanly under the count line. -->
+            <div
+              v-if="achievements.length > 0"
+              class="h-1 bg-zinc-800 rounded-full overflow-hidden"
+            >
+              <div
+                class="h-full bg-yellow-500/80 rounded-full transition-all duration-500"
+                :style="{ width: `${unlockedPercent}%` }"
+              />
+            </div>
+
+            <!-- Loading skeleton — 4×4 grid of pulse tiles so the
+                 layout doesn't jump when the data arrives. -->
+            <div
+              v-if="achievementsLoading"
+              class="grid grid-cols-4 gap-1.5"
+            >
+              <div
+                v-for="i in 12"
+                :key="i"
+                class="aspect-square rounded bg-zinc-800/60 animate-pulse"
+              />
+            </div>
+
+            <!-- Icon grid. 4 cols at ~60px each fits the 320px sidebar
+                 with the padding budget. Locked icons fall back to a
+                 grayscale unlocked icon when no locked variant ships. -->
+            <div
+              v-else
+              class="grid grid-cols-4 gap-1.5"
+            >
+              <div
+                v-for="ach in visibleAchievements"
+                :key="ach.id"
+                class="group relative aspect-square rounded overflow-hidden bg-zinc-800/60 ring-1 ring-zinc-700/40"
+                :title="achievementTooltip(ach)"
+              >
+                <img
+                  v-if="ach.unlocked && ach.iconUrl"
+                  :src="ach.iconUrl"
+                  :alt="ach.title"
+                  class="w-full h-full object-cover"
+                />
+                <img
+                  v-else-if="!ach.unlocked && ach.iconLockedUrl"
+                  :src="ach.iconLockedUrl"
+                  :alt="ach.title"
+                  class="w-full h-full object-cover"
+                />
+                <img
+                  v-else-if="ach.iconUrl"
+                  :src="ach.iconUrl"
+                  :alt="ach.title"
+                  class="w-full h-full object-cover grayscale opacity-40"
+                />
+                <div
+                  v-else
+                  class="w-full h-full flex items-center justify-center"
+                >
+                  <TrophyIcon class="size-3.5 text-zinc-600" />
+                </div>
+
+                <!-- Unlocked dot — smaller in the sidebar variant to
+                     match the smaller tile. -->
+                <div
+                  v-if="ach.unlocked"
+                  class="absolute top-0.5 right-0.5 size-3 rounded-full bg-yellow-500 flex items-center justify-center shadow"
+                >
+                  <CheckIcon class="size-2 text-zinc-950" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Disclosure toggle — chevron flips on expand. Keeps the
+                 same affordance as the rest of the page's collapsible
+                 sections instead of mixing a one-way 'Show all' link
+                 with the closeable-elsewhere pattern. -->
+            <button
+              v-if="
+                !achievementsLoading &&
+                achievements.length > ACHIEVEMENTS_PREVIEW
+              "
+              class="w-full flex items-center justify-between text-xs text-zinc-400 hover:text-zinc-200 transition-colors py-1"
+              @click="achievementsExpanded = !achievementsExpanded"
+            >
+              <span>{{
+                achievementsExpanded
+                  ? "Show fewer"
+                  : `Show all ${achievements.length}`
+              }}</span>
+              <ChevronDownIcon
+                class="size-3.5 transition-transform"
+                :class="{ 'rotate-180': achievementsExpanded }"
+              />
+            </button>
+          </div>
         </aside>
       </div>
     </template>
@@ -246,13 +375,19 @@ import {
   ArrowLeftIcon,
   ArrowPathIcon,
   CheckIcon,
+  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   PlusIcon,
 } from "@heroicons/vue/24/outline";
+import { TrophyIcon } from "@heroicons/vue/24/solid";
 import { micromark } from "micromark";
 import { useGame } from "~/composables/game";
-import { useServerApi, type StoreGame } from "~/composables/use-server-api";
+import {
+  useServerApi,
+  type StoreAchievement,
+  type StoreGame,
+} from "~/composables/use-server-api";
 import {
   rewriteDescriptionImages,
   serverUrl,
@@ -275,6 +410,47 @@ const currentImage = ref(0);
 const inLibrary = ref<boolean | null>(null);
 const libraryActionLoading = ref(false);
 const libraryError = ref<string | null>(null);
+
+// Achievements — preview-only fetch via the games.achievements binding.
+// Each row already carries the caller's unlock state so we don't have
+// to round-trip a second time for membership checks. Preview cap is
+// tuned for the sidebar grid (4 cols × 4 rows of small tiles); the
+// "Show all" link expands to the full list inline.
+const ACHIEVEMENTS_PREVIEW = 16;
+const achievements = ref<StoreAchievement[]>([]);
+const achievementsLoading = ref(false);
+const achievementsExpanded = ref(false);
+
+const unlockedCount = computed(
+  () => achievements.value.filter((a) => a.unlocked).length,
+);
+const unlockedPercent = computed(() =>
+  achievements.value.length > 0
+    ? (unlockedCount.value / achievements.value.length) * 100
+    : 0,
+);
+const visibleAchievements = computed(() =>
+  achievementsExpanded.value
+    ? achievements.value
+    : achievements.value.slice(0, ACHIEVEMENTS_PREVIEW),
+);
+
+/** Tooltip string for an achievement tile.  Composes title +
+ *  description + unlocked timestamp / rarity so a quick hover gives
+ *  the user the whole picture without an inline panel. */
+function achievementTooltip(ach: StoreAchievement): string {
+  const parts: string[] = [ach.title];
+  if (ach.description) parts.push(ach.description);
+  if (ach.unlocked && ach.unlockedAt) {
+    const d = new Date(ach.unlockedAt);
+    if (!Number.isNaN(d.getTime())) {
+      parts.push(`Unlocked ${d.toLocaleDateString()}`);
+    }
+  } else if (ach.rarity > 0) {
+    parts.push(`${ach.rarity.toFixed(1)}% of players have this`);
+  }
+  return parts.join(" — ");
+}
 
 // Game descriptions are authored in Markdown and may embed server-relative
 // image URLs. Render to HTML via micromark, then rewrite image `src`
@@ -307,6 +483,22 @@ async function loadStoreMeta() {
     storeMeta.value = res.results.find((g) => g.id === gameId.value) ?? null;
   } catch (e) {
     console.warn("[store/[id]] failed to load store meta:", e);
+  }
+}
+
+/** Per-game achievement list with the caller's unlock state baked in.
+ *  Soft-fails to an empty list so the section hides cleanly when the
+ *  endpoint isn't available (no provider linked, network down, etc.). */
+async function loadAchievements() {
+  if (!gameId.value) return;
+  achievementsLoading.value = true;
+  try {
+    achievements.value = await api.games.achievements(gameId.value);
+  } catch (e) {
+    console.warn("[store/[id]] failed to load achievements:", e);
+    achievements.value = [];
+  } finally {
+    achievementsLoading.value = false;
   }
 }
 
@@ -366,10 +558,11 @@ function prevImage() {
 
 onMounted(async () => {
   await load();
-  // Run the store metadata + library-membership fetches in parallel so
-  // the page paints fast.
+  // Kick off the remaining fetches in parallel — none of them block
+  // first paint of the hero + about block, so we keep them independent.
   loadStoreMeta();
   checkInLibrary();
+  loadAchievements();
 });
 
 // Watch gameId for navigation between different store/[id] pages without
@@ -380,8 +573,11 @@ watch(gameId, async () => {
   currentImage.value = 0;
   inLibrary.value = null;
   libraryError.value = null;
+  achievements.value = [];
+  achievementsExpanded.value = false;
   await load();
   loadStoreMeta();
   checkInLibrary();
+  loadAchievements();
 });
 </script>

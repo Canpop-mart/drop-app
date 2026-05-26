@@ -1,10 +1,46 @@
 <template>
   <div class="h-16 bg-zinc-950 flex flex-row justify-between">
     <div class="flex flex-row grow items-center pl-5 pr-2 py-3">
-      <div class="inline-flex items-center gap-x-10">
+      <div class="inline-flex items-center gap-x-6">
         <NuxtLink to="/store">
           <Wordmark class="h-8 mb-0.5" />
         </NuxtLink>
+        <!-- Browser-style back / forward arrows. The composable backs
+             onto window.history.state.position so the buttons disable
+             cleanly at the ends of the session history — clicking
+             "back" on the first page is a no-op, not a confusing
+             flash. Sits between the wordmark and the nav links for
+             the same reading order browser chrome uses. -->
+        <div class="flex items-center gap-1">
+          <button
+            class="rounded-md p-1.5 transition-colors"
+            :class="
+              navHistory.canGoBack.value
+                ? 'text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100'
+                : 'text-zinc-700 cursor-not-allowed'
+            "
+            :disabled="!navHistory.canGoBack.value"
+            aria-label="Go back"
+            title="Back"
+            @click="navHistory.back()"
+          >
+            <ChevronLeftIcon class="size-5" />
+          </button>
+          <button
+            class="rounded-md p-1.5 transition-colors"
+            :class="
+              navHistory.canGoForward.value
+                ? 'text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100'
+                : 'text-zinc-700 cursor-not-allowed'
+            "
+            :disabled="!navHistory.canGoForward.value"
+            aria-label="Go forward"
+            title="Forward"
+            @click="navHistory.forward()"
+          >
+            <ChevronRightIcon class="size-5" />
+          </button>
+        </div>
         <nav class="inline-flex items-center mt-0.5">
           <ol class="inline-flex items-center gap-x-6">
             <NuxtLink
@@ -55,14 +91,20 @@
 
 <script setup lang="ts">
 import { BellIcon, UserGroupIcon, BugAntIcon } from "@heroicons/vue/16/solid";
-import { ArrowsPointingOutIcon } from "@heroicons/vue/24/outline";
+import {
+  ArrowsPointingOutIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+} from "@heroicons/vue/24/outline";
 import { AppStatus, type NavigationItem, type QuickActionNav } from "../types";
 import HeaderWidget from "./HeaderWidget.vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useBigPictureMode } from "~/composables/big-picture";
+import { useNavHistory } from "~/composables/use-nav-history";
 
 const window = getCurrentWindow();
 const state = useAppState();
+const navHistory = useNavHistory();
 
 const navigation: Array<NavigationItem> = [
   {

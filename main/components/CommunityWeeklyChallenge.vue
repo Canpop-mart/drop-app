@@ -1,50 +1,46 @@
 <template>
-  <section v-if="challenge" class="mb-8">
-    <div class="flex items-baseline gap-2 mb-3">
-      <h2 class="text-lg font-display font-semibold text-zinc-100">
-        Your weekly quest
-      </h2>
-      <span class="text-xs text-zinc-500">{{ daysSuffix }}</span>
-    </div>
-
-    <div
-      class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-amber-900/30 via-zinc-900/70 to-orange-900/20 ring-1 ring-amber-500/25 px-5 py-5"
-    >
-      <div class="flex items-center gap-5">
-        <div
-          class="shrink-0 size-12 sm:size-14 rounded-full bg-amber-500/15 ring-1 ring-amber-400/40 flex items-center justify-center"
-        >
-          <component :is="kindIcon" class="size-6 text-amber-300" />
-        </div>
-
-        <div class="flex-1 min-w-0">
-          <p
-            class="text-base sm:text-lg font-display font-semibold text-zinc-100 leading-snug truncate"
-          >
+  <div
+    v-if="challenge"
+    class="rounded-xl bg-zinc-800/50 ring-1 ring-zinc-700/40 px-4 py-3 hover:ring-amber-500/40 transition"
+  >
+    <div class="flex items-center gap-3">
+      <div
+        class="shrink-0 size-9 rounded-full bg-amber-500/15 flex items-center justify-center"
+      >
+        <component :is="kindIcon" class="size-4 text-amber-300" />
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-baseline justify-between gap-2">
+          <p class="text-sm font-medium text-zinc-100 truncate">
             {{ challenge.title }}
-          </p>
-          <p class="text-xs text-zinc-400 mt-0.5 line-clamp-2">
-            {{ challenge.description }}
-          </p>
-
-          <!-- Progress bar — `currentValue` is the CALLER's progress. -->
-          <div class="mt-3 flex items-center gap-3">
-            <div
-              class="relative h-2 flex-1 rounded-full bg-zinc-800/80 overflow-hidden"
+            <span class="text-zinc-500 font-normal"
+              >— {{ challenge.description }}</span
             >
-              <div
-                class="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-amber-500 to-orange-400 transition-[width] duration-700 ease-out"
-                :style="{ width: `${challenge.percentComplete}%` }"
-              />
-            </div>
-            <p class="text-xs font-medium text-zinc-300 tabular-nums shrink-0">
-              {{ formatCurrent }} / {{ formatTarget }}
-            </p>
+          </p>
+          <span class="text-[10px] text-zinc-500 shrink-0 tabular-nums">{{
+            daysSuffix
+          }}</span>
+        </div>
+        <!-- Progress bar — amber is the only accent. Surface itself stays
+             neutral so the card visually matches the activity rows. -->
+        <div class="mt-2 flex items-center gap-3">
+          <div
+            class="relative h-1.5 flex-1 rounded-full bg-zinc-900 overflow-hidden"
+          >
+            <div
+              class="absolute inset-y-0 left-0 rounded-full bg-amber-500/80 transition-[width] duration-700 ease-out"
+              :style="{ width: `${challenge.percentComplete}%` }"
+            />
           </div>
+          <p
+            class="text-[11px] font-medium text-zinc-400 tabular-nums shrink-0"
+          >
+            {{ formatCurrent }} / {{ formatTarget }}
+          </p>
         </div>
       </div>
     </div>
-  </section>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -98,8 +94,8 @@ const daysSuffix = computed(() => {
   if (!props.challenge) return "";
   const d = props.challenge.daysRemaining;
   if (d <= 0) return "ends today";
-  if (d === 1) return "1 day left";
-  return `${d} days left`;
+  if (d === 1) return "1d left";
+  return `${d}d left`;
 });
 
 // `play_hours` and `genre_focus` measure in whole hours; everything else

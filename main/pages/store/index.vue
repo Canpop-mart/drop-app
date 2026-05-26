@@ -1,19 +1,23 @@
 <template>
-  <!-- Wide container — the store is the desktop landing, so it should use
-       the full window width rather than getting boxed into a centred
-       max-w-7xl strip. xl padding keeps the grid from running edge-to-edge
-       on ultrawide displays. -->
+  <!-- Wide outer container — keeps horizontal padding on ultrawide
+       displays. The header + Featured-tab content are individually
+       capped to 1600px inside; Browse is intentionally left
+       full-width because its tile grid wants the screen real estate. -->
   <div class="w-full px-10 xl:px-14 py-6">
-    <!-- Header — title + tabs -->
-    <div class="mb-6">
-      <h1 class="text-2xl font-display font-bold text-zinc-100">Store</h1>
-      <p class="mt-1 text-sm text-zinc-400">
-        Browse and add games to your library.
-      </p>
-    </div>
+    <!-- Header column — capped to the same 1600px as the Featured
+         body so the title / tabs / search bar align with the hero
+         and cards instead of stretching across the full viewport. -->
+    <div class="mx-auto max-w-[1600px]">
+      <!-- Header — title + tabs -->
+      <div class="mb-6">
+        <h1 class="text-2xl font-display font-bold text-zinc-100">Store</h1>
+        <p class="mt-1 text-sm text-zinc-400">
+          Browse and add games to your library.
+        </p>
+      </div>
 
-    <!-- Top bar: tab nav + search/select toggle -->
-    <div class="flex items-center gap-2 mb-6 border-b border-zinc-700/50">
+      <!-- Top bar: tab nav + search/select toggle -->
+      <div class="flex items-center gap-2 mb-6 border-b border-zinc-700/50">
       <button
         v-for="tab in tabs"
         :key="tab.value"
@@ -36,7 +40,9 @@
 
       <!-- Search box — visible on both tabs, but only the Browse tab acts on
            it for filtered results. Submitting from Featured switches to
-           Browse and runs the query. -->
+           Browse and runs the query. Clear-X appears once the user has
+           typed something so they can wipe the field (and the active
+           query) without selecting + deleting. -->
       <div class="relative">
         <MagnifyingGlassIcon
           class="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-zinc-500 pointer-events-none"
@@ -45,10 +51,20 @@
           v-model="searchInput"
           type="text"
           placeholder="Search the store..."
-          class="rounded-lg border border-zinc-700 bg-zinc-800/50 pl-9 pr-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:bg-zinc-800 focus:ring-2 focus:ring-blue-500 outline-none transition-colors w-72"
+          class="rounded-lg border border-zinc-700 bg-zinc-800/50 pl-9 pr-9 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:bg-zinc-800 focus:ring-2 focus:ring-blue-500 outline-none transition-colors w-72"
           @keydown.enter="submitSearch"
+          @keydown.escape="clearSearch"
         />
+        <button
+          v-if="searchInput.length > 0"
+          class="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700/50 transition-colors"
+          aria-label="Clear search"
+          @click="clearSearch"
+        >
+          <XMarkIcon class="size-3.5" />
+        </button>
       </div>
+    </div>
     </div>
 
     <!-- Loading skeleton on first load only -->
@@ -64,11 +80,21 @@
     </div>
 
     <!-- ═══ Featured tab ═══ -->
-    <template v-else-if="activeTab === 'featured'">
+    <!-- Cap the whole Featured column to a centred 1600px so the
+         hero, Recently Updated cards, and Discovery Tabs all line up
+         to the same column.  Without this, the Tabs section looked
+         like a slim widget marooned in a wide page; with it, the
+         three sections read as one designed surface. Browse tab is
+         intentionally left full-width because its grid wants the
+         screen real estate. -->
+    <div
+      v-else-if="activeTab === 'featured'"
+      class="mx-auto max-w-[1600px]"
+    >
       <!-- Hero carousel -->
       <section
         v-if="featured.length > 0"
-        class="mb-10"
+        class="mb-12"
       >
         <div
           class="relative rounded-2xl overflow-hidden cursor-pointer group aspect-[21/9]"
@@ -80,13 +106,16 @@
             :alt="featured[heroIndex].mName"
             class="w-full h-full object-cover"
           />
+          <!-- Gradient masks. Softened from the previous from-zinc-950/95
+               so the banner art still reads through the lower third of
+               the hero instead of being washed to near-solid black. -->
           <div
-            class="absolute inset-0 bg-gradient-to-t from-zinc-950/95 via-zinc-950/40 to-transparent"
+            class="absolute inset-0 bg-gradient-to-t from-zinc-950/85 via-zinc-950/30 to-transparent"
           />
           <div
-            class="absolute inset-0 bg-gradient-to-r from-zinc-950/70 via-transparent to-transparent"
+            class="absolute inset-0 bg-gradient-to-r from-zinc-950/60 via-transparent to-transparent"
           />
-          <div class="absolute bottom-0 inset-x-0 p-8">
+          <div class="absolute bottom-0 inset-x-0 p-8 pr-32">
             <h2
               class="text-4xl font-display font-bold text-zinc-100 drop-shadow-lg mb-2"
             >
@@ -110,7 +139,21 @@
               </span>
             </div>
           </div>
-          <!-- Carousel dots (click to jump) -->
+
+          <!-- X-of-Y indicator. Sits top-right so a user can tell at a
+               glance how deep the carousel is without counting dots.
+               Hidden on single-slide carousels (where there's nothing
+               to count). -->
+          <div
+            v-if="featured.length > 1"
+            class="absolute top-4 right-4 px-2.5 py-1 rounded-full bg-zinc-950/60 backdrop-blur-sm text-[11px] font-medium text-zinc-200 tabular-nums"
+          >
+            {{ heroIndex + 1 }} / {{ featured.length }}
+          </div>
+
+          <!-- Carousel dots. Manual nav resets the auto-rotate cadence
+               so a click doesn't trigger an immediate swap to the next
+               slide a beat later. -->
           <div
             v-if="featured.length > 1"
             class="absolute bottom-4 right-6 flex gap-1.5"
@@ -118,40 +161,77 @@
             <button
               v-for="(_, i) in featured"
               :key="i"
-              class="size-2 rounded-full transition-colors"
-              :class="i === heroIndex ? 'bg-blue-500' : 'bg-zinc-500/70 hover:bg-zinc-400'"
-              @click.stop="heroIndex = i"
+              class="size-2 rounded-full transition-all"
+              :class="
+                i === heroIndex
+                  ? 'bg-blue-500 w-5'
+                  : 'bg-zinc-500/70 hover:bg-zinc-400'
+              "
+              :aria-label="`Slide ${i + 1}`"
+              @click.stop="goToHeroSlide(i)"
             />
           </div>
         </div>
       </section>
 
-      <!-- Most Played This Week (trending) -->
-      <StoreShelf
-        v-if="trending.length > 0"
-        title="Most Played This Week"
-        :games="trending"
+      <!-- Recently Updated — Steam-style banner-card carousel.  Pulled
+           from /api/v1/store with sort='updated' so the order reflects
+           when each catalogue entry last changed. -->
+      <StoreRecentlyUpdated
+        v-if="recentlyUpdated.length > 0"
+        :games="recentlyUpdated"
+        :library-game-ids="libraryGameIdSet"
         @select="goToGame"
+        @browse-all="goToBrowseUpdated"
       />
 
-      <!-- Recently Added -->
-      <StoreShelf
-        v-if="recentGames.length > 0"
-        title="Recently Added"
-        :games="recentGames"
+      <!-- Discovery tabs — New / Most Played / Random with a sticky
+           preview panel on the right (Steam's "New & Trending" widget
+           the user wanted us to match).  Per-tab data is fetched
+           lazily on tab change so the initial Featured paint stays
+           cheap. -->
+      <StoreDiscoveryTabs
+        :games="discoveryListGames"
+        :loading="discoveryLoading"
+        :tab="discoveryTab"
+        :library-game-ids="libraryGameIdSet"
         @select="goToGame"
+        @tab="onDiscoveryTabChange"
+        @see-more="onDiscoverySeeMore"
       />
 
       <div
-        v-if="featured.length === 0 && trending.length === 0 && recentGames.length === 0"
+        v-if="
+          featured.length === 0 &&
+          recentlyUpdated.length === 0 &&
+          discoveryListGames.length === 0
+        "
         class="text-center text-zinc-500 py-20 text-sm"
       >
         No featured games yet. Try the Browse tab to see what's available.
       </div>
-    </template>
+    </div>
 
     <!-- ═══ Browse tab ═══ -->
-    <template v-else-if="activeTab === 'browse'">
+    <!-- Browse content now caps to the same 1600px column as the
+         header and the Featured tab, so the visual width is
+         consistent across the whole store.  Earlier iterations left
+         Browse full-width to maximise tile count; the trade-off
+         wasn't worth the inconsistency with the rest of the page. -->
+    <div
+      v-else-if="activeTab === 'browse'"
+      class="mx-auto max-w-[1600px]"
+    >
+      <!-- "Can't decide?" banner — lives at the top of Browse so the user
+           sees it before scrolling into the grid. Same component the
+           community page used to host; cover pool is now built from
+           browse + featured data instead of activity feeds. -->
+      <GameRoulette
+        class="mb-5"
+        :cover-pool="rouletteCoverPool"
+        @select="onRouletteSelect"
+      />
+
       <!-- Filter / sort controls -->
       <div class="flex items-center gap-3 mb-3 flex-wrap text-sm">
         <span class="text-zinc-500">Sort:</span>
@@ -246,13 +326,43 @@
       <div v-if="browseLoading && browseResults.length === 0" class="text-zinc-500 text-sm py-10">
         Loading games...
       </div>
+      <!-- Smart empty state. When the grid renders no results, advertise
+           which filter is most likely the culprit so the user can drop
+           it inline without playing whack-a-mole with the chip row. -->
       <div
         v-else-if="displayedResults.length === 0"
-        class="text-zinc-500 text-sm py-20 text-center"
+        class="py-20 text-center"
       >
-        No games match those filters.
+        <p class="text-sm text-zinc-300 font-medium">
+          No games match those filters.
+        </p>
+        <div
+          v-if="emptyStateSuggestions.length > 0"
+          class="mt-4 inline-flex flex-col items-center gap-2"
+        >
+          <p class="text-xs text-zinc-500">Try removing:</p>
+          <div class="flex flex-wrap gap-1.5 justify-center max-w-md">
+            <button
+              v-for="sug in emptyStateSuggestions"
+              :key="sug.key"
+              class="inline-flex items-center gap-1 rounded-full bg-blue-500/15 text-blue-300 ring-1 ring-blue-500/30 px-2.5 py-1 text-xs hover:bg-blue-500/25 transition-colors"
+              @click="sug.apply"
+            >
+              <span class="text-blue-400/70">{{ sug.label }}:</span>
+              <span>{{ sug.value }}</span>
+              <XMarkIcon class="size-3" />
+            </button>
+          </div>
+        </div>
+        <button
+          v-else
+          class="mt-3 text-xs text-blue-400 hover:text-blue-300 underline"
+          @click="clearBrowseFilters"
+        >
+          Clear all filters
+        </button>
       </div>
-      <GameTileGrid v-else>
+      <GameTileGrid v-else :item-count="displayedResults.length">
         <GameTile
           v-for="game in displayedResults"
           :key="game.id"
@@ -264,23 +374,66 @@
         />
       </GameTileGrid>
 
-      <!-- Load more — manual paginate so initial load stays fast even on
-           huge libraries. When client-side filters hide most results we
-           still surface the button so the user can pull more candidates
-           from the server until something matches. -->
+      <!-- Pagination — classic numbered nav.  The Browse grid is now
+           replaced wholesale each time the page changes (not appended
+           to), so picking page 7 → page 3 → page 7 round-trips cleanly
+           without doubling up rows.  Ellipsis collapses long page
+           sequences so the bar stays readable past 10+ pages. -->
       <div
-        v-if="browseResults.length < browseTotal"
-        class="mt-8 flex justify-center"
+        v-if="browseTotalPages > 1"
+        class="mt-8 flex flex-col items-center gap-2"
       >
-        <button
-          class="rounded-md bg-zinc-800/50 px-5 py-2.5 text-sm font-semibold text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50"
-          :disabled="browseLoading"
-          @click="loadBrowseMore"
-        >
-          {{ browseLoading ? "Loading..." : `Load more (${browseTotal - browseResults.length} left)` }}
-        </button>
+        <div class="flex items-center gap-1 text-xs">
+          <button
+            class="rounded-md p-2 transition-colors"
+            :class="
+              browsePage > 1 && !browseLoading
+                ? 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100'
+                : 'bg-zinc-900/40 text-zinc-700 cursor-not-allowed'
+            "
+            :disabled="browsePage <= 1 || browseLoading"
+            aria-label="Previous page"
+            @click="goToPage(browsePage - 1)"
+          >
+            <ChevronLeftIcon class="size-4" />
+          </button>
+
+          <button
+            v-for="(p, i) in browsePageNumbers"
+            :key="`${p}-${i}`"
+            class="min-w-[2rem] h-8 px-2 rounded-md text-xs font-semibold transition-colors tabular-nums"
+            :class="
+              p === '...'
+                ? 'text-zinc-500 cursor-default'
+                : p === browsePage
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100'
+            "
+            :disabled="p === '...' || p === browsePage || browseLoading"
+            @click="typeof p === 'number' && goToPage(p)"
+          >
+            {{ p }}
+          </button>
+
+          <button
+            class="rounded-md p-2 transition-colors"
+            :class="
+              browsePage < browseTotalPages && !browseLoading
+                ? 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100'
+                : 'bg-zinc-900/40 text-zinc-700 cursor-not-allowed'
+            "
+            :disabled="browsePage >= browseTotalPages || browseLoading"
+            aria-label="Next page"
+            @click="goToPage(browsePage + 1)"
+          >
+            <ChevronRightIcon class="size-4" />
+          </button>
+        </div>
+        <p class="text-xs text-zinc-500 tabular-nums">
+          {{ browsePageStart }}–{{ browsePageEnd }} of {{ browseTotal }}
+        </p>
       </div>
-    </template>
+    </div>
 
     <!-- Filter drawer — slides in from the right with advanced controls
          that don't belong in the chip row. Closed by default; opened via
@@ -449,6 +602,8 @@ import {
   MagnifyingGlassIcon,
   AdjustmentsHorizontalIcon,
   XMarkIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
 } from "@heroicons/vue/24/outline";
 import {
   useServerApi,
@@ -459,6 +614,43 @@ import {
 import { serverUrl } from "~/composables/use-server-fetch";
 import { deduplicatedInvoke } from "~/composables/game";
 import StoreShelf from "~/components/StoreShelf.vue";
+import StoreRecentlyUpdated from "~/components/StoreRecentlyUpdated.vue";
+import StoreDiscoveryTabs from "~/components/StoreDiscoveryTabs.vue";
+import GameRoulette from "~/components/GameRoulette.vue";
+
+// ── Browse-state restoration ─────────────────────────────────────────────
+//
+// Module-level snapshot of the user's last Browse-tab state. Survives
+// component remount within a session so navigating into /store/{id}
+// and back returns to the same tab + page + filter set the user came
+// from. The snapshot is intentionally NOT persisted to disk — a full
+// app restart resets to defaults, which matches "fresh session, fresh
+// view" expectations.
+//
+// We do this with module state rather than route query params for two
+// reasons: (1) we'd need to encode a dozen filter refs into the URL,
+// which gets noisy; (2) `router.back()` from /store/{id} should land
+// on the same `/store` URL it came from regardless of which filters
+// were active — using query params would make every filter change
+// push a new history entry, which makes the back button useless.
+type StoredBrowseSnapshot = {
+  activeTab: "featured" | "browse";
+  searchQuery: string;
+  browseSort: "recent" | "updated" | "name";
+  browsePage: number;
+  selectedTagIds: string[];
+  selectedLibraryId: string;
+  selectedPlatforms: string[];
+  emulatedFilter: "all" | "native" | "rom";
+  releaseYearFrom: number | null;
+  releaseYearTo: number | null;
+};
+// Cast away the literal-null narrowing TS would otherwise apply at
+// every read site — assignments happen inside snapshotBrowseState()
+// which TS treats as opaque, so reads at module top level would
+// otherwise stay narrowed to `null` and the `?.` chains would type as
+// `never`.
+let storedBrowseSnapshot = null as StoredBrowseSnapshot | null;
 
 useHead({ title: "Store" });
 
@@ -479,7 +671,19 @@ const tabs = [
   { label: "Featured", value: "featured" },
   { label: "Browse", value: "browse" },
 ] as const;
-const activeTab = ref<(typeof tabs)[number]["value"]>("featured");
+
+// Refs seed directly from `storedBrowseSnapshot` (the module-level
+// variable above) instead of going through a post-mount "now patch
+// the refs" dance.  That dance was racy: the lazy-load watch on
+// `activeTab` fires when the value flips from "featured" → "browse",
+// and Vue's scheduler runs that callback before any nextTick-scheduled
+// suppression flag has had a chance to clear. By initialising refs
+// from the snapshot, the value never changes — no watch fires — no
+// `loadBrowse(true)` clobbering the restored `browsePage`.
+
+const activeTab = ref<(typeof tabs)[number]["value"]>(
+  storedBrowseSnapshot?.activeTab ?? "featured",
+);
 
 // State
 const loading = ref(true);
@@ -489,8 +693,8 @@ const browseLoading = ref(false);
 // (`searchQuery`) that the query layer reads. Enter/submit promotes the
 // input to the query and switches to Browse. Keeps the typing experience
 // snappy without spamming requests on every keystroke.
-const searchInput = ref("");
-const searchQuery = ref("");
+const searchInput = ref(storedBrowseSnapshot?.searchQuery ?? "");
+const searchQuery = ref(storedBrowseSnapshot?.searchQuery ?? "");
 const heroIndex = ref(0);
 // "Newest" was dropped: it sorted by Game.mReleased (the metadata provider's
 // original release date) which gives wrong answers for remakes/remasters
@@ -498,7 +702,9 @@ const heroIndex = ref(0);
 // "Recently added" (Game.created — when admins added it to this Drop) and
 // "Recently updated" (max version.created — when the catalogue last changed
 // for this game). Default to Recently added.
-const browseSort = ref<"recent" | "updated" | "name">("recent");
+const browseSort = ref<"recent" | "updated" | "name">(
+  storedBrowseSnapshot?.browseSort ?? "recent",
+);
 
 // ── Filter state ──────────────────────────────────────────────────────────
 //
@@ -511,16 +717,29 @@ const browseSort = ref<"recent" | "updated" | "name">("recent");
 //     so we can match locally without round-tripping.
 //
 // The split matters for pagination: server-side filters narrow the result
-// set the server is paging over, while client-side filters just hide rows
-// from whatever page we've already pulled — so the "Load more" button stays
-// honest about how many *server* results remain.
-const selectedTagIds = ref<string[]>([]);
-const selectedLibraryId = ref<string>("");
-const selectedPlatforms = ref<string[]>([]);
+// set the server pages over (and the page nav counts pages of that set),
+// while client-side filters just hide rows from the already-loaded page.
+// The "showing X–Y of Z" caption reports the *server* count, so it's
+// accurate even when client-side filters are visually dropping rows.
+const selectedTagIds = ref<string[]>(
+  storedBrowseSnapshot?.selectedTagIds ? [...storedBrowseSnapshot.selectedTagIds] : [],
+);
+const selectedLibraryId = ref<string>(storedBrowseSnapshot?.selectedLibraryId ?? "");
+const selectedPlatforms = ref<string[]>(
+  storedBrowseSnapshot?.selectedPlatforms
+    ? [...storedBrowseSnapshot.selectedPlatforms]
+    : [],
+);
 const tagSearch = ref("");
-const emulatedFilter = ref<"all" | "native" | "rom">("all");
-const releaseYearFrom = ref<number | null>(null);
-const releaseYearTo = ref<number | null>(null);
+const emulatedFilter = ref<"all" | "native" | "rom">(
+  storedBrowseSnapshot?.emulatedFilter ?? "all",
+);
+const releaseYearFrom = ref<number | null>(
+  storedBrowseSnapshot?.releaseYearFrom ?? null,
+);
+const releaseYearTo = ref<number | null>(
+  storedBrowseSnapshot?.releaseYearTo ?? null,
+);
 const filterDrawerOpen = ref(false);
 
 const emulatedOptions = [
@@ -544,9 +763,52 @@ const featured = ref<StoreGame[]>([]);
 const trending = ref<TrendingGame[]>([]);
 const recentGames = ref<StoreGame[]>([]);
 
-// Browse data
+// "Recently Updated" — separate fetch with sort='updated', distinct
+// from `recentGames` (sort='recent') because the two answer different
+// questions ("what changed lately" vs "what was added lately").
+const recentlyUpdated = ref<StoreGame[]>([]);
+
+// Game IDs the caller already owns — drives the "In library" badge on
+// the new Featured-tab widgets. Lazy: empty Set until the membership
+// fetch lands, so the badges just don't render until then.
+const libraryGameIdSet = ref<Set<string>>(new Set());
+
+// Discovery tabs (New / Most Played / Random).  Each tab keeps its
+// own cached game list so flipping back to a previously-loaded tab is
+// instant.  `discoveryListGames` is just the active tab's slice.
+type DiscoveryTabValue = "new" | "popular" | "random";
+const discoveryTab = ref<DiscoveryTabValue>("new");
+const discoveryLoading = ref(false);
+const discoveryByTab = reactive({
+  new: [] as StoreGame[],
+  popular: [] as StoreGame[],
+  random: [] as StoreGame[],
+});
+const discoveryListGames = computed(() => discoveryByTab[discoveryTab.value]);
+
+// Browse data + pagination state. We use classic numbered pagination
+// (page 1 .. N) rather than "load more" — round-tripping back and
+// forth between pages stays clean because each page render replaces
+// the result set instead of appending.
+//
+// `BROWSE_PAGE_SIZE` is computed once at mount as `cols × 5` so each
+// page renders as a perfect rectangle (no partial trailing row).  We
+// don't re-compute on resize: the trade-off would be re-fetching the
+// catalog every time the user nudged the window, and the existing
+// page layout still reads fine if the user does resize between
+// fetches. The col count derives from the same breakpoints
+// GameTileGrid uses (3 / 4 / 5 / 6 / 7 / 8).
+function computeBrowsePageSize(): number {
+  if (typeof window === "undefined") return 40;
+  const w = window.innerWidth;
+  const cols =
+    w >= 1536 ? 8 : w >= 1280 ? 7 : w >= 1024 ? 6 : w >= 768 ? 5 : w >= 640 ? 4 : 3;
+  return cols * 5;
+}
+const BROWSE_PAGE_SIZE = computeBrowsePageSize();
 const browseResults = ref<StoreGame[]>([]);
 const browseTotal = ref(0);
+const browsePage = ref(storedBrowseSnapshot?.browsePage ?? 1);
 
 // Tag + library catalogs (loaded lazily once we land on the Browse tab).
 const allTags = ref<StoreTag[]>([]);
@@ -566,10 +828,53 @@ function goToGame(gameId?: string) {
   router.push(`/store/${gameId}`);
 }
 
+// Cover pool for the roulette spin animation. We seed the wheel from
+// whatever covers we've already pulled for other surfaces of this page
+// (featured carousel, trending shelf, recent shelf, current browse
+// results) so the animation has something to flip through without
+// paying an extra fetch. De-duped + capped at 40. The Featured tab is
+// usually loaded by the time the user lands on Browse, so this pool is
+// almost always non-empty on first spin.
+const rouletteCoverPool = computed(() => {
+  const pool = new Set<string>();
+  for (const g of featured.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  for (const g of trending.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  for (const g of recentGames.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  for (const g of browseResults.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  return [...pool].slice(0, 40);
+});
+
+function onRouletteSelect(payload: { gameId: string; owned: boolean }) {
+  // The roulette card pushes its own destination route; we only side-
+  // effect the metadata prefetch so the destination page hydrates fast.
+  // (Mirrors goToGame's deduplicated invoke pattern.)
+  deduplicatedInvoke("fetch_game", { gameId: payload.gameId }).catch(() => {});
+}
+
 function submitSearch() {
   searchQuery.value = searchInput.value.trim();
   activeTab.value = "browse";
   loadBrowse(true);
+}
+
+// Clear both the input and the committed query, then refresh the
+// browse list so the grid stops being filtered. Hooked to the X
+// button in the header and the Escape key on the input.
+function clearSearch() {
+  if (!searchInput.value && !searchQuery.value) return;
+  searchInput.value = "";
+  searchQuery.value = "";
+  if (activeTab.value === "browse") {
+    loadBrowse(true);
+  }
 }
 
 function setSort(value: typeof browseSort.value) {
@@ -729,6 +1034,87 @@ function removeFilterChip(chip: FilterChip) {
   }
 }
 
+// "Try removing:" hints rendered under the empty state. We expose the
+// up-to-3 most likely culprits in priority order: a free-text search
+// query first (most aggressive), then narrowed metadata (year range,
+// emulated/native), then membership filters (tags, library, platform).
+// Each suggestion is a self-contained `{ label, value, apply }` so the
+// empty-state template can render and dispatch without knowing the
+// shape of any one filter.
+type EmptyStateSuggestion = {
+  key: string;
+  label: string;
+  value: string;
+  apply: () => void;
+};
+
+const emptyStateSuggestions = computed<EmptyStateSuggestion[]>(() => {
+  const out: EmptyStateSuggestion[] = [];
+
+  if (searchQuery.value) {
+    out.push({
+      key: "search",
+      label: "Search",
+      value: `"${searchQuery.value}"`,
+      apply: () => clearSearch(),
+    });
+  }
+
+  if (releaseYearFrom.value || releaseYearTo.value) {
+    const from = releaseYearFrom.value ?? "";
+    const to = releaseYearTo.value ?? "";
+    out.push({
+      key: "year",
+      label: "Year",
+      value: `${from}${from || to ? "–" : ""}${to}`,
+      apply: () => {
+        releaseYearFrom.value = null;
+        releaseYearTo.value = null;
+      },
+    });
+  }
+
+  if (emulatedFilter.value !== "all") {
+    out.push({
+      key: "emulated",
+      label: "Type",
+      value: emulatedFilter.value === "rom" ? "ROM" : "Native",
+      apply: () => {
+        emulatedFilter.value = "all";
+      },
+    });
+  }
+
+  // Tag chips often dominate the filter set when present — fold the
+  // first one in so the user gets a one-click escape if the picked
+  // tag is too narrow.
+  for (const id of selectedTagIds.value.slice(0, 2)) {
+    const tag = allTags.value.find((t) => t.id === id);
+    out.push({
+      key: `tag:${id}`,
+      label: "Tag",
+      value: tag?.name ?? id,
+      apply: () => toggleTag(id),
+    });
+  }
+
+  if (selectedLibraryId.value) {
+    const lib = libraries.value.find((l) => l.id === selectedLibraryId.value);
+    out.push({
+      key: "library",
+      label: "Library",
+      value: lib?.name ?? selectedLibraryId.value,
+      apply: () => {
+        selectedLibraryId.value = "";
+        loadBrowse(true);
+      },
+    });
+  }
+
+  // Cap to 3 so the empty state stays a hint, not a second filter UI.
+  return out.slice(0, 3);
+});
+
 // Apply client-side filters on top of whatever the server returned.
 // Server already handled tags/library/platform/sort/search; we layer
 // the two fields the API doesn't expose as filters: year and emulation
@@ -758,8 +1144,47 @@ const displayedResults = computed<StoreGame[]>(() => {
   });
 });
 
-// Hero auto-advance every 8s, paused while the user is hovering. Matches
-// what BPM does, just without the focus-nav considerations.
+// Total page count derived from server count + page size.  At least
+// 1 so the pagination bar never disappears mid-load on a transient
+// `browseTotal === 0`.
+const browseTotalPages = computed(() =>
+  Math.max(1, Math.ceil(browseTotal.value / BROWSE_PAGE_SIZE)),
+);
+
+// 1-indexed "showing X–Y of Z" range for the small caption under the
+// page buttons. End is clamped against `browseTotal` for the final
+// page when the result count isn't a clean multiple of page size.
+const browsePageStart = computed(() =>
+  browseTotal.value === 0 ? 0 : (browsePage.value - 1) * BROWSE_PAGE_SIZE + 1,
+);
+const browsePageEnd = computed(() =>
+  Math.min(browsePage.value * BROWSE_PAGE_SIZE, browseTotal.value),
+);
+
+// Visible page-number tokens for the pagination bar. Collapses long
+// sequences with '...' so the bar stays compact past ~7 pages.
+// Strategy: always show first + last + current ± 1, with ellipsis
+// markers where there are gaps. Returns `number | '...'` so the
+// template can distinguish clickable cells from spacers.
+const browsePageNumbers = computed<Array<number | "...">>(() => {
+  const total = browseTotalPages.value;
+  const current = browsePage.value;
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+  const pages: Array<number | "..."> = [1];
+  const left = Math.max(2, current - 1);
+  const right = Math.min(total - 1, current + 1);
+  if (left > 2) pages.push("...");
+  for (let p = left; p <= right; p++) pages.push(p);
+  if (right < total - 1) pages.push("...");
+  pages.push(total);
+  return pages;
+});
+
+// Hero auto-advance every 8s. Manual dot clicks reset the timer so the
+// user doesn't get yanked to the next slide a beat after their click —
+// `goToHeroSlide` is the canonical entry point for those clicks.
 let heroInterval: ReturnType<typeof setInterval> | null = null;
 function startHeroRotation() {
   stopHeroRotation();
@@ -775,29 +1200,119 @@ function stopHeroRotation() {
     heroInterval = null;
   }
 }
+function goToHeroSlide(i: number) {
+  heroIndex.value = i;
+  // Reset the cadence so the next auto-advance is a full 8s away,
+  // not "whatever fraction of 8s was left on the prior tick."
+  startHeroRotation();
+}
 
 async function loadFeaturedData() {
   try {
-    const [feat, trend, recent] = await Promise.all([
+    const [feat, trend, recent, updated] = await Promise.all([
       api.store.featured().catch(() => [] as StoreGame[]),
       api.store
         .trending(7, 7)
         .then((d) => d.results)
         .catch(() => [] as TrendingGame[]),
-      // "Recently Added" shelf — sort by Game.created (when admins added
-       // it here), not Game.mReleased. The mReleased-based "newest" sort
-       // gave wrong answers because metadata providers report a remaster's
-       // original 2011 release date for its 2023 re-release, etc.
+      // Carry-over: kept for the discovery tab's "New" feed even
+      // though the standalone "Recently Added" shelf was retired in
+      // favour of the discovery widget. `sort='recent'` orders by
+      // Game.created (when an admin added it to this Drop instance).
       api.store
         .browse({ sort: "recent", take: 14 })
+        .then((d) => d.results)
+        .catch(() => [] as StoreGame[]),
+      // Recently Updated — sort='updated' is max(version.created),
+      // so this surfaces games whose catalogue entries changed lately
+      // (new version uploaded, metadata edit, etc.) — distinct from
+      // Recently Added.
+      api.store
+        .browse({ sort: "updated", take: 12 })
         .then((d) => d.results)
         .catch(() => [] as StoreGame[]),
     ]);
     featured.value = feat;
     trending.value = trend;
     recentGames.value = recent;
+    recentlyUpdated.value = updated;
+
+    // Seed the discovery tabs once the featured/trending fetches are
+    // in flight — "new" reuses the recent list, "popular" reuses the
+    // trending list (typed as TrendingGame which is a StoreGame
+    // superset).
+    discoveryByTab.new = recent;
+    discoveryByTab.popular = trend as unknown as StoreGame[];
   } catch (e) {
     console.error("[STORE] Failed to load featured:", e);
+  }
+}
+
+/** Lazy-fetch the games for whichever discovery tab the user selects.
+ *  Cached per tab so flipping back to a previously-loaded tab is
+ *  instant; the "random" tab refetches each time the user picks it so
+ *  they always get a fresh shuffle. */
+async function ensureDiscoveryTabLoaded(t: DiscoveryTabValue) {
+  if (t !== "random" && discoveryByTab[t].length > 0) return;
+  discoveryLoading.value = true;
+  try {
+    if (t === "new") {
+      const data = await api.store.browse({ sort: "recent", take: 14 });
+      discoveryByTab.new = data.results;
+    } else if (t === "popular") {
+      const data = await api.store.trending(14, 30);
+      discoveryByTab.popular = data.results as unknown as StoreGame[];
+    } else {
+      const data = await api.store.browse({ sort: "random", take: 14 });
+      discoveryByTab.random = data.results;
+    }
+  } catch (e) {
+    console.warn("[STORE] Failed to load discovery tab", t, e);
+  } finally {
+    discoveryLoading.value = false;
+  }
+}
+
+function onDiscoveryTabChange(t: DiscoveryTabValue) {
+  discoveryTab.value = t;
+  ensureDiscoveryTabLoaded(t);
+}
+
+function onDiscoverySeeMore(t: DiscoveryTabValue) {
+  // "See more" → jump to Browse with the matching server-side sort
+  // pre-applied. Random doesn't have a corresponding browse sort that
+  // makes sense for a See More flow; route it to the default browse.
+  searchInput.value = "";
+  searchQuery.value = "";
+  if (t === "new") browseSort.value = "recent";
+  else if (t === "popular") browseSort.value = "updated";
+  // (random falls through to whatever sort is current.)
+  activeTab.value = "browse";
+  browsePage.value = 1;
+  loadBrowse(true);
+}
+
+function goToBrowseUpdated() {
+  searchInput.value = "";
+  searchQuery.value = "";
+  browseSort.value = "updated";
+  activeTab.value = "browse";
+  browsePage.value = 1;
+  loadBrowse(true);
+}
+
+/** Resolve which games the caller already has in their library so the
+ *  Featured-tab widgets can surface an "In library" badge.  Soft-fails
+ *  to an empty set if the membership endpoint is unreachable. */
+async function loadLibraryMembership() {
+  try {
+    const res = await fetch(serverUrl("api/v1/collection/default"));
+    if (!res.ok) return;
+    const collection = await res.json();
+    const entries: Array<{ gameId: string }> = collection.entries ?? [];
+    libraryGameIdSet.value = new Set(entries.map((e) => e.gameId));
+  } catch (e) {
+    console.warn("[STORE] Library membership fetch failed:", e);
   }
 }
 
@@ -815,7 +1330,7 @@ function buildBrowseParams(skip: number): BrowseParams {
     : browseSort.value;
   return {
     skip,
-    take: 35,
+    take: BROWSE_PAGE_SIZE,
     q: searchQuery.value || undefined,
     tags: selectedTagIds.value.length
       ? selectedTagIds.value.join(",")
@@ -832,10 +1347,15 @@ function buildBrowseParams(skip: number): BrowseParams {
 async function loadBrowse(reset = false) {
   if (reset) {
     browseResults.value = [];
+    browsePage.value = 1;
   }
   browseLoading.value = true;
   try {
-    const data = await api.store.browse(buildBrowseParams(0));
+    const data = await api.store.browse(
+      buildBrowseParams((browsePage.value - 1) * BROWSE_PAGE_SIZE),
+    );
+    // Replace, don't append — each page render is a clean fetch so
+    // round-tripping (page 7 → page 3 → page 7) never doubles up rows.
     browseResults.value = data.results;
     browseTotal.value = data.count;
   } catch (e) {
@@ -845,18 +1365,19 @@ async function loadBrowse(reset = false) {
   }
 }
 
-async function loadBrowseMore() {
-  browseLoading.value = true;
-  try {
-    const data = await api.store.browse(
-      buildBrowseParams(browseResults.value.length),
-    );
-    browseResults.value.push(...data.results);
-    browseTotal.value = data.count;
-  } catch (e) {
-    console.error("[STORE] Failed to load more:", e);
-  } finally {
-    browseLoading.value = false;
+/** Jump to a specific page (1-indexed) and reload. Clamps to valid
+ *  range so a stale UI click on a page that no longer exists (e.g.
+ *  after a filter narrowed the result set) doesn't blow up. */
+function goToPage(p: number) {
+  if (browseLoading.value) return;
+  const target = Math.max(1, Math.min(p, browseTotalPages.value));
+  if (target === browsePage.value) return;
+  browsePage.value = target;
+  loadBrowse(false);
+  // Scroll the grid back to the top so the user sees page 1 of the
+  // new page, not whatever they were looking at on the prior one.
+  if (typeof window !== "undefined") {
+    nextTick(() => window.scrollTo({ top: 0, behavior: "smooth" }));
   }
 }
 
@@ -874,22 +1395,83 @@ async function loadFilterCatalogs() {
   libraries.value = [...libs].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** Snapshot the current Browse view to module state. Called by the
+ *  watch below on any user-driven change so the next remount can
+ *  restore the exact same page + filters. Cheap: just a few refs
+ *  copied into a plain object. */
+function snapshotBrowseState() {
+  storedBrowseSnapshot = {
+    activeTab: activeTab.value,
+    searchQuery: searchQuery.value,
+    browseSort: browseSort.value,
+    browsePage: browsePage.value,
+    selectedTagIds: [...selectedTagIds.value],
+    selectedLibraryId: selectedLibraryId.value,
+    selectedPlatforms: [...selectedPlatforms.value],
+    emulatedFilter: emulatedFilter.value,
+    releaseYearFrom: releaseYearFrom.value,
+    releaseYearTo: releaseYearTo.value,
+  };
+}
+
 onMounted(async () => {
-  await Promise.all([loadFeaturedData(), loadFilterCatalogs()]);
+  await Promise.all([
+    loadFeaturedData(),
+    loadFilterCatalogs(),
+    loadLibraryMembership(),
+  ]);
   // Browse is loaded lazily — only when the user actually opens that tab —
   // so the initial Featured render isn't blocked on a full-catalog query.
   loading.value = false;
   startHeroRotation();
+
+  // If the snapshot put us straight on the Browse tab, the lazy-load
+  // watch below won't fire (its initial value isn't a change), so we
+  // kick off the fetch ourselves with the restored page + filters.
+  if (activeTab.value === "browse") {
+    loadBrowse(false);
+  }
 });
 
-// Lazy-load browse when the tab is first opened.
+// Lazy-load browse when the user opens the tab for the first time
+// within the current session. Snapshot-restored sessions already have
+// their initial Browse fetch fired from onMounted above, so this watch
+// only catches subsequent user-driven tab switches.
 watch(activeTab, (tab) => {
   if (tab === "browse" && browseResults.value.length === 0 && !browseLoading.value) {
     loadBrowse(true);
   }
 });
 
+// Persist user-driven state changes to the module snapshot. The watch
+// fires after Vue commits the new ref values, so by the time we
+// snapshot we're capturing the latest view the user sees.  We watch
+// the broad set of refs that together describe a "where am I in the
+// Browse tab" answer; any one of them changing is meaningful.
+watch(
+  [
+    activeTab,
+    browsePage,
+    searchQuery,
+    browseSort,
+    selectedTagIds,
+    selectedLibraryId,
+    selectedPlatforms,
+    emulatedFilter,
+    releaseYearFrom,
+    releaseYearTo,
+  ],
+  () => {
+    snapshotBrowseState();
+  },
+  { deep: true },
+);
+
 onBeforeUnmount(() => {
   stopHeroRotation();
+  // One final snapshot on unmount catches any in-flight state changes
+  // that the watch's microtask hadn't flushed yet (e.g. clicking a
+  // game tile fires goToGame which navigates immediately).
+  snapshotBrowseState();
 });
 </script>

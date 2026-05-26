@@ -1,7 +1,11 @@
 <template>
   <div class="flex flex-row h-full">
-    <!-- Sidebar -->
+    <!-- Sidebar — only useful on game detail pages, where users want to
+         hop between titles. On the library index it just duplicates the
+         tile grid, and on the collections page it's irrelevant.  Hide
+         it on both so those surfaces get the full window width. -->
     <div
+      v-if="showSidebar"
       class="flex-none max-h-full overflow-y-auto w-72 bg-zinc-950/50 backdrop-blur-xl px-4 py-3 border-r border-zinc-800/50"
     >
       <LibrarySearch />
@@ -32,7 +36,19 @@
   </div>
 </template>
 
-<script setup lang="ts"></script>
+<script setup lang="ts">
+const route = useRoute();
+
+// Show the sidebar only on per-game routes (e.g. /library/abc-123). The
+// library index and the collections page each have their own primary
+// content, so the sidebar would be redundant there.
+const showSidebar = computed(() => {
+  const path = route.path.replace(/\/$/, "");
+  if (path === "/library") return false;
+  if (path === "/library/collections") return false;
+  return path.startsWith("/library/");
+});
+</script>
 
 <style scoped>
 .list-move,

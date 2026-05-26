@@ -234,6 +234,97 @@
 
     <!-- ═══ Browse tab ═══ -->
     <div v-else-if="activeTab === 'browse'" class="flex-1 overflow-y-auto px-8 py-6" data-bp-scroll>
+      <!-- Game roulette — muted variant, hand-rolled so we don't drag
+           the shared component into this focusable grid. Card-level
+           activation routes through `onRouletteCardSelect` so a remote
+           or keyboard user gets the same behaviour as a tile press.
+           Registered in the "content" focus group so D-pad reaches it
+           naturally from the tab strip above and the grid below. -->
+      <div
+        :ref="
+          (el: any) => registerGrid(el, { onSelect: onRouletteCardSelect })
+        "
+        class="rounded-xl bg-zinc-800/50 ring-1 ring-zinc-700/40 px-5 py-4 mb-5 cursor-pointer hover:ring-purple-500/40 transition"
+        :class="{ 'roulette-spinning-surface': rouletteSpinning }"
+        @click="onRouletteCardSelect"
+      >
+        <div class="flex items-center gap-4">
+          <div
+            class="shrink-0 h-20 w-14 rounded-md overflow-hidden flex items-center justify-center"
+            :class="
+              rouletteSpinning || rouletteResult
+                ? 'bg-zinc-900 ring-1 ring-purple-500/30'
+                : 'bg-purple-500/15'
+            "
+          >
+            <img
+              v-if="rouletteCoverId"
+              :src="objectUrl(rouletteCoverId)"
+              class="w-full h-full object-cover"
+              :class="{
+                'opacity-90': rouletteSpinning,
+                'roulette-tada': rouletteSettled,
+              }"
+              loading="lazy"
+            />
+            <span v-else class="text-xl text-purple-300">🎲</span>
+          </div>
+          <div class="flex-1 min-w-0">
+            <template v-if="rouletteResult">
+              <p class="text-base font-display font-semibold text-zinc-100 truncate">
+                {{ rouletteResult.game.name }}
+              </p>
+              <p class="text-xs text-purple-300/80 truncate mt-0.5">
+                {{ rouletteCaption }}
+              </p>
+            </template>
+            <template v-else-if="rouletteEmpty">
+              <p class="text-base font-display font-semibold text-zinc-100">
+                Nothing to spin yet
+              </p>
+              <p class="text-sm text-zinc-500 mt-0.5">
+                No games on the Drop catalog yet.
+              </p>
+            </template>
+            <template v-else-if="rouletteSpinning">
+              <p class="text-base font-display font-semibold text-zinc-100">
+                Spinning...
+              </p>
+              <p class="text-sm text-zinc-500 mt-0.5">
+                Picking something for you.
+              </p>
+            </template>
+            <template v-else>
+              <p class="text-base font-display font-semibold text-zinc-100">
+                Can't decide?
+              </p>
+              <p class="text-sm text-zinc-500 mt-0.5">
+                Spin to land on a random game from across the Drop catalog.
+              </p>
+            </template>
+          </div>
+          <span
+            class="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-purple-500/20 ring-1 ring-purple-400/40 px-4 py-2 text-sm font-semibold text-purple-100"
+          >
+            <svg
+              class="size-4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              :class="{ 'animate-spin': rouletteSpinning }"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"
+              />
+            </svg>
+            {{ rouletteSpinning ? "Spinning" : rouletteResult ? "Spin again" : "Spin" }}
+          </span>
+        </div>
+      </div>
+
       <!-- Filter summary bar -->
       <div class="flex items-center gap-3 mb-4">
         <div class="flex items-center gap-2 text-sm text-zinc-400">
@@ -547,7 +638,12 @@
 import { devLog } from "~/composables/dev-mode";
 import { MagnifyingGlassIcon, ArrowsUpDownIcon, FunnelIcon, CheckIcon } from "@heroicons/vue/24/outline";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
-import { useServerApi, type StoreGame, type TrendingGame } from "~/composables/use-server-api";
+import {
+  useServerApi,
+  type StoreGame,
+  type TrendingGame,
+  type RouletteResult,
+} from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
 import { deduplicatedInvoke } from "~/composables/game";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
@@ -645,6 +741,139 @@ function objectUrl(id: string): string {
   return serverUrl(`api/v1/object/${id}`);
 }
 
+// ── Roulette state (BPM-side, hand-rolled so we don't need to wrap the
+// shared component for focus delegate registration). Lives on the
+// Browse tab — "I want to play something" energy belongs next to the
+// game grid, not on the community page.
+const rouletteResult = ref<RouletteResult | null>(null);
+const rouletteSpinning = ref(false);
+const rouletteEmpty = ref(false);
+const rouletteSettled = ref(false);
+const roulettePreviewCoverId = ref<string | null>(null);
+let rouletteCycleTimer: ReturnType<typeof setInterval> | null = null;
+let rouletteTadaTimer: ReturnType<typeof setTimeout> | null = null;
+
+const rouletteCoverId = computed(() => {
+  if (rouletteSpinning.value) return roulettePreviewCoverId.value;
+  return rouletteResult.value?.game.coverObjectId ?? null;
+});
+
+const rouletteCaption = computed(() => {
+  if (!rouletteResult.value) return "";
+  switch (rouletteResult.value.source) {
+    case "rediscovery":
+      return "You haven't played in a while";
+    case "library":
+      return "From your library";
+    case "social":
+    case "discover": {
+      // Both branches mean "the caller doesn't own this" — provenance
+      // differs but the caption reads off the same alsoPlayedBy enrichment.
+      const n = rouletteResult.value.alsoPlayedBy?.length ?? 0;
+      if (n === 0) return "From the Drop catalog — give it a try";
+      if (n === 1)
+        return `${rouletteResult.value.alsoPlayedBy![0].displayName} has played this`;
+      return `${n} on this server have played this`;
+    }
+    default:
+      return "";
+  }
+});
+
+// Seed the spin animation from whatever covers are already loaded for
+// other surfaces of this page (featured, trending, recents, randoms,
+// current browse page). De-duped + capped at 40. By the time the user
+// reaches the Browse tab at least one of these is populated.
+const rouletteCoverPool = computed(() => {
+  const pool = new Set<string>();
+  for (const g of featured.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  for (const g of trending.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  for (const g of recentGames.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  for (const g of randomGames.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  for (const g of browseResults.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  return [...pool].slice(0, 40);
+});
+
+function pickRouletteCover(): string | null {
+  const pool = rouletteCoverPool.value;
+  if (pool.length === 0) return roulettePreviewCoverId.value;
+  return pool[Math.floor(Math.random() * pool.length)] ?? null;
+}
+
+async function spinRoulette() {
+  if (rouletteSpinning.value) return;
+  rouletteEmpty.value = false;
+  rouletteSettled.value = false;
+  rouletteSpinning.value = true;
+
+  const cycleMs = 80;
+  const minCycles = 8;
+  const maxCycles = 12;
+  const targetCycles =
+    minCycles + Math.floor(Math.random() * (maxCycles - minCycles + 1));
+  const minDurationMs = targetCycles * cycleMs;
+
+  if (rouletteCycleTimer) clearInterval(rouletteCycleTimer);
+  rouletteCycleTimer = setInterval(() => {
+    roulettePreviewCoverId.value = pickRouletteCover();
+  }, cycleMs);
+
+  const [fetched] = await Promise.all([
+    api.community.roulette().catch((e) => {
+      console.warn("[bpm roulette] fetch failed:", e);
+      return null;
+    }),
+    new Promise((r) => setTimeout(r, minDurationMs)),
+  ]);
+
+  if (rouletteCycleTimer) {
+    clearInterval(rouletteCycleTimer);
+    rouletteCycleTimer = null;
+  }
+
+  rouletteSpinning.value = false;
+  if (fetched) {
+    rouletteResult.value = fetched;
+    rouletteEmpty.value = false;
+    rouletteSettled.value = true;
+    if (rouletteTadaTimer) clearTimeout(rouletteTadaTimer);
+    rouletteTadaTimer = setTimeout(() => {
+      rouletteSettled.value = false;
+    }, 700);
+  } else {
+    rouletteResult.value = null;
+    rouletteEmpty.value = true;
+  }
+}
+
+/**
+ * Card-level activation. First press kicks off the spin; subsequent
+ * presses with a settled pick drill into that game's BPM library page.
+ * `rediscovery` / `library` picks are owned, `social` / `discover` are
+ * not — BPM's library page handles the install/play flow for both, so
+ * we can route everything through the same destination.
+ */
+function onRouletteCardSelect() {
+  if (rouletteSpinning.value) return;
+  if (!rouletteResult.value) {
+    spinRoulette();
+    return;
+  }
+  const gameId = rouletteResult.value.game.id;
+  const target = `/bigpicture/library/${gameId}`;
+  focusNav.setRouteState("backTo", "/bigpicture/store", target);
+  router.push(target);
+}
 
 function goToGame(gameId?: string) {
   if (!gameId) return;
@@ -1079,6 +1308,8 @@ onUnmounted(() => {
   stopHeroTimer();
   window.removeEventListener("resize", updateGridCols);
   if (searchDebounce) clearTimeout(searchDebounce);
+  if (rouletteCycleTimer) clearInterval(rouletteCycleTimer);
+  if (rouletteTadaTimer) clearTimeout(rouletteTadaTimer);
   for (const unsub of _unsubs) unsub();
   _unsubs.length = 0;
 });
@@ -1104,6 +1335,32 @@ const tabs = [
   );
   /* Vignette effect */
   box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.15);
+}
+
+/* Subtle purple tint on the roulette surface while the wheel is in
+   motion. Static + settled states stay neutral so the card matches
+   the filter-summary row above it. */
+.roulette-spinning-surface {
+  background-color: rgb(76 29 149 / 0.08);
+}
+
+@keyframes roulette-tada {
+  0% {
+    transform: scale(1);
+  }
+  30% {
+    transform: scale(1.08);
+  }
+  60% {
+    transform: scale(0.97);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.roulette-tada {
+  animation: roulette-tada 700ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 </style>

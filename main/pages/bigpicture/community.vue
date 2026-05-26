@@ -29,12 +29,10 @@
 
     <!-- Loading -->
     <div v-if="loading" class="flex-1 overflow-y-auto px-8 py-6">
-      <div class="grid grid-cols-4 gap-4 mb-8">
-        <div
-          v-for="i in 4"
-          :key="i"
-          class="h-20 rounded-xl bg-zinc-800/50 animate-pulse"
-        />
+      <div class="h-28 rounded-2xl bg-zinc-800/50 animate-pulse mb-5" />
+      <div class="grid grid-cols-2 gap-4 mb-5">
+        <div class="h-16 rounded-xl bg-zinc-800/50 animate-pulse" />
+        <div class="h-16 rounded-xl bg-zinc-800/50 animate-pulse" />
       </div>
       <div class="space-y-3">
         <div
@@ -48,30 +46,108 @@
     <!-- ═══ Activity tab ═══ -->
     <div
       v-else-if="activeTab === 'activity'"
-      class="flex-1 overflow-y-auto px-8 py-6"
+      class="flex-1 overflow-y-auto px-8 py-6 space-y-5"
     >
-      <!-- Weekly recap card -->
+      <!-- Header stats strip — collapses the old 4-tile grid into a slim
+           inline row, freeing the recap card to be the page's only loud
+           element. The "Players" tile (which doubled as a tab-switcher
+           shortcut) becomes a tappable focusable item so BPM remote /
+           keyboard users keep that affordance. -->
+      <div class="flex items-center justify-end gap-2 text-sm text-zinc-400 font-medium">
+        <button
+          :ref="
+            (el: any) =>
+              registerContent(el, { onSelect: () => (activeTab = 'players') })
+          "
+          class="flex items-center gap-1.5 rounded-md px-2 py-1 -my-1 hover:bg-zinc-800/60 focus:bg-zinc-800/60 transition-colors"
+          @click="activeTab = 'players'"
+        >
+          <span class="size-1.5 rounded-full bg-green-500 pulse-dot" />
+          <span class="text-zinc-200 tabular-nums">{{
+            stats.totalUsers.toLocaleString()
+          }}</span>
+          players
+        </button>
+        <span class="text-zinc-700">·</span>
+        <span>
+          <span class="text-zinc-200 tabular-nums">{{
+            stats.totalGames.toLocaleString()
+          }}</span>
+          games
+        </span>
+        <span class="text-zinc-700">·</span>
+        <span>
+          <span class="text-zinc-200 tabular-nums"
+            >{{ stats.totalPlaytimeHours.toLocaleString() }}h</span
+          >
+          played
+        </span>
+        <span class="text-zinc-700">·</span>
+        <span>
+          <span class="text-zinc-200 tabular-nums">{{
+            stats.totalAchievementUnlocks.toLocaleString()
+          }}</span>
+          unlocks
+        </span>
+      </div>
+
+      <!-- HERO: weekly recap is the only loud card. Layout mirrors the
+           desktop CommunityWeeklyRecap component (thumbnail anchor +
+           kicker / headline / meta), just with BPM focus delegate
+           wiring and slightly larger touch targets for the 10-foot UI. -->
       <div
         v-if="weeklyRecap.length > 0"
         :ref="(el: any) => registerContent(el, { onSelect: onRecapSelect })"
-        class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-900/40 via-zinc-900/60 to-purple-900/30 ring-1 ring-indigo-500/20 mb-6 cursor-pointer"
+        class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-900/40 via-zinc-900/60 to-purple-900/30 ring-1 ring-indigo-500/20 cursor-pointer"
         @click="onRecapSelect"
       >
-        <div
-          class="absolute top-3 left-4 text-[10px] tracking-[0.2em] uppercase text-indigo-300/80 font-medium z-10"
-        >
-          This week
-        </div>
         <transition name="bpm-slide-fade" mode="out-in">
-          <div :key="recapIndex" class="px-6 py-7 pl-6 pr-12">
-            <p class="text-xs font-medium text-indigo-300 mb-1">
-              {{ activeRecapSlide?.title }}
-            </p>
-            <p
-              class="text-lg font-display font-semibold text-zinc-100 leading-snug truncate"
+          <div
+            v-if="activeRecapSlide"
+            :key="recapIndex"
+            class="flex items-center gap-5 px-6 py-5"
+          >
+            <!-- Thumbnail anchor — cover for game-led slides, avatar for
+                 player-led slides, kind emoji as a last resort. -->
+            <div
+              class="shrink-0 size-24 rounded-xl overflow-hidden ring-1 ring-indigo-400/20 flex items-center justify-center"
+              :class="
+                activeRecapSlide.coverObjectId ||
+                activeRecapSlide.avatarObjectId
+                  ? 'bg-zinc-900/80'
+                  : 'bg-indigo-500/15'
+              "
             >
-              {{ activeRecapSlide?.subtitle }}
-            </p>
+              <img
+                v-if="activeRecapSlide.coverObjectId"
+                :src="objectUrl(activeRecapSlide.coverObjectId)"
+                :alt="activeRecapSlide.headline"
+                class="w-full h-full object-cover"
+              />
+              <img
+                v-else-if="activeRecapSlide.avatarObjectId"
+                :src="objectUrl(activeRecapSlide.avatarObjectId)"
+                :alt="activeRecapSlide.headline"
+                class="w-full h-full object-cover"
+              />
+              <span v-else class="text-3xl">{{ recapSlideEmoji }}</span>
+            </div>
+
+            <div class="flex-1 min-w-0 pr-12">
+              <p
+                class="text-[10px] tracking-[0.2em] uppercase text-indigo-300/80 font-medium mb-1 truncate"
+              >
+                {{ activeRecapSlide.title }}
+              </p>
+              <p
+                class="text-2xl font-display font-bold text-zinc-100 leading-tight truncate"
+              >
+                {{ activeRecapSlide.headline }}
+              </p>
+              <p class="text-sm text-zinc-400 mt-0.5 truncate">
+                {{ activeRecapSlide.meta }}
+              </p>
+            </div>
           </div>
         </transition>
         <div
@@ -88,266 +164,109 @@
         </div>
       </div>
 
-      <!-- Drop Time Machine card — sibling of weekly recap, hidden when null -->
+      <!-- Around right now strip — hidden on this layout (the data is
+           now surfaced inline on the Players / Leaderboard rows as
+           "online dot + currently-playing game"). Set
+           SHOW_AROUND_NOW_STRIP to true to restore the standalone strip. -->
       <div
-        v-if="timeMachine"
-        class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-amber-900/30 via-zinc-900/60 to-rose-900/20 ring-1 ring-amber-500/20 mb-6 px-5 py-4"
+        v-if="SHOW_AROUND_NOW_STRIP && nowPlaying.length > 0"
+        class="flex items-center gap-3 rounded-xl bg-zinc-900/40 ring-1 ring-zinc-800/60 px-4 py-2.5"
       >
-        <div class="flex items-center gap-2 mb-3">
+        <div class="flex items-center gap-1.5 shrink-0">
+          <span class="size-1.5 rounded-full bg-green-500 pulse-dot" />
           <span
-            class="text-[10px] tracking-[0.2em] uppercase text-amber-300/80 font-medium"
+            class="text-[11px] tracking-[0.15em] uppercase text-zinc-400 font-medium"
+            >Around now</span
           >
-            Drop Time Machine
-          </span>
         </div>
-        <div class="flex items-center gap-4">
-          <img
-            v-if="timeMachine.user.avatarObjectId"
-            :src="objectUrl(timeMachine.user.avatarObjectId)"
-            class="size-10 rounded-full object-cover ring-1 ring-amber-400/30 shrink-0"
-          />
-          <div
-            v-else
-            class="size-10 rounded-full bg-zinc-700 flex items-center justify-center ring-1 ring-amber-400/30 shrink-0"
-          >
-            <span class="text-xs font-bold text-zinc-400">
-              {{ timeMachine.user.displayName[0]?.toUpperCase() }}
-            </span>
-          </div>
-          <div class="flex-1 min-w-0">
-            <p class="text-xs text-amber-300/90 font-medium">
-              {{ timeMachineLabel }}
-            </p>
-            <p class="text-sm text-zinc-100 truncate">
-              <span class="font-medium">{{
-                timeMachine.user.displayName
-              }}</span>
-              <span class="text-zinc-400"> · {{ timeMachine.detail }} · </span>
-              <span class="text-amber-200">{{ timeMachine.game.name }}</span>
-            </p>
-          </div>
-          <img
-            v-if="timeMachine.game.coverObjectId"
-            :src="objectUrl(timeMachine.game.coverObjectId)"
-            class="h-14 w-10 rounded object-cover shrink-0"
-            loading="lazy"
-          />
-        </div>
-      </div>
-
-      <!-- Personal weekly quest card — hidden when endpoint returns null -->
-      <div
-        v-if="weeklyChallenge"
-        class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-amber-900/30 via-zinc-900/70 to-orange-900/20 ring-1 ring-amber-500/25 mb-6 px-5 py-4"
-      >
-        <div class="flex items-center gap-2 mb-3">
-          <span
-            class="text-[10px] tracking-[0.2em] uppercase text-amber-300/80 font-medium"
-          >
-            Your weekly quest
-          </span>
-          <span class="text-[10px] text-zinc-500">{{
-            weeklyChallengeDaysSuffix
-          }}</span>
-        </div>
-        <div class="flex items-center gap-4">
-          <div
-            class="shrink-0 size-12 rounded-full bg-amber-500/15 ring-1 ring-amber-400/40 flex items-center justify-center"
-          >
-            <span class="text-amber-300 text-xl">{{ weeklyChallengeEmoji }}</span>
-          </div>
-          <div class="flex-1 min-w-0">
-            <p
-              class="text-base font-display font-semibold text-zinc-100 truncate"
-            >
-              {{ weeklyChallenge.title }}
-            </p>
-            <p class="text-xs text-zinc-400 mt-0.5 line-clamp-2">
-              {{ weeklyChallenge.description }}
-            </p>
-            <div class="mt-3 flex items-center gap-3">
-              <div
-                class="relative h-2 flex-1 rounded-full bg-zinc-800/80 overflow-hidden"
-              >
-                <div
-                  class="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-amber-500 to-orange-400 transition-[width] duration-700 ease-out"
-                  :style="{ width: `${weeklyChallenge.percentComplete}%` }"
-                />
-              </div>
-              <p
-                class="text-xs font-medium text-zinc-300 tabular-nums shrink-0"
-              >
-                {{ formatChallengeValue(weeklyChallenge.currentValue) }} /
-                {{ formatChallengeValue(weeklyChallenge.targetValue) }}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Stats cards -->
-      <div class="grid grid-cols-4 gap-3 mb-8">
+        <div class="w-px h-4 bg-zinc-800 shrink-0" />
         <div
-          :ref="
-            (el: any) =>
-              registerContent(el, { onSelect: () => (activeTab = 'players') })
-          "
-          class="bg-zinc-900/60 rounded-xl p-4 cursor-pointer hover:bg-zinc-800/60 transition-colors"
-          @click="activeTab = 'players'"
+          class="flex items-center gap-2 min-w-0 overflow-x-auto"
+          style="scrollbar-width: none"
         >
-          <p class="text-2xl font-bold text-zinc-100">
-            {{ stats.totalUsers.toLocaleString() }}
-          </p>
-          <p class="text-xs text-blue-400 mt-1">Players &rarr;</p>
-        </div>
-        <div class="bg-zinc-900/60 rounded-xl p-4">
-          <p class="text-2xl font-bold text-zinc-100">
-            {{ stats.totalGames.toLocaleString() }}
-          </p>
-          <p class="text-xs text-zinc-500 mt-1">Games</p>
-        </div>
-        <div class="bg-zinc-900/60 rounded-xl p-4">
-          <p class="text-2xl font-bold text-zinc-100">
-            {{ stats.totalPlaytimeHours.toLocaleString() }}h
-          </p>
-          <p class="text-xs text-zinc-500 mt-1">Total Playtime</p>
-        </div>
-        <div class="bg-zinc-900/60 rounded-xl p-4">
-          <p class="text-2xl font-bold text-zinc-100">
-            {{ stats.totalAchievementUnlocks.toLocaleString() }}
-          </p>
-          <p class="text-xs text-zinc-500 mt-1">Achievements Unlocked</p>
-        </div>
-      </div>
-
-      <!-- Around right now strip -->
-      <div v-if="nowPlaying.length > 0" class="mb-8">
-        <div class="flex items-baseline gap-2 mb-3">
-          <h2 class="text-base font-display font-semibold text-zinc-100">
-            Around right now
-          </h2>
-          <span class="relative flex size-2.5">
-            <span
-              class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"
-            />
-            <span
-              class="relative inline-flex rounded-full size-2.5 bg-emerald-500"
-            />
-          </span>
-          <span class="text-xs text-zinc-500"
-            >{{ nowPlaying.length }}
-            {{ nowPlaying.length === 1 ? "player" : "players" }}</span
-          >
-        </div>
-        <div
-          class="flex gap-3 overflow-x-auto pb-2"
-          style="scrollbar-width: thin"
-        >
-          <button
-            v-for="entry in nowPlaying"
+          <template
+            v-for="(entry, i) in nowPlaying"
             :key="`${entry.userId}-${entry.startedAt}`"
-            :ref="
-              (el: any) =>
-                registerContent(el, { onSelect: () => goToGame(entry.game.id) })
-            "
-            class="shrink-0 group flex items-center gap-3 rounded-xl bg-emerald-500/5 ring-1 ring-emerald-500/20 hover:ring-emerald-400/50 transition-all p-2.5 pr-4"
-            @click="goToGame(entry.game.id)"
           >
-            <div class="relative shrink-0">
+            <button
+              :ref="
+                (el: any) =>
+                  registerContent(el, { onSelect: () => goToGame(entry.game.id) })
+              "
+              class="flex items-center gap-1.5 shrink-0 group"
+              @click="goToGame(entry.game.id)"
+            >
               <img
                 v-if="entry.avatarObjectId"
                 :src="objectUrl(entry.avatarObjectId)"
-                class="size-10 rounded-full object-cover ring-2 ring-emerald-400/60"
+                class="size-5 rounded-full object-cover"
               />
               <div
                 v-else
-                class="size-10 rounded-full bg-zinc-700 flex items-center justify-center ring-2 ring-emerald-400/60"
+                class="size-5 rounded-full bg-emerald-700/60 flex items-center justify-center text-[9px] font-bold text-zinc-100"
               >
-                <span class="text-xs font-bold text-zinc-400">{{
-                  entry.displayName[0]?.toUpperCase()
-                }}</span>
+                {{ entry.displayName[0]?.toUpperCase() }}
               </div>
+              <span class="text-xs font-medium text-zinc-200">{{
+                entry.displayName
+              }}</span>
+              <span class="text-xs text-zinc-500">in</span>
               <span
-                class="absolute -bottom-0.5 -right-0.5 size-3 rounded-full bg-emerald-500 ring-2 ring-zinc-950"
-              />
-            </div>
-            <img
-              v-if="entry.game.coverObjectId"
-              :src="objectUrl(entry.game.coverObjectId)"
-              class="h-12 w-9 rounded object-cover shrink-0"
-              loading="lazy"
-            />
-            <div class="text-left min-w-0 max-w-[10rem]">
-              <p class="text-xs text-zinc-400 truncate">
-                {{ entry.displayName }}
-              </p>
-              <p
-                class="text-sm font-medium text-zinc-100 truncate group-hover:text-emerald-300 transition-colors"
+                class="text-xs text-blue-400 group-hover:text-blue-300 transition-colors truncate max-w-[14rem]"
+                >{{ entry.game.name }}</span
               >
-                {{ entry.game.name }}
-              </p>
-            </div>
-          </button>
+            </button>
+            <span v-if="i < nowPlaying.length - 1" class="text-zinc-700 text-xs"
+              >·</span
+            >
+          </template>
         </div>
       </div>
 
-      <!-- Game roulette card -->
-      <div
-        :ref="
-          (el: any) => registerContent(el, { onSelect: onRouletteCardSelect })
-        "
-        class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-fuchsia-900/30 via-zinc-900/60 to-cyan-900/30 ring-1 ring-fuchsia-500/20 mb-8 px-5 py-4 cursor-pointer"
-        @click="onRouletteCardSelect"
-      >
-        <div class="flex items-center gap-2 mb-3">
-          <span
-            class="text-[10px] tracking-[0.2em] uppercase text-fuchsia-300/80 font-medium"
-          >
-            Game roulette
-          </span>
-          <span class="text-[10px] text-zinc-500"
-            >Can't decide? Let fate pick.</span
-          >
-        </div>
-        <div class="flex items-center gap-4">
-          <div
-            class="relative shrink-0 size-20 rounded-xl overflow-hidden bg-zinc-800 ring-1 ring-fuchsia-500/30"
-          >
-            <img
-              v-if="rouletteCoverId"
-              :src="objectUrl(rouletteCoverId)"
-              class="w-full h-full object-cover"
-              :class="{
-                'opacity-90': rouletteSpinning,
-                'roulette-tada': rouletteSettled,
-              }"
-              loading="lazy"
-            />
+      <!-- Weekly Quest card is hidden for now; flip SHOW_WEEKLY_QUEST to
+           bring it back. Game Roulette used to share this row but has
+           moved to the store's Browse tab where "I want to play
+           something" energy belongs. -->
+      <div v-if="SHOW_WEEKLY_QUEST && weeklyChallenge" class="space-y-4">
+        <div
+          class="rounded-xl bg-zinc-800/50 ring-1 ring-zinc-700/40 px-4 py-3 hover:ring-amber-500/40 transition"
+        >
+          <div class="flex items-center gap-3">
             <div
-              v-else
-              class="w-full h-full flex items-center justify-center text-zinc-600 text-2xl"
+              class="shrink-0 size-9 rounded-full bg-amber-500/15 flex items-center justify-center text-base"
             >
-              ✨
+              {{ weeklyChallengeEmoji }}
             </div>
-          </div>
-          <div class="flex-1 min-w-0">
-            <template v-if="rouletteResult">
-              <p
-                class="text-base font-display font-semibold text-zinc-100 truncate"
-              >
-                {{ rouletteResult.game.name }}
-              </p>
-              <p class="text-xs text-fuchsia-300 mt-0.5">
-                {{ rouletteCaption }}
-              </p>
-            </template>
-            <p v-else-if="rouletteEmpty" class="text-sm text-zinc-400">
-              Nothing to spin up yet — install a game first.
-            </p>
-            <p v-else-if="rouletteSpinning" class="text-sm text-zinc-400">
-              Spinning...
-            </p>
-            <p v-else class="text-sm text-zinc-300">Press A / click to spin.</p>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-baseline justify-between gap-2">
+                <p class="text-sm font-medium text-zinc-100 truncate">
+                  {{ weeklyChallenge.title }}
+                  <span class="text-zinc-500 font-normal"
+                    >— {{ weeklyChallenge.description }}</span
+                  >
+                </p>
+                <span
+                  class="text-[10px] text-zinc-500 shrink-0 tabular-nums"
+                  >{{ weeklyChallengeDaysSuffix }}</span
+                >
+              </div>
+              <div class="mt-2 flex items-center gap-3">
+                <div
+                  class="relative h-1.5 flex-1 rounded-full bg-zinc-900 overflow-hidden"
+                >
+                  <div
+                    class="absolute inset-y-0 left-0 rounded-full bg-amber-500/80 transition-[width] duration-700 ease-out"
+                    :style="{ width: `${weeklyChallenge.percentComplete}%` }"
+                  />
+                </div>
+                <p
+                  class="text-[11px] font-medium text-zinc-400 tabular-nums shrink-0"
+                >
+                  {{ formatChallengeValue(weeklyChallenge.currentValue) }} /
+                  {{ formatChallengeValue(weeklyChallenge.targetValue) }}
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -546,7 +465,22 @@
                 >👑</span
               >
             </p>
-            <p class="text-xs text-zinc-600">@{{ entry.user.username }}</p>
+            <!--
+              Two states: online (green dot + game name) vs offline
+              (@username). We prefer the online line because it's the
+              actionable signal — the row tap target already goes to the
+              profile, so the in-game name is a soft hint, not a button.
+            -->
+            <p
+              v-if="nowPlayingByUser.get(entry.user.id)"
+              class="text-xs text-zinc-400 flex items-center gap-1.5 min-w-0"
+            >
+              <span class="size-1.5 rounded-full bg-green-500 pulse-dot shrink-0" />
+              <span class="truncate">
+                {{ nowPlayingByUser.get(entry.user.id)!.game.name }}
+              </span>
+            </p>
+            <p v-else class="text-xs text-zinc-600">@{{ entry.user.username }}</p>
           </div>
 
           <div class="flex gap-6 text-right">
@@ -637,7 +571,22 @@
                 >👑</span
               >
             </p>
-            <p class="text-xs text-zinc-600">@{{ entry.user.username }}</p>
+            <!--
+              Two states: online (green dot + game name) vs offline
+              (@username). We prefer the online line because it's the
+              actionable signal — the row tap target already goes to the
+              profile, so the in-game name is a soft hint, not a button.
+            -->
+            <p
+              v-if="nowPlayingByUser.get(entry.user.id)"
+              class="text-xs text-zinc-400 flex items-center gap-1.5 min-w-0"
+            >
+              <span class="size-1.5 rounded-full bg-green-500 pulse-dot shrink-0" />
+              <span class="truncate">
+                {{ nowPlayingByUser.get(entry.user.id)!.game.name }}
+              </span>
+            </p>
+            <p v-else class="text-xs text-zinc-600">@{{ entry.user.username }}</p>
           </div>
 
           <div class="flex gap-6 text-right">
@@ -770,9 +719,7 @@ import {
   type NowPlayingEntry,
   type WeeklyRecapSlide,
   type MvpToday,
-  type TimeMachineEvent,
   type WeeklyChallenge,
-  type RouletteResult,
 } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
@@ -780,6 +727,15 @@ import { useFocusNavigation } from "~/composables/focus-navigation";
 import { clusterActivity } from "~/composables/use-community-clusters";
 
 definePageMeta({ layout: "bigpicture" });
+
+// Layout flags — flip to `true` to bring the hidden cards back. We use
+// `const` rather than `v-if="false"` because Vue's template typechecker
+// loses narrowing on null-guarded children inside a literal `false`
+// branch, but a boolean-typed reference combined with the original
+// truthy condition narrows cleanly (`v-if="SHOW_X && weeklyChallenge"`
+// still narrows weeklyChallenge to non-null inside the block).
+const SHOW_AROUND_NOW_STRIP = false;
+const SHOW_WEEKLY_QUEST = false;
 
 const api = useServerApi();
 const router = useRouter();
@@ -807,127 +763,21 @@ const leaderboard = ref<LeaderboardUser[]>([]);
 const nowPlaying = ref<NowPlayingEntry[]>([]);
 const weeklyRecap = ref<WeeklyRecapSlide[]>([]);
 const mvp = ref<MvpToday | null>(null);
-const timeMachine = ref<TimeMachineEvent | null>(null);
 const weeklyChallenge = ref<WeeklyChallenge | null>(null);
 const recapIndex = ref(0);
 
-// ── Roulette state (BPM-side, hand-rolled so we don't need to register the
-// shared component in this focusable grid).
-const rouletteResult = ref<RouletteResult | null>(null);
-const rouletteSpinning = ref(false);
-const rouletteEmpty = ref(false);
-const rouletteSettled = ref(false);
-const roulettePreviewCoverId = ref<string | null>(null);
-let rouletteCycleTimer: ReturnType<typeof setInterval> | null = null;
-let rouletteTadaTimer: ReturnType<typeof setTimeout> | null = null;
-
-const rouletteCoverId = computed(() => {
-  if (rouletteSpinning.value) return roulettePreviewCoverId.value;
-  return rouletteResult.value?.game.coverObjectId ?? null;
+// userId → currently-playing entry, for the Players / Leaderboard rows.
+// The standalone "Around now" strip is hidden on this layout; we recycle
+// the same data into each leaderboard row as a green-dot + game-name
+// decoration, so a user can see at a glance who's online without a
+// separate widget.
+const nowPlayingByUser = computed(() => {
+  const map = new Map<string, NowPlayingEntry>();
+  for (const entry of nowPlaying.value) {
+    map.set(entry.userId, entry);
+  }
+  return map;
 });
-
-const rouletteCaption = computed(() => {
-  if (!rouletteResult.value) return "";
-  switch (rouletteResult.value.source) {
-    case "rediscovery":
-      return "You haven't played in a while";
-    case "library":
-      return "From your library";
-    case "social": {
-      const n = rouletteResult.value.alsoPlayedBy?.length ?? 0;
-      if (n === 0) return "Played by others on this server";
-      if (n === 1)
-        return `${rouletteResult.value.alsoPlayedBy![0].displayName} has played this`;
-      return `${n} friends have played this`;
-    }
-    default:
-      return "";
-  }
-});
-
-const rouletteCoverPool = computed(() => {
-  const pool = new Set<string>();
-  for (const a of activity.value) {
-    if (a.game?.mCoverObjectId) pool.add(a.game.mCoverObjectId);
-  }
-  for (const n of nowPlaying.value) {
-    if (n.game?.coverObjectId) pool.add(n.game.coverObjectId);
-  }
-  return [...pool].slice(0, 40);
-});
-
-function pickRouletteCover(): string | null {
-  const pool = rouletteCoverPool.value;
-  if (pool.length === 0) return roulettePreviewCoverId.value;
-  return pool[Math.floor(Math.random() * pool.length)] ?? null;
-}
-
-async function spinRoulette() {
-  if (rouletteSpinning.value) return;
-  rouletteEmpty.value = false;
-  rouletteSettled.value = false;
-  rouletteSpinning.value = true;
-
-  const cycleMs = 80;
-  const minCycles = 8;
-  const maxCycles = 12;
-  const targetCycles =
-    minCycles + Math.floor(Math.random() * (maxCycles - minCycles + 1));
-  const minDurationMs = targetCycles * cycleMs;
-
-  if (rouletteCycleTimer) clearInterval(rouletteCycleTimer);
-  rouletteCycleTimer = setInterval(() => {
-    roulettePreviewCoverId.value = pickRouletteCover();
-  }, cycleMs);
-
-  const [fetched] = await Promise.all([
-    api.community.roulette().catch((e) => {
-      console.warn("[bpm roulette] fetch failed:", e);
-      return null;
-    }),
-    new Promise((r) => setTimeout(r, minDurationMs)),
-  ]);
-
-  if (rouletteCycleTimer) {
-    clearInterval(rouletteCycleTimer);
-    rouletteCycleTimer = null;
-  }
-
-  rouletteSpinning.value = false;
-  if (fetched) {
-    rouletteResult.value = fetched;
-    rouletteEmpty.value = false;
-    rouletteSettled.value = true;
-    if (rouletteTadaTimer) clearTimeout(rouletteTadaTimer);
-    rouletteTadaTimer = setTimeout(() => {
-      rouletteSettled.value = false;
-    }, 700);
-  } else {
-    rouletteResult.value = null;
-    rouletteEmpty.value = true;
-  }
-}
-
-/**
- * Card-level activation. On first press (no result yet, not spinning) we
- * kick off a spin. Subsequent presses while we have a settled pick navigate
- * to its destination — owned games go to the BPM library, social picks to
- * the BPM store.
- */
-function onRouletteCardSelect() {
-  if (rouletteSpinning.value) return;
-  if (!rouletteResult.value) {
-    spinRoulette();
-    return;
-  }
-  // BPM's library page handles both owned (installed) and store-discovery
-  // states for the same game id, so we can route both source kinds to the
-  // same route — same pattern the BPM store uses to "drill in" to a tile.
-  const gameId = rouletteResult.value.game.id;
-  const target = `/bigpicture/library/${gameId}`;
-  focusNav.setRouteState("backTo", "/bigpicture/community", target);
-  router.push(target);
-}
 
 const weeklyChallengeDaysSuffix = computed(() => {
   if (!weeklyChallenge.value) return "";
@@ -985,21 +835,6 @@ const mvpTooltip = computed(() => {
   return `Today's MVP — ${playLabel} · ${mvp.value.achievementsUnlocked} achievement${mvp.value.achievementsUnlocked === 1 ? "" : "s"}`;
 });
 
-const timeMachineLabel = computed(() => {
-  if (!timeMachine.value) return "";
-  switch (timeMachine.value.daysAgo) {
-    case 365:
-      return "A year ago today";
-    case 180:
-      return "Six months ago today";
-    case 90:
-      return "Three months ago today";
-    case 30:
-      return "One month ago today";
-    default:
-      return `${timeMachine.value.daysAgo} days ago today`;
-  }
-});
 let recapTimer: ReturnType<typeof setInterval> | null = null;
 
 const rankColors = ["text-yellow-400", "text-zinc-300", "text-amber-600"];
@@ -1030,6 +865,26 @@ const clusteredActivity = computed(() =>
 const activeRecapSlide = computed(
   () => weeklyRecap.value[recapIndex.value] ?? weeklyRecap.value[0],
 );
+
+// Per-kind fallback glyph for the thumbnail slot, used only when the
+// slide has neither a game cover nor a user avatar to render. Mirrors
+// the same mapping the desktop CommunityWeeklyRecap component uses.
+const recapSlideEmoji = computed(() => {
+  switch (activeRecapSlide.value?.kind) {
+    case "top_game":
+      return "🎮";
+    case "longest_session":
+      return "⏱";
+    case "most_unlocks":
+      return "🏆";
+    case "milestone":
+      return "🚀";
+    case "new_player":
+      return "👋";
+    default:
+      return "✨";
+  }
+});
 
 function onRecapSelect() {
   const slide = activeRecapSlide.value;
@@ -1122,7 +977,6 @@ onMounted(async () => {
       nowPlayingData,
       recapData,
       mvpData,
-      timeMachineData,
       weeklyChallengeData,
     ] = await Promise.all([
       api.community.stats().catch(() => stats.value),
@@ -1134,7 +988,6 @@ onMounted(async () => {
       api.community.nowPlaying().catch(() => []),
       api.community.weeklyRecap().catch(() => []),
       api.community.mvpToday().catch(() => null),
-      api.community.timeMachine().catch(() => null),
       api.community.weeklyChallenge().catch(() => null),
     ]);
     stats.value = statsData;
@@ -1144,7 +997,6 @@ onMounted(async () => {
     nowPlaying.value = nowPlayingData;
     weeklyRecap.value = recapData;
     mvp.value = mvpData;
-    timeMachine.value = timeMachineData;
     weeklyChallenge.value = weeklyChallengeData;
     startRecapTimer();
   } catch (e) {
@@ -1157,8 +1009,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (recapTimer) clearInterval(recapTimer);
-  if (rouletteCycleTimer) clearInterval(rouletteCycleTimer);
-  if (rouletteTadaTimer) clearTimeout(rouletteTadaTimer);
 });
 
 watch(
@@ -1186,22 +1036,24 @@ watch(
   transform: translateY(-6px);
 }
 
-@keyframes roulette-tada {
-  0% {
-    transform: scale(1);
-  }
-  30% {
-    transform: scale(1.08);
-  }
-  60% {
-    transform: scale(0.97);
-  }
+/* Pulsing green dot used in the header stats strip + the "Around now"
+   presence strip. */
+.pulse-dot {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes pulse {
+  0%,
   100% {
-    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
   }
 }
 
-.roulette-tada {
-  animation: roulette-tada 700ms cubic-bezier(0.34, 1.56, 0.64, 1);
+/* Hide the horizontal scrollbar on the "Around now" presence strip
+   while still allowing wheel/touch scroll on overflow. */
+.overflow-x-auto::-webkit-scrollbar {
+  display: none;
 }
 </style>

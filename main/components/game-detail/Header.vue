@@ -162,11 +162,12 @@
           @click="$emit('open-community')"
         >
           <UsersIcon class="size-4 text-zinc-400 shrink-0" />
-          <!-- "Friends Played" disambiguates the stat — the bare "Friends 0"
-               on Date Everything! read like "you have no friends" rather
-               than "no friends have played this yet". Past tense matches
-               the data semantics (any historical playtime > 0). -->
-          <span class="text-zinc-400">Friends Played</span>
+          <!-- "Friends Played:" disambiguates the stat — the bare
+               "Friends 0" on a solo game read like "you have no
+               friends" rather than "no friends have played this yet".
+               Colon makes the label-value relationship explicit (no
+               more "Friends Played 3" run-on). -->
+          <span class="text-zinc-400">Friends Played:</span>
           <span class="text-zinc-100 font-medium">
             {{ players.length }}
           </span>
@@ -175,9 +176,14 @@
             class="flex -space-x-1.5 ml-0.5"
           >
             <template v-for="p in players.slice(0, 3)" :key="p.userId">
+              <!-- Avatar URLs go through the Tauri `server://` protocol
+                   so the desktop webview can resolve them (a bare
+                   `/api/v1/object/...` path 404s in the file:// origin
+                   the webview runs in). The web build's serverUrl just
+                   returns the same path back. -->
               <img
                 v-if="p.avatarObjectId"
-                :src="`/api/v1/object/${p.avatarObjectId}`"
+                :src="serverUrl(`api/v1/object/${p.avatarObjectId}`)"
                 class="size-5 rounded-full ring-2 ring-zinc-800 object-cover bg-zinc-700"
                 referrerpolicy="no-referrer"
               />
@@ -222,6 +228,7 @@ import {
 import { InstalledType } from "~/types";
 import type { Game, GameStatus, GameVersion } from "~/types";
 import type { GamePlayerEntry } from "~/composables/use-server-api";
+import { serverUrl } from "~/composables/use-server-fetch";
 import {
   formatLastPlayed,
   formatPlaytime,

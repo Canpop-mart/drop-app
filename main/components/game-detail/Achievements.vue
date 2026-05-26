@@ -1,11 +1,10 @@
 <template>
-  <div class="bg-zinc-800/50 rounded-xl p-6 backdrop-blur-sm">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-xl font-display font-semibold text-zinc-100">
-        Achievements
-      </h2>
-    </div>
-
+  <!-- This component is now rendered inside a CollapsibleSection
+       on the library detail page, which already carries the
+       "Achievements" header + progress count.  Stripping the duplicate
+       header + outer card wrapper keeps the column tidy and lets the
+       parent own the surrounding chrome. -->
+  <div>
     <!-- ROM hash status banner (RetroAchievements). -->
     <div
       v-if="romHashResult?.status === 'Mismatch'"
@@ -69,10 +68,12 @@
       <TrophyIcon class="size-10 text-zinc-600 mb-2" />
       <p class="text-zinc-500 text-sm">No achievements available</p>
     </div>
-    <div
-      v-else
-      class="space-y-2 max-h-80 overflow-y-auto custom-scrollbar pr-1"
-    >
+    <!-- No inner max-height — the CollapsibleSection wrapper now
+         provides the show/hide affordance, so capping list height
+         here only adds a redundant inner scrollbar. The full list
+         expands naturally and users collapse the whole section if
+         it gets long. -->
+    <div v-else class="space-y-1">
       <div class="flex items-center justify-between mb-2">
         <span class="text-xs text-zinc-400">
           {{ unlockedCount }} / {{ achievements.length }} unlocked

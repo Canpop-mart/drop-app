@@ -134,17 +134,82 @@ export interface NowPlayingEntry {
   startedAt: string;
 }
 
+/**
+ * Weekly-recap slide shape. The server splits the old `subtitle` blob into
+ * structured fields so the client can build a real hierarchy:
+ *   - `title`           kicker label (small, uppercase)
+ *   - `headline`        the *thing* the slide is about (game or player name)
+ *   - `meta`            quieter supporting line under the headline
+ *   - `coverObjectId`   game cover for the thumbnail slot (preferred)
+ *   - `avatarObjectId`  player avatar — used when no cover is in scope
+ *     (most_unlocks / milestone / new_player) or as a secondary signal.
+ */
 export interface WeeklyRecapSlide {
   kind: string;
   title: string;
-  subtitle: string;
+  headline: string;
+  meta: string;
   gameId: string | null;
   userId: string | null;
+  coverObjectId: string | null;
+  avatarObjectId: string | null;
+}
+
+// ── Games: per-game achievements ───────────────────────────────────────────
+
+/**
+ * One achievement row for a given game, with the caller's unlock state
+ * baked in. Returned by `/api/v1/games/[id]/achievements` and consumed
+ * by the store detail page's Achievements section.
+ *
+ * `iconUrl` / `iconLockedUrl` are raw CDN URLs (Steam / RetroAchievements)
+ * — they are NOT object-store IDs, so render `<img :src="iconUrl">`
+ * directly without going through `useObject` / `serverUrl`.
+ */
+export interface StoreAchievement {
+  id: string;
+  gameId: string;
+  externalId: string;
+  provider: string;
+  title: string;
+  description: string;
+  iconUrl: string;
+  iconLockedUrl: string;
+  displayOrder: number;
+  unlocked: boolean;
+  unlockedAt: string | null;
+  /** Percent of owners who have unlocked this achievement (server-wide). */
+  rarity: number;
+  /** Raw count of unlocks across all users. */
+  unlockCount: number;
+}
+
+// ── Client: recent playtime ────────────────────────────────────────────────
+
+/**
+ * One entry per game the caller has ever played, capped at 20, ordered by
+ * the most recent session's `startedAt` desc. Drives the library page's
+ * "Continue playing" hero card and "Recently played" shelf.
+ */
+export interface RecentPlaytimeEntry {
+  gameId: string;
+  gameName: string;
+  coverObjectId: string | null;
+  lastPlayedAt: string;
+  totalPlaytimeSeconds: number;
 }
 
 // ── Community: roulette & weekly-challenge ─────────────────────────────────
 
-export type RouletteSource = "rediscovery" | "library" | "social";
+// `discover` was added when the roulette pool was widened to include EVERY
+// game on the Drop store — not just the caller's installs. A discover pick
+// is a game the caller doesn't own; `alsoPlayedBy` may still be populated
+// if other server users have hours in it.
+export type RouletteSource =
+  | "rediscovery"
+  | "library"
+  | "social"
+  | "discover";
 
 export interface RouletteResult {
   game: {
@@ -154,7 +219,7 @@ export interface RouletteResult {
     bannerObjectId: string | null;
   };
   source: RouletteSource;
-  /** Optional context for "social" picks — names of friends who play it. */
+  /** Optional context for "social" and "discover" picks. */
   alsoPlayedBy?: Array<{
     userId: string;
     displayName: string;
@@ -204,19 +269,6 @@ export interface MvpToday {
   sessionSeconds: number;
   achievementsUnlocked: number;
   asOf: string;
-}
-
-/**
- * "Drop Time Machine" — one "this day in history" event surfaced as a
- * compact card on the community page. Server returns null when no
- * candidates exist at any of the 30/90/180/365-day anniversary levels.
- */
-export interface TimeMachineEvent {
-  kind: "anniversary_session" | "anniversary_first_play" | "anniversary_unlock";
-  daysAgo: number;
-  user: { id: string; displayName: string; avatarObjectId: string | null };
-  game: { id: string; name: string; coverObjectId: string | null };
-  detail: string;
 }
 
 // ── Profile types ──────────────────────────────────────────────────────────
@@ -470,14 +522,6 @@ export function useServerApi() {
       mvpToday: () => apiFetch<MvpToday | null>("api/v1/community/mvp-today"),
 
       /**
-       * Drop Time Machine — one "this day in history" event picked at
-       * random from 30/90/180/365 day anniversaries. Returns null when
-       * there are no eligible events. Soft-fail to hidden card.
-       */
-      timeMachine: () =>
-        apiFetch<TimeMachineEvent | null>("api/v1/community/time-machine"),
-
-      /**
        * Server users with any playtime on this game, ranked by playtime desc.
        * Powers the "Friends X of 6" tile and the leaderboard inside the
        * per-game Community tab. Owned by Agent C — soft-fail to empty list.
@@ -579,6 +623,31 @@ export function useServerApi() {
 
       /** Get the current user's own profile. */
       me: () => apiFetch<UserProfile>("api/v1/user"),
+    },
+
+    playtime: {
+      /**
+       * Most-recently-played games for the current user, distinct per game,
+       * sorted by last session desc. Drives the library page's "Continue
+       * playing" hero card and the "Recently played" shelf.
+       */
+      recent: () =>
+        apiFetch<RecentPlaytimeEntry[]>("api/v1/client/playtime/recent"),
+    },
+
+    games: {
+      /**
+       * Per-game achievement list for the calling user. Each row carries
+       * the achievement metadata (title, description, icon URLs), the
+       * caller's unlock state (`unlocked` + `unlockedAt`), and the
+       * server-wide rarity stats (`rarity` percent + `unlockCount`).
+       *
+       * Drives the store detail page's Achievements section. The library
+       * detail page has its own richer pipeline via `useGameStats` —
+       * this binding is intentionally read-only and unstateful.
+       */
+      achievements: (gameId: string) =>
+        apiFetch<StoreAchievement[]>(`api/v1/games/${gameId}/achievements`),
     },
 
     saves: {

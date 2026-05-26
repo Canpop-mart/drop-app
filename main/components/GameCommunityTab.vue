@@ -1,33 +1,41 @@
 <template>
-  <div class="space-y-6">
-    <!-- ── Leaderboard ──────────────────────────────────────────────────── -->
-    <section class="bg-zinc-800/50 rounded-xl backdrop-blur-sm overflow-hidden">
-      <header class="px-6 py-3 border-b border-zinc-700/50 flex items-center gap-2">
+  <!-- Three stacked sections — leaderboard, first-to-unlock, recent
+       activity. Designed to slot inside a CollapsibleSection sidebar
+       on the library detail page, so the parent owns the section
+       header.  Padding + sizing are tuned to read cleanly in a 360px
+       sidebar without feeling smushed. -->
+  <div class="space-y-5">
+    <!-- ── Leaderboard ────────────────────────────────────────────────── -->
+    <div>
+      <div class="flex items-center gap-2 mb-2.5">
         <TrophyIcon class="size-4 text-yellow-500" />
-        <h3 class="text-sm font-display font-semibold text-zinc-100">
+        <h4 class="text-xs font-display font-semibold text-zinc-200 uppercase tracking-wider">
           Leaderboard
-        </h3>
-        <span class="text-xs text-zinc-500 ml-auto">
+        </h4>
+        <span class="text-[10px] text-zinc-500 ml-auto tabular-nums">
           {{ players.length }} {{ players.length === 1 ? "player" : "players" }}
         </span>
-      </header>
-      <div v-if="playersLoading" class="px-6 py-6 text-sm text-zinc-500">
+      </div>
+      <div v-if="playersLoading" class="text-sm text-zinc-500 py-3">
         Loading…
       </div>
       <div
         v-else-if="players.length === 0"
-        class="px-6 py-6 text-sm text-zinc-500"
+        class="text-sm text-zinc-500 py-3"
       >
         No data yet
       </div>
-      <ol v-else class="divide-y divide-zinc-700/40">
+      <ol
+        v-else
+        class="divide-y divide-zinc-700/40 rounded-lg bg-zinc-900/40 ring-1 ring-zinc-800/40 overflow-hidden"
+      >
         <li
           v-for="(p, idx) in players"
           :key="p.userId"
-          class="flex items-center gap-3 px-6 py-2.5"
+          class="flex items-center gap-3 px-3.5 py-3"
         >
           <span
-            class="size-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 tabular-nums"
+            class="size-6 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 tabular-nums"
             :class="rankColor(idx + 1)"
           >
             {{ idx + 1 }}
@@ -36,112 +44,115 @@
             v-if="p.avatarObjectId"
             :src="avatarUrl(p.avatarObjectId)"
             :alt="p.displayName"
-            class="size-7 rounded-full object-cover bg-zinc-700 shrink-0"
+            class="size-8 rounded-full object-cover bg-zinc-700 shrink-0"
             referrerpolicy="no-referrer"
           />
           <div
             v-else
-            class="size-7 rounded-full bg-zinc-700 flex items-center justify-center shrink-0"
+            class="size-8 rounded-full bg-zinc-700 flex items-center justify-center shrink-0"
           >
-            <span class="text-[10px] font-semibold text-zinc-300 uppercase">
+            <span class="text-xs font-semibold text-zinc-300 uppercase">
               {{ initial(p.displayName) }}
             </span>
           </div>
           <div class="flex-1 min-w-0">
-            <p class="text-sm font-medium text-zinc-200 truncate">
+            <p class="text-sm font-medium text-zinc-100 truncate">
               {{ p.displayName }}
             </p>
-            <p class="text-xs text-zinc-500">
+            <p class="text-xs text-zinc-500 mt-0.5">
               {{ formatPlaytime(p.playtimeSeconds) }}
               <span v-if="p.achievementsTotal > 0">
                 · {{ p.achievementsUnlocked }}/{{ p.achievementsTotal }}
-                <TrophyIcon class="inline size-3 text-yellow-500 -mt-0.5" />
               </span>
             </p>
           </div>
         </li>
       </ol>
-    </section>
+    </div>
 
-    <!-- ── First-to-unlock achievements ─────────────────────────────────── -->
-    <section class="bg-zinc-800/50 rounded-xl backdrop-blur-sm overflow-hidden">
-      <header class="px-6 py-3 border-b border-zinc-700/50 flex items-center gap-2">
+    <!-- ── First-to-unlock achievements ─────────────────────────────── -->
+    <div>
+      <div class="flex items-center gap-2 mb-2.5">
         <SparklesIcon class="size-4 text-yellow-400" />
-        <h3 class="text-sm font-display font-semibold text-zinc-100">
+        <h4 class="text-xs font-display font-semibold text-zinc-200 uppercase tracking-wider">
           First to unlock
-        </h3>
-        <span class="text-xs text-zinc-500 ml-auto">on this server</span>
-      </header>
-      <div v-if="firstsLoading" class="px-6 py-4 text-sm text-zinc-500">
+        </h4>
+        <span class="text-[10px] text-zinc-500 ml-auto">on this server</span>
+      </div>
+      <div v-if="firstsLoading" class="text-sm text-zinc-500 py-3">
         Loading…
       </div>
       <div
         v-else-if="firsts.length === 0"
-        class="px-6 py-4 text-sm text-zinc-500"
+        class="text-sm text-zinc-500 py-3"
       >
         No data yet
       </div>
       <div
         v-else
-        class="flex gap-3 overflow-x-auto px-6 py-4 firsts-scroll"
+        class="flex gap-2.5 overflow-x-auto pb-2 firsts-scroll"
       >
         <div
           v-for="f in firsts"
           :key="f.achievementId"
-          class="shrink-0 w-40 rounded-lg bg-zinc-900/60 p-3 ring-1 ring-yellow-500/30"
+          class="shrink-0 w-36 rounded-lg bg-zinc-900/50 p-3 ring-1 ring-yellow-500/25"
         >
-          <div class="flex items-center gap-2 mb-2">
-            <img
-              v-if="f.achievementIconUrl"
-              :src="f.achievementIconUrl"
-              class="size-10 rounded ring-2 ring-yellow-500/70 shrink-0"
-              referrerpolicy="no-referrer"
-              :alt="f.achievementName"
-            />
-            <div
-              v-else
-              class="size-10 rounded ring-2 ring-yellow-500/70 bg-zinc-800 flex items-center justify-center shrink-0"
-            >
-              <TrophyIcon class="size-5 text-yellow-500" />
-            </div>
-            <p
-              class="text-xs font-medium text-zinc-100 leading-tight line-clamp-2"
-            >
-              {{ f.achievementName }}
-            </p>
+          <img
+            v-if="f.achievementIconUrl"
+            :src="f.achievementIconUrl"
+            class="size-10 rounded ring-2 ring-yellow-500/60 mb-2"
+            referrerpolicy="no-referrer"
+            :alt="f.achievementName"
+          />
+          <div
+            v-else
+            class="size-10 rounded ring-2 ring-yellow-500/60 bg-zinc-800 flex items-center justify-center mb-2"
+          >
+            <TrophyIcon class="size-5 text-yellow-500" />
           </div>
-          <p class="text-[11px] text-yellow-400/90 truncate">
+          <p
+            class="text-xs font-medium text-zinc-100 leading-tight line-clamp-2 mb-1.5"
+          >
+            {{ f.achievementName }}
+          </p>
+          <p class="text-[11px] text-yellow-400/90 truncate font-medium">
             {{ f.displayName }}
           </p>
-          <p class="text-[10px] text-zinc-500" :title="fullTime(f.unlockedAt)">
+          <p
+            class="text-[10px] text-zinc-500 mt-0.5"
+            :title="fullTime(f.unlockedAt)"
+          >
             {{ relativeTime(f.unlockedAt) }}
           </p>
         </div>
       </div>
-    </section>
+    </div>
 
-    <!-- ── Activity for this game ───────────────────────────────────────── -->
-    <section class="bg-zinc-800/50 rounded-xl backdrop-blur-sm overflow-hidden">
-      <header class="px-6 py-3 border-b border-zinc-700/50 flex items-center gap-2">
+    <!-- ── Activity for this game ───────────────────────────────────── -->
+    <div>
+      <div class="flex items-center gap-2 mb-2.5">
         <BoltIcon class="size-4 text-blue-400" />
-        <h3 class="text-sm font-display font-semibold text-zinc-100">
+        <h4 class="text-xs font-display font-semibold text-zinc-200 uppercase tracking-wider">
           Recent activity
-        </h3>
-      </header>
-      <div v-if="activityLoading" class="px-6 py-4 text-sm text-zinc-500">
+        </h4>
+      </div>
+      <div v-if="activityLoading" class="text-sm text-zinc-500 py-3">
         Loading…
       </div>
       <div
         v-else-if="activity.length === 0"
-        class="px-6 py-4 text-sm text-zinc-500"
+        class="text-sm text-zinc-500 py-3"
       >
         No data yet
       </div>
-      <ul v-else class="divide-y divide-zinc-700/40">
+      <ul
+        v-else
+        class="divide-y divide-zinc-700/40 rounded-lg bg-zinc-900/40 ring-1 ring-zinc-800/40 overflow-hidden"
+      >
         <li
           v-for="(item, i) in activity"
           :key="`${item.type}-${item.timestamp}-${i}`"
-          class="flex items-start gap-3 px-6 py-3"
+          class="flex items-start gap-3 px-3.5 py-3"
         >
           <img
             v-if="item.user?.profilePictureObjectId"
@@ -156,7 +167,7 @@
             <UserIcon class="size-4 text-zinc-500" />
           </div>
           <div class="flex-1 min-w-0">
-            <p class="text-sm text-zinc-300">
+            <p class="text-sm text-zinc-300 leading-snug">
               <span class="font-medium text-zinc-100">{{
                 item.user?.displayName || item.user?.username || "Someone"
               }}</span>
@@ -176,13 +187,13 @@
                 </span>
               </template>
             </p>
-            <p class="text-xs text-zinc-500 mt-0.5">
+            <p class="text-[11px] text-zinc-500 mt-1">
               {{ relativeTime(item.timestamp) }}
             </p>
           </div>
         </li>
       </ul>
-    </section>
+    </div>
   </div>
 </template>
 
