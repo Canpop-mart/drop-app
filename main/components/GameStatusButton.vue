@@ -1,90 +1,35 @@
 <template>
-  <!-- Do not add scale animations to this: https://stackoverflow.com/a/35683068 -->
-  <div class="inline-flex divide-x divide-zinc-900">
-    <button
-      type="button"
-      @click="() => fetchStatusStyleData($props.status).action()"
-      :class="[
-        fetchStatusStyleData($props.status).style,
-        showDropdown ? 'rounded-l-md' : 'rounded-md',
-        'inline-flex uppercase font-display items-center gap-x-2 px-4 py-3 text-md font-semibold shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2',
-      ]"
-    >
-      <component
-        :is="fetchStatusStyleData($props.status).icon"
-        class="-mr-0.5 size-5"
-        aria-hidden="true"
-      />
-      {{ fetchStatusStyleData($props.status).buttonName }}
-    </button>
-    <Menu
-      v-if="showDropdown"
-      as="div"
-      class="relative inline-block text-left grow"
-    >
-      <div class="h-full">
-        <MenuButton
-          :class="[
-            fetchStatusStyleData($props.status).style,
-            'inline-flex w-full h-full justify-center items-center rounded-r-md px-1 py-2 text-sm font-semibold shadow-sm group',
-            'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2',
-          ]"
-        >
-          <ChevronDownIcon class="size-5" aria-hidden="true" />
-        </MenuButton>
-      </div>
+  <!-- Single primary action button.  The chevron dropdown that used
+       to sit next to this button (with "Options" + "Uninstall") was
+       consolidated into the top-left gear menu (OptionsMenu) so all
+       per-game knobs live in one discoverable place.
 
-      <transition
-        enter-active-class="transition ease-out duration-100"
-        enter-from-class="transform opacity-0 scale-95"
-        enter-to-class="transform opacity-100 scale-100"
-        leave-active-class="transition ease-in duration-75"
-        leave-from-class="transform opacity-100 scale-100"
-        leave-to-class="transform opacity-0 scale-95"
-      >
-        <MenuItems
-          class="absolute right-0 z-[500] mt-2 w-32 origin-top-right rounded-md bg-zinc-900 shadow-lg ring-1 ring-zinc-100/5 focus:outline-none"
-        >
-          <div class="py-1">
-            <MenuItem v-if="showOptions" v-slot="{ active }">
-              <button
-                @click="() => emit('options')"
-                :class="[
-                  active
-                    ? 'bg-zinc-800 text-zinc-100 outline-none'
-                    : 'text-zinc-400',
-                  'w-full px-4 py-2 text-sm inline-flex justify-between',
-                ]"
-              >
-                Options
-                <Cog6ToothIcon class="size-5" />
-              </button>
-            </MenuItem>
-            <MenuItem v-slot="{ active }">
-              <button
-                @click="() => emit('uninstall')"
-                :class="[
-                  active
-                    ? 'bg-zinc-800 text-zinc-100 outline-none'
-                    : 'text-zinc-400',
-                  'w-full inline-flex px-4 py-2 text-sm justify-between',
-                ]"
-              >
-                Uninstall
-                <TrashIcon class="size-5" />
-              </button>
-            </MenuItem>
-          </div>
-        </MenuItems>
-      </transition>
-    </Menu>
-  </div>
+       Hidden capability: **Shift+click on the Play / Setup button
+       triggers an incognito launch** (no playtime, achievement, or
+       presence reporting).  No visible UI hint — pure stealth.  The
+       handler short-circuits to `launch-incognito` only when the
+       current status is a launchable one; any other status falls
+       through to the normal action.
+
+       Do not add scale animations to this: https://stackoverflow.com/a/35683068 -->
+  <button
+    type="button"
+    class="inline-flex uppercase font-display items-center gap-x-2 px-4 py-3 text-md font-semibold shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 rounded-md"
+    :class="fetchStatusStyleData($props.status).style"
+    @click="onClick"
+  >
+    <component
+      :is="fetchStatusStyleData($props.status).icon"
+      class="-mr-0.5 size-5"
+      aria-hidden="true"
+    />
+    {{ fetchStatusStyleData($props.status).buttonName }}
+  </button>
 </template>
 
 <script setup lang="ts">
 import {
   ArrowDownTrayIcon,
-  ChevronDownIcon,
   PlayIcon,
   QueueListIcon,
   ServerIcon,
@@ -98,19 +43,36 @@ import {
   InstalledType,
   type GameStatus,
 } from "~/types.js";
-import { Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/vue";
-import { Cog6ToothIcon, TrashIcon } from "@heroicons/vue/24/outline";
+import { TrashIcon } from "@heroicons/vue/24/outline";
 
 const props = defineProps<{ status: GameStatus }>();
 const emit = defineEmits<{
   (e: "install"): void;
   (e: "launch"): void;
+  (e: "launch-incognito"): void;
   (e: "queue"): void;
-  (e: "uninstall"): void;
   (e: "kill"): void;
-  (e: "options"): void;
   (e: "resume"): void;
 }>();
+
+/**
+ * Click handler with the hidden Shift+click → incognito branch.
+ * Only short-circuits when the current status would actually start
+ * a session (Installed + Installed install_type — i.e. the Play
+ * button).  Setup / Resume / Install paths fall through to their
+ * normal actions even with Shift held, because there's no notion of
+ * "private install" to suppress there.
+ */
+function onClick(evt: MouseEvent) {
+  const isLaunchable =
+    props.status.type === "Installed" &&
+    props.status.install_type.type === InstalledType.Installed;
+  if (evt.shiftKey && isLaunchable) {
+    emit("launch-incognito");
+    return;
+  }
+  fetchStatusStyleData(props.status).action();
+}
 
 interface StatusStyleData {
   style: string;
@@ -157,15 +119,6 @@ function fetchStatusStyleData(status: GameStatus): StatusStyleData {
     action: buttonActions[status.type],
   };
 }
-
-const showDropdown = computed(() => props.status.type === "Installed");
-
-const showOptions = computed(
-  () =>
-    showDropdown.value &&
-    props.status.type === "Installed" &&
-    props.status.install_type.type !== InstalledType.PartiallyInstalled,
-);
 
 const styles: { [key in EmptyGameStatusEnum]: string } = {
   Remote:

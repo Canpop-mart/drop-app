@@ -106,6 +106,11 @@
             :alt="featured[heroIndex].mName"
             class="w-full h-full object-cover"
           />
+          <BannerFallback
+            v-else-if="featured[heroIndex]"
+            :name="featured[heroIndex].mName"
+            text-size="text-8xl"
+          />
           <!-- Gradient masks. Softened from the previous from-zinc-950/95
                so the banner art still reads through the lower third of
                the hero instead of being washed to near-solid black. -->
@@ -617,6 +622,7 @@ import StoreShelf from "~/components/StoreShelf.vue";
 import StoreRecentlyUpdated from "~/components/StoreRecentlyUpdated.vue";
 import StoreDiscoveryTabs from "~/components/StoreDiscoveryTabs.vue";
 import GameRoulette from "~/components/GameRoulette.vue";
+import BannerFallback from "~/components/BannerFallback.vue";
 
 // ── Browse-state restoration ─────────────────────────────────────────────
 //
@@ -650,7 +656,46 @@ type StoredBrowseSnapshot = {
 // which TS treats as opaque, so reads at module top level would
 // otherwise stay narrowed to `null` and the `?.` chains would type as
 // `never`.
+//
+// Backed by sessionStorage as a second layer: HMR in dev, route
+// pre-fetches, or any module re-evaluation can wipe the in-memory
+// `let`, but sessionStorage survives those.  The session-storage
+// fallback is loaded lazily on first access by `readBrowseSnapshot()`.
+const BROWSE_SNAPSHOT_STORAGE_KEY = "drop.store.browseSnapshot";
+
 let storedBrowseSnapshot = null as StoredBrowseSnapshot | null;
+
+function readBrowseSnapshot(): StoredBrowseSnapshot | null {
+  if (storedBrowseSnapshot) return storedBrowseSnapshot;
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(BROWSE_SNAPSHOT_STORAGE_KEY);
+    if (!raw) return null;
+    storedBrowseSnapshot = JSON.parse(raw) as StoredBrowseSnapshot;
+    return storedBrowseSnapshot;
+  } catch {
+    // Corrupt entry — wipe and start fresh.
+    try {
+      window.sessionStorage.removeItem(BROWSE_SNAPSHOT_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+}
+
+function writeBrowseSnapshot(s: StoredBrowseSnapshot) {
+  storedBrowseSnapshot = s;
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(
+      BROWSE_SNAPSHOT_STORAGE_KEY,
+      JSON.stringify(s),
+    );
+  } catch {
+    // Quota / disabled storage / etc. — module state still works.
+  }
+}
 
 useHead({ title: "Store" });
 
@@ -672,17 +717,25 @@ const tabs = [
   { label: "Browse", value: "browse" },
 ] as const;
 
-// Refs seed directly from `storedBrowseSnapshot` (the module-level
-// variable above) instead of going through a post-mount "now patch
-// the refs" dance.  That dance was racy: the lazy-load watch on
-// `activeTab` fires when the value flips from "featured" → "browse",
-// and Vue's scheduler runs that callback before any nextTick-scheduled
-// suppression flag has had a chance to clear. By initialising refs
-// from the snapshot, the value never changes — no watch fires — no
-// `loadBrowse(true)` clobbering the restored `browsePage`.
+// Refs seed directly from the snapshot (module state, falling back
+// to sessionStorage) instead of going through a post-mount "now
+// patch the refs" dance.  That dance was racy: the lazy-load watch
+// on `activeTab` fires when the value flips from "featured" →
+// "browse", and Vue's scheduler runs that callback before any
+// nextTick-scheduled suppression flag has had a chance to clear.
+// By initialising refs from the snapshot, the value never changes —
+// no watch fires — no `loadBrowse(true)` clobbering the restored
+// `browsePage`.
+//
+// We read once into a local `initial` constant so all refs see the
+// SAME snapshot — if we called `readBrowseSnapshot()` per-ref and
+// the module re-loaded between calls (unlikely but possible during
+// dev HMR) the refs could end up with a mix of restored + default
+// values.
+const initial = readBrowseSnapshot();
 
 const activeTab = ref<(typeof tabs)[number]["value"]>(
-  storedBrowseSnapshot?.activeTab ?? "featured",
+  initial?.activeTab ?? "featured",
 );
 
 // State
@@ -693,8 +746,8 @@ const browseLoading = ref(false);
 // (`searchQuery`) that the query layer reads. Enter/submit promotes the
 // input to the query and switches to Browse. Keeps the typing experience
 // snappy without spamming requests on every keystroke.
-const searchInput = ref(storedBrowseSnapshot?.searchQuery ?? "");
-const searchQuery = ref(storedBrowseSnapshot?.searchQuery ?? "");
+const searchInput = ref(initial?.searchQuery ?? "");
+const searchQuery = ref(initial?.searchQuery ?? "");
 const heroIndex = ref(0);
 // "Newest" was dropped: it sorted by Game.mReleased (the metadata provider's
 // original release date) which gives wrong answers for remakes/remasters
@@ -703,7 +756,7 @@ const heroIndex = ref(0);
 // "Recently updated" (max version.created — when the catalogue last changed
 // for this game). Default to Recently added.
 const browseSort = ref<"recent" | "updated" | "name">(
-  storedBrowseSnapshot?.browseSort ?? "recent",
+  initial?.browseSort ?? "recent",
 );
 
 // ── Filter state ──────────────────────────────────────────────────────────
@@ -722,23 +775,23 @@ const browseSort = ref<"recent" | "updated" | "name">(
 // The "showing X–Y of Z" caption reports the *server* count, so it's
 // accurate even when client-side filters are visually dropping rows.
 const selectedTagIds = ref<string[]>(
-  storedBrowseSnapshot?.selectedTagIds ? [...storedBrowseSnapshot.selectedTagIds] : [],
+  initial?.selectedTagIds ? [...initial.selectedTagIds] : [],
 );
-const selectedLibraryId = ref<string>(storedBrowseSnapshot?.selectedLibraryId ?? "");
+const selectedLibraryId = ref<string>(initial?.selectedLibraryId ?? "");
 const selectedPlatforms = ref<string[]>(
-  storedBrowseSnapshot?.selectedPlatforms
-    ? [...storedBrowseSnapshot.selectedPlatforms]
+  initial?.selectedPlatforms
+    ? [...initial.selectedPlatforms]
     : [],
 );
 const tagSearch = ref("");
 const emulatedFilter = ref<"all" | "native" | "rom">(
-  storedBrowseSnapshot?.emulatedFilter ?? "all",
+  initial?.emulatedFilter ?? "all",
 );
 const releaseYearFrom = ref<number | null>(
-  storedBrowseSnapshot?.releaseYearFrom ?? null,
+  initial?.releaseYearFrom ?? null,
 );
 const releaseYearTo = ref<number | null>(
-  storedBrowseSnapshot?.releaseYearTo ?? null,
+  initial?.releaseYearTo ?? null,
 );
 const filterDrawerOpen = ref(false);
 
@@ -808,7 +861,7 @@ function computeBrowsePageSize(): number {
 const BROWSE_PAGE_SIZE = computeBrowsePageSize();
 const browseResults = ref<StoreGame[]>([]);
 const browseTotal = ref(0);
-const browsePage = ref(storedBrowseSnapshot?.browsePage ?? 1);
+const browsePage = ref(initial?.browsePage ?? 1);
 
 // Tag + library catalogs (loaded lazily once we land on the Browse tab).
 const allTags = ref<StoreTag[]>([]);
@@ -1395,12 +1448,14 @@ async function loadFilterCatalogs() {
   libraries.value = [...libs].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Snapshot the current Browse view to module state. Called by the
- *  watch below on any user-driven change so the next remount can
- *  restore the exact same page + filters. Cheap: just a few refs
- *  copied into a plain object. */
+/** Snapshot the current Browse view to module state AND
+ *  sessionStorage.  Module state is the fast path; sessionStorage
+ *  is the survivor that lets us recover after HMR, a route prefetch
+ *  that re-evaluated the module, or any unexpected wipe of the
+ *  module-level `let`.  Cheap: just a few refs copied into a plain
+ *  object plus one JSON.stringify. */
 function snapshotBrowseState() {
-  storedBrowseSnapshot = {
+  writeBrowseSnapshot({
     activeTab: activeTab.value,
     searchQuery: searchQuery.value,
     browseSort: browseSort.value,
@@ -1411,7 +1466,7 @@ function snapshotBrowseState() {
     emulatedFilter: emulatedFilter.value,
     releaseYearFrom: releaseYearFrom.value,
     releaseYearTo: releaseYearTo.value,
-  };
+  });
 }
 
 onMounted(async () => {

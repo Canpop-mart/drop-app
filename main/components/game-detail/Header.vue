@@ -1,11 +1,18 @@
 <template>
   <div>
-    <!-- Blurred banner backdrop. -->
+    <!-- Blurred banner backdrop. When the game has no real banner
+         (mBannerObjectId is null), render the BannerFallback gradient
+         instead of stretching the cover-style icon across the full
+         hero — looks intentional rather than broken. -->
     <div class="absolute inset-0 z-0">
       <img
+        v-if="game.mBannerObjectId"
         :src="bannerUrl"
         class="w-full h-[24rem] object-cover blur-sm scale-105"
       />
+      <div v-else class="w-full h-[24rem] blur-sm scale-105">
+        <BannerFallback :name="game.mName" text-size="text-9xl" />
+      </div>
       <div
         class="absolute inset-0 bg-gradient-to-t from-zinc-900 via-zinc-900/80 to-transparent opacity-90"
       />
@@ -58,10 +65,9 @@
             :status="status"
             @install="$emit('install')"
             @launch="$emit('launch')"
+            @launch-incognito="$emit('launch-incognito')"
             @queue="$emit('queue')"
-            @uninstall="$emit('uninstall')"
             @kill="$emit('kill')"
-            @options="$emit('options')"
             @resume="$emit('resume')"
           />
           <!-- Streaming is gated behind dev mode while the Sunshine/Moonlight
@@ -227,6 +233,7 @@ import {
 } from "@heroicons/vue/24/solid";
 import { InstalledType } from "~/types";
 import type { Game, GameStatus, GameVersion } from "~/types";
+import BannerFallback from "~/components/BannerFallback.vue";
 import type { GamePlayerEntry } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
 import {
@@ -254,10 +261,11 @@ const props = defineProps<{
 defineEmits<{
   (e: "install"): void;
   (e: "launch"): void;
+  // Hidden Shift+click activation on the Play button — re-emitted up
+  // so the page can route it to launchCtl.launchIncognito().
+  (e: "launch-incognito"): void;
   (e: "queue"): void;
-  (e: "uninstall"): void;
   (e: "kill"): void;
-  (e: "options"): void;
   (e: "resume"): void;
   (e: "compat-result", outcome: unknown): void;
   // Emitted when the inline Friends stat is clicked — the page should

@@ -203,27 +203,38 @@ fn spawn_post_exit_sync(
     tauri::async_runtime::spawn(async move {
         // start_playtime can take up to ~7s when retrying, but the first
         // attempt usually lands sub-second — wait ~3s for the id.
-        match wait_for_session_id(&session_slot, Duration::from_secs(3)).await {
-            Some(session_id) => {
+        //
+        // In incognito mode no `start_playtime` was ever launched, so the
+        // slot will time out empty. We use that absence as the signal to
+        // also skip the achievement-session-end notify below: an incognito
+        // launch leaves zero server-side traces.
+        let session_id = wait_for_session_id(&session_slot, Duration::from_secs(3)).await;
+        match &session_id {
+            Some(sid) => {
                 if let Err(e) =
-                    remote::playtime::stop_playtime(&session_id, Some(actual_duration_secs)).await
+                    remote::playtime::stop_playtime(sid, Some(actual_duration_secs)).await
                 {
                     // In-process retries exhausted — persist so the next
                     // launch can retry instead of dropping the playtime.
                     warn!(
                         "[EXIT] playtime stop failed after retries; queuing for later: {e}"
                     );
-                    remote::playtime::queue_pending_stop(&session_id, actual_duration_secs);
+                    remote::playtime::queue_pending_stop(sid, actual_duration_secs);
                 }
             }
-            None => warn!(
-                "[EXIT] playtime stop skipped for {sync_game_id} ({actual_duration_secs}s): \
-                 session_id never populated (start_playtime failed or game exited too fast)"
+            None => log::info!(
+                "[EXIT] no playtime session for {sync_game_id} ({actual_duration_secs}s) — \
+                 incognito launch, start_playtime failure, or fast-exit before start landed"
             ),
         }
 
-        if let Err(e) = remote::achievements::notify_session_end(&sync_game_id).await {
-            warn!("[EXIT] failed to notify session end for {sync_game_id}: {e}");
+        // Achievement session-end notify only matters if we opened a session.
+        // Otherwise (incognito, or start_playtime never landed) there's
+        // nothing on the server side to reconcile.
+        if session_id.is_some() {
+            if let Err(e) = remote::achievements::notify_session_end(&sync_game_id).await {
+                warn!("[EXIT] failed to notify session end for {sync_game_id}: {e}");
+            }
         }
 
         if let Some(snap) = snapshot {
@@ -319,17 +330,21 @@ pub(crate) async fn wait_for_session_id(
     }
 }
 
-/// Send `heartbeat_playtime` for the given session every five minutes until
+/// Send `heartbeat_playtime` for the given session every 60 seconds until
 /// `cancel` is notified. Stops cleanly on cancellation. Each heartbeat is
 /// best-effort — `heartbeat_playtime` swallows network errors internally so
 /// a flaky connection doesn't kill the loop.
 ///
-/// Five minutes balances two costs: each heartbeat is a network round-trip
-/// (so not every few seconds), but the worst-case orphaned-session error is
-/// "duration assumed to be the gap between start and last heartbeat" — i.e.
-/// up to 5 minutes of overcount. Reasonable for an unattended-quit edge case.
+/// The 60s interval is intentionally well below the server's 5-minute
+/// `STALE_AFTER_MS` cutoff for the now-playing endpoint, so a single dropped
+/// heartbeat (network blip) can't push the session past the stale window and
+/// silently disappear from the community presence strip. With this margin a
+/// session can lose up to four heartbeats in a row before going stale —
+/// robust to typical residential wifi hiccups while keeping the round-trip
+/// rate low. Orphan-cleanup overcount worst case shrinks correspondingly to
+/// at most 60s.
 pub(crate) async fn run_playtime_heartbeat_loop(session_id: String, cancel: Arc<Notify>) {
-    const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5 * 60);
+    const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
     let mut ticker = tokio::time::interval(HEARTBEAT_INTERVAL);
     // Skip the immediate tick — we just started, no need to heartbeat yet.
     ticker.tick().await;

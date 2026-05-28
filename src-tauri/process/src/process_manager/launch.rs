@@ -64,12 +64,19 @@ use crate::{
 
 impl ProcessManager<'_> {
     /// Launch a game process for normal (non-streaming) play.
+    ///
+    /// `incognito` suppresses every server-side side effect of the session:
+    /// no `playSession` row, no playtime increment, no achievement-poll
+    /// sync, no presence broadcast. The game still launches normally and
+    /// the local Running status flips so the UI still tracks the process —
+    /// the difference is purely in what reaches the server.
     pub fn launch_process(
         &mut self,
         game_id: String,
         launch_process_index: usize,
+        incognito: bool,
     ) -> Result<(), ProcessError> {
-        self.launch_process_inner(game_id, launch_process_index, false, None)
+        self.launch_process_inner(game_id, launch_process_index, false, None, incognito)
     }
 
     /// Launch a game process for streaming.
@@ -86,7 +93,10 @@ impl ProcessManager<'_> {
         launch_process_index: usize,
         config_override: Option<database::models::data::UserConfiguration>,
     ) -> Result<(), ProcessError> {
-        self.launch_process_inner(game_id, launch_process_index, true, config_override)
+        // Streaming never goes incognito — the receiver expects credit for
+        // their play time. Incognito is a deliberate user-facing toggle
+        // and the streaming flow has no surface to expose it.
+        self.launch_process_inner(game_id, launch_process_index, true, config_override, false)
     }
 
     fn launch_process_inner(
@@ -95,6 +105,7 @@ impl ProcessManager<'_> {
         launch_process_index: usize,
         streaming: bool,
         config_override: Option<database::models::data::UserConfiguration>,
+        incognito: bool,
     ) -> Result<(), ProcessError> {
         if self.processes.contains_key(&game_id) {
             return Err(ProcessError::AlreadyRunning);
@@ -481,6 +492,7 @@ impl ProcessManager<'_> {
             launch_process_handle,
             emulator_info,
             save_snapshot,
+            incognito,
         );
         Ok(())
     }
@@ -489,12 +501,18 @@ impl ProcessManager<'_> {
     /// `Running`, insert it into the process table, and spawn the wait
     /// thread that detects exit. Split out of `launch_process_inner` so the
     /// long spawn flow ends on a single readable call.
+    ///
+    /// `incognito` suppresses the server-facing parts of the lifecycle:
+    /// no playtime session is opened, no heartbeat fires, no achievement
+    /// poller runs. The local process table + Running status are unchanged,
+    /// so the in-app UI still tracks the launch.
     fn register_running_process(
         &mut self,
         meta: &database::DownloadableMetadata,
         launch_process_handle: Arc<SharedChild>,
         emulator_info: Option<remote::goldberg::EmulatorInfo>,
         save_snapshot: Option<crate::process_manager::SaveSyncSnapshot>,
+        incognito: bool,
     ) {
         let game_id = meta.id.clone();
 
@@ -502,9 +520,17 @@ impl ProcessManager<'_> {
         // The id is stored in a shared mutex so the exit path can read it;
         // once established we kick off a heartbeat so the server can bound a
         // session whose stop never arrives (crash, kill -9, power loss).
+        //
+        // In incognito mode this block is skipped entirely. The slot is
+        // still created (but never populated) so the exit path's
+        // `wait_for_session_id` will time out into the "no session — skip
+        // stop" branch, which is exactly the no-op we want.
         let playtime_session_id = Arc::new(std::sync::Mutex::new(None::<String>));
         let playtime_heartbeat_cancel = Arc::new(Notify::new());
-        {
+        if incognito {
+            info!("[LAUNCH] {game_id}: incognito — no playtime session will be opened");
+            let _ = self.app_handle.emit("game_incognito_started", &game_id);
+        } else {
             let playtime_game_id = game_id.clone();
             let session_id_slot = playtime_session_id.clone();
             let hb_cancel = playtime_heartbeat_cancel.clone();
@@ -541,9 +567,12 @@ impl ProcessManager<'_> {
             (None, Some(ApplicationTransientStatus::Running {})),
         );
 
-        // Achievement polling for the session.
+        // Achievement polling for the session. In incognito we still
+        // allocate the cancel notify so the RunningProcess struct stays
+        // uniform, but we never spawn the poller — no server-side
+        // achievement sync happens for this session.
         let achievement_cancel = Arc::new(Notify::new());
-        {
+        if !incognito {
             let cancel = achievement_cancel.clone();
             let poll_game_id = game_id.clone();
             let poll_emulator_info = emulator_info;
@@ -571,6 +600,11 @@ impl ProcessManager<'_> {
                 )
                 .await;
             });
+        } else {
+            // Drop the unused `emulator_info` explicitly — keeping it bound
+            // would otherwise prompt a clippy warning about a value moved
+            // into a branch that's never used.
+            let _ = emulator_info;
         }
 
         let wait_handle = launch_process_handle.clone();

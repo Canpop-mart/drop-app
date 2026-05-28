@@ -63,18 +63,15 @@
         </div>
       </div>
 
-      <!-- Avatar -->
+      <!-- Avatar — uses the canonical preset gallery picker shared with BPM -->
       <div class="mb-6">
         <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
           Avatar
         </p>
         <div class="flex items-center gap-4">
           <img
-            v-if="avatarPreview || profile.profilePictureObjectId"
-            :src="
-              avatarPreview ||
-              objectUrl(profile.profilePictureObjectId!)
-            "
+            v-if="profile.profilePictureObjectId"
+            :src="objectUrl(profile.profilePictureObjectId!)"
             class="size-20 rounded-full object-cover ring-2 ring-zinc-700"
           />
           <div
@@ -83,21 +80,26 @@
           >
             <UserIcon class="size-10 text-zinc-500" />
           </div>
-          <label
-            class="inline-flex items-center gap-x-2 rounded-md bg-zinc-800/50 px-3 py-1.5 text-sm font-medium text-zinc-200 cursor-pointer hover:bg-zinc-800 transition-colors"
-            :class="{ 'opacity-50 pointer-events-none': avatarUploading }"
+          <button
+            type="button"
+            class="inline-flex items-center gap-x-2 rounded-md bg-zinc-800/50 px-3 py-1.5 text-sm font-medium text-zinc-200 hover:bg-zinc-800 transition-colors"
+            @click="avatarPickerOpen = true"
           >
             <PhotoIcon class="size-4" />
-            {{ avatarUploading ? "Uploading..." : "Change avatar" }}
-            <input
-              type="file"
-              accept="image/*"
-              class="hidden"
-              @change="onAvatarSelect"
-            />
-          </label>
+            Choose avatar
+          </button>
         </div>
+        <p class="text-xs text-zinc-500 mt-2">
+          Pick from the preset gallery — choices match Big Picture mode.
+        </p>
       </div>
+
+      <ProfilePicturePicker
+        :open="avatarPickerOpen"
+        @close="avatarPickerOpen = false"
+        @selected="onAvatarSelected"
+        @error="onAvatarError"
+      />
 
       <!-- Display name -->
       <div class="mb-6">
@@ -216,6 +218,7 @@ import {
   type UserProfile,
 } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
+import ProfilePicturePicker from "~/components/ProfilePicturePicker.vue";
 
 useHead({ title: "Edit profile" });
 
@@ -230,8 +233,9 @@ const bio = ref("");
 const selectedTheme = ref<string>("default");
 const initial = ref({ displayName: "", bio: "", theme: "default" });
 
-const avatarUploading = ref(false);
-const avatarPreview = ref<string | null>(null);
+// Avatar picker open flag — the picker component owns the upload itself
+// and emits the new object id back when it succeeds.
+const avatarPickerOpen = ref(false);
 
 const bannerUploading = ref(false);
 const bannerPreview = ref<string | null>(null);
@@ -260,31 +264,15 @@ function objectUrl(id: string): string {
   return serverUrl(`api/v1/object/${id}`);
 }
 
-async function onAvatarSelect(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0];
-  if (!file) return;
-  avatarUploading.value = true;
-  try {
-    // Local preview first so the UI feels responsive — upload runs in
-    // parallel and the preview is replaced by the server URL once
-    // profile state refreshes.
-    const reader = new FileReader();
-    reader.onload = () => {
-      avatarPreview.value = reader.result as string;
-    };
-    reader.readAsDataURL(file);
-    const result = await api.profile.uploadAvatar(file);
-    if (profile.value) {
-      profile.value.profilePictureObjectId = result.profilePictureObjectId;
-    }
-    avatarPreview.value = null;
-  } catch (e) {
-    saveError.value =
-      "Avatar upload failed: " + (e instanceof Error ? e.message : String(e));
-    avatarPreview.value = null;
-  } finally {
-    avatarUploading.value = false;
+function onAvatarSelected(newObjectId: string) {
+  if (profile.value) {
+    profile.value.profilePictureObjectId = newObjectId;
   }
+  saveError.value = null;
+}
+
+function onAvatarError(message: string) {
+  saveError.value = `Avatar upload failed: ${message}`;
 }
 
 async function onBannerSelect(e: Event) {

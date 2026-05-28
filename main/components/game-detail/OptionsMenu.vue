@@ -18,6 +18,25 @@
         class="absolute left-0 z-[500] mt-2 w-56 origin-top-left rounded-lg bg-zinc-900 shadow-lg ring-1 ring-zinc-100/5 focus:outline-none overflow-hidden"
       >
         <div class="py-1">
+          <!-- Configure (game options modal) — moved here from the
+               separate chevron-dropdown that used to sit next to the
+               Play button.  Consolidating both menus into this gear
+               keeps "all the per-game knobs" in one place. -->
+          <MenuItem v-if="showConfigure" v-slot="{ active }">
+            <button
+              @click="$emit('configure')"
+              :class="[
+                active
+                  ? 'bg-zinc-800 text-zinc-100 outline-none'
+                  : 'text-zinc-400',
+                'w-full px-4 py-2 text-sm inline-flex justify-between',
+              ]"
+            >
+              Configure
+              <Cog6ToothIcon class="size-5 text-blue-400" />
+            </button>
+          </MenuItem>
+
           <MenuItem v-if="config.isNativeGame.value" v-slot="{ active }">
             <button
               @click="config.applyProfileName()"
@@ -141,6 +160,21 @@
             </button>
           </MenuItem>
 
+          <MenuItem v-if="showUninstall" v-slot="{ active }">
+            <button
+              @click="$emit('uninstall')"
+              :class="[
+                active
+                  ? 'bg-zinc-800 text-zinc-100 outline-none'
+                  : 'text-zinc-400',
+                'w-full px-4 py-2 text-sm inline-flex justify-between',
+              ]"
+            >
+              Uninstall
+              <ArrowUturnLeftIcon class="size-5 text-orange-400" />
+            </button>
+          </MenuItem>
+
           <MenuItem v-slot="{ active }">
             <button
               @click="$emit('remove-from-library')"
@@ -173,7 +207,7 @@
  * achievements data on the parent.
  */
 import { Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/vue";
-import { Cog6ToothIcon } from "@heroicons/vue/24/outline";
+import { ArrowUturnLeftIcon, Cog6ToothIcon } from "@heroicons/vue/24/outline";
 import {
   AdjustmentsHorizontalIcon,
   SparklesIcon,
@@ -190,9 +224,24 @@ import {
 defineProps<{
   config: ReturnType<typeof useGameConfig>;
   hasAchievements: boolean;
+  /**
+   * Whether to show the "Configure" item — opens the per-game options
+   * modal.  Only meaningful for installed games (the modal needs a
+   * GameVersion).  Mirrors the precondition the old chevron-dropdown
+   * on the Play button used to check inline.
+   */
+  showConfigure?: boolean;
+  /**
+   * Whether to show the "Uninstall" item.  Only meaningful for
+   * installed games; was previously in GameStatusButton's chevron
+   * dropdown, now consolidated into this gear menu.
+   */
+  showUninstall?: boolean;
 }>();
 
 defineEmits<{
+  (e: "configure"): void;
+  (e: "uninstall"): void;
   (e: "reset-achievements"): void;
   (e: "remove-from-library"): void;
 }>();

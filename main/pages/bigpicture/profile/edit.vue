@@ -358,67 +358,14 @@
       </Transition>
     </Teleport>
 
-    <!-- Avatar Picker Overlay -->
-    <Teleport to="body">
-      <Transition
-        enter-active-class="transition-opacity duration-200"
-        leave-active-class="transition-opacity duration-200"
-        enter-from-class="opacity-0"
-        leave-to-class="opacity-0"
-      >
-        <div
-          v-if="avatarPickerOpen"
-          class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-        >
-          <div class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-6 max-w-3xl w-full mx-4 max-h-[85vh] flex flex-col">
-            <h2 class="text-lg font-semibold font-display text-zinc-100 mb-4">Choose Your Avatar</h2>
-
-            <!-- Avatar grid -->
-            <div class="flex-1 overflow-y-auto min-h-0">
-              <div class="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 gap-2 p-1">
-                <button
-                  v-for="pic in profilePics"
-                  :key="pic"
-                  :ref="(el: any) => registerAvatarPicker(el, { onSelect: () => selectAvatar(pic) })"
-                  class="relative aspect-square rounded-xl overflow-hidden ring-2 transition-all hover:scale-105"
-                  :class="selectedAvatarPic === pic
-                    ? 'ring-blue-500 shadow-lg shadow-blue-500/20'
-                    : 'ring-transparent hover:ring-zinc-600'"
-                  @click="selectAvatar(pic)"
-                >
-                  <img
-                    :src="avatarPicUrl(pic)"
-                    :alt="pic"
-                    class="size-full object-cover"
-                    loading="lazy"
-                  />
-                </button>
-              </div>
-            </div>
-
-            <!-- Actions -->
-            <div class="flex justify-end gap-2 mt-4 pt-3 border-t border-zinc-800">
-              <button
-                :ref="(el: any) => registerAvatarPicker(el, { onSelect: closeAvatarPicker })"
-                class="px-4 py-2.5 rounded-xl text-sm text-zinc-300 hover:text-zinc-100 bg-zinc-800/50 hover:bg-zinc-700 transition-colors"
-                @click="closeAvatarPicker"
-              >
-                Cancel
-              </button>
-              <button
-                v-if="selectedAvatarPic"
-                :ref="(el: any) => registerAvatarPicker(el, { onSelect: confirmAvatarPick })"
-                class="px-4 py-2.5 rounded-xl text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors"
-                :class="{ 'opacity-50 pointer-events-none': avatarUploading }"
-                @click="confirmAvatarPick"
-              >
-                {{ avatarUploading ? "Saving..." : "Select Avatar" }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
+    <!-- Avatar Picker Overlay (canonical component) -->
+    <ProfilePicturePicker
+      :open="avatarPickerOpen"
+      bpm-mode
+      return-focus-group="content"
+      @close="onAvatarPickerClose"
+      @selected="onAvatarSelected"
+    />
   </div>
 </template>
 
@@ -434,6 +381,7 @@ import {
 import { MagnifyingGlassIcon } from "@heroicons/vue/20/solid";
 import { TrophyIcon } from "@heroicons/vue/24/solid";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
+import ProfilePicturePicker from "~/components/ProfilePicturePicker.vue";
 import { serverUrl } from "~/composables/use-server-fetch";
 import type { UserProfile, StoreGame } from "~/composables/use-server-api";
 import { useAppState } from "~/composables/app-state";
@@ -476,7 +424,6 @@ const focusNav = useFocusNavigation();
 const gamepad = useGamepad();
 const registerContent = useBpFocusableGroup("content");
 const registerPicker = useBpFocusableGroup("picker");
-const registerAvatarPicker = useBpFocusableGroup("avatar-picker");
 
 // ── State ─────────────────────────────────────────────────────────────────
 
@@ -490,7 +437,6 @@ const bio = ref("");
 const selectedTheme = ref("default");
 const avatarPreview = ref<string | null>(null);
 const bannerPreview = ref<string | null>(null);
-const avatarUploading = ref(false);
 const bannerUploading = ref(false);
 
 const bannerFileInput = ref<HTMLInputElement | null>(null);
@@ -683,115 +629,34 @@ function confirmAchievementPick(ach: AchOption) {
   closePicker();
 }
 
-// ── Avatar picker (Xbox profile pics) ─────────────────────────────────────
-
-const profilePics = [
-  "20000.png","20000(1).png","20000(2).png","20001.png","20001(1).png",
-  "20002.png","20002(1).png","20003.png","20003(1).png","20004.png",
-  "20005.png","20006.png","20007.png",
-  "20008.png","20009.png","2000a.png","2000b.png","2000c.png",
-  "2000d.png","2000d(1).png","2007b.png",
-  "20400.png","20402.png","20405.png","20406.png","2041c.png","20429.png","20431.png",
-  "21000.png","21001.png","21002.png","21003.png","21004.png","21005.png",
-  "21006.png","21007.png","21008.png","21009.png","21010.png","21011.png",
-  "21012.png","21013.png","21014.png","21015.png","21016.png","21017.png",
-  "21018.png","21019.png","21020.png","21021.png","21022.png","21023.png",
-  "21024.png","21025.png","21026.png","21027.png","21029.png","21030.png",
-  "21031.png","21032.png","21033.png","21035.png","21036.png","21037.png",
-  "21038.png","21039.png","21040.png","21041.png","21042.png","21043.png",
-  "21044.png","21045.png","21046.png","21047.png","21048.png","21049.png",
-  "21050.png","21051.png","21052.png","21053.png","21054.png","21055.png",
-  "21056.png","21057.png","21058.png","21059.png","21060.png","21061.png",
-  "21062.png","21063.png","21064.png","21065.png","21066.png","21067.png",
-  "21068.png","21069.png",
-  "28000.png","28006.png","28008.png","28017.png","2801a.png","28026.png","2802e.png","2808e.png",
-];
+// ── Avatar picker ────────────────────────────────────────────────────────
+// The picker UI itself lives in `components/ProfilePicturePicker.vue` so
+// both BPM and the desktop edit page render the same gallery. This page
+// only tracks the open flag and reacts to the component's emitted events.
+// The component drives the BPM focus-restriction lifecycle internally.
 
 const avatarPickerOpen = ref(false);
-const selectedAvatarPic = ref<string | null>(null);
-
-// Resolve profile pic base path with Nuxt baseURL
-const _runtimeBase = (useRuntimeConfig().app.baseURL ?? "/").replace(/\/$/, "");
-const _profilePicBase = `${_runtimeBase}/img/boxart/profilepic`;
-
-function avatarPicUrl(filename: string): string {
-  return `${_profilePicBase}/${filename}`;
-}
 
 function openAvatarPicker() {
-  selectedAvatarPic.value = null;
   avatarPickerOpen.value = true;
-  nextTick(() => {
-    focusNav.restrictFocus("avatar-picker");
-    nextTick(() => focusNav.autoFocusContent("avatar-picker"));
-  });
 }
 
-function closeAvatarPicker() {
+function onAvatarPickerClose() {
   avatarPickerOpen.value = false;
-  focusNav.unrestrictFocus("content");
 }
 
-function selectAvatar(pic: string) {
-  selectedAvatarPic.value = pic;
-}
-
-async function confirmAvatarPick() {
-  devLog("state","[BPM:PROFILE] confirmAvatarPick called, selectedAvatarPic:", selectedAvatarPic.value);
-  if (!selectedAvatarPic.value) return;
-  avatarUploading.value = true;
-  try {
-    // Fetch the preset image as a blob and upload it to the avatar endpoint
-    const imgUrl = avatarPicUrl(selectedAvatarPic.value);
-    devLog("state","[BPM:PROFILE] Fetching preset image from:", imgUrl);
-    const res = await fetch(imgUrl);
-    devLog("state","[BPM:PROFILE] Image fetch status:", res.status, res.ok);
-    if (!res.ok) {
-      console.error("[BPM:PROFILE] Failed to fetch preset image:", res.status, res.statusText);
-      return;
-    }
-    const blob = await res.blob();
-    devLog("state","[BPM:PROFILE] Got blob:", blob.size, "bytes, type:", blob.type);
-    const file = new File([blob], selectedAvatarPic.value, { type: blob.type || "image/png" });
-
-    const form = new FormData();
-    form.append("file", file);
-    const url = serverUrl("api/v1/user/avatar");
-    devLog("state","[BPM:PROFILE] Uploading avatar to:", url);
-    const uploadRes = await fetch(url, { method: "POST", body: form });
-    devLog("state","[BPM:PROFILE] Upload response:", uploadRes.status, uploadRes.ok);
-
-    // Show preview
-    avatarPreview.value = imgUrl;
-
-    // Update app state so the top bar avatar refreshes immediately
-    if (uploadRes.ok) {
-      try {
-        const data = await uploadRes.json();
-        devLog("state","[BPM:PROFILE] Avatar response data:", JSON.stringify(data));
-        // Server returns { profilePictureObjectId: "..." }
-        const newId = data?.profilePictureObjectId;
-        if (newId && state.value?.user) {
-          state.value.user.profilePictureObjectId = newId;
-          // Also update our local profile ref
-          if (profile.value) {
-            profile.value.profilePictureObjectId = newId;
-          }
-        }
-      } catch (e) {
-        console.error("[BPM:PROFILE] Failed to parse avatar response:", e);
-      }
-    } else {
-      const errText = await uploadRes.text().catch(() => "");
-      console.error("[BPM:PROFILE] Avatar upload failed with status:", uploadRes.status, errText);
-    }
-
-    closeAvatarPicker();
-  } catch (err) {
-    console.error("[BPM:PROFILE] Avatar upload error:", err);
-  } finally {
-    avatarUploading.value = false;
+function onAvatarSelected(newObjectId: string) {
+  devLog("state", "[BPM:PROFILE] Avatar upload success, new id:", newObjectId);
+  // Update app state so the top bar avatar refreshes immediately.
+  if (state.value?.user) {
+    state.value.user.profilePictureObjectId = newObjectId;
   }
+  if (profile.value) {
+    profile.value.profilePictureObjectId = newObjectId;
+  }
+  // Clear any local preview so the freshly-uploaded server image is what
+  // shows. The component itself will close after success.
+  avatarPreview.value = null;
 }
 
 // ── Banner upload ─────────────────────────────────────────────────────────
@@ -887,7 +752,7 @@ _unsubs.push(
     if (keyboardVisible.value) {
       closeKeyboard();
     } else if (avatarPickerOpen.value) {
-      closeAvatarPicker();
+      onAvatarPickerClose();
     } else if (pickerOpen.value) {
       if (pickerMode.value === "achievement" && pickerSelectedGameId.value) {
         pickerGoBackToGames();

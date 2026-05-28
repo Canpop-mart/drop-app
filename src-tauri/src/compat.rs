@@ -189,7 +189,10 @@ pub async fn start_compat_test(
         let game_id_clone = game_id.clone();
         tokio::task::spawn_blocking(move || {
             let mut process_manager_lock = PROCESS_MANAGER.lock();
-            process_manager_lock.launch_process(game_id_clone, index)
+            // Compat-test launches are never incognito — the whole point of
+            // the test is to record a result against the game, which means
+            // the session + presence side effects are the desired behaviour.
+            process_manager_lock.launch_process(game_id_clone, index, false)
         })
         .await
         .map_err(|e| CompatTestError::LaunchFailed(format!("join error: {e}")))?

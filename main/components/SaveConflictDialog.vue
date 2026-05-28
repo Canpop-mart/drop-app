@@ -55,7 +55,7 @@
             </div>
             <div class="space-y-1 text-xs text-zinc-400">
               <div>{{ formatSize(conflict.localSize) }}</div>
-              <div>{{ formatDate(conflict.localModifiedAt * 1000) }}</div>
+              <div>{{ formatLocalModified(conflict.localModifiedAt) }}</div>
             </div>
           </button>
 
@@ -196,6 +196,7 @@ function formatSize(bytes: number): string {
 function formatDate(input: string | number): string {
   try {
     const d = new Date(input);
+    if (isNaN(d.getTime())) return "—";
     return d.toLocaleString(undefined, {
       month: "short",
       day: "numeric",
@@ -205,5 +206,17 @@ function formatDate(input: string | number): string {
   } catch {
     return String(input);
   }
+}
+
+/**
+ * Format the local file's mtime. The Rust side ships `localModifiedAt` as a
+ * unix-seconds integer; we convert to ms here so the dialog stays a thin view.
+ * A value of 0 means the scanner couldn't stat the file (rare but possible
+ * on Windows with files held open by another process) — show "—" rather than
+ * "Jan 1, 12:00 AM 1970" which is meaningless and looks like a bug to the user.
+ */
+function formatLocalModified(seconds: number): string {
+  if (!seconds || seconds <= 0) return "—";
+  return formatDate(seconds * 1000);
 }
 </script>

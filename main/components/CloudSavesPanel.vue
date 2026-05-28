@@ -210,11 +210,18 @@
  * Cloud Saves panel for the per-game library page (desktop variant).
  *
  * Lists the server-side cloud saves for the current user + game, with
- * per-row Restore and Delete actions. List and Delete are pure HTTP via
- * the `saves` namespace on `useServerApi()`. Restore for emulator saves
- * (`.srm` / `.state`) goes through the existing `write_save_file` Tauri
- * command. PC-game saves (filename prefixed with `pc:`) keep a disabled
- * Restore button with a tooltip — the per-launch sync handles those.
+ * per-row Restore and Delete actions. All three actions route through
+ * the `saves` namespace on `useServerApi()`, which goes through Tauri
+ * commands (not `server://` fetches) because the underlying server
+ * endpoints use `defineClientEventHandler` and require JWT/cert auth.
+ *
+ * Restore is type-aware:
+ *   - Emulator saves (`.srm` / `.state`) write to
+ *     `{install_dir}/drop-saves/{gameId}/(saves|states)` via
+ *     `write_save_file`.
+ *   - PC-game saves (filename prefixed with `pc/`, or `saveType === "pc"`)
+ *     re-scan with Ludusavi via `restore_pc_cloud_save` so they land at
+ *     the same on-disk location the game actually reads from.
  */
 import {
   ArrowDownTrayIcon,

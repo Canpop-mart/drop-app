@@ -57,12 +57,7 @@
               class="w-full h-full object-cover group-hover/card:scale-[1.03] transition-transform duration-500"
               loading="lazy"
             />
-            <div
-              v-else
-              class="w-full h-full flex items-center justify-center text-zinc-700 text-5xl font-display font-bold"
-            >
-              {{ g.mName.charAt(0).toUpperCase() }}
-            </div>
+            <BannerFallback v-else :name="g.mName" text-size="text-6xl" />
 
             <!-- "IN LIBRARY" badge — top-left.  Slightly larger now so
                  it reads as a real status indicator, not a footnote. -->
@@ -131,6 +126,7 @@
 import { ChevronLeftIcon, ChevronRightIcon } from "@heroicons/vue/24/outline";
 import type { StoreGame } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
+import BannerFallback from "~/components/BannerFallback.vue";
 
 const props = withDefaults(
   defineProps<{

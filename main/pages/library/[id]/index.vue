@@ -2,13 +2,33 @@
   <div
     class="mx-auto w-full relative flex flex-col justify-center pt-72 overflow-hidden"
   >
-    <!-- Options gear menu — pinned top-left above the banner. -->
+    <!-- Options gear menu — pinned top-left above the banner. Now
+         carries every per-game action including Configure and
+         Uninstall, which used to live in a separate chevron dropdown
+         on the Play button (consolidated v3.6 — single discoverable
+         options surface). -->
     <GameDetailOptionsMenu
       :config="config"
       :has-achievements="stats.achievements.value.length > 0"
+      :show-configure="
+        status.type === 'Installed' &&
+        status.install_type.type !== InstalledType.PartiallyInstalled
+      "
+      :show-uninstall="status.type === 'Installed'"
+      @configure="configureModalOpen = true"
+      @uninstall="launchCtl.uninstall()"
       @reset-achievements="resetConfirmOpen = true"
       @remove-from-library="removeConfirmOpen = true"
     />
+
+    <!--
+      Incognito launch — intentionally has NO visible UI.  Activation is
+      Shift+click on the Play button (handled inside GameStatusButton
+      via a `launch-incognito` emit when shiftKey is held).  No badge,
+      no pill, no purple indicator during an active session — pure
+      stealth so casual eyes on the screen see nothing that hints at
+      the feature.  See use-game-launch.ts for the suppression flow.
+    -->
 
     <!-- Banner, title, action buttons, stat bar (now includes the Friends
          pill as an inline 4th stat — was previously a standalone tile
@@ -24,10 +44,9 @@
       :players="friendsExcludingMe"
       @install="installCtl.openInstallFlow()"
       @launch="launchCtl.launch()"
+      @launch-incognito="launchCtl.launchIncognito()"
       @queue="goToQueue()"
-      @uninstall="launchCtl.uninstall()"
       @kill="launchCtl.kill()"
-      @options="configureModalOpen = true"
       @resume="launchCtl.resumeDownload()"
       @compat-result="onCompatTestResult"
       @open-community="activeDetailTab = 'community'"
@@ -342,6 +361,15 @@ const installCtl = useGameInstall(game);
 const launchCtl = useGameLaunch(game, status);
 const stats = useGameStats(game.id);
 const config = useGameConfig(game, version);
+
+// Clear the active-incognito latch as soon as the backend reports the
+// process has exited. The event payload carries only the game id so we
+// gate on that to avoid clearing a sibling page's overlay. The Rust side
+// emits `game_process_exited` from `on_process_finish` regardless of how
+// the game ended (clean exit, crash, manual kill).
+useListen<string>("game_process_exited", (evt) => {
+  if (evt.payload === game.id) launchCtl.incognitoActive.value = false;
+});
 
 // ── Modal / tab UI state ─────────────────────────────────────────────────
 const configureModalOpen = ref(false);

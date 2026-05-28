@@ -24,18 +24,23 @@ pub enum LaunchResult {
 }
 
 #[tauri::command]
-pub fn launch_game(id: String, index: usize) -> Result<LaunchResult, ProcessError> {
-    launch_game_inner(id, index, false, None)
+pub fn launch_game(
+    id: String,
+    index: usize,
+    incognito: Option<bool>,
+) -> Result<LaunchResult, ProcessError> {
+    launch_game_inner(id, index, false, None, incognito.unwrap_or(false))
 }
 
 /// Launch a game for streaming. Auto-resolves save conflicts and optionally
 /// applies the remote client's user configuration (widescreen, quality, etc.).
+/// Streaming never runs incognito — the remote client wants the play credited.
 pub fn launch_game_streaming(
     id: String,
     index: usize,
     config_override: Option<database::models::data::UserConfiguration>,
 ) -> Result<LaunchResult, ProcessError> {
-    launch_game_inner(id, index, true, config_override)
+    launch_game_inner(id, index, true, config_override, false)
 }
 
 fn launch_game_inner(
@@ -43,6 +48,7 @@ fn launch_game_inner(
     index: usize,
     streaming: bool,
     config_override: Option<database::models::data::UserConfiguration>,
+    incognito: bool,
 ) -> Result<LaunchResult, ProcessError> {
     let result = {
         let mut process_manager_lock = PROCESS_MANAGER.lock();
@@ -50,7 +56,7 @@ fn launch_game_inner(
         if streaming {
             process_manager_lock.launch_process_streaming(id, index, config_override)
         } else {
-            process_manager_lock.launch_process(id, index)
+            process_manager_lock.launch_process(id, index, incognito)
         }
     };
 
@@ -178,6 +184,15 @@ pub struct ConflictResolutionPayload {
 pub struct ConflictResolutionEntry {
     pub filename: String,
     pub choice: String, // "keep_local" | "keep_cloud"
+}
+
+/// Diagnostic: list controllers visible to Drop's gilrs view. Used by the
+/// emulator-controller troubleshoot flow so a user can confirm Drop and the
+/// OS agree on which pads are plugged in before complaining that the game
+/// can't see them. Delegates to the `process` crate where gilrs already lives.
+#[tauri::command]
+pub fn list_gamepads() -> Vec<process::gamepad::DetectedGamepad> {
+    process::gamepad::list_connected_gamepads()
 }
 
 #[tauri::command]

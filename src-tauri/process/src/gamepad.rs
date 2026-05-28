@@ -33,6 +33,42 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter};
 
+/// Snapshot of one gamepad as seen by `gilrs` from Drop's *own* process.
+///
+/// Lets the frontend show the user which controllers Drop can see — useful
+/// to confirm before launching an emulator that the OS-level input stack is
+/// already happy. Native games and emulators (RetroArch, DuckStation,
+/// PCSX2, …) inherit the same input access since Drop does not scrub any
+/// HID / XInput / DirectInput env vars when spawning them.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedGamepad {
+    pub id: u32,
+    pub name: String,
+    pub connected: bool,
+    pub power: String,
+}
+
+/// List controllers visible to Drop. Best-effort: if `Gilrs::new()` fails
+/// (no input subsystem, permission error) we return an empty list rather
+/// than an error — the "Drop sees nothing" answer is itself the diagnostic.
+pub fn list_connected_gamepads() -> Vec<DetectedGamepad> {
+    let Ok(g) = Gilrs::new() else {
+        return Vec::new();
+    };
+    g.gamepads()
+        .map(|(id, gp)| {
+            let idx: usize = id.into();
+            DetectedGamepad {
+                id: idx as u32,
+                name: gp.name().to_string(),
+                connected: gp.is_connected(),
+                power: format!("{:?}", gp.power_info()),
+            }
+        })
+        .collect()
+}
+
 // ── Dead zone ────────────────────────────────────────────────────────────────
 
 const STICK_DEAD_ZONE: f32 = 0.15;

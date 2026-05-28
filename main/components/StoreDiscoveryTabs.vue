@@ -79,12 +79,7 @@
               class="w-full h-full object-cover"
               loading="lazy"
             />
-            <div
-              v-else
-              class="w-full h-full flex items-center justify-center text-zinc-700 font-display font-bold text-2xl"
-            >
-              {{ g.mName.charAt(0).toUpperCase() }}
-            </div>
+            <BannerFallback v-else :name="g.mName" text-size="text-2xl" />
           </div>
 
           <div class="flex-1 min-w-0">
@@ -157,12 +152,7 @@
               :alt="preview.mName"
               class="w-full h-full object-cover"
             />
-            <div
-              v-else
-              class="w-full h-full flex items-center justify-center text-zinc-700 text-5xl font-display font-bold"
-            >
-              {{ preview.mName.charAt(0).toUpperCase() }}
-            </div>
+            <BannerFallback v-else :name="preview.mName" text-size="text-6xl" />
           </div>
 
           <h4 class="text-lg font-display font-semibold text-zinc-100 leading-tight">
@@ -238,6 +228,7 @@
  */
 import type { StoreGame } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
+import BannerFallback from "~/components/BannerFallback.vue";
 
 type TabValue = "new" | "popular" | "random";
 

@@ -22,10 +22,9 @@
           :alt="gameRef.mName"
           class="absolute inset-0 w-full h-full object-cover"
         />
-        <div
-          v-else
-          class="absolute inset-0 bg-gradient-to-br from-zinc-800 to-zinc-900"
-        />
+        <div v-else class="absolute inset-0">
+          <BannerFallback :name="gameRef.mName" text-size="text-9xl" />
+        </div>
         <!-- Softer gradient masks. The bottom drop is the heaviest
              (so the title is always readable), the side drop is
              lighter so banner art shows through on the right. -->
@@ -382,6 +381,7 @@ import {
 } from "@heroicons/vue/24/outline";
 import { TrophyIcon } from "@heroicons/vue/24/solid";
 import { micromark } from "micromark";
+import BannerFallback from "~/components/BannerFallback.vue";
 import { useGame } from "~/composables/game";
 import {
   useServerApi,

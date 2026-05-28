@@ -34,6 +34,17 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
   // actually starting fine.
   const launchInFlight = ref(false);
 
+  // Incognito mode for the *next* launch. When true, the backend won't
+  // open a PlaySession, won't heartbeat, won't update Playtime, and won't
+  // poll achievements. Cleared back to `false` after the launch_game call
+  // returns so a normal Play click after an incognito launch isn't sticky.
+  // Pure client-side state — the server doesn't see this flag.
+  const incognitoNext = ref(false);
+  // Latches `true` while an incognito session is actually running so a UI
+  // overlay (purple badge) can confirm to the user that no session data is
+  // being reported. Cleared by the page's existing process-exit watcher.
+  const incognitoActive = ref(false);
+
   function notifyLaunchFailure(action: "run" | "stop", err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
     createModal(
@@ -72,20 +83,44 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
     }
   }
 
+  /**
+   * Convenience entry: launch the game with incognito set for *this*
+   * invocation only. Used by the gear menu's "Play incognito" action so a
+   * follow-up plain Play click stays normal.
+   */
+  async function launchIncognito() {
+    incognitoNext.value = true;
+    try {
+      await launch();
+    } finally {
+      // `launch` may queue the launch-options modal; if it does we want
+      // incognito to still be set when the user picks an option. The flag
+      // is cleared inside `launchIndex` after the actual invoke.
+    }
+  }
+
   async function launchIndex(index: number) {
     if (launchInFlight.value) return;
     launchInFlight.value = true;
     launchOptions.value = undefined;
+    const useIncognito = incognitoNext.value;
+    incognitoNext.value = false;
     try {
       const result = await invoke<LaunchResult>("launch_game", {
         id: game.id,
         index,
+        incognito: useIncognito,
       });
       if (result.result === "InstallRequired") {
         dependencyRequiredModal.value = {
           gameId: result.data[0],
           versionId: result.data[1],
         };
+      } else if (useIncognito) {
+        // Latch the overlay only once the backend has accepted the launch
+        // (the Success arm). InstallRequired never actually spawns the
+        // child, so we don't claim incognito is active in that case.
+        incognitoActive.value = true;
       }
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
@@ -128,9 +163,11 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
     launchOptionsOpen,
     dependencyRequiredModal,
     launch,
+    launchIncognito,
     launchIndex,
     kill,
     uninstall,
     resumeDownload,
+    incognitoActive,
   };
 }

@@ -275,6 +275,19 @@ function goToUser(_userId: string) {
   // surface both have their own profile routes.
 }
 
+// "Now playing" presence is the only datum on this page that is genuinely
+// live — the leaderboard row's green dot + game name needs to react when
+// someone starts/stops playing. Everything else (stats, activity, recap,
+// leaderboard totals) is hour/day-scale and doesn't merit polling.
+function refreshNowPlaying() {
+  api.community
+    .nowPlaying()
+    .then((n) => (nowPlaying.value = n))
+    .catch((e) => console.warn("[community] now-playing failed:", e));
+}
+
+let nowPlayingTimer: ReturnType<typeof setInterval> | null = null;
+
 onMounted(() => {
   // Independent fetches in parallel — each soft-fails so a single broken
   // endpoint can't blank the whole page.
@@ -295,10 +308,12 @@ onMounted(() => {
     .catch((e) => console.warn("[community] leaderboard failed:", e))
     .finally(() => (leaderboardLoading.value = false));
 
-  api.community
-    .nowPlaying()
-    .then((n) => (nowPlaying.value = n))
-    .catch((e) => console.warn("[community] now-playing failed:", e));
+  refreshNowPlaying();
+  // 30s cadence — comfortably under the server's 5-minute stale window so a
+  // session that just started or just ended flips within roughly one polling
+  // cycle. Cleared on unmount to keep the request bus quiet when the user
+  // navigates away.
+  nowPlayingTimer = setInterval(refreshNowPlaying, 30_000);
 
   api.community
     .weeklyRecap()
@@ -314,6 +329,13 @@ onMounted(() => {
     .weeklyChallenge()
     .then((w) => (weeklyChallenge.value = w))
     .catch((e) => console.warn("[community] weekly-challenge failed:", e));
+});
+
+onUnmounted(() => {
+  if (nowPlayingTimer) {
+    clearInterval(nowPlayingTimer);
+    nowPlayingTimer = null;
+  }
 });
 </script>
 

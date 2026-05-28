@@ -786,13 +786,24 @@ pub fn restore_pc_cloud_save(
 ) -> Result<String, String> {
     use base64::Engine;
 
+    // PC saves uploaded by the launch-time sync use a `pc/<basename>` key so
+    // they don't collide with emu save filenames. Older or hand-uploaded rows
+    // may lack the prefix — fall back to treating the whole filename as the
+    // basename in that case so restore still does the right thing.
     let basename = filename
         .strip_prefix("pc/")
-        .ok_or_else(|| format!("Not a PC cloud save filename: {filename:?}"))?;
+        .unwrap_or(filename.as_str());
 
+    // The game metadata cache is populated under two different keys depending
+    // on which page the user opened first:
+    //   - `fetch_library_logic` writes `game/{id}` (library bulk-fetch).
+    //   - `fetch_game_logic` writes `&id` (no prefix) on the per-game page.
+    // Try both before giving up so users who landed straight on a deep link
+    // can still restore.
     let game_name = remote::cache::get_cached_object::<games::library::Game>(&format!(
         "game/{game_id}"
     ))
+    .or_else(|_| remote::cache::get_cached_object::<games::library::Game>(&game_id))
     .map(|g| g.m_name)
     .map_err(|_| {
         "Game metadata not cached on this device. Open the game's library page once, then retry."

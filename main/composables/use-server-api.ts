@@ -658,8 +658,17 @@ export function useServerApi() {
       // We route through Tauri commands so the request gets signed
       // with the right credentials (the same path the launch-time
       // sync already uses).
+      //
+      // Error surface: every method here forwards the Rust command's
+      // error string via Tauri's `invoke` rejection. Callers should
+      // present `e.message` (Error) or `String(e)` directly — strings
+      // like "Save quota exceeded: would be 1.2 GiB / 1.0 GiB" come
+      // through verbatim from the server's quota check.
 
-      /** List cloud saves for a game (current user only). */
+      /**
+       * List cloud saves for a game (current user only). Returns the
+       * active (non-tombstoned) rows, newest `clientModifiedAt` first.
+       */
       list: (gameId: string) =>
         invoke<CloudSaveListEntry[]>("list_cloud_saves", { gameId }),
 
@@ -667,17 +676,25 @@ export function useServerApi() {
        * Download one cloud save by its id. Returns base64-encoded bytes
        * wrapped in `{ data }` so existing call sites that destructure
        * `const { data } = await api.saves.download(...)` keep working.
+       *
+       * `filename` and `saveType` are returned as empty strings — they
+       * were only ever used as a sanity echo, and callers already have
+       * the canonical values from their `CloudSaveListEntry`. If a future
+       * call site genuinely needs them, change `download_cloud_save` on
+       * the Rust side to return the full struct rather than papering
+       * over it here.
        */
       download: async (id: string): Promise<CloudSaveDownload> => {
         const data = await invoke<string>("download_cloud_save", { id });
-        // filename/saveType were only ever used as a sanity echo by
-        // callers — they pass them in from the list entry. Leave them
-        // empty here; if a future caller needs them, switch the Rust
-        // command to return the full struct.
         return { filename: "", saveType: "", data };
       },
 
-      /** Delete one cloud save by its id. */
+      /**
+       * Soft-delete one cloud save by its id. The server tombstones the
+       * row (sets `deletedAt`) and records the deleting device so other
+       * clients delete their local copy on next sync. A re-upload of the
+       * same filename revives the row. Idempotent for already-deleted ids.
+       */
       delete: (id: string) => invoke<void>("delete_cloud_save", { id }),
     },
 
