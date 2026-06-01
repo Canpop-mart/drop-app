@@ -21,7 +21,6 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { devLog } from "~/composables/dev-mode";
-import { serverUrl } from "~/composables/use-server-fetch";
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -158,14 +157,14 @@ export function useBpmGameSaves(
 
   async function fetchCloudSaves() {
     try {
-      const resp = await fetch(
-        serverUrl(`api/v1/client/saves/list?gameId=${gameId}`),
-      );
-      if (resp.ok) {
-        cloudSaves.value = await resp.json();
-      }
-    } catch {
-      /* non-critical */
+      // The /saves/* endpoints need the client's JWT/cert auth, which the
+      // `server://` protocol (Bearer web token) does NOT provide — raw fetches
+      // 403. Route through the Tauri command, same as the desktop panel.
+      cloudSaves.value = await invoke<CloudSaveEntry[]>("list_cloud_saves", {
+        gameId,
+      });
+    } catch (e) {
+      devLog("state", "[BPM:GAME] Failed to list cloud saves:", e);
     }
   }
 
@@ -215,50 +214,15 @@ export function useBpmGameSaves(
   async function doUpload(save: SaveFile) {
     cloudSyncStatus.value[save.filename] = "uploading";
     try {
-      // Before overwriting, back up the existing cloud version with a
-      // `.bak` suffix so the user can recover from a bad sync.
-      const existingCloud = cloudSaves.value.find(
-        (c) => c.filename === save.filename,
-      );
-      if (existingCloud) {
-        const backupResp = await fetch(
-          serverUrl(`api/v1/client/saves/download?id=${existingCloud.id}`),
-        );
-        if (backupResp.ok) {
-          const backupData = await backupResp.json();
-          await fetch(serverUrl("api/v1/client/saves/upload"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              gameId,
-              filename: save.filename + ".bak",
-              saveType: save.save_type,
-              data: backupData.data,
-              clientModifiedAt: existingCloud.clientModifiedAt,
-            }),
-          });
-        }
-      }
-
-      const base64Data = await invoke<string>("read_save_file", {
+      // `backup_saves` scans this game's local saves, uploads the named one
+      // through the JWT/cert-authed sync path, and records the manifest — the
+      // same command the desktop panel uses. (The server keeps prior versions
+      // via tombstones, so no manual client-side `.bak` re-upload is needed.)
+      await invoke("backup_saves", {
         gameId,
-        filename: save.filename,
-        saveType: save.save_type,
+        gameName: gameName.value ?? "",
+        filenames: [save.filename],
       });
-
-      const resp = await fetch(serverUrl("api/v1/client/saves/upload"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          gameId,
-          filename: save.filename,
-          saveType: save.save_type,
-          data: base64Data,
-          clientModifiedAt: new Date(save.modified * 1000).toISOString(),
-        }),
-      });
-      if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
-
       await fetchCloudSaves();
     } catch (e) {
       console.error("[BPM:GAME] Cloud save upload failed:", e);
@@ -294,12 +258,9 @@ export function useBpmGameSaves(
         }
       }
 
-      const resp = await fetch(
-        serverUrl(`api/v1/client/saves/download?id=${cloudEntry.id}`),
-      );
-      if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
-      const { data } = await resp.json();
-
+      const data = await invoke<string>("download_cloud_save", {
+        id: cloudEntry.id,
+      });
       await invoke("write_save_file", { gameId, filename, saveType, data });
       await fetchSaves();
     } catch (e) {
@@ -556,27 +517,15 @@ export function useBpmGameSaves(
     if (!group.primary || !gameName.value) return;
     pcSyncStatus.value[group.name] = "uploading";
     try {
-      const base64Data = await invoke<string>("read_pc_save_file", {
-        filePath: group.primary.path,
+      // `backup_saves` re-scans with Ludusavi and uploads the requested file
+      // through the JWT/cert-authed path. The `pc__` namespace prefix is the
+      // sanitize-safe identity the scanner emits, so a save backed up here and
+      // one backed up on desktop are the same cloud entry.
+      await invoke("backup_saves", {
+        gameId,
+        gameName: gameName.value,
+        filenames: [`pc__${group.name}`],
       });
-      const resp = await fetch(serverUrl("api/v1/client/saves/upload"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          gameId,
-          // Sanitize-safe namespace prefix shared with the desktop scanner so
-          // a save backed up here and one backed up on desktop are the same
-          // cloud entry (the older `pc:` prefix had its `:` stripped server-
-          // side, so BPM uploads never matched their own read-back).
-          filename: `pc__${group.name}`,
-          saveType: "pc",
-          data: base64Data,
-          clientModifiedAt: new Date(
-            group.primary.modified * 1000,
-          ).toISOString(),
-        }),
-      });
-      if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
       await fetchCloudSaves();
       devLog("state", "[BPM:GAME] PC save uploaded:", group.name);
     } catch (e) {
@@ -592,16 +541,13 @@ export function useBpmGameSaves(
     if (!cloudEntry) return;
     pcSyncStatus.value[group.name] = "downloading";
     try {
-      const resp = await fetch(
-        serverUrl(`api/v1/client/saves/download?id=${cloudEntry.id}`),
-      );
-      if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
-      const { data } = await resp.json();
-
       if (!group.primary) {
         onError("No local path known for this save — cannot restore.");
         return;
       }
+      const data = await invoke<string>("download_cloud_save", {
+        id: cloudEntry.id,
+      });
       await invoke("write_pc_save_file", {
         filePath: group.primary.path,
         data,

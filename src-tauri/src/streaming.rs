@@ -288,8 +288,8 @@ pub struct SunshineAppsConfig {
 
 /// Quality presets for streaming, chosen on the client (the device running
 /// Moonlight). Each maps to an fps + bitrate handed to Moonlight. Resolution is
-/// pinned to the Steam Deck's native 1280x800 (which the host also switches to),
-/// so the capture and the stream match — no upscaling/blur from a mismatch.
+/// a separate setting (`streaming_resolution`) so it can be raised when the Deck
+/// is docked to a TV.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum StreamQuality {
@@ -311,14 +311,91 @@ impl StreamQuality {
         }
     }
 
-    /// Moonlight stream parameters: (width, height, fps, bitrate_kbps).
-    fn params(self) -> (u32, u32, u32, u32) {
+    /// Moonlight stream parameters: (fps, bitrate_kbps).
+    fn params(self) -> (u32, u32) {
         match self {
-            Self::DataSaver => (1280, 800, 30, 8_000),
-            Self::Balanced => (1280, 800, 60, 20_000),
-            Self::HighQuality => (1280, 800, 60, 35_000),
+            Self::DataSaver => (30, 8_000),
+            Self::Balanced => (60, 20_000),
+            Self::HighQuality => (60, 35_000),
         }
     }
+}
+
+/// Parse the `streaming_resolution` setting into explicit dimensions, or `None`
+/// to mean "leave the display alone / let Moonlight pick" (the `"native"`
+/// option). Accepts `"1280x800"`, `"1920x1080"`, `"2560x1440"`, etc.
+fn parse_stream_resolution(s: &str) -> Option<(u32, u32)> {
+    let s = s.trim().to_ascii_lowercase();
+    if s.is_empty() || s == "native" || s == "off" {
+        return None;
+    }
+    let (w, h) = s.split_once('x')?;
+    Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+}
+
+/// Open Sunshine's inbound ports in Windows Firewall (best-effort).
+///
+/// Drop runs the *portable* Sunshine as a child process, which — unlike the
+/// Sunshine installer — never registers firewall rules. Without them Windows
+/// silently drops inbound GameStream traffic, so Moonlight on another device
+/// fails with "failed to connect to <host>:47989" even though Sunshine is
+/// running locally. Adding the rules needs elevation; if Drop isn't elevated
+/// this no-ops and logs a hint (allow Sunshine manually, or run Drop as admin).
+#[cfg(target_os = "windows")]
+fn ensure_sunshine_firewall() {
+    // GameStream uses TCP 47984 (HTTPS) / 47989 (HTTP) / 47990 (web UI) /
+    // 48010 (RTSP) and UDP 47998-48000 (video/control/audio) + 48002 (mic).
+    for (name, proto, ports) in [
+        ("Drop Sunshine (TCP)", "TCP", "47984-48010"),
+        ("Drop Sunshine (UDP)", "UDP", "47998-48010"),
+    ] {
+        // Drop any stale rule of the same name first so repeated starts stay idempotent.
+        let _ = Command::new("netsh")
+            .args(["advfirewall", "firewall", "delete", "rule"])
+            .arg(format!("name={name}"))
+            .output();
+        let result = Command::new("netsh")
+            .args(["advfirewall", "firewall", "add", "rule"])
+            .arg(format!("name={name}"))
+            .args(["dir=in", "action=allow"])
+            .arg(format!("protocol={proto}"))
+            .arg(format!("localport={ports}"))
+            .args(["enable=yes", "profile=any"])
+            .output();
+        match result {
+            Ok(o) if o.status.success() => info!("[SUNSHINE] Firewall rule '{name}' added"),
+            Ok(_) => warn!(
+                "[SUNSHINE] Couldn't add firewall rule '{name}' — run Drop as administrator \
+                 (or allow Sunshine through Windows Firewall) so other devices can connect"
+            ),
+            Err(e) => warn!("[SUNSHINE] netsh failed for '{name}': {e}"),
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_sunshine_firewall() {}
+
+/// Wait until Sunshine's HTTP port is actually accepting connections.
+///
+/// First-run Sunshine generates certificates and can take several seconds to
+/// bind — longer than a fixed sleep — so the session is marked Ready (and the
+/// client told to connect) only once the port answers, up to a ~10s timeout.
+/// Returns `true` once the port answers, `false` if it never does within the
+/// timeout.
+async fn wait_for_sunshine_ready() -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+    let addr = SocketAddr::from(([127, 0, 0, 1], SUNSHINE_BASE_PORT));
+    for _ in 0..20 {
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok() {
+            info!("[SUNSHINE] HTTP port {SUNSHINE_BASE_PORT} ready");
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    warn!("[SUNSHINE] HTTP port {SUNSHINE_BASE_PORT} not ready after ~10s");
+    false
 }
 
 /// Generate sunshine.conf with Drop-specific settings.
@@ -565,6 +642,11 @@ pub async fn start_sunshine(
         let mut guard = SUNSHINE_PROCESS.lock().await;
         *guard = Some(child);
     }
+
+    // Open the firewall so other devices can reach this host, and wait until
+    // Sunshine is actually listening before reporting success.
+    ensure_sunshine_firewall();
+    wait_for_sunshine_ready().await;
 
     Ok(format!("https://localhost:{}", SUNSHINE_WEB_PORT))
 }
@@ -1199,32 +1281,40 @@ pub async fn launch_moonlight(
     // (via fulfill_stream_request step 9).  Sunshine's per-app entries would
     // try to launch the game a second time, causing conflicts.  The game is
     // already running on the PC desktop — Moonlight just captures the screen.
-    // Apply the user's quality preset (resolution / fps / bitrate). Read from
-    // settings so the choice persists and applies to every stream from this
-    // device. Moonlight takes bitrate in Kbps.
-    let (qw, qh, qfps, qbitrate) = {
+    // Apply the user's quality preset (fps + bitrate) and resolution, read from
+    // settings so they persist across streams. Moonlight takes bitrate in Kbps.
+    // Resolution is its own setting so it can be raised when docked to a TV; the
+    // "native" option omits `--resolution` and lets Moonlight use its default.
+    let (qfps, qbitrate, resolution) = {
         let db = borrow_db_checked();
-        StreamQuality::from_setting(&db.settings.streaming_quality).params()
+        let (fps, bitrate) =
+            StreamQuality::from_setting(&db.settings.streaming_quality).params();
+        (fps, bitrate, parse_stream_resolution(&db.settings.streaming_resolution))
     };
-    let resolution = format!("{qw}x{qh}");
     let fps_str = qfps.to_string();
     let bitrate_str = qbitrate.to_string();
     info!(
         "[MOONLIGHT] Starting stream to {} (Desktop capture, {} @ {}fps, {}kbps)...",
-        address, resolution, qfps, qbitrate
+        address,
+        resolution
+            .map(|(w, h)| format!("{w}x{h}"))
+            .unwrap_or_else(|| "native".to_string()),
+        qfps,
+        qbitrate
     );
+    let mut args: Vec<String> = vec!["stream".to_string()];
+    if let Some((w, h)) = resolution {
+        args.push("--resolution".to_string());
+        args.push(format!("{w}x{h}"));
+    }
+    args.push("--fps".to_string());
+    args.push(fps_str);
+    args.push("--bitrate".to_string());
+    args.push(bitrate_str);
+    args.push(address.clone());
+    args.push("Desktop".to_string());
     let mut cmd = moonlight_command(&moonlight_str);
-    cmd.args([
-        "stream",
-        "--resolution",
-        &resolution,
-        "--fps",
-        &fps_str,
-        "--bitrate",
-        &bitrate_str,
-        &address,
-        "Desktop",
-    ]);
+    cmd.args(&args);
 
     let child = cmd.spawn()
         .map_err(|e| format!("Failed to launch Moonlight: {e}"))?;
@@ -1590,8 +1680,8 @@ async fn fulfill_stream_request(
                             return;
                         }
                     }
-                    // Give Sunshine time to initialize
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    // Open the firewall so the client can reach this host.
+                    ensure_sunshine_firewall();
                 }
                 Err(e) => {
                     warn!("[STREAM-FULFILL] Failed to generate Sunshine config: {e}");
@@ -1599,6 +1689,21 @@ async fn fulfill_stream_request(
                 }
             }
         }
+    }
+
+    // Whether we just started Sunshine or it was already running, make sure it
+    // is actually accepting connections before sending the pairing PIN and
+    // marking the session Ready. Without this the host reports "Ready" while
+    // Sunshine is still binding (or not running at all), so Moonlight on the
+    // client races ahead and gets no response on :47989. If it never comes up,
+    // abort the session rather than tell the client to connect to a dead host.
+    if !wait_for_sunshine_ready().await {
+        warn!(
+            "[STREAM-FULFILL] Sunshine never started listening on port {SUNSHINE_BASE_PORT}; \
+             aborting session {session_id} instead of telling the client to connect"
+        );
+        let _ = streaming_sessions::stop_streaming_session(&session_id).await;
+        return;
     }
 
     // 5. Send the PIN to Sunshine's API for pre-pairing (Moonlight streams
@@ -1621,17 +1726,30 @@ async fn fulfill_stream_request(
     }
     info!("[STREAM-FULFILL] Session {} marked Ready", session_id);
 
-    // 7. Change resolution for Steam Deck streaming (Windows only)
+    // 7. Switch the host display to the configured streaming resolution
+    //    (Windows only). Defaults to the Deck's 1280x800; set bigger (or
+    //    "native" to skip the switch) when the Deck is docked to a TV.
     #[cfg(target_os = "windows")]
     {
-        // Steam Deck native resolution is 1280x800
-        match set_display_resolution(1280, 800) {
-            Ok((old_w, old_h)) => {
-                let mut guard = SAVED_RESOLUTION.lock().await;
-                *guard = Some(SavedResolution { width: old_w, height: old_h });
-                info!("[STREAM-FULFILL] Saved original resolution {}x{}, switched to 1280x800", old_w, old_h);
-            }
-            Err(e) => warn!("[STREAM-FULFILL] Failed to set streaming resolution: {e}"),
+        let res = {
+            let db = borrow_db_checked();
+            db.settings.streaming_resolution.clone()
+        };
+        match parse_stream_resolution(&res) {
+            Some((w, h)) => match set_display_resolution(w, h) {
+                Ok((old_w, old_h)) => {
+                    let mut guard = SAVED_RESOLUTION.lock().await;
+                    *guard = Some(SavedResolution { width: old_w, height: old_h });
+                    info!(
+                        "[STREAM-FULFILL] Saved original resolution {}x{}, switched to {}x{}",
+                        old_w, old_h, w, h
+                    );
+                }
+                Err(e) => warn!("[STREAM-FULFILL] Failed to set streaming resolution: {e}"),
+            },
+            None => info!(
+                "[STREAM-FULFILL] streaming_resolution is 'native' — leaving host display unchanged"
+            ),
         }
     }
 

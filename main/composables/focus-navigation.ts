@@ -1256,8 +1256,10 @@ function wireGamepad() {
       if (!enabled.value || inputLocked.value) return;
       const container = findScrollContainer();
       if (container) {
+        // Scroll ~60% of a screen (not a full screen) so a row of context
+        // carries over — a full-viewport jump is disorienting when browsing.
         container.scrollBy({
-          top: -container.clientHeight,
+          top: -container.clientHeight * 0.6,
           behavior: "smooth",
         });
       }
@@ -1270,7 +1272,7 @@ function wireGamepad() {
       const container = findScrollContainer();
       if (container) {
         container.scrollBy({
-          top: container.clientHeight,
+          top: container.clientHeight * 0.6,
           behavior: "smooth",
         });
       }
@@ -1283,8 +1285,10 @@ function wireGamepad() {
   // State variables (leftStickDirection, timers, stopLeftStickRepeat) are at
   // module scope so destroy() can clean them up.
 
-  const LEFT_STICK_NAV_THRESHOLD = 0.55; // deflection needed to trigger nav
-  const LEFT_STICK_REPEAT_DELAY = 300; // ms before repeat starts
+  // 0.55 felt sluggish on the Deck stick (needs a big push); 0.4 is responsive
+  // while still clear of the 0.15 dead zone. Repeat delay matches the D-pad.
+  const LEFT_STICK_NAV_THRESHOLD = 0.4; // deflection needed to trigger nav
+  const LEFT_STICK_REPEAT_DELAY = 250; // ms before repeat starts
   const LEFT_STICK_REPEAT_RATE = 120; // ms between repeats
 
   function getLeftStickDirection(

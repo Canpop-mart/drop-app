@@ -15,6 +15,29 @@
       <StreamingSetup />
     </div>
 
+    <!-- Stream resolution: the display mode this PC switches to while hosting a
+         stream. Set it to match the streaming device (small for a handheld,
+         1080p for a docked TV); "Don't change" leaves your desktop alone. -->
+    <div class="mt-8">
+      <h4 class="text-sm font-semibold text-zinc-200 mb-1">Stream Resolution</h4>
+      <p class="text-sm text-zinc-400 mb-3">
+        The resolution this PC switches to while streaming a game. Lower matches
+        a handheld screen; higher suits a docked TV. Set the same value on the
+        device you stream to.
+      </p>
+      <select
+        v-model="streamingResolution"
+        class="w-full max-w-xs rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        @change="saveStreamingResolution"
+      >
+        <option value="1280x800">Handheld (1280×800)</option>
+        <option value="1920x1080">1080p (1920×1080)</option>
+        <option value="2560x1440">1440p (2560×1440)</option>
+        <option value="native">Don't change my resolution</option>
+      </select>
+      <p v-if="resolutionSaved" class="mt-2 text-xs text-green-400">Saved.</p>
+    </div>
+
     <!-- Active sessions -->
     <div class="mt-8">
       <h4 class="text-sm font-semibold text-zinc-200 mb-3">
@@ -65,6 +88,7 @@
 </template>
 
 <script setup lang="ts">
+import { invoke } from "@tauri-apps/api/core";
 import {
   useStreaming,
   type StreamingSession,
@@ -75,7 +99,33 @@ const { listRemoteSessions } = useStreaming();
 const sessions = ref<StreamingSession[]>([]);
 const sessionsLoading = ref(true);
 
+// Host display resolution while streaming (read by streaming.rs at launch).
+const streamingResolution = ref("1280x800");
+const resolutionSaved = ref(false);
+
+async function saveStreamingResolution() {
+  try {
+    await invoke("update_settings", {
+      newSettings: { streamingResolution: streamingResolution.value },
+    });
+    resolutionSaved.value = true;
+    setTimeout(() => {
+      resolutionSaved.value = false;
+    }, 1500);
+  } catch (e) {
+    console.error("[SETTINGS] Failed to save streaming resolution:", e);
+  }
+}
+
 onMounted(async () => {
+  try {
+    const settings = await invoke<Record<string, unknown>>("fetch_settings");
+    if (typeof settings.streamingResolution === "string") {
+      streamingResolution.value = settings.streamingResolution;
+    }
+  } catch {
+    // keep default
+  }
   try {
     sessions.value = await listRemoteSessions();
   } finally {

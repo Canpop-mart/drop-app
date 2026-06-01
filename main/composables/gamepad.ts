@@ -159,36 +159,66 @@ function pollFrame() {
   if (!polling) return;
 
   const gamepads = navigator.getGamepads();
-  let foundConnected = false;
-
+  const active: Gamepad[] = [];
   for (const gp of gamepads) {
-    if (!gp || !gp.connected) continue;
-    foundConnected = true;
+    if (gp && gp.connected) active.push(gp);
+  }
 
-    const cid = gp.index;
+  if (active.length === 0) {
+    if (connected.value) {
+      connected.value = false;
+      controllerName.value = "";
+      controllerId.value = null;
+      buttons.clear();
+      axes.clear();
+      prevButtons.clear();
+      prevAxes.clear();
+      devLog("gamepad", "[GAMEPAD] Controller disconnected");
+    }
+    rafId = requestAnimationFrame(pollFrame);
+    return;
+  }
 
-    // Detect new connection
-    if (!connected.value || controllerId.value !== cid) {
-      connected.value = true;
-      controllerId.value = cid;
-      controllerName.value = gp.id;
+  // Accept input from EVERY connected controller, not just index 0. On a
+  // docked Steam Deck the built-in gamepad (index 0) AND a Bluetooth
+  // controller are both connected; locking onto the first one left the BT
+  // controller dead. A logical button is pressed if it's down on ANY
+  // controller; an axis takes the largest-magnitude reading across them.
+  if (!connected.value) {
+    connected.value = true;
+    controllerId.value = active[0].index;
+    controllerName.value =
+      active.length === 1 ? active[0].id : `${active.length} controllers`;
+    devLog(
+      "gamepad",
+      `[GAMEPAD] ${active.length} controller(s) connected: ${active
+        .map((g) => g.id)
+        .join(", ")}`,
+    );
+  }
 
-      devLog("gamepad",
-        `[GAMEPAD] Controller connected: ${gp.id} (index ${cid})`,
-      );
+  // ── Buttons (pressed if down on ANY controller) ──────────────────
+  for (const key in activeButtonMap) {
+    const i = Number(key);
+    const name = activeButtonMap[i];
+    if (!name) continue;
+
+    let pressed = false;
+    let cid = active[0].index;
+    for (const gp of active) {
+      const btn = gp.buttons[i];
+      if (!btn) continue;
+      // Triggers (index 6,7) use analog value, others use .pressed
+      const p =
+        i === 6 || i === 7 ? btn.value > TRIGGER_PRESS_THRESHOLD : btn.pressed;
+      if (p) {
+        pressed = true;
+        cid = gp.index;
+        break;
+      }
     }
 
-    // ── Buttons ──────────────────────────────────────────────────
-    for (let i = 0; i < gp.buttons.length; i++) {
-      const name = activeButtonMap[i];
-      if (!name) continue;
-
-      const btn = gp.buttons[i];
-      // Triggers (index 6,7) use analog value, others use .pressed
-      const pressed =
-        i === 6 || i === 7 ? btn.value > TRIGGER_PRESS_THRESHOLD : btn.pressed;
-
-      const wasPressedPrev = prevButtons.get(name) ?? false;
+    const wasPressedPrev = prevButtons.get(name) ?? false;
 
       if (pressed !== wasPressedPrev) {
         prevButtons.set(name, pressed);
@@ -247,11 +277,19 @@ function pollFrame() {
     // settled stick reads ~0 within one frame.
     //
     // AXIS_CHANGE_THRESHOLD now only gates dev-log noise, never the cache.
-    for (let i = 0; i < Math.min(gp.axes.length, 4); i++) {
+    for (const key in AXIS_NAMES) {
+      const i = Number(key);
       const name = AXIS_NAMES[i];
       if (!name) continue;
 
-      const filtered = applyDeadZone(gp.axes[i]);
+      // Largest-magnitude reading across all connected controllers.
+      let filtered = 0;
+      for (const gp of active) {
+        if (i < gp.axes.length) {
+          const f = applyDeadZone(gp.axes[i]);
+          if (Math.abs(f) > Math.abs(filtered)) filtered = f;
+        }
+      }
       const prev = prevAxes.get(name) ?? 0;
 
       // Heartbeat: unconditionally refresh the cached value so a stick at
@@ -260,24 +298,9 @@ function pollFrame() {
 
       if (Math.abs(filtered - prev) >= AXIS_CHANGE_THRESHOLD) {
         prevAxes.set(name, filtered);
-        devLog("gamepad", `axis ${name}=${filtered.toFixed(2)} (cid=${cid})`);
+        devLog("gamepad", `axis ${name}=${filtered.toFixed(2)}`);
       }
     }
-
-    // Only process first connected gamepad
-    break;
-  }
-
-  if (!foundConnected && connected.value) {
-    connected.value = false;
-    controllerName.value = "";
-    controllerId.value = null;
-    buttons.clear();
-    axes.clear();
-    prevButtons.clear();
-    prevAxes.clear();
-    devLog("gamepad","[GAMEPAD] Controller disconnected");
-  }
 
   rafId = requestAnimationFrame(pollFrame);
 }

@@ -869,6 +869,34 @@
             </button>
           </div>
         </div>
+
+        <!-- Stream resolution — bump it up when this Deck is docked to a TV.
+             Set it to the SAME value on the host PC so the captured desktop and
+             the stream match (otherwise Sunshine up/down-scales). "Don't change"
+             leaves the host display alone. -->
+        <div class="bg-zinc-900/50 rounded-xl p-4 space-y-3">
+          <div>
+            <p class="text-sm font-medium text-zinc-300">Stream resolution</p>
+            <p class="text-xs text-zinc-500 mt-0.5">
+              1280×800 suits the handheld screen; raise it when docked to a TV.
+              Set the same value on the host PC's Streaming settings.
+            </p>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              v-for="opt in STREAM_RESOLUTION_OPTIONS"
+              :key="opt.value"
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-3 py-2 rounded-lg text-sm font-medium transition-colors text-center"
+              :class="streamingResolution === opt.value ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingResolution(opt.value)"
+            >
+              <span class="block">{{ opt.label }}</span>
+              <span class="block text-[10px] opacity-70 mt-0.5">{{ opt.detail }}</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- ═══════ Developer ═══════ -->
@@ -1277,12 +1305,32 @@ async function setStreamingQuality(value: string) {
   }
 }
 
+// Client/host stream resolution. Read by both the host (display switch) and the
+// client (Moonlight `--resolution`) from `streaming_resolution` in Settings.
+const STREAM_RESOLUTION_OPTIONS = [
+  { value: "1280x800", label: "Deck", detail: "1280×800" },
+  { value: "1920x1080", label: "1080p", detail: "1920×1080" },
+  { value: "2560x1440", label: "1440p", detail: "2560×1440" },
+  { value: "native", label: "Don't change", detail: "leave display" },
+] as const;
+const streamingResolution = ref<string>("1280x800");
+
+async function setStreamingResolution(value: string) {
+  streamingResolution.value = value;
+  try {
+    await invoke("update_settings", { newSettings: { streamingResolution: value } });
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save stream resolution:", e);
+  }
+}
+
 onMounted(async () => {
   try {
     const settings = await invoke<Record<string, any>>("fetch_settings");
     if (settings.sunshineUsername) streamingUsername.value = settings.sunshineUsername;
     if (settings.sunshinePassword) streamingPassword.value = settings.sunshinePassword;
     if (settings.streamingQuality) streamingQuality.value = settings.streamingQuality;
+    if (settings.streamingResolution) streamingResolution.value = settings.streamingResolution;
   } catch {
     // Settings not available yet — keep defaults
   }

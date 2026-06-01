@@ -287,12 +287,16 @@ watch(
   },
 );
 
-// Server-side scanner produces filenames prefixed with `pc/` (see
-// remote/src/save_sync/scan.rs). The earlier `pc:` check here was a typo —
-// it never matched, so PC entries always took the emu-restore path and
-// silently wrote to the wrong directory.
+// PC saves are namespaced so they don't collide with emulator saves. `pc__`
+// is the current sanitize-safe prefix (see remote/src/save_sync/scan.rs);
+// `pc/` is the legacy one. Recognising both routes PC entries to the
+// Ludusavi-aware restore path instead of the emu-restore path.
 function isPcSave(entry: CloudSaveListEntry): boolean {
-  return entry.saveType === "pc" || entry.filename.startsWith("pc/");
+  return (
+    entry.saveType === "pc" ||
+    entry.filename.startsWith("pc__") ||
+    entry.filename.startsWith("pc/")
+  );
 }
 
 async function restore(entry: CloudSaveListEntry) {

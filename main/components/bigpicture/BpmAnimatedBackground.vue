@@ -1,5 +1,9 @@
 <template>
-  <div v-show="props.enabled" class="animated-background" :class="`theme-${themeId}`">
+  <div
+    v-show="props.enabled"
+    class="animated-background"
+    :class="[`theme-${themeId}`, { reduced }]"
+  >
     <!-- Steam -->
     <div v-if="themeId === 'steam'" class="steam-bg"></div>
 
@@ -126,8 +130,20 @@ const props = withDefaults(defineProps<Props>(), {
   z-index: 0;
   pointer-events: none;
   overflow: hidden;
-  will-change: contents;
   contain: strict;
+}
+
+/* When the app's reduced-motion setting is on, keep the cheap transform/opacity
+   animations but strip every blur: `filter: blur()` and `backdrop-filter` are
+   the dominant GPU cost on the Steam Deck iGPU (the `:reduced` template guards
+   only thin out element COUNTS, not the blur on what remains). */
+.animated-background.reduced,
+.animated-background.reduced *,
+.animated-background.reduced *::before,
+.animated-background.reduced *::after {
+  filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* Respect system preference for reduced motion */

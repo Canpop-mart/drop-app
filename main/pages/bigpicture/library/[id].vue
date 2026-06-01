@@ -436,8 +436,10 @@
 
     <!-- Tab content -->
     <div class="flex-1 px-8 py-6">
-      <!-- Achievements -->
-      <div v-if="activeTab === 'achievements'" class="space-y-4">
+      <!-- Community — achievements list + leaderboard, matching desktop's
+           Community tab (which stacks the achievement grid above the
+           leaderboard / first-to-unlock signal). -->
+      <div v-if="activeTab === 'community'" class="space-y-4">
         <!-- Achievement summary progress + Verify ROM -->
         <div v-if="achievements.length > 0" class="flex items-center gap-3 px-1">
           <div class="flex-1 h-2 bg-zinc-800 rounded-full overflow-hidden">
@@ -564,70 +566,64 @@
         >
           No achievements available for this game.
         </p>
-      </div>
 
-      <!-- Details (markdown rendered) -->
-      <div v-else-if="activeTab === 'details'" class="max-w-3xl">
-        <div
-          v-if="game?.mDescription"
-          class="prose prose-invert prose-zinc max-w-none text-zinc-300 leading-relaxed"
-          v-html="renderedDescription"
-        />
-        <p v-else class="text-zinc-500">No description available.</p>
-      </div>
-
-      <!-- Gallery -->
-      <div
-        v-else-if="activeTab === 'gallery'"
-        class="grid grid-cols-2 gap-4"
-      >
-        <div
-          v-for="(imgId, idx) in game?.mImageCarouselObjectIds"
-          :key="idx"
-          class="aspect-video rounded-lg overflow-hidden bg-zinc-800"
-        >
-          <img
-            :src="objectUrl(imgId)"
-            class="w-full h-full object-cover"
-            loading="lazy"
+        <!-- Leaderboard / activity / first-to-unlock — the shared component
+             desktop shows alongside achievements in its Community tab. -->
+        <div class="pt-5 mt-1 border-t border-zinc-800/50">
+          <GameCommunityTab
+            :game-id="gameId"
+            :players="gamePlayers"
+            :firsts="gameFirsts"
           />
         </div>
-        <p
-          v-if="!game?.mImageCarouselObjectIds?.length"
-          class="text-zinc-500 col-span-2 text-center py-8 text-sm"
-        >
-          No screenshots available.
-        </p>
       </div>
-      <!-- Community — leaderboard + activity + firsts. Shared component
-           between desktop and BPM; the page just threads in the
-           pre-fetched players/firsts lists. -->
-      <GameCommunityTab
-        v-else-if="activeTab === 'community'"
-        :game-id="gameId"
-        :players="gamePlayers"
-        :firsts="gameFirsts"
-      />
 
-      <!-- Saves — gated by dev mode (also guarded here as a belt-and-braces
-           in case activeTab is briefly still 'saves' when dev mode flips
-           off, before the watcher resets it). -->
-      <BpmGameSavesTab
-        v-else-if="activeTab === 'saves' && devMode.enabled.value"
-        :saves="saves"
-        :is-native-game="isNativeGame"
-        :register-action="registerAction"
-        :format-time-ago="formatTimeAgo"
-      />
-    </div>
+      <!-- About — description + gallery, matching desktop's About tab. -->
+      <div v-else-if="activeTab === 'about'" class="max-w-3xl space-y-8">
+        <div>
+          <div
+            v-if="game?.mDescription"
+            class="prose prose-invert prose-zinc max-w-none text-zinc-300 leading-relaxed"
+            v-html="renderedDescription"
+          />
+          <p v-else class="text-zinc-500">No description available.</p>
+        </div>
 
-    <!-- Cloud Saves — list / restore / delete. Lives outside the tab strip
-         so it stays visible on every tab, parallel to the desktop layout. -->
-    <div class="px-8 pb-6">
-      <BpmCloudSavesPanel
-        :game-id="gameId"
-        :register-action="registerAction"
-      />
+        <div v-if="game?.mImageCarouselObjectIds?.length">
+          <h3 class="text-sm font-semibold mb-3" style="color: var(--bpm-muted)">
+            GALLERY
+          </h3>
+          <div class="grid grid-cols-2 gap-4">
+            <div
+              v-for="(imgId, idx) in game?.mImageCarouselObjectIds"
+              :key="idx"
+              class="aspect-video rounded-lg overflow-hidden bg-zinc-800"
+            >
+              <img
+                :src="objectUrl(imgId)"
+                class="w-full h-full object-cover"
+                loading="lazy"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cloud Saves — cloud list (restore/delete) + local save management
+           (upload/download), matching desktop's single Cloud Saves tab. No
+           longer gated behind dev mode. -->
+      <div v-else-if="activeTab === 'cloudsaves'" class="space-y-6">
+        <BpmCloudSavesPanel
+          :game-id="gameId"
+          :register-action="registerAction"
+        />
+        <BpmGameSavesTab
+          :saves="saves"
+          :is-native-game="isNativeGame"
+          :register-action="registerAction"
+          :format-time-ago="formatTimeAgo"
+        />
+      </div>
     </div>
 
     <!-- Recommended games -->
@@ -923,20 +919,13 @@ const statusRef = shallowRef<any>(null);
 const status = computed<GameStatus | null>(() => statusRef.value?.value ?? null);
 const version = ref<GameVersion | null>(null);
 const versionOptions = ref<VersionOption[] | null>(null);
-const activeTab = ref("achievements");
+const activeTab = ref("about");
 // Plain object — NOT reactive. Storing DOM refs in a reactive ref causes
 // infinite update loops when set from :ref callbacks during render.
 const tabRefs: Record<string, HTMLElement | null> = {};
 const tabIndicatorStyle = ref({ left: "0", width: "0" });
 const launchError = ref<string | null>(null);
 const diagnosticsRan = ref(false);
-
-// Dev mode gates Streaming + Cloud Saves UI on this page (the Saves tab,
-// the Stream-from-device entries in the play menu, and the Ludusavi
-// install prompt). Keep the underlying machinery wired up — composables,
-// listeners — so toggling dev mode at runtime cleanly reveals the UI
-// without a reload.
-const devMode = useDevMode();
 
 // ── Streaming ─────────────────────────────────────────────────────────────
 // Receiver-side streaming + cross-device discovery lives in
@@ -1465,31 +1454,13 @@ function onAchievementIconError(event: Event) {
   img.parentNode?.insertBefore(fallback, img.nextSibling);
 }
 
-// Saves tab is gated behind dev mode while the Ludusavi-backed cloud sync
-// flow is still in development. When dev mode is off the tab disappears
-// from the row; if `activeTab` happens to be "saves" at the moment the
-// user toggles dev mode off, the watcher below resets it to the first tab.
-const tabs = computed(() => {
-  const list: { label: string; value: string }[] = [
-    { label: "Achievements", value: "achievements" },
-    { label: "Details", value: "details" },
-    { label: "Gallery", value: "gallery" },
-    { label: "Community", value: "community" },
-  ];
-  if (devMode.enabled.value) {
-    list.push({ label: "Saves", value: "saves" });
-  }
-  return list;
-});
-
-watch(
-  () => devMode.enabled.value,
-  (enabled) => {
-    if (!enabled && activeTab.value === "saves") {
-      activeTab.value = "achievements";
-    }
-  },
-);
+// Three tabs, matching the desktop game-detail page: About (description +
+// gallery), Community (achievements + leaderboard), and Cloud Saves.
+const tabs = computed(() => [
+  { label: "About", value: "about" },
+  { label: "Community", value: "community" },
+  { label: "Cloud Saves", value: "cloudsaves" },
+]);
 
 interface AchievementItem {
   id: string;
@@ -1586,11 +1557,11 @@ const saves = useBpmGameSaves(
   (msg) => { launchError.value = msg; },
 );
 
-// Load saves when the saves tab is selected.
+// Load saves when the Cloud Saves tab is selected.
 watch(
   () => activeTab.value,
   (tab) => {
-    if (tab === "saves") saves.loadAll();
+    if (tab === "cloudsaves") saves.loadAll();
   },
 );
 

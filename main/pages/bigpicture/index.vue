@@ -1817,10 +1817,18 @@ const hideTitles = ref(
 // Reads the `bpm:boxArtOverlay` key the BPM settings page writes. The
 // CustomEvent listener picks up live changes so toggling the setting
 // updates the home-page tiles immediately, without a route bounce.
+// Default the platform-themed cover overlays OFF on Deck hardware: each adds a
+// `mix-blend-mode` layer + a second image over every tile, which is real
+// fill-rate cost across a grid on the iGPU. Honour an explicit user choice;
+// otherwise off on Deck, on elsewhere. (Mirrors the animated-bg default below.)
 const showBoxArtOverlays = ref(
-  typeof localStorage !== "undefined"
-    ? localStorage.getItem("bpm:boxArtOverlay") !== "false"
-    : true,
+  (() => {
+    if (typeof localStorage === "undefined") return true;
+    const stored = localStorage.getItem("bpm:boxArtOverlay");
+    if (stored === "true") return true;
+    if (stored === "false") return false;
+    return !useDeckMode().isSteamDeckHardware.value;
+  })(),
 );
 function onBoxArtOverlayChange(e: Event) {
   showBoxArtOverlays.value = (e as CustomEvent<boolean>).detail !== false;

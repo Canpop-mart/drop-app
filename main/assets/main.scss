@@ -79,7 +79,10 @@ $helvetica: (
  */
 .bp-focused {
   outline: 3px solid rgba(var(--bpm-accent, 59 130 246) / 0.8);
-  outline-offset: 0px;
+  /* Small gap between the element and its ring so it reads as a halo rather
+     than a border (elements are scrolled in with a 32px margin, so the offset
+     never clips against the viewport edge). */
+  outline-offset: 2px;
   z-index: 10;
   position: relative;
   transition: outline 0.15s ease;

@@ -337,6 +337,13 @@ pub mod data {
             /// `"highQuality"`. Drives the fps/bitrate passed to Moonlight.
             #[serde(default = "default_streaming_quality")]
             pub streaming_quality: String,
+            /// Game-streaming resolution: `"1280x800"` (Deck handheld, default),
+            /// `"1920x1080"`, `"2560x1440"`, or `"native"` to leave the display
+            /// unchanged. The host switches its display to this while streaming,
+            /// and the client asks Moonlight to stream at it — set it bigger when
+            /// the Deck is docked to a TV.
+            #[serde(default = "default_streaming_resolution")]
+            pub streaming_resolution: String,
         }
 
         // Manual Debug impl: redact the Sunshine password so it never leaks
@@ -369,6 +376,7 @@ pub mod data {
                     .field("cloud_saves_enabled", &self.cloud_saves_enabled)
                     .field("device_name", &self.device_name)
                     .field("streaming_quality", &self.streaming_quality)
+                    .field("streaming_resolution", &self.streaming_resolution)
                     .finish()
             }
         }
@@ -379,6 +387,10 @@ pub mod data {
 
         fn default_streaming_quality() -> String {
             "balanced".to_string()
+        }
+
+        fn default_streaming_resolution() -> String {
+            "1280x800".to_string()
         }
 
         fn default_true() -> bool {
@@ -399,6 +411,7 @@ pub mod data {
                     cloud_saves_enabled: default_true(),
                     device_name: None,
                     streaming_quality: default_streaming_quality(),
+                    streaming_resolution: default_streaming_resolution(),
                 }
             }
         }

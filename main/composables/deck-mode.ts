@@ -38,14 +38,9 @@ const sessionType = ref<SessionType>("desktop");
  */
 const isGamescope = computed(() => sessionType.value === "gamescope");
 
-/**
- * True when running on Steam Deck hardware (Game Mode or Desktop Mode).
- */
-const isSteamDeckHardware = computed(
-  () =>
-    sessionType.value === "gamescope" ||
-    sessionType.value === "steamDeckDesktop",
-);
+// `isSteamDeckHardware` is defined below, after `isDeck`, so it can reuse the
+// full Deck-mode signal (gamescope + resolution/UA auto-detect + manual
+// override) instead of only the Rust session probe — see the note there.
 
 /**
  * Manual override: "auto" | "deck" | "desktop"
@@ -78,6 +73,22 @@ const isDeck = computed(() => {
   if (forceOverride.value === "desktop") return false;
   return autoDetected.value;
 });
+
+/**
+ * True when we should treat this as Steam Deck / handheld hardware for the
+ * purposes of performance-friendly defaults (animated background off, reduced
+ * motion on, box-art overlays off, …).
+ *
+ * Originally this trusted only the Rust session probe (`gamescope` /
+ * `steamDeckDesktop`). But that probe can miss under gamescope, leaving an
+ * actual Deck with desktop-grade defaults and the lag that comes with them. It
+ * now follows the resolved Deck-mode signal (`isDeck`, which folds in the
+ * resolution/UA auto-detection and the manual override) plus the explicit
+ * Deck-desktop session type.
+ */
+const isSteamDeckHardware = computed(
+  () => sessionType.value === "steamDeckDesktop" || isDeck.value,
+);
 
 let initialized = false;
 

@@ -816,17 +816,26 @@ pub struct LocalSaveEntry {
 /// not just what's already in the cloud. Same detection as the manual
 /// sync, so what shows here is exactly what "Sync now" would push.
 #[tauri::command]
-pub fn scan_local_game_saves(game_id: String, game_name: String) -> Vec<LocalSaveEntry> {
-    scan_all_local_saves(&game_id, &game_name)
-        .into_iter()
-        .map(|f| LocalSaveEntry {
-            filename: f.filename,
-            save_type: f.save_type,
-            size: f.size,
-            modified_at: f.modified_at,
-            data_hash: f.data_hash,
-        })
-        .collect()
+pub async fn scan_local_game_saves(
+    game_id: String,
+    game_name: String,
+) -> Result<Vec<LocalSaveEntry>, String> {
+    // Same multi-second Ludusavi scan as the manual sync — keep it off the
+    // main thread so the panel's refresh never freezes the UI.
+    tokio::task::spawn_blocking(move || {
+        scan_all_local_saves(&game_id, &game_name)
+            .into_iter()
+            .map(|f| LocalSaveEntry {
+                filename: f.filename,
+                save_type: f.save_type,
+                size: f.size,
+                modified_at: f.modified_at,
+                data_hash: f.data_hash,
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| format!("Local save scan task failed: {e}"))
 }
 
 /// Manually scan + upload this game's saves to the cloud, on demand —
@@ -1468,7 +1477,15 @@ fn find_steam_app_id(game_id: &str) -> Option<String> {
 /// List PC game save locations using Ludusavi.
 /// Returns the files Ludusavi finds for this game.
 #[tauri::command]
-pub fn list_pc_game_saves(game_id: String, game_name: String) -> Result<LudusaviSaveInfo, String> {
+pub async fn list_pc_game_saves(
+    game_id: String,
+    game_name: String,
+) -> Result<LudusaviSaveInfo, String> {
+    // Ludusavi shells out to several multi-second filesystem scans (name
+    // resolution + up to three `backup --preview` passes + a manifest parse).
+    // Run them on a blocking thread so Tauri's main thread — and, in Big
+    // Picture Mode, the gamepad poll loop — isn't frozen while they run.
+    tokio::task::spawn_blocking(move || -> Result<LudusaviSaveInfo, String> {
     let ludusavi = find_ludusavi().ok_or("Ludusavi not installed")?;
 
     // Try Steam App ID first (more accurate), fall back to game name
@@ -1596,7 +1613,8 @@ pub fn list_pc_game_saves(game_id: String, game_name: String) -> Result<Ludusavi
             resolved_name = name.clone();
             if let Some(game_files) = game_data.get("files").and_then(|f| f.as_object()) {
                 for (path, file_data) in game_files {
-                    let size = file_data.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+                    // Ludusavi reports size under `bytes`, not `size`.
+                    let size = file_data.get("bytes").and_then(|s| s.as_u64()).unwrap_or(0);
                     files.push(LudusaviFile {
                         path: path.clone(),
                         size,
@@ -1624,6 +1642,9 @@ pub fn list_pc_game_saves(game_id: String, game_name: String) -> Result<Ludusavi
         files,
         game_name: resolved_name,
     })
+    })
+    .await
+    .map_err(|e| format!("Ludusavi scan task failed: {e}"))?
 }
 
 /// Scan common Windows/Linux save locations for a game that Ludusavi doesn't know about.
