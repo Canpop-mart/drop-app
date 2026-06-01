@@ -73,7 +73,8 @@
                   <PlayIcon class="size-5" />
                   <span class="font-medium">Play</span>
                 </button>
-                <!-- Stream from other devices (only those that have the game) -->
+                <!-- Play on another device that has the game — launches it
+                     there and streams it back here via Moonlight. -->
                 <template v-for="(device, i) in streamableDevices" :key="'stream-' + device.id">
                   <button
                     class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
@@ -82,8 +83,8 @@
                     @mouseenter="playMenuFocus = 1 + i"
                   >
                     <SignalIcon class="size-5 text-purple-400" />
-                    <span class="font-medium">Stream from {{ device.name }}</span>
-                    <span class="text-xs opacity-50 ml-auto">{{ device.platform }}</span>
+                    <span class="font-medium">Play on {{ device.name }}</span>
+                    <span class="text-xs opacity-50 ml-auto">Stream · {{ device.platform }}</span>
                   </button>
                 </template>
                 <!-- Install on other devices (only those that don't have the game) -->
@@ -164,6 +165,32 @@
             <ArrowDownTrayIcon class="size-6 animate-bounce" />
             {{ status?.type === "Downloading" ? "Downloading..." : "Queued" }}
           </button>
+
+          <!-- ── Not installed here, but installed on another device:
+               offer to play it there and stream it back. This is the
+               "play a PC game on the Deck without installing" path. -->
+          <div
+            v-if="
+              status &&
+              status.type !== 'Installed' &&
+              status.type !== 'Running' &&
+              status.type !== 'Downloading' &&
+              status.type !== 'Queued' &&
+              streamableDevices.length > 0
+            "
+            :ref="(el: any) => registerAction(el, { onSelect: () => streaming.streamFromDevice(streamableDevices[0]) })"
+            class="bp-focus-delegate inline-flex cursor-pointer"
+          >
+            <span class="bp-focus-ring inline-flex rounded-xl">
+              <button
+                class="inline-flex items-center px-8 py-4 text-lg gap-3 bg-purple-600 hover:bg-purple-500 text-white font-semibold rounded-xl transition-all shadow-lg shadow-purple-600/20 hover:scale-105"
+                @click.stop="streaming.streamFromDevice(streamableDevices[0])"
+              >
+                <SignalIcon class="size-6" />
+                Play on {{ streamableDevices[0].name }}
+              </button>
+            </span>
+          </div>
 
           <!-- ── Not installed: Install button with device picker.
                Explicit condition (not v-else) because launchStatus
@@ -921,7 +948,6 @@ import type { ClientDevice } from "~/composables/useStreaming";
 const streaming = useBpmGameStreaming(
   gameId,
   version,
-  devMode.enabled,
   (msg) => { launchError.value = msg; },
   (msg) => showInfoToast(msg),
 );

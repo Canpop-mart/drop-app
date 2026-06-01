@@ -767,11 +767,206 @@ pub async fn delete_cloud_save(id: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Scan every local save file for a game — PC (Ludusavi, name-normalized and
+/// manifest-tag-filtered) plus emulator (Drop's drop-saves dir, if the
+/// emulator is installed). Pure read: no upload, no disk mutation. Shared
+/// by the manual-sync command and the "show local saves" scan so both use
+/// identical detection.
+fn scan_all_local_saves(
+    game_id: &str,
+    game_name: &str,
+) -> Vec<remote::save_sync::LocalSaveFile> {
+    let mut out = Vec::new();
+
+    let steam_app_id = find_steam_app_id(game_id);
+    out.extend(remote::save_sync::scan_pc_saves(
+        game_name,
+        steam_app_id.as_deref(),
+        None,
+    ));
+
+    // `find_emulator_saves_dir` → `<install>/drop-saves/<game_id>`;
+    // `scan_emu_saves` wants the install root and re-joins those segments.
+    if let Some(saves_dir) = find_emulator_saves_dir(game_id)
+        && let Some(emu_root) = saves_dir.parent().and_then(|p| p.parent())
+    {
+        out.extend(remote::save_sync::scan_emu_saves(emu_root, game_id));
+    }
+
+    out
+}
+
+/// One locally-detected save file, for the panel's unified status list.
+///
+/// `data_hash` lets the panel compare a local file against its cloud
+/// counterpart (matched by `filename`) to decide whether a save is Synced
+/// (hashes equal) or in Conflict (both present, hashes differ).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSaveEntry {
+    pub filename: String,
+    pub save_type: String,
+    pub size: u64,
+    pub modified_at: u64,
+    pub data_hash: String,
+}
+
+/// Scan and return this game's local save files WITHOUT uploading — so the
+/// Cloud Saves panel's refresh can show what's on disk (synced or not),
+/// not just what's already in the cloud. Same detection as the manual
+/// sync, so what shows here is exactly what "Sync now" would push.
+#[tauri::command]
+pub fn scan_local_game_saves(game_id: String, game_name: String) -> Vec<LocalSaveEntry> {
+    scan_all_local_saves(&game_id, &game_name)
+        .into_iter()
+        .map(|f| LocalSaveEntry {
+            filename: f.filename,
+            save_type: f.save_type,
+            size: f.size,
+            modified_at: f.modified_at,
+            data_hash: f.data_hash,
+        })
+        .collect()
+}
+
+/// Manually scan + upload this game's saves to the cloud, on demand —
+/// independent of whether the game is installed or has ever been launched.
+///
+/// This is the escape hatch for the most common "no cloud saves" case: a
+/// game was played before save-sync worked (or under a display name
+/// Ludusavi's exact matcher couldn't resolve), so the only scan/upload
+/// triggers — game launch and exit — never produced anything, and the
+/// game may since have been uninstalled. The save files are still on disk;
+/// this re-scans with the current (name-normalized, manifest-tag-filtered)
+/// Ludusavi logic and pushes whatever real saves it finds.
+///
+/// `game_name` is the Drop display name; `scan_pc_saves` resolves it to
+/// Ludusavi's canonical manifest title internally. Returns the number of
+/// files uploaded. Mirrors the post-exit upload path (empty baseline =>
+/// every detected file counts as new) and persists the synced manifest so
+/// later diffs stay correct.
+#[tauri::command]
+pub async fn sync_game_saves_now(
+    game_id: String,
+    game_name: String,
+) -> Result<usize, String> {
+    if !borrow_db_checked().settings.cloud_saves_enabled {
+        return Err("Cloud saves are disabled in settings.".to_string());
+    }
+
+    // Same detection the panel's refresh shows — PC (Ludusavi) + emulator.
+    let current_saves = scan_all_local_saves(&game_id, &game_name);
+
+    if current_saves.is_empty() {
+        return Ok(0);
+    }
+
+    // Empty baseline => every detected file is treated as new and uploaded.
+    let baseline = std::collections::HashMap::new();
+    let (count, errors) =
+        remote::save_sync::upload_changed_saves(&game_id, &baseline, &current_saves)
+            .await
+            .map_err(|e| format!("Upload failed: {e}"))?;
+
+    for err in &errors {
+        warn!("[SAVE-SYNC] Manual sync upload error: {err}");
+    }
+
+    // Persist the synced state so subsequent launch/exit diffs are correct.
+    let mut manifest = remote::save_sync::load_manifest(&game_id);
+    for file in &current_saves {
+        manifest.files.insert(
+            file.filename.clone(),
+            remote::save_sync::SyncFileEntry {
+                save_type: file.save_type.clone(),
+                synced_hash: file.data_hash.clone(),
+                cloud_id: None,
+                synced_at: chrono::Utc::now().to_rfc3339(),
+            },
+        );
+    }
+    manifest.last_synced_at = Some(chrono::Utc::now().to_rfc3339());
+    if let Err(e) = remote::save_sync::save_manifest(&manifest) {
+        warn!("[SAVE-SYNC] Manual sync: failed to persist manifest: {e}");
+    }
+
+    Ok(count)
+}
+
+/// Back up a specific set of local save files to the cloud, identified by
+/// their namespaced filenames (e.g. `"pc__gen.sav"` or `"Game.srm"`).
+///
+/// Powers the unified panel's per-row "Back up", the "Keep this PC" side of
+/// a conflict (pass one filename), and the header Sync's push half (pass all
+/// the not-backed-up filenames). Pushing an explicit allowlist — rather than
+/// a blanket "upload everything" — is what keeps Sync safe: files the user
+/// didn't ask to push (notably the cloud side of a conflict) are never
+/// silently overwritten.
+///
+/// Scans once, keeps only the requested filenames, uploads them in a single
+/// bulk call, and records them in the manifest so later diffs are correct.
+/// Returns the number of files uploaded.
+#[tauri::command]
+pub async fn backup_saves(
+    game_id: String,
+    game_name: String,
+    filenames: Vec<String>,
+) -> Result<usize, String> {
+    if !borrow_db_checked().settings.cloud_saves_enabled {
+        return Err("Cloud saves are disabled in settings.".to_string());
+    }
+    if filenames.is_empty() {
+        return Ok(0);
+    }
+
+    let wanted: std::collections::HashSet<&str> =
+        filenames.iter().map(|s| s.as_str()).collect();
+    let targets: Vec<remote::save_sync::LocalSaveFile> = scan_all_local_saves(&game_id, &game_name)
+        .into_iter()
+        .filter(|f| wanted.contains(f.filename.as_str()))
+        .collect();
+    if targets.is_empty() {
+        return Err(
+            "None of those saves are on this device anymore — try refreshing.".to_string(),
+        );
+    }
+
+    // Empty baseline => every file we hand it is treated as new and uploaded.
+    let baseline = std::collections::HashMap::new();
+    let (count, errors) =
+        remote::save_sync::upload_changed_saves(&game_id, &baseline, &targets)
+            .await
+            .map_err(|e| format!("Upload failed: {e}"))?;
+    for err in &errors {
+        warn!("[SAVE-SYNC] Backup error: {err}");
+    }
+
+    // Record the synced state for each pushed file so later diffs are correct.
+    let mut manifest = remote::save_sync::load_manifest(&game_id);
+    for file in &targets {
+        manifest.files.insert(
+            file.filename.clone(),
+            remote::save_sync::SyncFileEntry {
+                save_type: file.save_type.clone(),
+                synced_hash: file.data_hash.clone(),
+                cloud_id: None,
+                synced_at: chrono::Utc::now().to_rfc3339(),
+            },
+        );
+    }
+    manifest.last_synced_at = Some(chrono::Utc::now().to_rfc3339());
+    if let Err(e) = remote::save_sync::save_manifest(&manifest) {
+        warn!("[SAVE-SYNC] Backup: failed to persist manifest: {e}");
+    }
+
+    Ok(count)
+}
+
 /// Resolve a PC cloud save back to its real on-disk location and write it.
 ///
 /// The frontend's per-game Cloud Saves panel hits this for `saveType == "pc"`
-/// entries. The cloud filename comes back as `"pc/<basename>"`; we strip the
-/// prefix, look up the game name from the cache, compute the Wine prefix the
+/// entries. The cloud filename comes back namespaced (e.g. `"pc__<basename>"`);
+/// we strip the prefix, look up the game name from the cache, compute the Wine prefix the
 /// same way the launch pipeline does (Linux host + Windows target +
 /// `$DATA_ROOT/pfx/{game_id}` exists), and ask Ludusavi where that basename
 /// would live on disk. Then `write_downloaded_pc_save` (which already
@@ -786,13 +981,11 @@ pub fn restore_pc_cloud_save(
 ) -> Result<String, String> {
     use base64::Engine;
 
-    // PC saves uploaded by the launch-time sync use a `pc/<basename>` key so
-    // they don't collide with emu save filenames. Older or hand-uploaded rows
-    // may lack the prefix — fall back to treating the whole filename as the
-    // basename in that case so restore still does the right thing.
-    let basename = filename
-        .strip_prefix("pc/")
-        .unwrap_or(filename.as_str());
+    // PC saves uploaded by the launch-time sync carry a namespace prefix so
+    // they don't collide with emu save filenames. `strip_pc_prefix` handles the
+    // current `pc__` prefix and the legacy `pc/` prefix, and leaves un-prefixed
+    // (older or hand-uploaded) rows untouched so restore still does the right thing.
+    let basename = remote::save_sync::scan::strip_pc_prefix(filename.as_str());
 
     // The game metadata cache is populated under two different keys depending
     // on which page the user opened first:
@@ -1281,25 +1474,59 @@ pub fn list_pc_game_saves(game_id: String, game_name: String) -> Result<Ludusavi
     // Try Steam App ID first (more accurate), fall back to game name
     let app_id = find_steam_app_id(&game_id);
 
-    // Step 1: Use "find" to resolve the game's canonical name from Steam ID
-    // Step 2: Use "backup --preview --api <name>" to scan for actual files
-    let resolved_name = if let Some(ref id) = app_id {
-        let find_output = std::process::Command::new(&ludusavi)
-            .args(["find", "--api", "--steam-id", id])
-            .output()
-            .ok();
-        find_output.and_then(|o| {
-            let s = String::from_utf8_lossy(&o.stdout);
-            // Parse the game name from find output (first key in "games" object)
-            serde_json::from_str::<serde_json::Value>(&s).ok()
-                .and_then(|v| v.get("games")?.as_object()?.keys().next().map(|k| k.to_string()))
+    // Resolve the game's canonical manifest title before the exact-match
+    // backup. Ludusavi's `backup` matches names exactly + case-sensitively,
+    // so Drop's branded display names ("LEGO® Batman™: Legacy of the Dark
+    // Knight") never hit the manifest's canonical title ("Lego Batman:
+    // Legacy of the Dark Knight") and the scan silently returns nothing.
+    //
+    // Precedence mirrors Ludusavi's own `find`: Steam ID (exact identifier)
+    // → `--normalized` (ignores caps, ®/™, edition/year suffixes).
+    let first_title = |stdout: &[u8]| -> Option<String> {
+        let s = String::from_utf8_lossy(stdout);
+        serde_json::from_str::<serde_json::Value>(&s).ok().and_then(|v| {
+            v.get("games")?
+                .as_object()?
+                .keys()
+                .next()
+                .map(|k| k.to_string())
         })
-    } else {
-        None
     };
 
+    let resolved_name = app_id
+        .as_ref()
+        .and_then(|id| {
+            let o = std::process::Command::new(&ludusavi)
+                .args(["find", "--api", "--steam-id", id])
+                .output()
+                .ok()?;
+            if o.status.success() {
+                first_title(&o.stdout)
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            // Normalized display-name resolution — the fix for branded /
+            // trademark-laden titles that exact matching misses.
+            let o = std::process::Command::new(&ludusavi)
+                .args(["find", "--api", "--normalized", &game_name])
+                .output()
+                .ok()?;
+            if o.status.success() {
+                first_title(&o.stdout)
+            } else {
+                None
+            }
+        });
+
     let search_name = resolved_name.as_deref().unwrap_or(&game_name);
-    log::info!("[LUDUSAVI] Resolved game name: '{}' (from Steam ID {:?})", search_name, app_id);
+    log::info!(
+        "[LUDUSAVI] Resolved game name: '{}' (from Steam ID {:?}, display '{}')",
+        search_name,
+        app_id,
+        game_name
+    );
 
     // Use "backup --preview --api" which actually scans the filesystem.
     // Try the resolved name first, then the original name, then subtitle-stripped.

@@ -158,6 +158,8 @@
           <CloudSavesPanel
             v-else-if="activeDetailTab === 'saves'"
             :game-id="game.id"
+            :game-name="game.mName"
+            :is-native-game="config.isNativeGame.value"
           />
         </div>
       </div>

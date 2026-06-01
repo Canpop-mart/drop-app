@@ -332,6 +332,11 @@ pub mod data {
             /// hostname. Defaults to `None` for new installs.
             #[serde(default)]
             pub device_name: Option<String>,
+            /// Game-streaming quality preset applied when this device connects
+            /// to a host with Moonlight: `"dataSaver"`, `"balanced"`, or
+            /// `"highQuality"`. Drives the fps/bitrate passed to Moonlight.
+            #[serde(default = "default_streaming_quality")]
+            pub streaming_quality: String,
         }
 
         // Manual Debug impl: redact the Sunshine password so it never leaks
@@ -363,12 +368,17 @@ pub mod data {
                     )
                     .field("cloud_saves_enabled", &self.cloud_saves_enabled)
                     .field("device_name", &self.device_name)
+                    .field("streaming_quality", &self.streaming_quality)
                     .finish()
             }
         }
 
         fn default_sunshine_username() -> String {
             "sunshine".to_string()
+        }
+
+        fn default_streaming_quality() -> String {
+            "balanced".to_string()
         }
 
         fn default_true() -> bool {
@@ -388,6 +398,7 @@ pub mod data {
                     ra_token: String::new(),
                     cloud_saves_enabled: default_true(),
                     device_name: None,
+                    streaming_quality: default_streaming_quality(),
                 }
             }
         }

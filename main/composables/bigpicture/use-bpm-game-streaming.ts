@@ -37,8 +37,6 @@ export function useBpmGameStreaming(
   gameId: string,
   /** The page's loaded version — its `userConfiguration` is sent to the host. */
   version: Ref<GameVersion | null>,
-  /** Whether streaming/device UI is enabled (dev mode). */
-  devModeEnabled: Ref<boolean>,
   /** Surface a streaming failure as a page-level error dialog. */
   onError: (msg: string) => void,
   /** Show a transient neutral toast (e.g. remote-install acknowledgement). */
@@ -100,21 +98,16 @@ export function useBpmGameStreaming(
     return [...byKey.values()];
   });
 
-  // Devices that have this game installed (can stream from). Empty when dev
-  // mode is off so the play menu's "Stream from {device}" rows disappear.
+  // Devices that have this game installed — "Play on {device}" targets.
   const streamableDevices = computed(() =>
-    devModeEnabled.value
-      ? otherDevices.value.filter((d) => d.hasGame === true)
-      : [],
+    otherDevices.value.filter((d) => d.hasGame === true),
   );
   // Devices that definitively do NOT have this game (can install on).
   // Strict `=== false` — devices that haven't reported (`undefined`) are
   // unknown and excluded from BOTH lists, so an already-installed game
   // never shows a spurious "Install on X" entry.
   const installableDevices = computed(() =>
-    devModeEnabled.value
-      ? otherDevices.value.filter((d) => d.hasGame === false)
-      : [],
+    otherDevices.value.filter((d) => d.hasGame === false),
   );
 
   async function loadDevices() {
@@ -388,10 +381,8 @@ export function useBpmGameStreaming(
 
   /** Ask another device to install this game. */
   async function installOnDevice(device: ClientDevice) {
-    // Belt-and-braces gate — `installableDevices` is already empty when dev
-    // mode is off, so the UI can't get here. But if a stale focus index
-    // ever fires this with no device, bail cleanly.
-    if (!devModeEnabled.value || !device) return;
+    // Guard against a stale focus index firing with no device.
+    if (!device) return;
     devLog(
       "event",
       `[BPM:STREAM] Remote install on device: ${device.name} (${device.id})`,

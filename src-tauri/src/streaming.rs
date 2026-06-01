@@ -286,13 +286,39 @@ pub struct SunshineAppsConfig {
     pub apps: Vec<SunshineApp>,
 }
 
-/// Quality presets for streaming.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+/// Quality presets for streaming, chosen on the client (the device running
+/// Moonlight). Each maps to an fps + bitrate handed to Moonlight. Resolution is
+/// pinned to the Steam Deck's native 1280x800 (which the host also switches to),
+/// so the capture and the stream match — no upscaling/blur from a mismatch.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum StreamQuality {
-    LowLatency,
+    /// Easy on the network: 30 fps, ~8 Mbps.
+    DataSaver,
+    /// Default: 60 fps, ~20 Mbps.
     Balanced,
-    Quality,
+    /// Sharpest: 60 fps, ~35 Mbps.
+    HighQuality,
+}
+
+impl StreamQuality {
+    /// Parse the persisted settings string. Unknown/empty falls back to Balanced.
+    fn from_setting(s: &str) -> Self {
+        match s {
+            "dataSaver" => Self::DataSaver,
+            "highQuality" => Self::HighQuality,
+            _ => Self::Balanced,
+        }
+    }
+
+    /// Moonlight stream parameters: (width, height, fps, bitrate_kbps).
+    fn params(self) -> (u32, u32, u32, u32) {
+        match self {
+            Self::DataSaver => (1280, 800, 30, 8_000),
+            Self::Balanced => (1280, 800, 60, 20_000),
+            Self::HighQuality => (1280, 800, 60, 35_000),
+        }
+    }
 }
 
 /// Generate sunshine.conf with Drop-specific settings.
@@ -1173,9 +1199,32 @@ pub async fn launch_moonlight(
     // (via fulfill_stream_request step 9).  Sunshine's per-app entries would
     // try to launch the game a second time, causing conflicts.  The game is
     // already running on the PC desktop — Moonlight just captures the screen.
-    info!("[MOONLIGHT] Starting stream to {} (Desktop capture)...", address);
+    // Apply the user's quality preset (resolution / fps / bitrate). Read from
+    // settings so the choice persists and applies to every stream from this
+    // device. Moonlight takes bitrate in Kbps.
+    let (qw, qh, qfps, qbitrate) = {
+        let db = borrow_db_checked();
+        StreamQuality::from_setting(&db.settings.streaming_quality).params()
+    };
+    let resolution = format!("{qw}x{qh}");
+    let fps_str = qfps.to_string();
+    let bitrate_str = qbitrate.to_string();
+    info!(
+        "[MOONLIGHT] Starting stream to {} (Desktop capture, {} @ {}fps, {}kbps)...",
+        address, resolution, qfps, qbitrate
+    );
     let mut cmd = moonlight_command(&moonlight_str);
-    cmd.args(["stream", &address, "Desktop"]);
+    cmd.args([
+        "stream",
+        "--resolution",
+        &resolution,
+        "--fps",
+        &fps_str,
+        "--bitrate",
+        &bitrate_str,
+        &address,
+        "Desktop",
+    ]);
 
     let child = cmd.spawn()
         .map_err(|e| format!("Failed to launch Moonlight: {e}"))?;
@@ -1603,7 +1652,9 @@ async fn fulfill_stream_request(
         }
     }
 
-    // 9. Start heartbeating in background; auto-stop session when game exits
+    // 9. Start heartbeating in background. This loop is the host-side lifecycle
+    //    owner: it keeps the session alive, and tears everything down — INCLUDING
+    //    killing the game on this PC — when the stream ends, whichever side ends it.
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
     {
         let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
@@ -1613,29 +1664,66 @@ async fn fulfill_stream_request(
     let sid = session_id.clone();
     let hb_game_id = game_id.clone();
     tokio::spawn(async move {
+        // Whether the game is still running when the stream ends and so must be
+        // killed on the host. (When the game exits on its own, it's already gone.)
+        let mut kill_game_on_exit = false;
+        // The server rejects heartbeats for Stopped/expired sessions (404), which
+        // is exactly what happens the moment the Deck ends the stream. Require two
+        // strikes (~10s) so a single transient network blip never kills a live game.
+        let mut consecutive_hb_failures = 0u32;
+
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-            // Check if cancellation was signalled
+            // (a) Host UI asked to stop hosting (stop_all_host_sessions). The game
+            //     is still running here, so it needs killing too.
             if *cancel_rx.borrow() {
-                info!("[STREAM-FULFILL] Session {} cancelled, stopping heartbeat", sid);
+                info!("[STREAM-FULFILL] Session {} cancelled by host, stopping", sid);
+                kill_game_on_exit = true;
                 let _ = streaming_sessions::stop_streaming_session(&sid).await;
                 break;
             }
 
-            // Check if the game process has exited — auto-stop the session
-            let game_exited = !process::PROCESS_MANAGER.lock().is_game_running(&hb_game_id);
-            if game_exited {
-                info!("[STREAM-FULFILL] Game {} exited, auto-stopping session {}", hb_game_id, sid);
+            // (b) Game exited on the host on its own — just tear the session down;
+            //     the Deck's watcher then closes Moonlight. Nothing to kill.
+            if !process::PROCESS_MANAGER.lock().is_game_running(&hb_game_id) {
+                info!("[STREAM-FULFILL] Game {} exited on host, stopping session {}", hb_game_id, sid);
                 let _ = streaming_sessions::stop_streaming_session(&sid).await;
                 break;
             }
 
-            if let Err(e) = streaming_sessions::heartbeat_streaming(&sid, Some("Streaming")).await {
-                warn!("[STREAM-FULFILL] Heartbeat failed for {}: {e}", sid);
-                break;
+            // (c) Heartbeat. A sustained failure means the client ended the
+            //     stream (the Deck called stop → server 404s the heartbeat), so
+            //     kill the still-running game so it exits on the host too —
+            //     this is the "quit on the Deck → game closes on the PC" path.
+            match streaming_sessions::heartbeat_streaming(&sid, Some("Streaming")).await {
+                Ok(()) => consecutive_hb_failures = 0,
+                Err(e) => {
+                    consecutive_hb_failures += 1;
+                    warn!(
+                        "[STREAM-FULFILL] Heartbeat failed for {} ({}/2): {e}",
+                        sid, consecutive_hb_failures
+                    );
+                    if consecutive_hb_failures >= 2 {
+                        info!(
+                            "[STREAM-FULFILL] Session {} ended from the client side — killing game {} on host",
+                            sid, hb_game_id
+                        );
+                        kill_game_on_exit = true;
+                        break;
+                    }
+                }
             }
         }
+
+        // Kill the game on the host if the stream ended while it was still running.
+        if kill_game_on_exit {
+            match process::PROCESS_MANAGER.lock().kill_game(hb_game_id.clone()) {
+                Ok(()) => info!("[STREAM-FULFILL] Killed game {} on host after stream ended", hb_game_id),
+                Err(e) => warn!("[STREAM-FULFILL] Failed to kill game {} on host: {e}", hb_game_id),
+            }
+        }
+
         // Clean up from the active sessions map
         let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
         sessions.remove(&sid);

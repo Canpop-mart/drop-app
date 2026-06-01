@@ -321,6 +321,10 @@ export function useBpmGameSaves(
       });
     }
     for (const cloud of cloudSaves.value) {
+      // PC-game saves have their own grouped view (pcSaveGroups /
+      // pcCloudSaves); keep them out of the emulator merged list so they
+      // don't show up as stray cloud-only rows here.
+      if (stripPcCloudPrefix(cloud.filename) !== null) continue;
       const existing = map.get(cloud.filename);
       if (existing) {
         existing.cloud = cloud;
@@ -488,6 +492,23 @@ export function useBpmGameSaves(
   );
 
   // ── Per-PC-save cloud sync ────────────────────────────────────────────
+
+  /**
+   * Strip the PC-save cloud namespace prefix, returning the bare filename, or
+   * null if the entry isn't a PC save. PC saves are namespaced so they don't
+   * collide with emulator saves. `pc__` is the current, sanitize-safe prefix
+   * — it must match what the desktop scanner uploads (see
+   * `remote/src/save_sync/scan.rs`) so both surfaces share one cloud identity.
+   * The legacy `pc/` / `pc:` prefixes are tolerated for old uploads, though
+   * the server's filename sanitizer mangled their separators at the time.
+   */
+  function stripPcCloudPrefix(filename: string): string | null {
+    if (filename.startsWith("pc__")) return filename.slice(4);
+    if (filename.startsWith("pc/")) return filename.slice(3);
+    if (filename.startsWith("pc:")) return filename.slice(3);
+    return null;
+  }
+
   const pcSyncStatus = ref<Record<string, string>>({});
   const pcCloudSaves = ref<Record<string, CloudSaveEntry>>({});
   const pcCloudStatus = ref<Record<string, string>>({});
@@ -495,9 +516,9 @@ export function useBpmGameSaves(
   function refreshPcCloudStatus() {
     const map: Record<string, CloudSaveEntry> = {};
     for (const cloud of cloudSaves.value) {
-      // PC-game cloud saves are namespaced with a `pc:` filename prefix.
-      if (cloud.filename.startsWith("pc:")) {
-        map[cloud.filename.slice(3).toLowerCase()] = cloud;
+      const base = stripPcCloudPrefix(cloud.filename);
+      if (base !== null) {
+        map[base.toLowerCase()] = cloud;
       }
     }
     pcCloudSaves.value = map;
@@ -543,8 +564,12 @@ export function useBpmGameSaves(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           gameId,
-          filename: `pc:${group.name}`,
-          saveType: "save",
+          // Sanitize-safe namespace prefix shared with the desktop scanner so
+          // a save backed up here and one backed up on desktop are the same
+          // cloud entry (the older `pc:` prefix had its `:` stripped server-
+          // side, so BPM uploads never matched their own read-back).
+          filename: `pc__${group.name}`,
+          saveType: "pc",
           data: base64Data,
           clientModifiedAt: new Date(
             group.primary.modified * 1000,

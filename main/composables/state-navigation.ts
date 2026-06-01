@@ -35,54 +35,69 @@ export function setupHooks() {
 
   // Handle remote install requests from other devices.
   //
-  // Gated behind dev mode: the UI that triggers these events (BPM library
-  // "Install on {device}" play-menu rows) is also dev-mode-only, so under
-  // normal use this listener never fires. We still register it inside the
-  // gate so a stale server-side push doesn't start a surprise download on
-  // a user who's never opted in. Toggling dev mode on requires a page
-  // refresh to wire the listener — acceptable, since dev mode is
-  // configured before triggering remote installs anyway.
-  const devMode = useDevMode();
-  if (devMode.enabled.value) {
-    useListen<{ gameId: string; gameName: string; sessionId: string }>(
-      "remote-install-request",
-      async (event) => {
-        const payload = event.payload;
-        devLog("state",
-          "[REMOTE-INSTALL] Received request to install:",
-          payload.gameName,
-          payload.gameId,
+  // Fired by the host's stream-request poller when another of the user's
+  // devices asks this one to install a game it doesn't have (the BPM library
+  // "Install on {device}" rows). A request can only come from the same user's
+  // own devices (server gates by account), so it's safe to act on — we start
+  // the download and surface a notification so it isn't a silent surprise.
+  useListen<{ gameId: string; gameName: string; sessionId: string }>(
+    "remote-install-request",
+    async (event) => {
+      const payload = event.payload;
+      devLog(
+        "state",
+        "[REMOTE-INSTALL] Received request to install:",
+        payload.gameName,
+        payload.gameId,
+      );
+      try {
+        const versions = await invoke<VersionOption[]>(
+          "fetch_game_version_options",
+          { gameId: payload.gameId },
         );
-        try {
-          const versions = await invoke<VersionOption[]>(
-            "fetch_game_version_options",
-            { gameId: payload.gameId },
+        if (versions && versions.length > 0) {
+          const vo = versions[0];
+          await invoke("download_game", {
+            gameId: payload.gameId,
+            versionId: vo.versionId,
+            installDir: 0,
+            targetPlatform: vo.platform,
+            enableUpdates: true,
+          });
+          devLog(
+            "state",
+            "[REMOTE-INSTALL] Download started for:",
+            payload.gameName,
           );
-          if (versions && versions.length > 0) {
-            const vo = versions[0];
-            await invoke("download_game", {
-              gameId: payload.gameId,
-              versionId: vo.versionId,
-              installDir: 0,
-              targetPlatform: vo.platform,
-              enableUpdates: true,
-            });
-            devLog("state",
-              "[REMOTE-INSTALL] Download started for:",
-              payload.gameName,
-            );
-          } else {
-            console.warn(
-              "[REMOTE-INSTALL] No versions available for:",
-              payload.gameId,
-            );
-          }
-        } catch (e) {
-          console.warn("[REMOTE-INSTALL] Failed to start download:", e);
+          createModal(
+            ModalType.Notification,
+            {
+              title: "Install started from another device",
+              description: `“${payload.gameName}” is now downloading — it was requested from one of your other devices.`,
+              buttonText: "OK",
+            },
+            (e, c) => c(),
+          );
+        } else {
+          console.warn(
+            "[REMOTE-INSTALL] No versions available for:",
+            payload.gameId,
+          );
+          createModal(
+            ModalType.Notification,
+            {
+              title: "Couldn't start remote install",
+              description: `A device asked this PC to install “${payload.gameName}”, but no installable version is available here.`,
+              buttonText: "Close",
+            },
+            (e, c) => c(),
+          );
         }
-      },
-    );
-  }
+      } catch (e) {
+        console.warn("[REMOTE-INSTALL] Failed to start download:", e);
+      }
+    },
+  );
 
   // This is for errors that (we think) aren't our fault
   useListen<string>("launch_external_error", (event) => {

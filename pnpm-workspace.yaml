@@ -2,8 +2,22 @@ packages:
   - "main"
   - "libs/drop-base"
 
+# Native deps whose install/build scripts pnpm is allowed to run.
+# pnpm 10+ blocks postinstall build scripts by default; these four
+# genuinely need to compile or fetch a platform binary:
+#   - sharp           image processing native bindings
+#   - @parcel/watcher native file-watcher (HMR)
+#   - esbuild         downloads/links its platform binary
+#   - unrs-resolver   native module resolver
+# (Replaces an earlier broken `allowBuilds:` placeholder block whose
+#  values were literally "set this to true or false" — not a real pnpm
+#  key, so those three were silently treated as ignored builds and made
+#  `pnpm install` exit non-zero on pnpm 11.)
 onlyBuiltDependencies:
   - sharp
+  - "@parcel/watcher"
+  - esbuild
+  - unrs-resolver
 
 overrides:
   cross-spawn@<6.0.6: ">=6.0.6"

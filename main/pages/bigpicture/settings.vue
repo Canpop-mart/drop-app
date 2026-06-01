@@ -843,6 +843,32 @@
           </div>
           <p v-if="streamingSaved" class="text-xs text-green-400">Credentials saved.</p>
         </div>
+
+        <!-- Stream quality — client-side: what this device requests from
+             Moonlight when it plays a game streamed from another PC. -->
+        <div class="bg-zinc-900/50 rounded-xl p-4 space-y-3">
+          <div>
+            <p class="text-sm font-medium text-zinc-300">Stream quality</p>
+            <p class="text-xs text-zinc-500 mt-0.5">
+              Used when this device plays a game streamed from another PC.
+              Higher quality looks sharper but needs more bandwidth.
+            </p>
+          </div>
+          <div class="grid grid-cols-3 gap-2">
+            <button
+              v-for="opt in STREAM_QUALITY_OPTIONS"
+              :key="opt.value"
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-3 py-2 rounded-lg text-sm font-medium transition-colors text-center"
+              :class="streamingQuality === opt.value ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingQuality(opt.value)"
+            >
+              <span class="block">{{ opt.label }}</span>
+              <span class="block text-[10px] opacity-70 mt-0.5">{{ opt.detail }}</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- ═══════ Developer ═══════ -->
@@ -1139,11 +1165,7 @@ const sections = computed(() => {
   const tail = [
     { label: "Achievements", value: "achievements" },
     { label: "Cloud Saves", value: "cloudsaves" },
-    // Streaming is gated behind dev mode until the Sunshine/Moonlight flow
-    // is hardened — see the Developer section below for the toggle.
-    ...(dev.enabled.value
-      ? [{ label: "Streaming", value: "streaming" }]
-      : []),
+    { label: "Streaming", value: "streaming" },
     { label: "Developer", value: "developer" },
     { label: "About", value: "about" },
   ];
@@ -1237,11 +1259,30 @@ const streamingUsername = ref("sunshine");
 const streamingPassword = ref("");
 const streamingSaved = ref(false);
 
+// Client-side stream quality preset. Mirrors the StreamQuality enum in
+// src-tauri/src/streaming.rs — the value is read there at Moonlight launch.
+const STREAM_QUALITY_OPTIONS = [
+  { value: "dataSaver", label: "Data Saver", detail: "30fps · 8 Mbps" },
+  { value: "balanced", label: "Balanced", detail: "60fps · 20 Mbps" },
+  { value: "highQuality", label: "High", detail: "60fps · 35 Mbps" },
+] as const;
+const streamingQuality = ref<string>("balanced");
+
+async function setStreamingQuality(value: string) {
+  streamingQuality.value = value;
+  try {
+    await invoke("update_settings", { newSettings: { streamingQuality: value } });
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save stream quality:", e);
+  }
+}
+
 onMounted(async () => {
   try {
     const settings = await invoke<Record<string, any>>("fetch_settings");
     if (settings.sunshineUsername) streamingUsername.value = settings.sunshineUsername;
     if (settings.sunshinePassword) streamingPassword.value = settings.sunshinePassword;
+    if (settings.streamingQuality) streamingQuality.value = settings.streamingQuality;
   } catch {
     // Settings not available yet — keep defaults
   }

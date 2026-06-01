@@ -310,9 +310,27 @@ pub fn sync_pc_saves(
             remote::save_sync::bulk_download(&download_ids),
         ) {
             Ok(Ok(downloaded)) => {
+                // The game's PC saves all live in one directory. Derive it
+                // from the pre-launch scan so a cloud-only save (one with no
+                // local copy yet) lands in that real folder instead of the
+                // dead-end fallback dir — otherwise the game never reads it.
+                let save_dir: Option<PathBuf> = pc_paths
+                    .values()
+                    .next()
+                    .and_then(|p| p.parent())
+                    .map(|parent| parent.to_path_buf());
                 for (filename, _save_type, _hash, data) in &downloaded {
-                    let orig = pc_paths.get(filename.as_str()).map(|p| p.as_path());
-                    match remote::save_sync::write_downloaded_pc_save(filename, data, orig) {
+                    let dest: Option<PathBuf> = match pc_paths.get(filename.as_str()) {
+                        Some(p) => Some(p.clone()),
+                        None => save_dir.as_ref().map(|dir| {
+                            dir.join(remote::save_sync::scan::strip_pc_prefix(filename))
+                        }),
+                    };
+                    match remote::save_sync::write_downloaded_pc_save(
+                        filename,
+                        data,
+                        dest.as_deref(),
+                    ) {
                         Ok(p) => info!("[SAVE-SYNC] Downloaded PC save: {}", p.display()),
                         Err(e) => warn!("[SAVE-SYNC] Failed to write PC save {filename}: {e}"),
                     }
