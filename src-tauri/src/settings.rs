@@ -199,6 +199,11 @@ pub fn ra_clear_credentials() {
 }
 
 /// Describes how the app was packaged, affecting update behavior.
+// Most variants are constructed only under their platform's `#[cfg]`
+// (Flatpak/AppImage/SystemPackage on Linux, MacOsBundle on macOS), so they
+// read as "never constructed" on a Windows build. Allow it rather than gate
+// every variant individually.
+#[allow(dead_code)]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PackageFormat {
@@ -251,7 +256,7 @@ pub fn detect_package_format() -> PackageFormat {
 /// Returns paths like /run/media/mmcblk0p1 that can be used as install directories.
 #[tauri::command]
 pub fn detect_removable_storage() -> Vec<PathBuf> {
-    let mut results = Vec::new();
+    let results = Vec::new();
 
     #[cfg(target_os = "linux")]
     {

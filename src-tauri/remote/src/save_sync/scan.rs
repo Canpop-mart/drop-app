@@ -232,11 +232,10 @@ fn find_ludusavi() -> Option<PathBuf> {
     }
 
     // Check PATH
-    if let Ok(output) = std::process::Command::new("ludusavi").arg("--version").output() {
-        if output.status.success() {
+    if let Ok(output) = std::process::Command::new("ludusavi").arg("--version").output()
+        && output.status.success() {
             return Some(PathBuf::from("ludusavi"));
         }
-    }
 
     None
 }
@@ -283,8 +282,8 @@ fn resolve_canonical_title(
     steam_app_id: Option<&str>,
 ) -> Option<String> {
     // 1) Steam ID — highest-precedence, exact identifier match.
-    if let Some(id) = steam_app_id {
-        if let Ok(output) = std::process::Command::new(ludusavi)
+    if let Some(id) = steam_app_id
+        && let Ok(output) = std::process::Command::new(ludusavi)
             .args(["find", "--api", "--steam-id", id])
             .output()
             && output.status.success()
@@ -292,7 +291,6 @@ fn resolve_canonical_title(
         {
             return Some(name);
         }
-    }
 
     // 2) Normalized display name — collapses caps / ®™ / edition+year
     //    suffixes onto the manifest's canonical title.
@@ -455,8 +453,8 @@ fn manifest_path_rules(ludusavi: &Path, title: &str) -> Vec<ManifestPathRule> {
                 .and_then(|t| t.as_array())
                 .map(|arr| arr.iter().filter_map(|t| t.as_str()).collect())
                 .unwrap_or_default();
-            let has_save = tags.iter().any(|t| *t == "save");
-            let has_config = tags.iter().any(|t| *t == "config");
+            let has_save = tags.contains(&"save");
+            let has_config = tags.contains(&"config");
             // config-only == tagged config but NOT save. Untagged paths
             // (no tags) default to save data per the manifest spec, so we
             // do NOT exclude them.

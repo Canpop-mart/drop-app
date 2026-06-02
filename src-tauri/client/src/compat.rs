@@ -1,5 +1,4 @@
 use std::{
-    ffi::OsStr,
     path::PathBuf,
     process::{Command, Stdio},
     sync::LazyLock,
@@ -130,14 +129,12 @@ fn get_umu_executable() -> Option<PathBuf> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output()
-    {
-        if output.status.success() {
+        && output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !path.is_empty() {
                 candidates.push(PathBuf::from(path));
             }
         }
-    }
 
     // 3. Known system directories
     for dir in UMU_INSTALL_DIRS {

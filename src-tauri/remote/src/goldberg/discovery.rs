@@ -40,24 +40,22 @@ fn find_steam_api_dir_recursive(dir: &Path, depth: u32, max_depth: u32) -> Optio
     // Files in this directory first.
     for entry in &entries {
         let path = entry.path();
-        if path.is_file() {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if path.is_file()
+            && let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 let lower = name.to_ascii_lowercase();
                 if STEAM_API_DLLS.iter().any(|dll| lower == *dll) {
                     return Some(dir.to_path_buf());
                 }
             }
-        }
     }
 
     // Then recurse into subdirectories.
     for entry in &entries {
         let path = entry.path();
-        if path.is_dir() {
-            if let Some(found) = find_steam_api_dir_recursive(&path, depth + 1, max_depth) {
+        if path.is_dir()
+            && let Some(found) = find_steam_api_dir_recursive(&path, depth + 1, max_depth) {
                 return Some(found);
             }
-        }
     }
     None
 }

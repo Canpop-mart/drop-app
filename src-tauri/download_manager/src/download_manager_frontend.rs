@@ -131,17 +131,23 @@ impl DownloadManager {
         Some(progress_object.get_progress())
     }
     pub async fn rearrange_string(&self, meta: &DownloadableMetadata, new_index: usize) {
-        let mut queue = self.edit();
-        let Some(current_index) = get_index_from_id(&mut queue, meta) else {
-            log::warn!("rearrange_string: no queue entry matches metadata");
-            return;
-        };
-        let Some(to_move) = queue.remove(current_index) else {
-            log::warn!("rearrange_string: index {current_index} no longer valid");
-            return;
-        };
-        let clamped = new_index.min(queue.len());
-        queue.insert(clamped, to_move);
+        // Mutate the queue under the lock in a synchronous scope, then DROP the
+        // guard before the async `send!`. Holding a `std::sync::MutexGuard`
+        // across an await can deadlock (clippy::await_holding_lock) — mirror
+        // the pattern already used by `rearrange` below.
+        {
+            let mut queue = self.edit();
+            let Some(current_index) = get_index_from_id(&mut queue, meta) else {
+                log::warn!("rearrange_string: no queue entry matches metadata");
+                return;
+            };
+            let Some(to_move) = queue.remove(current_index) else {
+                log::warn!("rearrange_string: index {current_index} no longer valid");
+                return;
+            };
+            let clamped = new_index.min(queue.len());
+            queue.insert(clamped, to_move);
+        }
         send!(self.command_sender, DownloadManagerSignal::UpdateUIQueue);
     }
     pub async fn cancel(&self, meta: DownloadableMetadata) {

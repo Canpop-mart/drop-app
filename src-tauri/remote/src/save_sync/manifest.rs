@@ -28,8 +28,8 @@ pub fn manifest_path(game_id: &str) -> Option<PathBuf> {
 /// that is corrupt or oversized is moved aside (see [`backup_corrupt_manifest`])
 /// and a clean one returned — sync should never hard-fail on a bad manifest.
 pub fn load_manifest(game_id: &str) -> SyncManifest {
-    if let Some(path) = manifest_path(game_id) {
-        if path.exists() {
+    if let Some(path) = manifest_path(game_id)
+        && path.exists() {
             let oversize = fs::metadata(&path)
                 .map(|m| m.len() > MANIFEST_MAX_BYTES)
                 .unwrap_or(false);
@@ -57,7 +57,6 @@ pub fn load_manifest(game_id: &str) -> SyncManifest {
                 }
             }
         }
-    }
     SyncManifest {
         game_id: game_id.to_string(),
         ..Default::default()

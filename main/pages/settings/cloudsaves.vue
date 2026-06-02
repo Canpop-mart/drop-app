@@ -135,4 +135,13 @@ async function saveSettings() {
     saveState.loading = false;
   }
 }
+
+// Persist the moment the sync toggle flips. The Switch reads as an instant
+// control, but previously only the "Save Changes" button called
+// update_settings — so toggling sync OFF appeared to take effect when it
+// hadn't (the launch path kept reading the old value). Auto-saving on change
+// closes that trap; the button still covers the device-name field.
+watch(cloudSavesEnabled, () => {
+  saveSettings();
+});
 </script>

@@ -115,14 +115,13 @@ impl Display for RemoteAccessError {
 
                 // Check for body/decoding errors (the common "error decoding response body")
                 // These methods are on the inner reqwest::Error
-                if let reqwest_middleware::Error::Reqwest(inner) = error.as_ref() {
-                    if inner.is_body() || inner.is_decode() {
+                if let reqwest_middleware::Error::Reqwest(inner) = error.as_ref()
+                    && (inner.is_body() || inner.is_decode()) {
                         return write!(
                             f,
                             "Download interrupted — the connection was lost while receiving data. The download will retry automatically."
                         );
                     }
-                }
 
                 write!(
                     f,

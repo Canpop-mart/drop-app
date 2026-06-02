@@ -61,11 +61,10 @@ pub fn configure_goldberg(dll_dir: &Path, display_name: Option<&str>) {
     } else {
         update_ini_content(&existing, &desired_save_line)
     };
-    if let Some(name) = display_name {
-        if !name_ok {
+    if let Some(name) = display_name
+        && !name_ok {
             updated = update_ini_account_name(&updated, name);
         }
-    }
 
     match std::fs::write(&ini_path, &updated) {
         Ok(_) => info!(
@@ -218,8 +217,8 @@ pub fn check_gbe_activity(dll_dir: &str) -> bool {
         root.join("crash_reports"),
         root.join("logs"),
     ] {
-        if log_dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&log_dir) {
+        if log_dir.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&log_dir) {
                 let files: Vec<_> = entries.flatten().filter(|e| e.path().is_file()).collect();
                 if !files.is_empty() {
                     info!("[GBE-DIAG] Found {} log/crash files in {}", files.len(), log_dir.display());
@@ -229,7 +228,6 @@ pub fn check_gbe_activity(dll_dir: &str) -> bool {
                     found_any = true;
                 }
             }
-        }
     }
 
     // GBE-specific marker files.
@@ -245,8 +243,8 @@ pub fn check_gbe_activity(dll_dir: &str) -> bool {
 
     // Runtime files GBE creates inside drop-goldberg/<AppID>/.
     let save_root = root.join(DROP_GSE_FOLDER);
-    if save_root.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&save_root) {
+    if save_root.is_dir()
+        && let Ok(entries) = std::fs::read_dir(&save_root) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if !path.is_dir() {
@@ -265,7 +263,6 @@ pub fn check_gbe_activity(dll_dir: &str) -> bool {
                 }
             }
         }
-    }
 
     if found_any {
         info!("[GBE-DIAG] GBE appears active in {dll_dir}");

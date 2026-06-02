@@ -84,11 +84,10 @@ pub fn cleanup_m3u(game_install_dir: &Path) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with(M3U_PREFIX) && name_str.ends_with(".m3u") {
-                if let Err(e) = fs::remove_file(entry.path()) {
+            if name_str.starts_with(M3U_PREFIX) && name_str.ends_with(".m3u")
+                && let Err(e) = fs::remove_file(entry.path()) {
                     log::warn!("Failed to clean up {}: {}", entry.path().display(), e);
                 }
-            }
         }
     }
 }

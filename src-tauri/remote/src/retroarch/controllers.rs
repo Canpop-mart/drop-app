@@ -121,11 +121,10 @@ pub fn write_nintendo_remaps(remaps_dir: &Path) {
 pub fn cleanup_nintendo_remaps(remaps_dir: &Path) {
     for core_name in REMAP_CORE_NAMES {
         let rmp_path = remaps_dir.join(core_name).join(format!("{core_name}.rmp"));
-        if rmp_path.exists() {
-            if let Err(e) = fs::remove_file(&rmp_path) {
+        if rmp_path.exists()
+            && let Err(e) = fs::remove_file(&rmp_path) {
                 warn!("[RETROARCH] Failed to remove remap {}: {e}", rmp_path.display());
             }
-        }
     }
 }
 

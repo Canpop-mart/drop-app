@@ -218,8 +218,8 @@ pub fn resolve_core_for_rom(emu_root: &Path, rom_path: &str) -> Option<PathBuf> 
 
     // .m3u playlists (multi-disc): resolve the core from the first disc.
     if rom_ext == "m3u" {
-        if let Ok(contents) = fs::read_to_string(rom) {
-            if let Some(first_line) = contents
+        if let Ok(contents) = fs::read_to_string(rom)
+            && let Some(first_line) = contents
                 .lines()
                 .find(|l| !l.trim().is_empty() && !l.starts_with('#'))
             {
@@ -227,7 +227,6 @@ pub fn resolve_core_for_rom(emu_root: &Path, rom_path: &str) -> Option<PathBuf> 
                 info!("[RETROARCH] .m3u playlist — resolving core from first disc: {first_disc}");
                 return resolve_core_for_rom(emu_root, first_disc);
             }
-        }
         warn!("[RETROARCH] .m3u file is empty or unreadable: {rom_path}");
         return None;
     }

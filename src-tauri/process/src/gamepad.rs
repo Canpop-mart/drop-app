@@ -358,7 +358,7 @@ fn poll_loop(app_handle: AppHandle) {
             // from flooding the bus) OR on the periodic heartbeat (so the
             // frontend's cached value can never go stale against a settled
             // / drifting stick — see AXIS_HEARTBEAT_FRAMES).
-            let axis_heartbeat = frame_count % AXIS_HEARTBEAT_FRAMES == 0;
+            let axis_heartbeat = frame_count.is_multiple_of(AXIS_HEARTBEAT_FRAMES);
             for &axis in ALL_AXES {
                 let raw = gamepad.value(axis);
                 let filtered = apply_dead_zone(raw);
@@ -385,7 +385,7 @@ fn poll_loop(app_handle: AppHandle) {
         frame_count += 1;
 
         // Every ~5 seconds, dump diagnostic state
-        if frame_count % 300 == 0 {
+        if frame_count.is_multiple_of(300) {
             for (id, gamepad) in gilrs.gamepads() {
                 let cid = gamepad_id_to_u32(id);
                 let mut pressed_list = Vec::new();

@@ -75,8 +75,8 @@ pub const DROP_GSE_FOLDER: &str = "drop-goldberg";
 /// Drop (or games launched outside Drop).
 const APPDATA_FALLBACK_DIRS: &[&str] = &[
     "drop-goldberg",           // legacy Drop location
-    "GSE Saves",               // GBE fork default
-    "GSE saves",               // case variant
+    "GSE Saves",               // GBE fork default (Windows is case-insensitive,
+                               // so this also matches a lowercased "gse saves")
     "Goldberg SteamEmu Saves", // original Goldberg default
 ];
 

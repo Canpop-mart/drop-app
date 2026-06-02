@@ -143,11 +143,10 @@ fn collect_download_ids(
         .map(|s| s.id.clone())
         .collect();
     for action in &sync_result.actions {
-        if action.action == "download" {
-            if let Some(cloud) = &action.cloud_save {
+        if action.action == "download"
+            && let Some(cloud) = &action.cloud_save {
                 ids.push(cloud.id.clone());
             }
-        }
     }
     ids.extend(extra);
     ids

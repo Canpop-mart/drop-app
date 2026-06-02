@@ -513,13 +513,10 @@ fn clean_stale_per_core_overrides(emu_root: &Path) {
         let Ok(files) = fs::read_dir(&path) else { continue };
         for file in files.flatten() {
             let fp = file.path();
-            match fp.extension().and_then(|e| e.to_str()) {
-                Some("opt" | "cfg") => match fs::remove_file(&fp) {
-                    Ok(_) => info!("[RETROARCH] Removed stale per-core override: {}", fp.display()),
-                    Err(e) => warn!("[RETROARCH] Failed to remove stale override {}: {e}", fp.display()),
-                },
-                _ => {}
-            }
+            if let Some("opt" | "cfg") = fp.extension().and_then(|e| e.to_str()) { match fs::remove_file(&fp) {
+                Ok(_) => info!("[RETROARCH] Removed stale per-core override: {}", fp.display()),
+                Err(e) => warn!("[RETROARCH] Failed to remove stale override {}: {e}", fp.display()),
+            } }
         }
     }
 }

@@ -114,28 +114,25 @@ pub fn check_and_place_bios(system_dir: &Path, current_rom_ext: Option<&str>) ->
 
     for spec in BIOS_SPECS {
         // Skip BIOS checks irrelevant to the current game.
-        if !spec.rom_extensions.is_empty() {
-            if let Some(ext) = current_rom_ext {
-                if !spec.rom_extensions.contains(&ext) {
+        if !spec.rom_extensions.is_empty()
+            && let Some(ext) = current_rom_ext
+                && !spec.rom_extensions.contains(&ext) {
                     continue;
                 }
-            }
-        }
 
         let target_dir = match spec.core_subdir {
             Some(sub) => system_dir.join(sub),
             None => system_dir.to_path_buf(),
         };
 
-        if spec.core_subdir.is_some() {
-            if let Err(e) = fs::create_dir_all(&target_dir) {
+        if spec.core_subdir.is_some()
+            && let Err(e) = fs::create_dir_all(&target_dir) {
                 warn!(
                     "[RETROARCH] Failed to create {} BIOS dir {}: {e}",
                     spec.label,
                     target_dir.display()
                 );
             }
-        }
 
         let has_bios_in_target = dir_has_bios(&target_dir, spec.matches);
 

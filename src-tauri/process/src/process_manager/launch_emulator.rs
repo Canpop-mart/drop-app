@@ -160,8 +160,8 @@ impl ProcessManager<'_> {
                 .args
                 .iter()
                 .any(|a| a == "-L" || a.starts_with("--libretro"));
-            if !has_core_flag {
-                if let Some(core_path) = remote::retroarch::resolve_core_for_rom(
+            if !has_core_flag
+                && let Some(core_path) = remote::retroarch::resolve_core_for_rom(
                     std::path::Path::new(emulator_install_dir),
                     &rom_path,
                 ) {
@@ -170,7 +170,6 @@ impl ProcessManager<'_> {
                         .args
                         .push(core_path.to_string_lossy().to_string());
                 }
-            }
             exe_command.args.push(rom_path.clone());
         }
 
@@ -336,16 +335,17 @@ fn inject_emulator_fullscreen_flag(exe_command: &mut ParsedCommand) {
         return;
     }
 
-    let flag: &str = if exe_lower.contains("ryujinx") {
+    // ryujinx/pcsx2 take `--fullscreen`; yuzu/suyu/cemu take `-f`. Grouped so
+    // the shared flag values aren't duplicated across branches (clippy
+    // if_same_then_else). Standalone PCSX2 only — the libretro core path goes
+    // through RetroArch, handled above.
+    let flag: &str = if exe_lower.contains("ryujinx") || exe_lower.contains("pcsx2") {
         "--fullscreen"
-    } else if exe_lower.contains("yuzu") || exe_lower.contains("suyu") {
+    } else if exe_lower.contains("yuzu")
+        || exe_lower.contains("suyu")
+        || exe_lower.contains("cemu")
+    {
         "-f"
-    } else if exe_lower.contains("cemu") {
-        "-f"
-    } else if exe_lower.contains("pcsx2") {
-        // Standalone PCSX2 (the libretro core path doesn't hit this branch —
-        // it goes through RetroArch).
-        "--fullscreen"
     } else {
         return;
     };

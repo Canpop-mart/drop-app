@@ -546,7 +546,7 @@ fn find_emulator_saves_dir(game_id: &str) -> Option<std::path::PathBuf> {
     let db = borrow_db_checked();
 
     // Check all installed game versions for one that has this game's saves
-    for (emu_id, status) in db.applications.game_statuses.iter() {
+    for (_emu_id, status) in db.applications.game_statuses.iter() {
         if let GameDownloadStatus::Installed { install_dir, .. } = status {
             let saves_path = Path::new(install_dir)
                 .join("drop-saves")
@@ -1943,7 +1943,7 @@ pub fn delete_game_save(
 pub async fn check_ra_rom_hash(
     game_id: String,
 ) -> Result<serde_json::Value, String> {
-    use database::{borrow_db_checked, GameDownloadStatus, models::data::InstalledGameType};
+    use database::{borrow_db_checked, GameDownloadStatus};
 
     // 1. Find the installed game version and its emulator
     let (install_dir, game_version) = {

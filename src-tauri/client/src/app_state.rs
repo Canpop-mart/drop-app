@@ -32,11 +32,10 @@ impl SessionType {
         }
 
         // XDG_CURRENT_DESKTOP=gamescope is set in SteamOS Game Mode
-        if let Ok(desktop) = std::env::var("XDG_CURRENT_DESKTOP") {
-            if desktop.to_lowercase().contains("gamescope") {
+        if let Ok(desktop) = std::env::var("XDG_CURRENT_DESKTOP")
+            && desktop.to_lowercase().contains("gamescope") {
                 return Self::Gamescope;
             }
-        }
 
         // SteamOS sets this in Game Mode sessions
         if std::env::var("SteamGamepadUI").is_ok() {

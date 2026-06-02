@@ -45,7 +45,7 @@ pub fn apply_crt_shader(
     let bundled_path = write_bundled_crt_shader(emu_root);
 
     let chosen_shader = find_best_crt_shader(emu_root, prefer_high_res_capable)
-        .or_else(|| {
+        .or({
             #[cfg(target_os = "linux")]
             {
                 if let Some(appimage_path) = super::discovery::find_appimage_binary(emu_root) {

@@ -16,7 +16,6 @@ use ::client::{
     app_state::{AppState, SessionType, UmuState},
     app_status::AppStatus,
     autostart::sync_autostart_on_startup,
-    compat::UMU_LAUNCHER_EXECUTABLE,
 };
 use ::download_manager::DownloadManagerWrapper;
 use ::games::scan::scan_install_dirs;
@@ -602,11 +601,21 @@ pub fn run() {
                         .menu(&menu)
                         .on_menu_event(|app, event| match event.id.as_ref() {
                             "open" => {
-                                app.webview_windows()
-                                    .get("frontend")
-                                    .expect("Failed to get webview")
-                                    .show()
-                                    .expect("Failed to show window");
+                                // "frontend" is a child WEBVIEW inside the
+                                // "main" WINDOW, so it never appears in
+                                // webview_windows() — the old lookup was
+                                // always None and .expect() panicked on
+                                // every Open click. The close handler hides
+                                // the "main" window, so restore that window
+                                // here, and never panic on a lookup miss.
+                                let windows = app.windows();
+                                if let Some(window) = windows.get("main") {
+                                    let _ = window.show();
+                                    let _ = window.unminimize();
+                                    let _ = window.set_focus();
+                                } else {
+                                    warn!("tray open: no \"main\" window to restore");
+                                }
                             }
                             "quit" => {
                                 // Route through cleanup_and_exit instead of

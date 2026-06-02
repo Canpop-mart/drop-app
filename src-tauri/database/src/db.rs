@@ -75,11 +75,10 @@ fn load_or_generate_key() -> ([u8; 16], [u8; 16]) {
     write_key_file(&key_path, &buffer);
 
     // Best-effort: also store in keyring for discoverability, but file is canonical
-    if let Ok(entry) = Entry::new("drop", "database_key") {
-        if let Err(e) = entry.set_secret(&buffer) {
+    if let Ok(entry) = Entry::new("drop", "database_key")
+        && let Err(e) = entry.set_secret(&buffer) {
             info!("could not cache key in keyring (non-fatal): {e}");
         }
-    }
 
     info!("created new database key in file: {}", key_path.display());
     split_key_iv(&buffer)

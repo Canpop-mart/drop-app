@@ -55,12 +55,11 @@ pub fn parse_sse_ini(ini_path: &Path) -> Option<(String, PathBuf)> {
             in_settings = false;
             continue;
         }
-        if in_settings {
-            if let Some(value) = trimmed.strip_prefix("AppId=") {
+        if in_settings
+            && let Some(value) = trimmed.strip_prefix("AppId=") {
                 app_id = Some(value.trim().to_string());
                 debug!("[EMU-SSE] AppId from ini: {}", value.trim());
             }
-        }
     }
 
     let app_id = app_id?;
@@ -124,13 +123,12 @@ pub fn read_sse_unlocks(save_path: &Path, app_id: &str) -> Vec<GoldbergAchieveme
     let json_path = save_path.join("achievements.json");
     if json_path.exists() {
         debug!("{TAG} Found achievements.json at SSE path");
-        if let Ok(contents) = std::fs::read_to_string(&json_path) {
-            if let Ok(achievements) = serde_json::from_str::<Vec<GoldbergAchievement>>(&contents) {
+        if let Ok(contents) = std::fs::read_to_string(&json_path)
+            && let Ok(achievements) = serde_json::from_str::<Vec<GoldbergAchievement>>(&contents) {
                 let earned = achievements.iter().filter(|a| a.earned).count();
                 info!("{TAG} Read {} achievements from SSE JSON ({earned} earned)", achievements.len());
                 return achievements;
             }
-        }
     }
 
     debug!("{TAG} No known achievement file found at {}", save_path.display());

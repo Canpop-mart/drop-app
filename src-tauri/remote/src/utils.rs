@@ -32,11 +32,10 @@ pub async fn bounded_json<T: DeserializeOwned>(
     response: reqwest::Response,
     cap_bytes: u64,
 ) -> std::result::Result<T, RemoteAccessError> {
-    if let Some(len) = response.content_length() {
-        if len > cap_bytes {
+    if let Some(len) = response.content_length()
+        && len > cap_bytes {
             return Err(RemoteAccessError::ResponseTooLarge(cap_bytes));
         }
-    }
     let bytes = bounded_bytes(response, cap_bytes).await?;
     serde_json::from_slice(&bytes)
         .map_err(|e| RemoteAccessError::UnparseableResponse(e.to_string()))
@@ -49,11 +48,10 @@ pub async fn bounded_bytes(
     response: reqwest::Response,
     cap_bytes: u64,
 ) -> std::result::Result<Vec<u8>, RemoteAccessError> {
-    if let Some(len) = response.content_length() {
-        if len > cap_bytes {
+    if let Some(len) = response.content_length()
+        && len > cap_bytes {
             return Err(RemoteAccessError::ResponseTooLarge(cap_bytes));
         }
-    }
     let mut stream = response.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {

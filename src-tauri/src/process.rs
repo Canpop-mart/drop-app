@@ -24,12 +24,35 @@ pub enum LaunchResult {
 }
 
 #[tauri::command]
-pub fn launch_game(
+pub async fn launch_game(
     id: String,
     index: usize,
     incognito: Option<bool>,
 ) -> Result<LaunchResult, ProcessError> {
-    launch_game_inner(id, index, false, None, incognito.unwrap_or(false))
+    // launch_game_inner holds the PROCESS_MANAGER lock and, on a save-sync
+    // conflict, blocks on the UI-resolution channel for up to 5 minutes
+    // (see process_manager::save_sync). As a *synchronous* command this ran
+    // on the WebView/main thread, so the conflict dialog could never paint
+    // and the whole app froze. Make the command async (Tauri runs it off the
+    // main thread) and run the blocking work on a dedicated OS thread — NOT
+    // spawn_blocking — because launch_game_inner internally calls
+    // tauri::async_runtime::block_on, which panics on a Tokio runtime thread
+    // but is fine on a plain std thread (as it was on the main thread).
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(launch_game_inner(
+            id,
+            index,
+            false,
+            None,
+            incognito.unwrap_or(false),
+        ));
+    });
+    rx.await.unwrap_or_else(|_| {
+        Err(ProcessError::IOError(Arc::new(std::io::Error::other(
+            "launch thread terminated before returning a result",
+        ))))
+    })
 }
 
 /// Launch a game for streaming. Auto-resolves save conflicts and optionally

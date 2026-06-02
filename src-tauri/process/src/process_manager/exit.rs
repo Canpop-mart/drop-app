@@ -231,11 +231,10 @@ fn spawn_post_exit_sync(
         // Achievement session-end notify only matters if we opened a session.
         // Otherwise (incognito, or start_playtime never landed) there's
         // nothing on the server side to reconcile.
-        if session_id.is_some() {
-            if let Err(e) = remote::achievements::notify_session_end(&sync_game_id).await {
+        if session_id.is_some()
+            && let Err(e) = remote::achievements::notify_session_end(&sync_game_id).await {
                 warn!("[EXIT] failed to notify session end for {sync_game_id}: {e}");
             }
-        }
 
         if let Some(snap) = snapshot {
             upload_changed_saves_for(&snap).await;

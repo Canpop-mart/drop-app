@@ -7,7 +7,7 @@
 //!
 //! Patching is idempotent: running it twice produces the same file.
 
-use log::{debug, warn};
+use log::debug;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -68,7 +68,7 @@ pub fn patch_retroarch_cfg_with_deletions(
         let trimmed = line.trim();
 
         if let Some(key) = extract_cfg_key(trimmed) {
-            if delete_keys.iter().any(|dk| *dk == key) {
+            if delete_keys.contains(&key) {
                 debug!("[RETROARCH] Removing stale config key: {key}");
                 continue;
             }
@@ -84,11 +84,10 @@ pub fn patch_retroarch_cfg_with_deletions(
 
     // Append override keys that weren't already in the file.
     for (key, was_found) in &found_keys {
-        if !was_found {
-            if let Some(value) = overrides.get(key) {
+        if !was_found
+            && let Some(value) = overrides.get(key) {
                 lines.push(format!("{key} = {value}"));
             }
-        }
     }
 
     let content = lines.join("\n") + "\n";

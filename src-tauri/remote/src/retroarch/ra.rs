@@ -180,9 +180,7 @@ pub fn hash_rom(emu_root: &Path, rom_path: &str, console_id: i64) -> Option<Stri
     let stdout = String::from_utf8_lossy(&output.stdout);
     // RAHasher prints the hash on a line; some versions print "<hash> <file>".
     let hash = stdout
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .last()
+        .lines().rfind(|l| !l.trim().is_empty())
         .and_then(|l| l.split_whitespace().next())
         .map(|s| s.trim().to_lowercase());
 

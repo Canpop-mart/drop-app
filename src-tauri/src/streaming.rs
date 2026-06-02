@@ -401,8 +401,8 @@ async fn wait_for_sunshine_ready() -> bool {
 /// Generate sunshine.conf with Drop-specific settings.
 fn generate_sunshine_conf(
     config_dir: &Path,
-    admin_username: &str,
-    admin_password: &str,
+    _admin_username: &str,
+    _admin_password: &str,
 ) -> Result<PathBuf, String> {
     std::fs::create_dir_all(config_dir)
         .map_err(|e| format!("Failed to create config dir: {e}"))?;
@@ -513,6 +513,9 @@ pub fn register_game_app(
 }
 
 /// Unregister a game from Sunshine's apps.json.
+// Paired with `register_game_app` as a complete API; not yet called from a
+// path that compiles on every platform, so allow the dead-code warning.
+#[allow(dead_code)]
 pub fn unregister_game_app(game_name: &str) -> Result<(), String> {
     let apps_path = sunshine_config_dir().join("apps.json");
     if !apps_path.exists() {
@@ -1214,7 +1217,7 @@ pub async fn launch_moonlight(
     host: String,
     port: u16,
     pin: Option<String>,
-    app_name: Option<String>,
+    _app_name: Option<String>,
 ) -> Result<(), String> {
     let moonlight = match find_moonlight() {
         Some(m) => m,
@@ -1341,7 +1344,7 @@ pub async fn watch_moonlight_session(session_id: String) -> Result<(), String> {
         }
     }
 
-    let (cancel_tx, mut cancel_rx) = watch::channel(false);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
     {
         let mut guard = MOONLIGHT_WATCHER_CANCEL.lock().await;
         *guard = Some(cancel_tx);
@@ -1602,7 +1605,7 @@ pub fn spawn_stream_request_poller() {
 async fn fulfill_stream_request(
     session_id: String,
     game_id: String,
-    game_name: String,
+    _game_name: String,
     game_config: Option<database::models::data::UserConfiguration>,
 ) {
     info!("[STREAM-FULFILL] Fulfilling stream request {} for game {}", session_id, game_id);
@@ -1773,7 +1776,7 @@ async fn fulfill_stream_request(
     // 9. Start heartbeating in background. This loop is the host-side lifecycle
     //    owner: it keeps the session alive, and tears everything down — INCLUDING
     //    killing the game on this PC — when the stream ends, whichever side ends it.
-    let (cancel_tx, mut cancel_rx) = watch::channel(false);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
     {
         let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
         sessions.insert(session_id.clone(), cancel_tx);

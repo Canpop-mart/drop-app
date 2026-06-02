@@ -89,8 +89,10 @@ pub mod data {
         /// Backward-compatible with the old `widescreen: bool` field:
         /// `false` deserializes to `Standard`, `true` to `Wide16_9`.
         #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+        #[derive(Default)]
         pub enum AspectRatio {
             /// 4:3 — original console ratio (default)
+            #[default]
             Standard,
             /// 16:9 — widescreen
             Wide16_9,
@@ -98,11 +100,7 @@ pub mod data {
             Wide16_10,
         }
 
-        impl Default for AspectRatio {
-            fn default() -> Self {
-                AspectRatio::Standard
-            }
-        }
+        
 
         impl std::fmt::Display for AspectRatio {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

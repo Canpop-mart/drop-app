@@ -1,10 +1,8 @@
 use std::collections::HashMap;
-use std::fs::{Permissions, set_permissions};
 use std::io::SeekFrom;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Instant;
 
 use aes::cipher::{KeyIvInit, StreamCipher};
