@@ -206,8 +206,8 @@ fn upsert_section_key(
 /// Checks for GBE log / crash / marker files to verify the emulator is
 /// actually loading. GBE writes logs to `<save>/crash_reports/` and creates
 /// marker files; call this after the game has run briefly to diagnose a DLL
-/// that isn't really a Goldberg/GBE build.
-pub fn check_gbe_activity(dll_dir: &str) {
+/// that isn't really a Goldberg/GBE build. Returns `true` if GBE looks active.
+pub fn check_gbe_activity(dll_dir: &str) -> bool {
     let root = PathBuf::from(dll_dir);
     let mut found_any = false;
 
@@ -275,4 +275,5 @@ pub fn check_gbe_activity(dll_dir: &str) {
              loading. Check that the steam_api DLL is a Goldberg/GBE build."
         );
     }
+    found_any
 }

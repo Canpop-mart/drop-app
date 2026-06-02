@@ -33,6 +33,26 @@ export function setupHooks() {
     );
   });
 
+  // Surface games whose Steam emulator isn't recording achievement unlocks
+  // (no GBE activity detected at runtime) so a silently-stuck "0 / N" has a
+  // visible explanation. Shown once per game per session.
+  const warnedTrackingInactive = new Set<string>();
+  useListen<{ gameId: string }>("achievement_tracking_inactive", (event) => {
+    const gameId = event.payload?.gameId;
+    if (!gameId || warnedTrackingInactive.has(gameId)) return;
+    warnedTrackingInactive.add(gameId);
+    createModal(
+      ModalType.Notification,
+      {
+        title: "Achievements may not be tracking",
+        description:
+          "This game's Steam emulator doesn't appear to be recording achievement unlocks, so they won't appear. This is almost always a packaging issue with the game build rather than a Drop problem.",
+        buttonText: "OK",
+      },
+      (e, c) => c(),
+    );
+  });
+
   // Handle remote install requests from other devices.
   //
   // Fired by the host's stream-request poller when another of the user's

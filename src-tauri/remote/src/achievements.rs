@@ -265,7 +265,11 @@ async fn check_and_report_local(
             const MIN_TS: u64 = 946_684_800;  // 2000-01-01
             const MAX_TS: u64 = 4_102_444_800; // 2100-01-01
             let unlocked_at = if ach.earned_time >= MIN_TS && ach.earned_time <= MAX_TS {
-                chrono::DateTime::from_timestamp(ach.earned_time as i64, 0)
+                // Clamp timestamps in the future (clock skew / bad save) to now
+                // so unlock ordering on the server/UI stays sane.
+                let now = get_current_time_secs();
+                let ts = if ach.earned_time > now { now } else { ach.earned_time };
+                chrono::DateTime::from_timestamp(ts as i64, 0)
                     .map(|dt| dt.to_rfc3339())
                     .unwrap_or_else(|| chrono::Utc::now().to_rfc3339())
             } else {
@@ -350,12 +354,32 @@ pub async fn poll_achievements(
                     .iter()
                     .any(|l| l.provider == "RetroAchievements");
 
-                let goldberg_app_ids: Vec<String> = data
+                let mut goldberg_app_ids: Vec<String> = data
                     .external_links
                     .iter()
                     .filter(|l| l.provider == "Goldberg")
                     .map(|l| l.external_game_id.clone())
                     .collect();
+
+                // Fold in the game's own on-disk Steam AppID when a Goldberg-
+                // family emulator was detected locally. This (a) lets a game with
+                // no server-side Goldberg link still be tracked, and (b) catches a
+                // server AppID that doesn't match the folder GBE actually writes
+                // to — without it those unlocks are read by nobody. RA still wins
+                // below if the game is RA-linked.
+                if !ra_linked
+                    && let Some(info) = &emulator_info
+                    && matches!(
+                        info.emulator,
+                        goldberg::SteamEmulator::Goldberg { .. }
+                            | goldberg::SteamEmulator::Unknown { .. }
+                    )
+                    && let Some(local_id) = goldberg::read_local_steam_appid(info.dll_dir())
+                    && !goldberg_app_ids.contains(&local_id)
+                {
+                    info!("{TAG} Using locally-detected Goldberg AppID {local_id} for {game_id}");
+                    goldberg_app_ids.push(local_id);
+                }
 
                 let mode = if ra_linked {
                     info!("{TAG} Mode: RetroAchievements (game {game_id})");
@@ -437,22 +461,32 @@ pub async fn poll_achievements(
                         }
                     }
                 }
-                // For RA mode, do one final poll
+                // For RA mode, do a few *delayed* final polls. RetroArch reports
+                // unlocks to RA's servers asynchronously, so an achievement
+                // earned right before quitting usually isn't visible to the RA
+                // API yet — a single immediate poll misses it. Retry a handful
+                // of times with a short delay so the last unlocks still reach
+                // the UI instead of only being reconciled silently server-side.
                 if matches!(mode, AchievementMode::RetroAchievements) {
-                    let new_unlocks = poll_ra(&game_id).await;
-                    for unlock in &new_unlocks {
-                        if !known_unlocked.contains(&unlock.id) {
-                            info!("{TAG} Final RA unlock: {} - {}", unlock.title, unlock.description);
-                            known_unlocked.insert(unlock.id.clone());
-                            on_new_achievement(AchievementItem {
-                                id: unlock.id.clone(),
-                                external_id: unlock.external_id.clone(),
-                                provider: "RetroAchievements".to_string(),
-                                title: unlock.title.clone(),
-                                description: unlock.description.clone(),
-                                icon_url: unlock.icon_url.clone(),
-                                unlocked: true,
-                            });
+                    for attempt in 0..3 {
+                        if attempt > 0 {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                        }
+                        for unlock in &poll_ra(&game_id).await {
+                            if !known_unlocked_external_ids.contains(&unlock.external_id) {
+                                info!("{TAG} Final RA unlock: {} - {}", unlock.title, unlock.description);
+                                known_unlocked.insert(unlock.id.clone());
+                                known_unlocked_external_ids.insert(unlock.external_id.clone());
+                                on_new_achievement(AchievementItem {
+                                    id: unlock.id.clone(),
+                                    external_id: unlock.external_id.clone(),
+                                    provider: "RetroAchievements".to_string(),
+                                    title: unlock.title.clone(),
+                                    description: unlock.description.clone(),
+                                    icon_url: unlock.icon_url.clone(),
+                                    unlocked: true,
+                                });
+                            }
                         }
                     }
                 }
@@ -464,11 +498,28 @@ pub async fn poll_achievements(
 
         match &mode {
             AchievementMode::Goldberg { app_ids } => {
-                // On first poll, run GBE diagnostics
+                // On first poll, run GBE diagnostics. If the emulator isn't
+                // actually writing anything, achievements will never be recorded
+                // for this game — surface that to the UI instead of leaving the
+                // user staring at a silently-stuck count.
                 if first_poll {
                     first_poll = false;
-                    if let Some(info) = &emulator_info {
-                        goldberg::check_gbe_activity(info.dll_dir());
+                    if let Some(info) = &emulator_info
+                        && !goldberg::check_gbe_activity(info.dll_dir())
+                    {
+                        #[derive(Serialize, Clone)]
+                        #[serde(rename_all = "camelCase")]
+                        struct TrackingInactive {
+                            game_id: String,
+                        }
+                        let lock = crate::utils::DROP_APP_HANDLE.lock().await;
+                        if let Some(handle) = &*lock {
+                            use tauri::Emitter;
+                            let _ = handle.emit(
+                                "achievement_tracking_inactive",
+                                TrackingInactive { game_id: game_id.clone() },
+                            );
+                        }
                     }
                 }
 
@@ -488,7 +539,18 @@ pub async fn poll_achievements(
                         game_id
                     );
                     match report_achievements(&game_id, new_reports.clone()).await {
-                        Ok(_) => {
+                        Ok(resp) => {
+                            if (resp.recorded as usize) < new_reports.len() {
+                                warn!(
+                                    "{TAG} Server recorded {} of {} reported achievements for {} \
+                                     — the rest were already known or rejected",
+                                    resp.recorded, new_reports.len(), game_id
+                                );
+                            }
+                            // Mark all sent as known. The on-disk save file is the
+                            // source of truth and persists, so a genuinely missed
+                            // unlock is re-read + re-reported on the next launch
+                            // (the known set is reseeded fresh from the server).
                             for r in &new_reports {
                                 known_unlocked_external_ids.insert(r.external_id.clone());
                             }
@@ -558,7 +620,11 @@ pub async fn poll_achievements(
                 let new_unlocks = poll_ra(&game_id).await;
 
                 for unlock in &new_unlocks {
-                    if !known_unlocked.contains(&unlock.id) {
+                    // Dedup on the RA achievement id (`external_id`), which is a
+                    // stable identifier present in both the config and the RA
+                    // poll — unlike `id`, whose id-space isn't guaranteed to
+                    // match between the two endpoints.
+                    if !known_unlocked_external_ids.contains(&unlock.external_id) {
                         info!(
                             "{TAG} RA achievement unlocked: {} - {}",
                             unlock.title, unlock.description
@@ -578,7 +644,13 @@ pub async fn poll_achievements(
                 }
             }
 
-            AchievementMode::None => unreachable!(),
+            AchievementMode::None => {
+                // Should be unreachable (None returns before the loop), but a
+                // `unreachable!()` here would panic the whole poller task on any
+                // future regression. Degrade gracefully instead.
+                warn!("{TAG} poll loop entered None mode for {game_id}; stopping poller");
+                return;
+            }
         }
     }
 }

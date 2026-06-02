@@ -17,9 +17,23 @@ import { devLog } from "./dev-mode";
 
 // ── Audio Context ────────────────────────────────────────────────────────────
 
+// WebKitGTK (the Linux webview, including the Steam Deck AppImage) routes
+// WebAudio and <audio> through GStreamer. On SteamOS / AppImage environments
+// the GStreamer audio sink (`autoaudiosink`) is frequently missing, and
+// touching the audio pipeline there crashes the WebProcess with a NULL-instance
+// GObject error — i.e. a blank white screen. Chromium-based webviews (WebView2
+// on Windows) and WKWebView (macOS, CoreAudio) are unaffected. UI sound can't
+// reliably play on that backend anyway, so disable it on Linux entirely rather
+// than risk the crash. (This is why adding `media-src data:` to the CSP — which
+// let the silent-WAV unlock element load — white-screened the Deck.)
+const AUDIO_BACKEND_UNSAFE =
+  typeof navigator !== "undefined" &&
+  /linux/i.test(navigator.userAgent) &&
+  !/android/i.test(navigator.userAgent);
+
 let audioCtx: AudioContext | null = null;
 let masterGain: GainNode | null = null;
-let audioFailed = false;
+let audioFailed = AUDIO_BACKEND_UNSAFE;
 let audioUnlocked = false;
 let enabled = true;
 let activeProfile: SoundProfileId = "steam";
@@ -80,7 +94,9 @@ const SILENT_WAV =
   "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
 
 function ensureAudioUnlock() {
-  if (audioUnlocked || typeof document === "undefined") return;
+  // `audioFailed` is true up-front on Linux/WebKitGTK — bail before creating
+  // the silent-WAV <audio> element, whose GStreamer pipeline crashes there.
+  if (audioUnlocked || audioFailed || typeof document === "undefined") return;
 
   // Drop a muted, autoplaying, looping silent <audio> into the page.
   // This primes the platform's audio pipeline without any user gesture.

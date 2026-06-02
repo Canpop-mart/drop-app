@@ -1638,6 +1638,24 @@ function rarityTextColor(rarity: number): string {
 const unlockedCount = computed(() => achievements.value.filter(a => a.unlocked).length);
 const achievementPercent = computed(() => achievements.value.length > 0 ? (unlockedCount.value / achievements.value.length) * 100 : 0);
 
+// Live-refresh the achievement list/count when the backend reports an unlock,
+// so the Community tab updates in place instead of only after re-navigating
+// (the unlock toast already fires). The event carries no gameId, so any unlock
+// triggers a cheap refetch of this game's achievements.
+async function reloadAchievements() {
+  try {
+    const res = await fetch(serverUrl(`api/v1/games/${gameId}/achievements`));
+    if (!res.ok) return;
+    const r = await res.json();
+    achievements.value = Array.isArray(r) ? r : (r.achievements ?? []);
+  } catch {
+    // best-effort; ignore refresh failures
+  }
+}
+useListen("achievement_unlocked", () => {
+  reloadAchievements();
+});
+
 // ── ROM Hash Verification (RetroAchievements) ──────────────────────────
 type RomHashResult = {
   status: "Match" | "Mismatch" | "NoHashData" | "Error";

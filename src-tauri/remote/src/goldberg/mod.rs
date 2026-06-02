@@ -180,6 +180,56 @@ pub fn gse_save_path(app_id: &str, dll_dir: Option<&str>) -> Option<PathBuf> {
     }
 }
 
+/// Every `achievements.json` that exists for `app_id`, across the DLL-dir
+/// `drop-goldberg` folder AND the GBE-fork default save locations (next to the
+/// DLL and under %APPDATA%). The reader scans all of these and keeps whichever
+/// actually contains unlocks, so Drop's own all-`false` `drop-goldberg` file
+/// can't mask real unlocks GBE wrote to its default path.
+pub fn gse_candidate_paths(app_id: &str, dll_dir: Option<&str>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    // Next to the DLL (where `local_save_path=./drop-goldberg` points, plus the
+    // GBE-fork defaults if a fork ignored that redirect).
+    if let Some(dir) = dll_dir {
+        let base = PathBuf::from(dir);
+        for name in APPDATA_FALLBACK_DIRS {
+            let p = base.join(name).join(app_id).join("achievements.json");
+            if p.exists() {
+                out.push(p);
+            }
+        }
+    }
+    // The same fork defaults under %APPDATA% (a fork not configured by Drop).
+    if let Some(data_dir) = dirs::data_dir() {
+        for name in APPDATA_FALLBACK_DIRS {
+            let p = data_dir.join(name).join(app_id).join("achievements.json");
+            if p.exists() {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// Read the game's own Steam AppID from `steam_appid.txt` next to the emulator
+/// DLL (or in `steam_settings/`). Used to track Goldberg achievements when the
+/// server provided no Goldberg AppID link, and to catch a server AppID that
+/// differs from the one the game actually uses on disk.
+pub fn read_local_steam_appid(dll_dir: &str) -> Option<String> {
+    let base = std::path::Path::new(dll_dir);
+    for candidate in [
+        base.join("steam_appid.txt"),
+        base.join("steam_settings").join("steam_appid.txt"),
+    ] {
+        if let Ok(s) = std::fs::read_to_string(&candidate) {
+            let id = s.trim();
+            if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
 // ── Unified achievement-reading API ──────────────────────────────────────
 
 /// Reads all achievement unlocks for a game, auto-selecting the reader by
@@ -249,6 +299,7 @@ pub fn configure_saves_for_game(install_dir: &str, display_name: Option<&str>) -
 
 /// Checks for GBE log/crash/marker files to verify the emulator loaded.
 /// Thin re-export of [`config::check_gbe_activity`] for call-site stability.
-pub fn check_gbe_activity(dll_dir: &str) {
-    config::check_gbe_activity(dll_dir);
+/// Returns `true` if GBE looks active (writing logs/markers/runtime files).
+pub fn check_gbe_activity(dll_dir: &str) -> bool {
+    config::check_gbe_activity(dll_dir)
 }

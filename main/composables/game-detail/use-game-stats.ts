@@ -71,7 +71,7 @@ export function useGameStats(gameId: string) {
     () => achievements.value.filter((a) => a.unlocked).length,
   );
 
-  onMounted(async () => {
+  async function loadAchievements() {
     try {
       const res = await fetch(
         serverUrl(`api/v1/games/${gameId}/achievements`),
@@ -88,6 +88,16 @@ export function useGameStats(gameId: string) {
     } finally {
       achievementsLoading.value = false;
     }
+  }
+
+  onMounted(loadAchievements);
+
+  // Refresh when the backend reports a new unlock, so the list + progress
+  // count update live instead of staying stale until you re-navigate (the
+  // unlock toast already fires; this keeps the page itself in sync). The
+  // event carries no gameId, so any unlock triggers a (cheap) refetch.
+  useListen("achievement_unlocked", () => {
+    loadAchievements();
   });
 
   const resetBusy = ref(false);

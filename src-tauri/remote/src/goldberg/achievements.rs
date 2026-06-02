@@ -123,31 +123,54 @@ fn migrate_array_to_map_format(path: &Path, achievements: &[GoldbergAchievement]
 /// map format on the spot so GBE can record future unlocks.
 pub fn read_goldberg_unlocks(app_id: &str, dll_dir: Option<&str>) -> Vec<GoldbergAchievement> {
     const TAG: &str = "[ACH-GSE]";
-    let path = match super::gse_save_path(app_id, dll_dir) {
-        Some(p) => p,
-        None => {
-            warn!("{TAG} Could not determine save path for AppID {app_id}");
-            return Vec::new();
-        }
-    };
 
-    if !path.exists() {
-        info!("{TAG} File does not exist: {} (AppID {app_id})", path.display());
+    // Scan EVERY candidate location, not just the first that exists. Drop writes
+    // an all-`false` `drop-goldberg/<AppID>/achievements.json` so GBE has a
+    // map-format file to record into — but some GBE forks ignore the
+    // `local_save_path` redirect and write unlocks to their own default folder
+    // instead (`GSE Saves`, `Goldberg SteamEmu Saves`, next to the DLL or under
+    // %APPDATA%). Returning the first file found would let that all-`false`
+    // shadow mask the real unlocks, so read them all and keep the one with the
+    // most earned achievements.
+    let candidates = super::gse_candidate_paths(app_id, dll_dir);
+    if candidates.is_empty() {
+        match super::gse_save_path(app_id, dll_dir) {
+            Some(p) => info!(
+                "{TAG} No achievements.json on disk for AppID {app_id} (expected at {})",
+                p.display()
+            ),
+            None => warn!("{TAG} Could not determine save path for AppID {app_id}"),
+        }
         return Vec::new();
     }
 
+    let mut best: Vec<GoldbergAchievement> = Vec::new();
+    let mut best_earned: i64 = -1;
+    for path in &candidates {
+        let Some(contents) = read_file_with_retries(path) else {
+            continue;
+        };
+        let parsed = finish_parse(path, &contents);
+        let earned = parsed.iter().filter(|a| a.earned).count() as i64;
+        if earned > best_earned {
+            best_earned = earned;
+            best = parsed;
+        }
+    }
+    best
+}
+
+/// Read a file with a few short retries (GBE may be mid-write). `None` if every
+/// attempt failed.
+fn read_file_with_retries(path: &Path) -> Option<String> {
+    const TAG: &str = "[ACH-GSE]";
     let mut last_err = String::new();
     for attempt in 0..=FILE_READ_RETRIES {
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => return finish_parse(&path, &contents),
+        match std::fs::read_to_string(path) {
+            Ok(contents) => return Some(contents),
             Err(e) => {
                 last_err = e.to_string();
                 if attempt < FILE_READ_RETRIES {
-                    debug!(
-                        "{TAG} Read attempt {}/{FILE_READ_RETRIES} failed for {} ({e}), retrying...",
-                        attempt + 1,
-                        path.display()
-                    );
                     std::thread::sleep(std::time::Duration::from_millis(
                         FILE_READ_RETRY_DELAY_MS * (attempt as u64 + 1),
                     ));
@@ -155,9 +178,11 @@ pub fn read_goldberg_unlocks(app_id: &str, dll_dir: Option<&str>) -> Vec<Goldber
             }
         }
     }
-
-    warn!("{TAG} READ FAILED after {FILE_READ_RETRIES} retries for {}: {last_err}", path.display());
-    Vec::new()
+    warn!(
+        "{TAG} READ FAILED after {FILE_READ_RETRIES} retries for {}: {last_err}",
+        path.display()
+    );
+    None
 }
 
 /// Parses the file contents, migrating array-format files and logging counts.
