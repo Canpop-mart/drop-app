@@ -44,8 +44,14 @@ pub fn apply_crt_shader(
     // Always write the bundled shader so there is a guaranteed fallback.
     let bundled_path = write_bundled_crt_shader(emu_root);
 
+    // The Linux branch below uses `return`, so this MUST stay a closure
+    // (`.or_else`): a plain `.or(block)` makes that `return` exit the whole
+    // function and mismatch its `Option<String>` return type. On non-Linux
+    // builds the cfg block is empty, so clippy flags the closure as
+    // unnecessary — hence the allow. Do NOT let `clippy --fix` collapse this.
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     let chosen_shader = find_best_crt_shader(emu_root, prefer_high_res_capable)
-        .or({
+        .or_else(|| {
             #[cfg(target_os = "linux")]
             {
                 if let Some(appimage_path) = super::discovery::find_appimage_binary(emu_root) {
