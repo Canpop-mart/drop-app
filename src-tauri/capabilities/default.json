@@ -16,6 +16,8 @@
     "deep-link:default",
     "dialog:default",
     "os:default",
-    "opener:default"
+    "opener:default",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

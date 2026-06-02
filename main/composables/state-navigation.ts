@@ -137,6 +137,10 @@ export function setupHooks() {
       },
     );
   });
+
+  // Check for an app update once at startup. No-op in dev / when offline /
+  // before the first signed release — see use-updater.ts.
+  void checkForAppUpdate();
 }
 
 export function initialNavigation(state: ReturnType<typeof useAppState>) {

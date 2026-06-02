@@ -123,6 +123,15 @@
           <p class="text-xs text-zinc-500 truncate">
             {{ ach.description }}
           </p>
+          <p
+            v-if="rarityLabel(ach) || ach.points"
+            class="text-[11px] text-zinc-600 flex items-center gap-2 mt-0.5"
+          >
+            <span v-if="rarityLabel(ach)">{{ rarityLabel(ach) }} of players</span>
+            <span v-if="ach.points" class="text-amber-400/80"
+              >{{ ach.points }} pts</span
+            >
+          </p>
           <!-- Server-first badge — only renders when this achievement
                appears in the firsts map. Uses the shared component. -->
           <GameAchievementFirstBadge
@@ -173,6 +182,13 @@ const unlockedPercent = computed(() =>
     ? (props.unlockedCount / props.achievements.length) * 100
     : 0,
 );
+
+/** Preferred rarity label: global (RA/Steam) % if known, else this server's. */
+function rarityLabel(ach: AchievementData): string | null {
+  const pct = ach.globalPercent ?? ach.rarity ?? null;
+  if (pct === null || pct === undefined) return null;
+  return `${Math.round(pct * 10) / 10}%`;
+}
 </script>
 
 <style scoped>

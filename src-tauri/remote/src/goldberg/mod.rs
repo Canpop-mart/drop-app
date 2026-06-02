@@ -56,6 +56,7 @@
 
 pub mod achievements;
 pub mod config;
+pub mod crackers;
 pub mod discovery;
 pub mod sse;
 
@@ -235,7 +236,8 @@ pub fn read_local_steam_appid(dll_dir: &str) -> Option<String> {
 /// Reads all achievement unlocks for a game, auto-selecting the reader by
 /// emulator type. With no `emulator_info`, falls back to the Goldberg path.
 pub fn read_unlocks(app_id: &str, emulator_info: Option<&EmulatorInfo>) -> Vec<GoldbergAchievement> {
-    match emulator_info {
+    // 1. Emulator-specific read (Goldberg JSON map/array, or SSE ini).
+    let mut unlocks = match emulator_info {
         Some(info) => match &info.emulator {
             SteamEmulator::Goldberg { dll_dir } | SteamEmulator::Unknown { dll_dir } => {
                 achievements::read_goldberg_unlocks(app_id, Some(dll_dir.as_str()))
@@ -245,6 +247,39 @@ pub fn read_unlocks(app_id: &str, emulator_info: Option<&EmulatorInfo>) -> Vec<G
             }
         },
         None => achievements::read_goldberg_unlocks(app_id, None),
+    };
+
+    // 2. Multi-cracker + real-Steam-client scan. Many games ship a cracker
+    //    other than Goldberg/SSE (CODEX, RUNE, OnlineFix, EMPRESS, RLD!,
+    //    CreamAPI, SKIDROW, 3DM, Razor1911) that writes unlocks to its own
+    //    fixed location/format the read above never sees — the most common
+    //    reason a game shows a silently-stuck 0/N. Merge any earned
+    //    achievements found there (and from a real Steam install) into the set.
+    let dll_dir = emulator_info.map(|i| i.dll_dir());
+    let cracker_earned = crackers::scan_all_crackers(app_id, dll_dir);
+    merge_earned(&mut unlocks, cracker_earned);
+    unlocks
+}
+
+/// Merge `extra` (all earned) into `base`: mark matching entries earned (with
+/// the earlier unlock time) and append achievements `base` didn't already have.
+fn merge_earned(base: &mut Vec<GoldbergAchievement>, extra: Vec<GoldbergAchievement>) {
+    use std::collections::HashMap;
+    let mut index: HashMap<String, usize> =
+        base.iter().enumerate().map(|(i, a)| (a.name.clone(), i)).collect();
+    for ach in extra {
+        if let Some(&i) = index.get(&ach.name) {
+            let existing = &mut base[i];
+            existing.earned = true;
+            if ach.earned_time != 0
+                && (existing.earned_time == 0 || ach.earned_time < existing.earned_time)
+            {
+                existing.earned_time = ach.earned_time;
+            }
+        } else {
+            index.insert(ach.name.clone(), base.len());
+            base.push(ach);
+        }
     }
 }
 

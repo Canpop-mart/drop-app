@@ -354,12 +354,19 @@ pub async fn poll_achievements(
                     .iter()
                     .any(|l| l.provider == "RetroAchievements");
 
+                // AppIDs to scan locally: "Goldberg" links AND "Steam"-provider
+                // links (the game's store AppID). Including the Steam AppID lets
+                // the multi-cracker scanner find unlocks for a game the server
+                // never classified as Goldberg, so client-side detection no
+                // longer depends on server-side Goldberg classification.
                 let mut goldberg_app_ids: Vec<String> = data
                     .external_links
                     .iter()
-                    .filter(|l| l.provider == "Goldberg")
+                    .filter(|l| l.provider == "Goldberg" || l.provider == "Steam")
                     .map(|l| l.external_game_id.clone())
                     .collect();
+                goldberg_app_ids.sort();
+                goldberg_app_ids.dedup();
 
                 // Fold in the game's own on-disk Steam AppID when a Goldberg-
                 // family emulator was detected locally. This (a) lets a game with

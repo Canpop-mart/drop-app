@@ -1,6 +1,6 @@
 [package]
 name = "drop-app"
-version = "4.1.2"
+version = "4.5.0"
 description = "The client application for the open-source, self-hosted game distribution platform Drop"
 authors = ["Drop OSS"]
 edition = "2024"
@@ -102,6 +102,8 @@ zstd = "0.13.3"
 base64 = "0.22"
 zip = "2"
 flate2 = "1"
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-process = "2.3.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -30,6 +30,12 @@ export interface AchievementData {
   description: string;
   iconUrl: string;
   unlocked: boolean;
+  /** Gamerscore-style points (RetroAchievements). 0/absent for Steam. */
+  points?: number;
+  /** Global unlock rarity % from RA/Steam (0-100). Null/absent = unknown. */
+  globalPercent?: number | null;
+  /** Per-instance unlock rarity % across this server's players. */
+  rarity?: number;
 }
 
 /** Result of a RetroAchievements ROM-hash check (launch-time or on-demand). */
