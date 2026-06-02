@@ -17,6 +17,11 @@ use ::client::{
     app_status::AppStatus,
     autostart::sync_autostart_on_startup,
 };
+// Only used in the Linux UMU/Proton path (umu_state below). cfg-gated so there
+// is no unused-import warning on Windows, and so clippy --fix (run on Windows)
+// won't strip it again — doing so broke the Linux build.
+#[cfg(target_os = "linux")]
+use ::client::compat::UMU_LAUNCHER_EXECUTABLE;
 use ::download_manager::DownloadManagerWrapper;
 use ::games::scan::scan_install_dirs;
 use ::games::status::reconcile_on_startup;

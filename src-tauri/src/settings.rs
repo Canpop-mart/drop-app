@@ -256,7 +256,11 @@ pub fn detect_package_format() -> PackageFormat {
 /// Returns paths like /run/media/mmcblk0p1 that can be used as install directories.
 #[tauri::command]
 pub fn detect_removable_storage() -> Vec<PathBuf> {
-    let results = Vec::new();
+    // `results` is mutated only in the cfg(linux) block below, so mark it mut
+    // unconditionally and allow the unused-mut warning on non-Linux. (Without
+    // this, clippy --fix on Windows strips the `mut` and breaks the Linux build.)
+    #[allow(unused_mut)]
+    let mut results = Vec::new();
 
     #[cfg(target_os = "linux")]
     {
