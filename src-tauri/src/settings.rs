@@ -76,6 +76,10 @@ const ALLOWED_SETTINGS_KEYS: &[&str] = &[
     "raToken",
     "cloudSavesEnabled",
     "deviceName",
+    "streamingQuality",
+    "streamingResolution",
+    "streamingHdr",
+    "streamingAutoResolution",
 ];
 
 /// Max length accepted for free-form string settings. Prevents a rogue

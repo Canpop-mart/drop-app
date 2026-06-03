@@ -286,27 +286,32 @@ pub struct SunshineAppsConfig {
     pub apps: Vec<SunshineApp>,
 }
 
-/// Quality presets for streaming, chosen on the client (the device running
-/// Moonlight). Each maps to an fps + bitrate handed to Moonlight. Resolution is
-/// a separate setting (`streaming_resolution`) so it can be raised when the Deck
-/// is docked to a TV.
+/// Quality profiles for streaming, chosen on the client (the device running
+/// Moonlight). Each maps to an fps + bitrate handed to Moonlight; resolution and
+/// HDR are separate settings. The encoder-quality knobs (NVENC preset, spatial
+/// AQ, two-pass) are set globally in `sunshine.conf` and benefit every profile,
+/// so the profile only varies the bandwidth/framerate trade-off.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum StreamQuality {
-    /// Easy on the network: 30 fps, ~8 Mbps.
-    DataSaver,
-    /// Default: 60 fps, ~20 Mbps.
+    /// Lowest latency / weakest network: 60 fps, ~18 Mbps.
+    Performance,
+    /// Default: 60 fps, ~30 Mbps.
     Balanced,
-    /// Sharpest: 60 fps, ~35 Mbps.
-    HighQuality,
+    /// Sharpest at 60 fps: ~50 Mbps. Good for story games over a solid link.
+    Quality,
+    /// Maxed out for a wired/LAN link: 120 fps, ~80 Mbps.
+    Ultra,
 }
 
 impl StreamQuality {
-    /// Parse the persisted settings string. Unknown/empty falls back to Balanced.
+    /// Parse the persisted settings string. Unknown/empty falls back to
+    /// Balanced. Legacy values (`dataSaver`, `highQuality`) are still accepted.
     fn from_setting(s: &str) -> Self {
         match s {
-            "dataSaver" => Self::DataSaver,
-            "highQuality" => Self::HighQuality,
+            "performance" | "dataSaver" => Self::Performance,
+            "quality" | "highQuality" => Self::Quality,
+            "ultra" => Self::Ultra,
             _ => Self::Balanced,
         }
     }
@@ -314,9 +319,10 @@ impl StreamQuality {
     /// Moonlight stream parameters: (fps, bitrate_kbps).
     fn params(self) -> (u32, u32) {
         match self {
-            Self::DataSaver => (30, 8_000),
-            Self::Balanced => (60, 20_000),
-            Self::HighQuality => (60, 35_000),
+            Self::Performance => (60, 18_000),
+            Self::Balanced => (60, 30_000),
+            Self::Quality => (60, 50_000),
+            Self::Ultra => (120, 80_000),
         }
     }
 }
@@ -331,6 +337,44 @@ fn parse_stream_resolution(s: &str) -> Option<(u32, u32)> {
     }
     let (w, h) = s.split_once('x')?;
     Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+}
+
+/// Resolve the resolution Moonlight should request (`--resolution`).
+///
+/// With `streaming_auto_resolution` on (the default), use the client's *current*
+/// display size so docking the Deck to a TV "just works" without touching a
+/// setting. With it off, use the manual `streaming_resolution`. Returns `None`
+/// to omit `--resolution` entirely (let Moonlight pick its own default).
+fn resolve_stream_resolution(window: &tauri::WebviewWindow) -> Option<(u32, u32)> {
+    let (auto, manual) = {
+        let db = borrow_db_checked();
+        (
+            db.settings.streaming_auto_resolution,
+            db.settings.streaming_resolution.clone(),
+        )
+    };
+    if auto {
+        let monitor = window
+            .current_monitor()
+            .ok()
+            .flatten()
+            .or_else(|| window.primary_monitor().ok().flatten());
+        if let Some(monitor) = monitor {
+            let size = monitor.size();
+            if size.width > 0 && size.height > 0 {
+                info!(
+                    "[MOONLIGHT] Auto-resolution: streaming at the client's current display ({}x{})",
+                    size.width, size.height
+                );
+                return Some((size.width, size.height));
+            }
+        }
+        warn!(
+            "[MOONLIGHT] Auto-resolution is on but the display size couldn't be read; \
+             falling back to the manual streaming_resolution setting"
+        );
+    }
+    parse_stream_resolution(&manual)
 }
 
 /// Open Sunshine's inbound ports in Windows Firewall (best-effort).
@@ -443,6 +487,22 @@ resolutions = [
 # Streaming defaults
 channels = 1
 fec_percentage = 20
+
+# Encoding — tuned by Drop for sharp, low-added-latency streams. Without these,
+# Sunshine falls back to its fastest/lowest-quality encoder preset (NVENC P1),
+# which looks soft. These knobs are global and benefit every quality profile;
+# the profile only varies fps/bitrate (client-negotiated by Moonlight).
+#   NVENC (NVIDIA): preset 1=fastest(P1)..7=slowest(P7); P5 is a large quality
+#   gain for negligible added latency on a modern GPU.
+nvenc_preset = 5
+nvenc_twopass = quarter_res
+nvenc_spatial_aq = enabled
+#   AMD AMF
+amd_quality = quality
+amd_preanalysis = enabled
+amd_vbaq = enabled
+#   Intel QuickSync
+qsv_preset = slower
 
 # Logging
 min_log_level = 2
@@ -1214,6 +1274,7 @@ pub async fn kill_moonlight() -> Result<(), String> {
 /// Auto-installs Moonlight if not found.
 #[tauri::command]
 pub async fn launch_moonlight(
+    window: tauri::WebviewWindow,
     host: String,
     port: u16,
     pin: Option<String>,
@@ -1288,22 +1349,24 @@ pub async fn launch_moonlight(
     // settings so they persist across streams. Moonlight takes bitrate in Kbps.
     // Resolution is its own setting so it can be raised when docked to a TV; the
     // "native" option omits `--resolution` and lets Moonlight use its default.
-    let (qfps, qbitrate, resolution) = {
+    let (qfps, qbitrate, hdr) = {
         let db = borrow_db_checked();
         let (fps, bitrate) =
             StreamQuality::from_setting(&db.settings.streaming_quality).params();
-        (fps, bitrate, parse_stream_resolution(&db.settings.streaming_resolution))
+        (fps, bitrate, db.settings.streaming_hdr)
     };
+    let resolution = resolve_stream_resolution(&window);
     let fps_str = qfps.to_string();
     let bitrate_str = qbitrate.to_string();
     info!(
-        "[MOONLIGHT] Starting stream to {} (Desktop capture, {} @ {}fps, {}kbps)...",
+        "[MOONLIGHT] Starting stream to {} (Desktop capture, {} @ {}fps, {}kbps, hdr={})...",
         address,
         resolution
             .map(|(w, h)| format!("{w}x{h}"))
             .unwrap_or_else(|| "native".to_string()),
         qfps,
-        qbitrate
+        qbitrate,
+        hdr
     );
     let mut args: Vec<String> = vec!["stream".to_string()];
     if let Some((w, h)) = resolution {
@@ -1314,6 +1377,9 @@ pub async fn launch_moonlight(
     args.push(fps_str);
     args.push("--bitrate".to_string());
     args.push(bitrate_str);
+    if hdr {
+        args.push("--hdr".to_string());
+    }
     args.push(address.clone());
     args.push("Desktop".to_string());
     let mut cmd = moonlight_command(&moonlight_str);

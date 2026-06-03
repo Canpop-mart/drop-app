@@ -330,18 +330,27 @@ pub mod data {
             /// hostname. Defaults to `None` for new installs.
             #[serde(default)]
             pub device_name: Option<String>,
-            /// Game-streaming quality preset applied when this device connects
-            /// to a host with Moonlight: `"dataSaver"`, `"balanced"`, or
-            /// `"highQuality"`. Drives the fps/bitrate passed to Moonlight.
+            /// Game-streaming quality profile: `"performance"`, `"balanced"`
+            /// (default), `"quality"`, or `"ultra"`. Drives the fps + bitrate
+            /// handed to Moonlight. (Legacy `"dataSaver"`/`"highQuality"` map to
+            /// performance/quality for back-compat.)
             #[serde(default = "default_streaming_quality")]
             pub streaming_quality: String,
-            /// Game-streaming resolution: `"1280x800"` (Deck handheld, default),
-            /// `"1920x1080"`, `"2560x1440"`, or `"native"` to leave the display
-            /// unchanged. The host switches its display to this while streaming,
-            /// and the client asks Moonlight to stream at it — set it bigger when
-            /// the Deck is docked to a TV.
+            /// Game-streaming resolution used when `streaming_auto_resolution`
+            /// is off: `"1280x800"` (Deck handheld), `"1920x1080"`,
+            /// `"2560x1440"`, `"3840x2160"`, or `"native"` to leave the display
+            /// unchanged. The host switches its display to this while streaming.
             #[serde(default = "default_streaming_resolution")]
             pub streaming_resolution: String,
+            /// Game-streaming HDR: launch Moonlight with `--hdr` and stream
+            /// 10-bit. Best on HDR panels (Deck OLED, HDR TV); off for SDR.
+            #[serde(default)]
+            pub streaming_hdr: bool,
+            /// Game-streaming: when true (default), the client streams at its
+            /// *current* display resolution (so docking to a TV just works) and
+            /// `streaming_resolution` is ignored. False uses the manual value.
+            #[serde(default = "default_true")]
+            pub streaming_auto_resolution: bool,
         }
 
         // Manual Debug impl: redact the Sunshine password so it never leaks
@@ -375,6 +384,8 @@ pub mod data {
                     .field("device_name", &self.device_name)
                     .field("streaming_quality", &self.streaming_quality)
                     .field("streaming_resolution", &self.streaming_resolution)
+                    .field("streaming_hdr", &self.streaming_hdr)
+                    .field("streaming_auto_resolution", &self.streaming_auto_resolution)
                     .finish()
             }
         }
@@ -410,6 +421,8 @@ pub mod data {
                     device_name: None,
                     streaming_quality: default_streaming_quality(),
                     streaming_resolution: default_streaming_resolution(),
+                    streaming_hdr: false,
+                    streaming_auto_resolution: true,
                 }
             }
         }

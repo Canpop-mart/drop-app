@@ -854,7 +854,7 @@
               Higher quality looks sharper but needs more bandwidth.
             </p>
           </div>
-          <div class="grid grid-cols-3 gap-2">
+          <div class="grid grid-cols-2 gap-2">
             <button
               v-for="opt in STREAM_QUALITY_OPTIONS"
               :key="opt.value"
@@ -870,11 +870,58 @@
           </div>
         </div>
 
-        <!-- Stream resolution — bump it up when this Deck is docked to a TV.
-             Set it to the SAME value on the host PC so the captured desktop and
-             the stream match (otherwise Sunshine up/down-scales). "Don't change"
-             leaves the host display alone. -->
-        <div class="bg-zinc-900/50 rounded-xl p-4 space-y-3">
+        <!-- HDR — 10-bit passthrough. Best on the OLED Deck or an HDR TV. -->
+        <div class="bg-zinc-900/50 rounded-xl p-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-zinc-300">HDR</p>
+              <p class="text-xs text-zinc-500 mt-0.5">
+                Stream in 10-bit HDR. Great on the OLED Deck or an HDR TV; leave
+                off for SDR screens.
+              </p>
+            </div>
+            <button
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-5 py-2 rounded-lg text-sm font-medium transition-colors shrink-0"
+              :class="streamingHdr ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingHdr(!streamingHdr)"
+            >
+              {{ streamingHdr ? "On" : "Off" }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Auto resolution — stream at this device's current screen size, so
+             docking to a TV just works. Off reveals a fixed-resolution picker. -->
+        <div class="bg-zinc-900/50 rounded-xl p-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-zinc-300">Auto resolution</p>
+              <p class="text-xs text-zinc-500 mt-0.5">
+                Stream at this device's current screen resolution — docking to a
+                TV just works. Turn off to choose a fixed resolution.
+              </p>
+            </div>
+            <button
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-5 py-2 rounded-lg text-sm font-medium transition-colors shrink-0"
+              :class="streamingAutoResolution ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingAutoResolution(!streamingAutoResolution)"
+            >
+              {{ streamingAutoResolution ? "On" : "Off" }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Manual stream resolution — only when auto resolution is off. Match
+             it on the host PC so the captured desktop and the stream line up
+             (otherwise Sunshine up/down-scales). "Don't change" leaves it. -->
+        <div
+          v-if="!streamingAutoResolution"
+          class="bg-zinc-900/50 rounded-xl p-4 space-y-3"
+        >
           <div>
             <p class="text-sm font-medium text-zinc-300">Stream resolution</p>
             <p class="text-xs text-zinc-500 mt-0.5">
@@ -1290,9 +1337,10 @@ const streamingSaved = ref(false);
 // Client-side stream quality preset. Mirrors the StreamQuality enum in
 // src-tauri/src/streaming.rs — the value is read there at Moonlight launch.
 const STREAM_QUALITY_OPTIONS = [
-  { value: "dataSaver", label: "Data Saver", detail: "30fps · 8 Mbps" },
-  { value: "balanced", label: "Balanced", detail: "60fps · 20 Mbps" },
-  { value: "highQuality", label: "High", detail: "60fps · 35 Mbps" },
+  { value: "performance", label: "Performance", detail: "60fps · 18 Mbps" },
+  { value: "balanced", label: "Balanced", detail: "60fps · 30 Mbps" },
+  { value: "quality", label: "Quality", detail: "60fps · 50 Mbps" },
+  { value: "ultra", label: "Ultra", detail: "120fps · 80 Mbps" },
 ] as const;
 const streamingQuality = ref<string>("balanced");
 
@@ -1311,6 +1359,7 @@ const STREAM_RESOLUTION_OPTIONS = [
   { value: "1280x800", label: "Deck", detail: "1280×800" },
   { value: "1920x1080", label: "1080p", detail: "1920×1080" },
   { value: "2560x1440", label: "1440p", detail: "2560×1440" },
+  { value: "3840x2160", label: "4K", detail: "3840×2160" },
   { value: "native", label: "Don't change", detail: "leave display" },
 ] as const;
 const streamingResolution = ref<string>("1280x800");
@@ -1324,6 +1373,32 @@ async function setStreamingResolution(value: string) {
   }
 }
 
+// HDR — 10-bit passthrough (Moonlight `--hdr`).
+const streamingHdr = ref<boolean>(false);
+
+async function setStreamingHdr(value: boolean) {
+  streamingHdr.value = value;
+  try {
+    await invoke("update_settings", { newSettings: { streamingHdr: value } });
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save HDR setting:", e);
+  }
+}
+
+// Auto resolution — stream at the client's current display size.
+const streamingAutoResolution = ref<boolean>(true);
+
+async function setStreamingAutoResolution(value: boolean) {
+  streamingAutoResolution.value = value;
+  try {
+    await invoke("update_settings", {
+      newSettings: { streamingAutoResolution: value },
+    });
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save auto-resolution setting:", e);
+  }
+}
+
 onMounted(async () => {
   try {
     const settings = await invoke<Record<string, any>>("fetch_settings");
@@ -1331,6 +1406,10 @@ onMounted(async () => {
     if (settings.sunshinePassword) streamingPassword.value = settings.sunshinePassword;
     if (settings.streamingQuality) streamingQuality.value = settings.streamingQuality;
     if (settings.streamingResolution) streamingResolution.value = settings.streamingResolution;
+    if (typeof settings.streamingHdr === "boolean")
+      streamingHdr.value = settings.streamingHdr;
+    if (typeof settings.streamingAutoResolution === "boolean")
+      streamingAutoResolution.value = settings.streamingAutoResolution;
   } catch {
     // Settings not available yet — keep defaults
   }

@@ -15,15 +15,52 @@
       <StreamingSetup />
     </div>
 
-    <!-- Stream resolution: the display mode this PC switches to while hosting a
-         stream. Set it to match the streaming device (small for a handheld,
-         1080p for a docked TV); "Don't change" leaves your desktop alone. -->
+    <!-- Stream quality — used when THIS PC watches a game streamed from another
+         PC (the profile + HDR + auto-resolution Moonlight requests). -->
     <div class="mt-8">
-      <h4 class="text-sm font-semibold text-zinc-200 mb-1">Stream Resolution</h4>
+      <h4 class="text-sm font-semibold text-zinc-200 mb-1">Stream Quality</h4>
       <p class="text-sm text-zinc-400 mb-3">
-        The resolution this PC switches to while streaming a game. Lower matches
-        a handheld screen; higher suits a docked TV. Set the same value on the
-        device you stream to.
+        Profile used when this PC watches a game streamed from another PC.
+        Higher looks sharper but needs more bandwidth.
+      </p>
+      <select
+        v-model="streamingQuality"
+        class="w-full max-w-xs rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        @change="saveStreamingQuality"
+      >
+        <option value="performance">Performance (60fps · 18 Mbps)</option>
+        <option value="balanced">Balanced (60fps · 30 Mbps)</option>
+        <option value="quality">Quality (60fps · 50 Mbps)</option>
+        <option value="ultra">Ultra (120fps · 80 Mbps)</option>
+      </select>
+      <label class="mt-3 flex items-center gap-2 text-sm text-zinc-300">
+        <input
+          v-model="streamingHdr"
+          type="checkbox"
+          class="rounded border-zinc-600 bg-zinc-800 text-blue-600 focus:ring-blue-500"
+          @change="saveStreamingToggles"
+        />
+        HDR (10-bit) — best on an HDR display
+      </label>
+      <label class="mt-2 flex items-center gap-2 text-sm text-zinc-300">
+        <input
+          v-model="streamingAutoResolution"
+          type="checkbox"
+          class="rounded border-zinc-600 bg-zinc-800 text-blue-600 focus:ring-blue-500"
+          @change="saveStreamingToggles"
+        />
+        Auto resolution — match this device's screen when watching
+      </label>
+    </div>
+
+    <!-- Host resolution: the display mode this PC switches to while HOSTING a
+         stream. Match it to the device you stream to (small for a handheld,
+         1080p/4K for a docked TV); "Don't change" leaves your desktop alone. -->
+    <div class="mt-8">
+      <h4 class="text-sm font-semibold text-zinc-200 mb-1">Host Resolution</h4>
+      <p class="text-sm text-zinc-400 mb-3">
+        The resolution this PC switches to while streaming a game to another
+        device. Match it to the device you stream to.
       </p>
       <select
         v-model="streamingResolution"
@@ -33,6 +70,7 @@
         <option value="1280x800">Handheld (1280×800)</option>
         <option value="1920x1080">1080p (1920×1080)</option>
         <option value="2560x1440">1440p (2560×1440)</option>
+        <option value="3840x2160">4K (3840×2160)</option>
         <option value="native">Don't change my resolution</option>
       </select>
       <p v-if="resolutionSaved" class="mt-2 text-xs text-green-400">Saved.</p>
@@ -103,6 +141,34 @@ const sessionsLoading = ref(true);
 const streamingResolution = ref("1280x800");
 const resolutionSaved = ref(false);
 
+// Client-side stream quality (used when this PC watches a stream).
+const streamingQuality = ref("balanced");
+const streamingHdr = ref(false);
+const streamingAutoResolution = ref(true);
+
+async function saveStreamingQuality() {
+  try {
+    await invoke("update_settings", {
+      newSettings: { streamingQuality: streamingQuality.value },
+    });
+  } catch (e) {
+    console.error("[SETTINGS] Failed to save stream quality:", e);
+  }
+}
+
+async function saveStreamingToggles() {
+  try {
+    await invoke("update_settings", {
+      newSettings: {
+        streamingHdr: streamingHdr.value,
+        streamingAutoResolution: streamingAutoResolution.value,
+      },
+    });
+  } catch (e) {
+    console.error("[SETTINGS] Failed to save streaming toggles:", e);
+  }
+}
+
 async function saveStreamingResolution() {
   try {
     await invoke("update_settings", {
@@ -122,6 +188,15 @@ onMounted(async () => {
     const settings = await invoke<Record<string, unknown>>("fetch_settings");
     if (typeof settings.streamingResolution === "string") {
       streamingResolution.value = settings.streamingResolution;
+    }
+    if (typeof settings.streamingQuality === "string") {
+      streamingQuality.value = settings.streamingQuality;
+    }
+    if (typeof settings.streamingHdr === "boolean") {
+      streamingHdr.value = settings.streamingHdr;
+    }
+    if (typeof settings.streamingAutoResolution === "boolean") {
+      streamingAutoResolution.value = settings.streamingAutoResolution;
     }
   } catch {
     // keep default
