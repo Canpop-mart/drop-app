@@ -341,11 +341,17 @@ fn parse_stream_resolution(s: &str) -> Option<(u32, u32)> {
 
 /// Resolve the resolution Moonlight should request (`--resolution`).
 ///
-/// With `streaming_auto_resolution` on (the default), use the client's *current*
-/// display size so docking the Deck to a TV "just works" without touching a
+/// With `streaming_auto_resolution` on (the default), use the client's current
+/// display size — passed from the frontend as `client_resolution` (e.g.
+/// `"1920x1080"`) so docking the Deck to a TV "just works" without touching a
 /// setting. With it off, use the manual `streaming_resolution`. Returns `None`
 /// to omit `--resolution` entirely (let Moonlight pick its own default).
-fn resolve_stream_resolution(window: &tauri::WebviewWindow) -> Option<(u32, u32)> {
+///
+/// Note: the client size is passed as data from the webview rather than read via
+/// a `WebviewWindow` here — Drop's frontend is a *child webview*, not a
+/// `WebviewWindow`, so injecting one into the command fails ("current webview is
+/// not a webviewwindow").
+fn resolve_stream_resolution(client_resolution: Option<&str>) -> Option<(u32, u32)> {
     let (auto, manual) = {
         let db = borrow_db_checked();
         (
@@ -354,23 +360,15 @@ fn resolve_stream_resolution(window: &tauri::WebviewWindow) -> Option<(u32, u32)
         )
     };
     if auto {
-        let monitor = window
-            .current_monitor()
-            .ok()
-            .flatten()
-            .or_else(|| window.primary_monitor().ok().flatten());
-        if let Some(monitor) = monitor {
-            let size = monitor.size();
-            if size.width > 0 && size.height > 0 {
-                info!(
-                    "[MOONLIGHT] Auto-resolution: streaming at the client's current display ({}x{})",
-                    size.width, size.height
-                );
-                return Some((size.width, size.height));
-            }
+        if let Some(res) = client_resolution.and_then(parse_stream_resolution) {
+            info!(
+                "[MOONLIGHT] Auto-resolution: streaming at the client's current display ({}x{})",
+                res.0, res.1
+            );
+            return Some(res);
         }
         warn!(
-            "[MOONLIGHT] Auto-resolution is on but the display size couldn't be read; \
+            "[MOONLIGHT] Auto-resolution is on but no usable client display size was provided; \
              falling back to the manual streaming_resolution setting"
         );
     }
@@ -1274,11 +1272,11 @@ pub async fn kill_moonlight() -> Result<(), String> {
 /// Auto-installs Moonlight if not found.
 #[tauri::command]
 pub async fn launch_moonlight(
-    window: tauri::WebviewWindow,
     host: String,
     port: u16,
     pin: Option<String>,
     _app_name: Option<String>,
+    client_resolution: Option<String>,
 ) -> Result<(), String> {
     let moonlight = match find_moonlight() {
         Some(m) => m,
@@ -1355,7 +1353,7 @@ pub async fn launch_moonlight(
             StreamQuality::from_setting(&db.settings.streaming_quality).params();
         (fps, bitrate, db.settings.streaming_hdr)
     };
-    let resolution = resolve_stream_resolution(&window);
+    let resolution = resolve_stream_resolution(client_resolution.as_deref());
     let fps_str = qfps.to_string();
     let bitrate_str = qbitrate.to_string();
     info!(
@@ -1796,29 +1794,42 @@ async fn fulfill_stream_request(
     info!("[STREAM-FULFILL] Session {} marked Ready", session_id);
 
     // 7. Switch the host display to the configured streaming resolution
-    //    (Windows only). Defaults to the Deck's 1280x800; set bigger (or
-    //    "native" to skip the switch) when the Deck is docked to a TV.
+    //    (Windows only). When auto-resolution is on, leave the host display
+    //    ALONE — the client streams at its own display size and Sunshine scales
+    //    to it, so forcing the host down (e.g. to 1280x800) would just upscale
+    //    and look soft. Only switch when the user picked a fixed resolution and
+    //    it isn't "native".
     #[cfg(target_os = "windows")]
     {
-        let res = {
+        let (auto, res) = {
             let db = borrow_db_checked();
-            db.settings.streaming_resolution.clone()
+            (
+                db.settings.streaming_auto_resolution,
+                db.settings.streaming_resolution.clone(),
+            )
         };
-        match parse_stream_resolution(&res) {
-            Some((w, h)) => match set_display_resolution(w, h) {
-                Ok((old_w, old_h)) => {
-                    let mut guard = SAVED_RESOLUTION.lock().await;
-                    *guard = Some(SavedResolution { width: old_w, height: old_h });
-                    info!(
-                        "[STREAM-FULFILL] Saved original resolution {}x{}, switched to {}x{}",
-                        old_w, old_h, w, h
-                    );
-                }
-                Err(e) => warn!("[STREAM-FULFILL] Failed to set streaming resolution: {e}"),
-            },
-            None => info!(
-                "[STREAM-FULFILL] streaming_resolution is 'native' — leaving host display unchanged"
-            ),
+        if auto {
+            info!(
+                "[STREAM-FULFILL] Auto-resolution is on — leaving the host display unchanged \
+                 so Sunshine scales to whatever the client requests"
+            );
+        } else {
+            match parse_stream_resolution(&res) {
+                Some((w, h)) => match set_display_resolution(w, h) {
+                    Ok((old_w, old_h)) => {
+                        let mut guard = SAVED_RESOLUTION.lock().await;
+                        *guard = Some(SavedResolution { width: old_w, height: old_h });
+                        info!(
+                            "[STREAM-FULFILL] Saved original resolution {}x{}, switched to {}x{}",
+                            old_w, old_h, w, h
+                        );
+                    }
+                    Err(e) => warn!("[STREAM-FULFILL] Failed to set streaming resolution: {e}"),
+                },
+                None => info!(
+                    "[STREAM-FULFILL] streaming_resolution is 'native' — leaving host display unchanged"
+                ),
+            }
         }
     }
 

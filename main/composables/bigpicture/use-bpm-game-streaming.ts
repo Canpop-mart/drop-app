@@ -171,11 +171,20 @@ export function useBpmGameStreaming(
       }
       const port = info.sunshinePort || 47989;
       devLog("event", `[BPM:STREAM] Launching Moonlight → ${host}:${port}`);
+      // Pass this device's current display size so the backend can stream at it
+      // when auto-resolution is on. Read from the DOM (window.screen) rather
+      // than a Rust WebviewWindow — Drop's frontend is a child webview, so
+      // injecting a WebviewWindow into the command fails.
+      const dpr = window.devicePixelRatio || 1;
+      const clientResolution = `${Math.round(window.screen.width * dpr)}x${Math.round(
+        window.screen.height * dpr,
+      )}`;
       await invoke("launch_moonlight", {
         host,
         port,
         pin: info.pairingPin ?? null,
         appName: info.game?.mName ?? null,
+        clientResolution,
       });
       activeStreamSessionId = sessionId;
       isStreaming.value = true;
