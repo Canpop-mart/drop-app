@@ -61,7 +61,7 @@
       <div class="mt-6 w-full bg-zinc-900 px-8">
         <div class="flex items-center gap-1 border-b border-zinc-700/50">
           <button
-            v-for="tab in detailTabs"
+            v-for="tab in visibleDetailTabs"
             :key="tab.value"
             class="relative px-5 py-3 text-sm font-medium transition-colors"
             :class="
@@ -156,7 +156,7 @@
           </div>
 
           <CloudSavesPanel
-            v-else-if="activeDetailTab === 'saves'"
+            v-else-if="activeDetailTab === 'saves' && devMode.enabled.value"
             :game-id="game.id"
             :game-name="game.mName"
             :is-native-game="config.isNativeGame.value"
@@ -392,6 +392,11 @@ const detailTabs = [
 ] as const;
 const activeDetailTab =
   ref<(typeof detailTabs)[number]["value"]>("about");
+
+// Cloud saves is dev-gated, so its tab only appears when dev mode is on.
+const visibleDetailTabs = computed(() =>
+  detailTabs.filter((t) => t.value !== "saves" || devMode.enabled.value),
+);
 
 // ── Community surfaces ───────────────────────────────────────────────────
 // Per-game players + first-to-unlock are fetched once at the page level

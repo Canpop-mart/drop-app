@@ -16,5 +16,6 @@ pub mod save_sync;
 pub mod server_proto;
 pub mod streaming_sessions;
 pub mod utils;
+pub mod web_upload;
 
 pub use auth::setup;

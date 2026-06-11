@@ -740,7 +740,7 @@
 
       <!-- ═══════ Cloud Saves ═══════ -->
       <div
-        v-if="activeSection === 'cloudsaves'"
+        v-if="activeSection === 'cloudsaves' && dev.enabled.value"
         class="space-y-5 max-w-xl"
       >
         <h3 class="text-lg font-semibold text-zinc-200 font-display">
@@ -1239,7 +1239,10 @@ const sections = computed(() => {
   ];
   const tail = [
     { label: "Achievements", value: "achievements" },
-    { label: "Cloud Saves", value: "cloudsaves" },
+    // Cloud saves is dev-gated — it doesn't sync seamlessly enough yet.
+    ...(dev.enabled.value
+      ? [{ label: "Cloud Saves", value: "cloudsaves" }]
+      : []),
     { label: "Streaming", value: "streaming" },
     { label: "Developer", value: "developer" },
     { label: "About", value: "about" },

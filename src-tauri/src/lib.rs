@@ -298,6 +298,7 @@ pub fn run() {
             gen_drop_url,
             fetch_drop_object,
             check_online,
+            ::remote::web_upload::upload_user_image,
             // Library
             fetch_library,
             fetch_game,

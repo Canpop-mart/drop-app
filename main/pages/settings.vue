@@ -102,12 +102,18 @@ const navigation = computed(() => [
     prefix: "/settings/achievements",
     icon: TrophyIcon,
   },
-  {
-    label: "Cloud Saves",
-    route: "/settings/cloudsaves",
-    prefix: "/settings/cloudsaves",
-    icon: CloudIcon,
-  },
+  // Cloud saves is dev-gated — it doesn't sync seamlessly enough for general
+  // use yet. Enable dev mode (/settings/developer) to access it.
+  ...(devMode.enabled.value
+    ? [
+        {
+          label: "Cloud Saves",
+          route: "/settings/cloudsaves",
+          prefix: "/settings/cloudsaves",
+          icon: CloudIcon,
+        },
+      ]
+    : []),
   // Streaming is gated behind dev mode until the Sunshine/Moonlight flow is
   // hardened for end users — see /settings/developer.
   ...(devMode.enabled.value

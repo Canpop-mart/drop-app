@@ -86,6 +86,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { hostname } from "@tauri-apps/plugin-os";
 import { type Settings } from "~/types";
 
+// Cloud saves is dev-gated. The settings nav hides the link outside dev mode;
+// this guards a direct URL visit too.
+definePageMeta({
+  middleware() {
+    const devMode = useDevMode();
+    if (!devMode.enabled.value) return navigateTo("/settings");
+  },
+});
+
 const settings = await invoke<Settings>("fetch_settings");
 
 const cloudSavesEnabled = ref<boolean>(settings.cloudSavesEnabled ?? true);

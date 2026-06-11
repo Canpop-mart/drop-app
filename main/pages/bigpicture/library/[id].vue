@@ -612,7 +612,10 @@
       <!-- Cloud Saves — cloud list (restore/delete) + local save management
            (upload/download), matching desktop's single Cloud Saves tab. No
            longer gated behind dev mode. -->
-      <div v-else-if="activeTab === 'cloudsaves'" class="space-y-6">
+      <div
+        v-else-if="activeTab === 'cloudsaves' && devMode.enabled.value"
+        class="space-y-6"
+      >
         <BpmCloudSavesPanel
           :game-id="gameId"
           :register-action="registerAction"
@@ -920,6 +923,8 @@ const status = computed<GameStatus | null>(() => statusRef.value?.value ?? null)
 const version = ref<GameVersion | null>(null);
 const versionOptions = ref<VersionOption[] | null>(null);
 const activeTab = ref("about");
+// Cloud saves is dev-gated, so its tab only shows when dev mode is on.
+const devMode = useDevMode();
 // Plain object — NOT reactive. Storing DOM refs in a reactive ref causes
 // infinite update loops when set from :ref callbacks during render.
 const tabRefs: Record<string, HTMLElement | null> = {};
@@ -1459,7 +1464,10 @@ function onAchievementIconError(event: Event) {
 const tabs = computed(() => [
   { label: "About", value: "about" },
   { label: "Community", value: "community" },
-  { label: "Cloud Saves", value: "cloudsaves" },
+  // Cloud saves is dev-gated.
+  ...(devMode.enabled.value
+    ? [{ label: "Cloud Saves", value: "cloudsaves" }]
+    : []),
 ]);
 
 interface AchievementItem {

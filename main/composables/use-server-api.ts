@@ -418,6 +418,25 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+/**
+ * Read a File into base64 (no data-URL prefix) for the native
+ * `upload_user_image` command. FileReader avoids the call-stack blowups of
+ * `btoa(String.fromCharCode(...bytes))` on large images.
+ */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () =>
+      reject(reader.error ?? new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
 // ── Store API ───────────────────────────────────────────────────────────────
 
 export function useServerApi() {
@@ -584,25 +603,29 @@ export function useServerApi() {
 
       /** Upload avatar image. Returns new object ID. */
       uploadAvatar: async (file: File) => {
-        const form = new FormData();
-        form.append("file", file);
-        return apiFetch<{ profilePictureObjectId: string }>(
-          "api/v1/user/avatar",
-          {
-            method: "POST",
-            body: form,
-          },
-        );
+        // Route through the native upload command rather than a multipart POST
+        // over the server:// webview protocol — that path hard-crashes
+        // WebKitGTK on the Steam Deck. See remote/src/web_upload.rs.
+        const json = await invoke<string>("upload_user_image", {
+          path: "api/v1/user/avatar",
+          filename: file.name,
+          contentType: file.type || "image/png",
+          dataBase64: await fileToBase64(file),
+        });
+        return JSON.parse(json) as { profilePictureObjectId: string };
       },
 
       /** Upload banner image. Returns new object ID. */
       uploadBanner: async (file: File) => {
-        const form = new FormData();
-        form.append("file", file);
-        return apiFetch<{ bannerObjectId: string }>("api/v1/user/banner", {
-          method: "POST",
-          body: form,
+        // Native command upload (see uploadAvatar) — avoids the WebKitGTK
+        // multipart-over-server:// crash on the Steam Deck.
+        const json = await invoke<string>("upload_user_image", {
+          path: "api/v1/user/banner",
+          filename: file.name,
+          contentType: file.type || "image/png",
+          dataBase64: await fileToBase64(file),
         });
+        return JSON.parse(json) as { bannerObjectId: string };
       },
 
       /** Update showcase items. */
