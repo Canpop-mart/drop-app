@@ -1,7 +1,7 @@
 {
   "name": "view",
   "private": true,
-  "version": "4.7.0",
+  "version": "4.7.1",
   "type": "module",
   "scripts": {
     "build": "nuxt generate",
@@ -21,7 +21,7 @@
     "@tauri-apps/plugin-shell": "^2.3.5",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "micromark": "^4.0.2",
-    "nuxt": "~3.21.6",
+    "nuxt": "3.21.2",
     "vue-router": "^4.6.4",
     "vuedraggable": "^4.1.0"
   },

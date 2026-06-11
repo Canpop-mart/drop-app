@@ -440,6 +440,72 @@
       </div>
     </div>
 
+    <!-- ═══ Collections tab ═══ -->
+    <!-- Curated store collections as clickable cards. Each opens the native
+         /store/collection/[id] page (games grid + "add entire collection"). -->
+    <div
+      v-else-if="activeTab === 'collections'"
+      class="mx-auto max-w-[1600px]"
+    >
+      <div
+        v-if="collectionsLoading && collections.length === 0"
+        class="py-10 text-sm text-zinc-500"
+      >
+        Loading collections...
+      </div>
+      <div
+        v-else-if="collections.length === 0"
+        class="py-20 text-center text-sm text-zinc-500"
+      >
+        No collections yet. The store's curated collections will show up here.
+      </div>
+      <div
+        v-else
+        class="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+      >
+        <button
+          v-for="c in collections"
+          :key="c.id"
+          class="group relative overflow-hidden rounded-2xl bg-zinc-900 text-left ring-1 ring-zinc-800/60 transition-all hover:-translate-y-1 hover:ring-blue-500/40"
+          @click="goToCollection(c.id)"
+        >
+          <div class="relative aspect-[16/9] overflow-hidden bg-zinc-800">
+            <img
+              v-if="c.coverObjectId"
+              :src="objectUrl(c.coverObjectId)"
+              :alt="c.name"
+              class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+            />
+            <div
+              v-else
+              class="flex h-full w-full items-center justify-center"
+            >
+              <RectangleStackIcon class="size-10 text-zinc-600" />
+            </div>
+            <div
+              class="absolute inset-0 bg-gradient-to-t from-zinc-950/90 via-zinc-950/20 to-transparent"
+            />
+            <div class="absolute inset-x-0 bottom-0 p-4">
+              <h3
+                class="font-display text-lg font-bold text-zinc-100 drop-shadow"
+              >
+                {{ c.name }}
+              </h3>
+              <p class="mt-0.5 text-xs text-zinc-400">
+                {{ c.gameCount }} game{{ c.gameCount === 1 ? "" : "s" }}
+              </p>
+            </div>
+          </div>
+          <p
+            v-if="c.description"
+            class="line-clamp-2 px-4 py-3 text-sm text-zinc-400"
+          >
+            {{ c.description }}
+          </p>
+        </button>
+      </div>
+    </div>
+
     <!-- Filter drawer — slides in from the right with advanced controls
          that don't belong in the chip row. Closed by default; opened via
          the "Filters" button. -->
@@ -609,9 +675,11 @@ import {
   XMarkIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  RectangleStackIcon,
 } from "@heroicons/vue/24/outline";
 import {
   useServerApi,
+  type StoreCollectionSummary,
   type StoreGame,
   type StoreTag,
   type TrendingGame,
@@ -640,7 +708,7 @@ import BannerFallback from "~/components/BannerFallback.vue";
 // were active — using query params would make every filter change
 // push a new history entry, which makes the back button useless.
 type StoredBrowseSnapshot = {
-  activeTab: "featured" | "browse";
+  activeTab: "featured" | "browse" | "collections";
   searchQuery: string;
   browseSort: "recent" | "updated" | "name";
   browsePage: number;
@@ -715,6 +783,7 @@ if (incomingGameId) {
 const tabs = [
   { label: "Featured", value: "featured" },
   { label: "Browse", value: "browse" },
+  { label: "Collections", value: "collections" },
 ] as const;
 
 // Refs seed directly from the snapshot (module state, falling back
@@ -1369,6 +1438,28 @@ async function loadLibraryMembership() {
   }
 }
 
+// ── Collections (curated store collections) ───────────────────────────────
+// Lazy-loaded the first time the user opens the Collections tab so the
+// Featured paint isn't blocked on a fetch they may never look at.
+const collections = ref<StoreCollectionSummary[]>([]);
+const collectionsLoading = ref(false);
+
+async function loadCollections() {
+  if (collections.value.length > 0 || collectionsLoading.value) return;
+  collectionsLoading.value = true;
+  try {
+    collections.value = await api.store.collections();
+  } catch (e) {
+    console.error("[STORE] Failed to load collections:", e);
+  } finally {
+    collectionsLoading.value = false;
+  }
+}
+
+function goToCollection(id: string) {
+  router.push(`/store/collection/${id}`);
+}
+
 // Build the server-side query — only the params the API actually
 // understands. CSV the tag IDs together since that's what /api/v1/store
 // expects (single `tags=a,b,c` query string).
@@ -1485,6 +1576,8 @@ onMounted(async () => {
   // kick off the fetch ourselves with the restored page + filters.
   if (activeTab.value === "browse") {
     loadBrowse(false);
+  } else if (activeTab.value === "collections") {
+    loadCollections();
   }
 });
 
@@ -1495,6 +1588,8 @@ onMounted(async () => {
 watch(activeTab, (tab) => {
   if (tab === "browse" && browseResults.value.length === 0 && !browseLoading.value) {
     loadBrowse(true);
+  } else if (tab === "collections") {
+    loadCollections();
   }
 });
 

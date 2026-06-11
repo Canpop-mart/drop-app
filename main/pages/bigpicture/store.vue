@@ -539,6 +539,162 @@
       </div>
     </div>
 
+    <!-- ═══ Collections tab ═══ -->
+    <div
+      v-else-if="activeTab === 'collections'"
+      class="flex-1 overflow-y-auto px-8 py-6"
+      data-bp-scroll
+    >
+      <!-- Detail view (in-page): a selected collection's games + bulk add. -->
+      <template v-if="viewingCollection">
+        <div class="mb-6 flex items-start gap-4">
+          <button
+            :ref="(el: any) => registerTab(el, { onSelect: closeCollection })"
+            class="bp-focus-delegate shrink-0 rounded-lg bg-zinc-800/60 p-2 text-zinc-100 transition-colors hover:bg-zinc-700"
+            @click="closeCollection"
+          >
+            <ArrowLeftIcon class="size-5" />
+          </button>
+          <div class="min-w-0 flex-1">
+            <h2 class="font-display text-3xl font-bold text-zinc-100">
+              {{ viewingCollection.name }}
+            </h2>
+            <p
+              v-if="viewingCollection.description"
+              class="mt-1 line-clamp-2 max-w-3xl text-sm text-zinc-400"
+            >
+              {{ viewingCollection.description }}
+            </p>
+          </div>
+          <button
+            v-if="viewingCollection.games.length > 0"
+            :ref="(el: any) => registerTab(el, { onSelect: addViewingCollectionToLibrary })"
+            :disabled="addingCollection || addedCollection"
+            class="bp-focus-delegate shrink-0 inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors disabled:opacity-50"
+            :class="
+              addedCollection
+                ? 'bg-emerald-600 text-white'
+                : 'bg-blue-600 text-white hover:bg-blue-500'
+            "
+            @click="addViewingCollectionToLibrary"
+          >
+            <CheckIcon v-if="addedCollection" class="size-4" />
+            <PlusIcon v-else class="size-4" />
+            {{
+              addedCollection
+                ? "Added to library"
+                : addingCollection
+                  ? "Adding…"
+                  : "Add entire collection"
+            }}
+          </button>
+        </div>
+
+        <div
+          v-if="viewingCollection.games.length > 0"
+          class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7"
+        >
+          <div
+            v-for="game in viewingCollection.games"
+            :key="game.id"
+            :ref="(el: any) => registerGrid(el, { onSelect: () => goToGame(game.id) })"
+            class="group bp-focus-delegate relative flex cursor-pointer flex-col rounded-xl transition-all duration-200"
+            @click="goToGame(game.id)"
+          >
+            <div
+              class="bp-focus-ring relative aspect-[3/4] overflow-hidden rounded-xl bg-zinc-800"
+            >
+              <img
+                v-if="game.mCoverObjectId"
+                :src="objectUrl(game.mCoverObjectId)"
+                :alt="game.mName"
+                class="h-full w-full object-cover"
+                loading="lazy"
+              />
+              <div
+                v-else
+                class="flex h-full w-full items-center justify-center"
+              >
+                <span class="text-2xl font-bold text-zinc-500">{{
+                  game.mName[0]
+                }}</span>
+              </div>
+              <div
+                class="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent"
+              />
+            </div>
+            <div class="bg-zinc-900/80 px-2 py-2">
+              <p class="truncate text-sm font-medium text-zinc-200">
+                {{ game.mName }}
+              </p>
+            </div>
+          </div>
+        </div>
+        <div v-else class="py-20 text-center text-zinc-500">
+          This collection has no games yet.
+        </div>
+      </template>
+
+      <!-- List view: curated collection cards. -->
+      <template v-else>
+        <div
+          v-if="collectionsLoading && collections.length === 0"
+          class="py-20 text-center text-zinc-500"
+        >
+          Loading collections...
+        </div>
+        <div v-else-if="collections.length === 0" class="py-24 text-center">
+          <RectangleStackIcon class="mx-auto mb-4 size-16 text-zinc-600" />
+          <h3 class="text-2xl font-semibold text-zinc-400">
+            No collections yet
+          </h3>
+        </div>
+        <div
+          v-else
+          class="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+        >
+          <div
+            v-for="c in collections"
+            :key="c.id"
+            :ref="(el: any) => registerGrid(el, { onSelect: () => openCollection(c.id) })"
+            class="group bp-focus-delegate relative cursor-pointer overflow-hidden rounded-2xl bg-zinc-900 ring-1 ring-zinc-800/60"
+            @click="openCollection(c.id)"
+          >
+            <div
+              class="bp-focus-ring relative aspect-[16/9] overflow-hidden bg-zinc-800"
+            >
+              <img
+                v-if="c.coverObjectId"
+                :src="objectUrl(c.coverObjectId)"
+                :alt="c.name"
+                class="h-full w-full object-cover"
+                loading="lazy"
+              />
+              <div
+                v-else
+                class="flex h-full w-full items-center justify-center"
+              >
+                <RectangleStackIcon class="size-10 text-zinc-600" />
+              </div>
+              <div
+                class="absolute inset-0 bg-gradient-to-t from-zinc-950/90 via-zinc-950/20 to-transparent"
+              />
+              <div class="absolute inset-x-0 bottom-0 p-4">
+                <h3
+                  class="font-display text-lg font-bold text-zinc-100 drop-shadow"
+                >
+                  {{ c.name }}
+                </h3>
+                <p class="mt-0.5 text-xs text-zinc-400">
+                  {{ c.gameCount }} game{{ c.gameCount === 1 ? "" : "s" }}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
     <!-- Floating bulk-action bar -->
     <Teleport to="body">
       <Transition
@@ -636,13 +792,15 @@
 
 <script setup lang="ts">
 import { devLog } from "~/composables/dev-mode";
-import { MagnifyingGlassIcon, ArrowsUpDownIcon, FunnelIcon, CheckIcon } from "@heroicons/vue/24/outline";
+import { MagnifyingGlassIcon, ArrowsUpDownIcon, FunnelIcon, CheckIcon, ArrowLeftIcon, PlusIcon, RectangleStackIcon } from "@heroicons/vue/24/outline";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
 import {
   useServerApi,
   type StoreGame,
   type TrendingGame,
   type RouletteResult,
+  type StoreCollectionSummary,
+  type StoreCollectionDetail,
 } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
 import { deduplicatedInvoke } from "~/composables/game";
@@ -888,6 +1046,63 @@ function goToGame(gameId?: string) {
   }).catch((e) => {
     console.error(`[BPM:STORE] Navigation FAILED for ${gameId}:`, e);
   });
+}
+
+// ── Collections (curated store collections) ───────────────────────────────
+// The Collections tab shows curated collection cards; selecting one opens an
+// in-page detail view (its games + an "add the whole thing" action) instead
+// of a separate route, so we reuse this page's existing focus groups.
+const collections = ref<StoreCollectionSummary[]>([]);
+const collectionsLoading = ref(false);
+const viewingCollection = ref<StoreCollectionDetail | null>(null);
+const addingCollection = ref(false);
+const addedCollection = ref(false);
+
+async function loadCollections() {
+  if (collections.value.length > 0 || collectionsLoading.value) return;
+  collectionsLoading.value = true;
+  try {
+    collections.value = await api.store.collections();
+  } catch (e) {
+    console.error("[BPM:STORE] Failed to load collections:", e);
+  } finally {
+    collectionsLoading.value = false;
+  }
+}
+
+async function openCollection(id: string) {
+  addedCollection.value = false;
+  try {
+    viewingCollection.value = await api.store.collection(id);
+    // Move controller focus onto the freshly-rendered games grid.
+    nextTick(() => focusNav.autoFocusContent("content"));
+  } catch (e) {
+    console.error("[BPM:STORE] Failed to load collection:", e);
+  }
+}
+
+function closeCollection() {
+  viewingCollection.value = null;
+  addedCollection.value = false;
+  nextTick(() => focusNav.autoFocusContent("content"));
+}
+
+async function addViewingCollectionToLibrary() {
+  if (
+    !viewingCollection.value ||
+    addingCollection.value ||
+    addedCollection.value
+  )
+    return;
+  addingCollection.value = true;
+  try {
+    await api.store.addCollectionToLibrary(viewingCollection.value.id);
+    addedCollection.value = true;
+  } catch (e) {
+    console.error("[BPM:STORE] Failed to add collection to library:", e);
+  } finally {
+    addingCollection.value = false;
+  }
 }
 
 // ── Bulk selection helpers ──────────────────────────────────────────────
@@ -1179,12 +1394,14 @@ watch(showBulkShelfPicker, (open) => {
 // Reload browse when tab switches to browse; persist tab across back-nav.
 watch(activeTab, (tab) => {
   focusNav.setRouteState("activeTab", tab);
+  // Leaving Browse mid-selection drops bulk state so the floating bar doesn't
+  // linger on an unrelated tab; leaving Collections resets any open detail.
+  if (tab !== "browse" && bulkSelectMode.value) exitBulkMode();
+  if (tab !== "collections") viewingCollection.value = null;
   if (tab === "browse") {
     loadBrowse(true);
-  } else if (bulkSelectMode.value) {
-    // Leaving browse while mid-selection — drop the bulk state so the
-    // floating bar doesn't linger on an unrelated tab.
-    exitBulkMode();
+  } else if (tab === "collections") {
+    loadCollections();
   }
 });
 
@@ -1250,6 +1467,10 @@ _unsubs.push(
       showFilterMenu.value = false;
       return;
     }
+    if (viewingCollection.value) {
+      closeCollection();
+      return;
+    }
     if (bulkSelectMode.value) {
       exitBulkMode();
       return;
@@ -1295,6 +1516,8 @@ onMounted(async () => {
     // render empty forever. Kick the fetch off manually here.
     if (activeTab.value === "browse") {
       loadBrowse(true);
+    } else if (activeTab.value === "collections") {
+      loadCollections();
     }
     nextTick(() => {
       if (!focusNav.restoreFocusSnapshot("/bigpicture/store")) {
@@ -1317,6 +1540,7 @@ onUnmounted(() => {
 const tabs = [
   { label: "Featured", value: "featured" },
   { label: "Browse", value: "browse" },
+  { label: "Collections", value: "collections" },
 ];
 </script>
 

@@ -41,6 +41,36 @@ export interface StoreTag {
   name: string;
 }
 
+// ── Store collection types ──────────────────────────────────────────────────
+
+/** One curated collection in the store-home Collections list (lightweight). */
+export interface StoreCollectionSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  coverObjectId: string | null;
+  gameCount: number;
+}
+
+/** A game as returned inside a store collection's detail payload. */
+export interface StoreCollectionGame {
+  id: string;
+  mName: string;
+  mShortDescription: string;
+  mCoverObjectId: string;
+  mBannerObjectId: string;
+  mIconObjectId: string;
+}
+
+/** A store collection plus its games, for the collection landing page. */
+export interface StoreCollectionDetail {
+  id: string;
+  name: string;
+  description: string | null;
+  coverObjectId: string | null;
+  games: StoreCollectionGame[];
+}
+
 // ── Community types ─────────────────────────────────────────────────────────
 
 export interface CommunityStats {
@@ -493,6 +523,25 @@ export function useServerApi() {
 
       /** Get all available tags. */
       tags: () => apiFetch<StoreTag[]>("api/v1/store/tags"),
+
+      /** Curated store collections (public + featured) for the Collections tab. */
+      collections: () =>
+        apiFetch<StoreCollectionSummary[]>("api/v1/store/collection"),
+
+      /** One store collection with its games, for the collection landing page. */
+      collection: (id: string) =>
+        apiFetch<StoreCollectionDetail>(`api/v1/store/collection/${id}`),
+
+      /**
+       * Add an entire collection to the caller's library: every game is added
+       * to their library and a personal copy of the collection is saved as a
+       * shelf. Returns the new shelf id and the number of games added.
+       */
+      addCollectionToLibrary: (id: string) =>
+        apiFetch<{ shelfId: string; gameCount: number }>(
+          `api/v1/store/collection/${id}/add-to-library`,
+          { method: "POST" },
+        ),
     },
 
     community: {
