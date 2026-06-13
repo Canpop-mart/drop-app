@@ -63,6 +63,26 @@ pub fn add_download_dir(new_dir: PathBuf) -> Result<(), DownloadManagerError<()>
     Ok(())
 }
 
+/// Opens an install directory (by its index in the configured list) in the
+/// platform file manager, mirroring `delete_download_dir`'s index-based
+/// access so the frontend can reuse the `dirIdx` it already has.
+#[tauri::command]
+pub fn open_download_dir(index: usize, app_handle: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = {
+        let lock = borrow_db_checked();
+        lock.applications
+            .install_dirs
+            .get(index)
+            .cloned()
+            .ok_or_else(|| format!("No install directory at index {index}"))?
+    };
+    app_handle
+        .opener()
+        .open_path(dir.display().to_string(), None::<&str>)
+        .map_err(|e| format!("Failed to open install directory: {e}"))
+}
+
 /// Keys the frontend is allowed to patch via `update_settings`. Must stay in
 /// sync with `Settings` field names (camelCase serde form).
 const ALLOWED_SETTINGS_KEYS: &[&str] = &[
@@ -470,4 +490,132 @@ pub fn open_steam_keyboard(app_handle: tauri::AppHandle) -> Result<(), String> {
         .opener()
         .open_url("steam://open/keyboard", None::<&str>)
         .map_err(|e| format!("Failed to open Steam keyboard: {}", e))
+}
+
+// ── Windows Defender "safe zone" ─────────────────────────────────────────
+// Cracked game payloads (OnlineFix/Goldberg DLLs, repacks) and Drop's own
+// unsigned binary routinely trip Defender heuristics → quarantine → broken
+// installs and launches. We let the user carve out the paths Drop owns.
+//
+// Reading the current exclusion LIST requires admin, so the unelevated status
+// only reports real-time-protection state + the paths we'd manage. Adding the
+// exclusions spawns one UAC-elevated PowerShell — the UAC prompt is the
+// consent. Everything here is a no-op off Windows.
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefenderStatus {
+    /// False off Windows / when Defender cmdlets are unavailable.
+    pub supported: bool,
+    /// Real-time protection on? None when unknown. Readable unelevated.
+    pub realtime_enabled: Option<bool>,
+    /// Paths Drop would exclude: games dirs + data dir + install dir. (The
+    /// live exclusion list can't be read without admin, so we surface what
+    /// we'd add rather than what's already there.)
+    pub managed_paths: Vec<String>,
+}
+
+/// Games install dirs + Drop's data dir + Drop's own install dir.
+fn defender_managed_paths() -> Vec<String> {
+    let mut paths: Vec<String> = {
+        let lock = borrow_db_checked();
+        lock.applications
+            .install_dirs
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect()
+    };
+    paths.push(DATA_ROOT_DIR.to_string_lossy().to_string());
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            paths.push(dir.to_string_lossy().to_string());
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+#[tauri::command]
+pub fn get_defender_status() -> DefenderStatus {
+    let managed_paths = defender_managed_paths();
+    #[cfg(windows)]
+    {
+        let realtime_enabled = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "(Get-MpComputerStatus).RealTimeProtectionEnabled",
+            ])
+            .output()
+            .ok()
+            .and_then(|o| {
+                match String::from_utf8_lossy(&o.stdout).trim().to_lowercase().as_str() {
+                    "true" => Some(true),
+                    "false" => Some(false),
+                    _ => None,
+                }
+            });
+        DefenderStatus {
+            supported: true,
+            realtime_enabled,
+            managed_paths,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        DefenderStatus {
+            supported: false,
+            realtime_enabled: None,
+            managed_paths,
+        }
+    }
+}
+
+#[tauri::command]
+pub fn add_defender_exclusions() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let paths = defender_managed_paths();
+        if paths.is_empty() {
+            return Err("No Drop paths to exclude".to_string());
+        }
+        // PowerShell array of single-quoted paths (escape embedded quotes).
+        let ps_array = paths
+            .iter()
+            .map(|p| format!("'{}'", p.replace('\'', "''")))
+            .collect::<Vec<_>>()
+            .join(",");
+        let inner = format!("Add-MpPreference -ExclusionPath {ps_array}");
+        // Base64(UTF-16LE) the inner command for -EncodedCommand so we never
+        // fight nested PowerShell quoting across the elevation hop.
+        let encoded = {
+            use base64::{engine::general_purpose::STANDARD, Engine};
+            let utf16: Vec<u8> =
+                inner.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+            STANDARD.encode(utf16)
+        };
+        // Start-Process -Verb RunAs raises the UAC prompt — that IS the
+        // consent. -Wait blocks until the elevated process exits; declining
+        // UAC makes Start-Process throw, so the outer shell exits non-zero.
+        let outer = format!(
+            "Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden \
+             -ArgumentList '-NoProfile','-EncodedCommand','{encoded}'"
+        );
+        let status = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &outer])
+            .status()
+            .map_err(|e| format!("Failed to start elevated PowerShell: {e}"))?;
+        if !status.success() {
+            return Err(
+                "Couldn't add the Defender exclusions — the elevation prompt may have been declined."
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Windows Defender exclusions only apply on Windows.".to_string())
+    }
 }

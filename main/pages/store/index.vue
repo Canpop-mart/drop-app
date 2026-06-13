@@ -560,6 +560,43 @@
               placeholder="Search tags..."
               class="w-full rounded-md border border-zinc-700 bg-zinc-800/50 px-3 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-500 focus:ring-2 focus:ring-blue-500 outline-none mb-2"
             />
+            <!-- Match mode — only meaningful with 2+ tags selected. "All
+                 tags" sends tagMode=and (intersection); "Any tag" is the
+                 default union. -->
+            <div
+              v-if="selectedTagIds.length >= 2"
+              class="mb-2 flex items-center gap-2"
+            >
+              <span class="text-xs text-zinc-500">Match</span>
+              <div
+                class="inline-flex overflow-hidden rounded-md ring-1 ring-zinc-700"
+              >
+                <button
+                  type="button"
+                  class="px-2.5 py-1 text-xs transition-colors"
+                  :class="
+                    tagMode === 'and'
+                      ? 'bg-blue-600 text-white'
+                      : 'text-zinc-400 hover:bg-zinc-800'
+                  "
+                  @click="setTagMode('and')"
+                >
+                  All tags
+                </button>
+                <button
+                  type="button"
+                  class="px-2.5 py-1 text-xs transition-colors"
+                  :class="
+                    tagMode === 'or'
+                      ? 'bg-blue-600 text-white'
+                      : 'text-zinc-400 hover:bg-zinc-800'
+                  "
+                  @click="setTagMode('or')"
+                >
+                  Any tag
+                </button>
+              </div>
+            </div>
             <div class="max-h-64 overflow-y-auto pr-1 space-y-1">
               <label
                 v-for="tag in filteredTagList"
@@ -713,6 +750,7 @@ type StoredBrowseSnapshot = {
   browseSort: "recent" | "updated" | "name";
   browsePage: number;
   selectedTagIds: string[];
+  tagMode: "and" | "or";
   selectedLibraryId: string;
   selectedPlatforms: string[];
   emulatedFilter: "all" | "native" | "rom";
@@ -846,6 +884,10 @@ const browseSort = ref<"recent" | "updated" | "name">(
 const selectedTagIds = ref<string[]>(
   initial?.selectedTagIds ? [...initial.selectedTagIds] : [],
 );
+// How multiple selected tags combine: "or" = any (default), "and" = all
+// (intersection). Only meaningful with 2+ tags selected; the toggle and the
+// query param are both gated on that.
+const tagMode = ref<"and" | "or">(initial?.tagMode ?? "or");
 const selectedLibraryId = ref<string>(initial?.selectedLibraryId ?? "");
 const selectedPlatforms = ref<string[]>(
   initial?.selectedPlatforms
@@ -1009,6 +1051,14 @@ function toggleTag(tagId: string) {
   if (i === -1) selectedTagIds.value.push(tagId);
   else selectedTagIds.value.splice(i, 1);
   loadBrowse(true);
+}
+
+function setTagMode(mode: "and" | "or") {
+  if (tagMode.value === mode) return;
+  tagMode.value = mode;
+  // Only re-query when 2+ tags are selected — with 0 or 1 tag the mode
+  // doesn't change the result set.
+  if (selectedTagIds.value.length >= 2) loadBrowse(true);
 }
 
 function togglePlatform(platform: string) {
@@ -1479,6 +1529,12 @@ function buildBrowseParams(skip: number): BrowseParams {
     tags: selectedTagIds.value.length
       ? selectedTagIds.value.join(",")
       : undefined,
+    // Only send the non-default "and" when it actually changes the result
+    // (2+ tags). Keeps the common single-tag query clean.
+    tagMode:
+      selectedTagIds.value.length >= 2 && tagMode.value === "and"
+        ? "and"
+        : undefined,
     library: selectedLibraryId.value || undefined,
     platform: selectedPlatforms.value.length
       ? selectedPlatforms.value.join(",")
@@ -1552,6 +1608,7 @@ function snapshotBrowseState() {
     browseSort: browseSort.value,
     browsePage: browsePage.value,
     selectedTagIds: [...selectedTagIds.value],
+    tagMode: tagMode.value,
     selectedLibraryId: selectedLibraryId.value,
     selectedPlatforms: [...selectedPlatforms.value],
     emulatedFilter: emulatedFilter.value,
@@ -1605,6 +1662,7 @@ watch(
     searchQuery,
     browseSort,
     selectedTagIds,
+    tagMode,
     selectedLibraryId,
     selectedPlatforms,
     emulatedFilter,

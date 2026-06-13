@@ -50,6 +50,14 @@
         </div>
         <div class="flex shrink-0 items-center gap-x-6">
           <button
+            @click="() => openDirectory(dirIdx)"
+            class="-m-2.5 block p-2.5 text-zinc-400 hover:text-zinc-100"
+            title="Open in file explorer"
+          >
+            <span class="sr-only">Open in file explorer</span>
+            <FolderOpenIcon class="size-5" aria-hidden="true" />
+          </button>
+          <button
             @click="() => deleteDirectory(dirIdx)"
             :disabled="dirs.length <= 1"
             :class="[
@@ -59,12 +67,57 @@
               '-m-2.5 block p-2.5',
             ]"
           >
-            <span class="sr-only">Open options</span>
+            <span class="sr-only">Delete directory</span>
             <TrashIcon class="size-5" aria-hidden="true" />
           </button>
         </div>
       </li>
     </ul>
+
+    <!-- Antivirus (Windows Defender) — offer to exclude Drop's folders so
+         cracked game files (and Drop itself) stop getting quarantined, which
+         silently breaks installs and launches. Windows-only. -->
+    <div v-if="defender?.supported" class="border-t border-zinc-600 py-6">
+      <h3 class="text-base font-display font-semibold text-zinc-100">
+        Antivirus protection
+      </h3>
+      <p class="mt-1 text-sm text-zinc-400 max-w-xl">
+        Windows Defender sometimes quarantines game files — and Drop itself —
+        which breaks installs and launches. Add Drop's folders to Defender's
+        exclusion list so it leaves them alone. Windows will ask you to confirm
+        with an admin (UAC) prompt.
+      </p>
+      <div class="mt-3 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          @click="addExclusions"
+          :disabled="defenderBusy"
+          class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:bg-blue-600/50 disabled:cursor-not-allowed"
+        >
+          {{
+            defenderBusy
+              ? "Waiting for confirmation…"
+              : "Protect Drop's folders"
+          }}
+        </button>
+        <span v-if="defenderDone" class="text-sm text-green-400">
+          Exclusions added.
+        </span>
+        <span
+          v-else-if="defender.realtimeEnabled === false"
+          class="text-sm text-amber-400"
+        >
+          Real-time protection is currently off.
+        </span>
+      </div>
+      <p v-if="defenderError" class="mt-2 text-sm text-red-400">
+        {{ defenderError }}
+      </p>
+      <p class="mt-3 text-xs text-zinc-500 break-all">
+        Will exclude: {{ defender.managedPaths.join("  •  ") }}
+      </p>
+    </div>
+
     <div class="border-t border-zinc-600 py-6">
       <h3 class="text-base font-display font-semibold text-zinc-100">
         Download Settings
@@ -251,6 +304,7 @@ import {
   TransitionRoot,
 } from "@headlessui/vue";
 import { FolderIcon, TrashIcon, XCircleIcon } from "@heroicons/vue/16/solid";
+import { FolderOpenIcon } from "@heroicons/vue/24/solid";
 import { invoke } from "@tauri-apps/api/core";
 import { Switch } from "@headlessui/vue";
 import { type Settings } from "~/types";
@@ -271,12 +325,46 @@ const saveState = reactive({
   success: false,
 });
 
+type DefenderStatus = {
+  supported: boolean;
+  realtimeEnabled: boolean | null;
+  managedPaths: string[];
+};
+const defender = ref<DefenderStatus | null>(null);
+const defenderBusy = ref(false);
+const defenderDone = ref(false);
+const defenderError = ref<string | undefined>(undefined);
+
+async function loadDefender() {
+  try {
+    defender.value = await invoke<DefenderStatus>("get_defender_status");
+  } catch {
+    defender.value = null;
+  }
+}
+
+async function addExclusions() {
+  defenderError.value = undefined;
+  defenderDone.value = false;
+  defenderBusy.value = true;
+  try {
+    await invoke("add_defender_exclusions");
+    defenderDone.value = true;
+    await loadDefender();
+  } catch (e) {
+    defenderError.value = typeof e === "string" ? e : String(e);
+  } finally {
+    defenderBusy.value = false;
+  }
+}
+
 async function updateDirs() {
   const newDirs = await invoke<Array<string>>("fetch_download_dir_stats");
   dirs.value = newDirs;
 }
 
 await updateDirs();
+await loadDefender();
 
 async function selectDirectoryDialog(): Promise<string> {
   const res = await invoke("plugin:dialog|open", {
@@ -320,6 +408,10 @@ async function submitDirectory() {
     error.value = e as string;
     createDirectoryLoading.value = false;
   }
+}
+
+async function openDirectory(index: number) {
+  await invoke("open_download_dir", { index });
 }
 
 async function deleteDirectory(index: number) {

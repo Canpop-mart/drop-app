@@ -70,6 +70,11 @@ struct CompatResultPayload<'a> {
     notes: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     log_excerpt: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    game_version_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    multiplayer_ok: Option<bool>,
+    source: &'a str,
 }
 
 /// Data the frontend sees when a test finishes. Kept narrow on purpose —
@@ -383,6 +388,9 @@ pub async fn confirm_compat_render(
         None,
         notes.as_deref(),
         None,
+        "worker",
+        None,
+        None,
     )
     .await;
     match &outcome {
@@ -410,6 +418,9 @@ async fn finish(
         proton_version,
         opts.notes.as_deref(),
         log_tail.as_deref(),
+        "worker",
+        None,
+        None,
     )
     .await
     {
@@ -565,6 +576,9 @@ async fn post_result(
     proton_version: Option<&str>,
     notes: Option<&str>,
     log_excerpt: Option<&str>,
+    source: &str,
+    game_version_id: Option<&str>,
+    multiplayer_ok: Option<bool>,
 ) -> Result<(), RemoteAccessError> {
     let url = generate_url(&["api", "v1", "client", "compat", "results"], &[])?;
     // Trim log to keep request bodies bounded; the server caps it server-side
@@ -584,6 +598,9 @@ async fn post_result(
         proton_version,
         notes,
         log_excerpt: trimmed_log,
+        game_version_id,
+        multiplayer_ok,
+        source,
     };
 
     let response = make_authenticated_post(url, &payload).await?;
@@ -595,6 +612,100 @@ async fn post_result(
         )));
     }
     Ok(())
+}
+
+/// Report a REAL user launch's outcome to the compat dataset (source="launch"),
+/// distinct from the test worker's deliberate runs ("worker"). Maps the raw
+/// exit to a coarse status — we can't observe rendering like the worker, so a
+/// clean, non-trivial run is our proxy for "it worked". Ships a log excerpt
+/// only on failure (a success is a few bytes). Best-effort; a failed POST is
+/// logged, never surfaced to the user.
+pub async fn report_launch_outcome(
+    game_id: &str,
+    game_version_id: Option<&str>,
+    exit_code: Option<i32>,
+    terminated_by_signal: bool,
+    manually_killed: bool,
+    elapsed_secs: u64,
+    wait_failed: bool,
+) {
+    const SUSPICIOUS_SECS: u64 = 2;
+    let status = if wait_failed {
+        CompatStatus::NoLaunch
+    } else if manually_killed {
+        // The user quit — it launched and ran long enough to be killed.
+        CompatStatus::AliveRenders
+    } else if terminated_by_signal || matches!(exit_code, Some(c) if c != 0) {
+        CompatStatus::Crash
+    } else if elapsed_secs < SUSPICIOUS_SECS {
+        // Clean but near-instant exit — almost always a failed launch.
+        CompatStatus::EarlyExit
+    } else {
+        CompatStatus::AliveRenders
+    };
+
+    // Only ship a log excerpt for failures; successes stay tiny.
+    let log = match status {
+        CompatStatus::Crash | CompatStatus::EarlyExit | CompatStatus::NoLaunch => {
+            read_log_safe(game_id)
+        }
+        _ => None,
+    };
+    let proton_version = detect_proton_version();
+    if let Err(e) = post_result(
+        game_id,
+        status,
+        None,
+        proton_version.as_deref(),
+        None,
+        log.as_deref(),
+        "launch",
+        game_version_id,
+        None,
+    )
+    .await
+    {
+        warn!("[compat] launch-outcome report failed for {game_id}: {e}");
+    }
+}
+
+/// Shape of the `game_launch_outcome` event the process manager emits on every
+/// game exit (camelCase to match the JSON it serialises).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LaunchOutcomeEvent {
+    game_id: String,
+    version_id: Option<String>,
+    exit_code: Option<i32>,
+    terminated_by_signal: bool,
+    manually_killed: bool,
+    elapsed_secs: u64,
+    wait_failed: bool,
+}
+
+/// Register the per-launch compat reporter: listen for `game_launch_outcome`
+/// and turn each into a best-effort telemetry POST via [`report_launch_outcome`].
+/// Call once at startup from the Tauri `setup` hook.
+pub fn register_launch_telemetry(app: &tauri::AppHandle) {
+    use tauri::Listener as _;
+    app.listen("game_launch_outcome", |event| {
+        let Ok(o) = serde_json::from_str::<LaunchOutcomeEvent>(event.payload()) else {
+            warn!("[compat] malformed game_launch_outcome payload");
+            return;
+        };
+        tauri::async_runtime::spawn(async move {
+            report_launch_outcome(
+                &o.game_id,
+                o.version_id.as_deref(),
+                o.exit_code,
+                o.terminated_by_signal,
+                o.manually_killed,
+                o.elapsed_secs,
+                o.wait_failed,
+            )
+            .await;
+        });
+    });
 }
 
 /// Returns the tail of the most recent per-launch log for `game_id`, or

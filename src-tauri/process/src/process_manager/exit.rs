@@ -145,6 +145,26 @@ impl ProcessManager<'_> {
             );
         }
 
+        // Auto-report this launch's outcome to the compat dataset (source
+        // "launch") so real plays build the per-version, multiplayer-aware
+        // compatibility picture — not just the test worker. Fire-and-forget;
+        // the main-crate listener turns this into the actual POST.
+        let _ = self.app_handle.emit(
+            "game_launch_outcome",
+            serde_json::json!({
+                "gameId": &game_id,
+                "versionId": &meta.version,
+                "exitCode": result.as_ref().ok().and_then(|s| s.code()),
+                "terminatedBySignal": result
+                    .as_ref()
+                    .map(|s| s.code().is_none())
+                    .unwrap_or(false),
+                "manuallyKilled": manually_killed,
+                "elapsedSecs": elapsed.as_secs(),
+                "waitFailed": result.is_err(),
+            }),
+        );
+
         // Push the post-exit status to the frontend.
         let version_data = db_handle
             .applications

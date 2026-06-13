@@ -304,6 +304,9 @@ pub fn run() {
             fetch_game,
             add_download_dir,
             delete_download_dir,
+            open_download_dir,
+            get_defender_status,
+            add_defender_exclusions,
             fetch_download_dir_stats,
             fetch_game_status,
             fetch_game_statuses,
@@ -402,6 +405,10 @@ pub fn run() {
         ))
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // Per-launch compat reporting: every game exit emits
+            // `game_launch_outcome`; this turns each into a telemetry POST.
+            crate::compat::register_launch_telemetry(&handle);
 
             tauri::async_runtime::block_on(async move {
                 let state = setup(handle.clone()).await;

@@ -43,6 +43,10 @@ pub enum ProcessError {
     /// A native launch found a Windows binary and must fall back to compat.
     /// Carries the binary path. Handled internally as a fallback trigger.
     NeedsCompat(String),
+    /// The resolved launch target doesn't exist on disk. Usual cause:
+    /// antivirus (Defender) quarantining a game exe or crack DLL. Carries
+    /// the missing path.
+    LaunchTargetMissing(String),
 }
 
 impl Display for ProcessError {
@@ -68,6 +72,12 @@ impl Display for ProcessError {
                  It needs a compatibility layer (Proton/UMU). Check that the game's \
                  platform is set to Windows and that Proton is configured in settings.",
                 binary
+            ),
+            ProcessError::LaunchTargetMissing(path) => &format!(
+                "Launch file is missing: '{}'. It may have been removed by antivirus \
+                 (Windows Defender). Verify or re-download the game, and consider adding \
+                 it to your Defender exclusions in Settings.",
+                path
             ),
         };
         write!(f, "{s}")

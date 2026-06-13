@@ -347,9 +347,22 @@ impl ProcessManager<'_> {
         let working_dir = effective_cwd.as_deref().unwrap_or(install_dir);
         let mut parsed_launch = ParsedCommand::parse(target_launch_string.clone())?;
         let executable_name = parsed_launch.command.clone();
-        let working_dir_owned = working_dir.to_string();
         let game_install_dir_owned = install_dir.to_string();
         parsed_launch.make_absolute(working_dir.into());
+        // Launch from the executable's OWN directory for normal games: this
+        // matches double-clicking the .exe, and stays correct when an install
+        // nests the game one folder deep (otherwise CWD sits a level above the
+        // binary and CWD-relative lookups silently fail — Goldberg runtime
+        // state, a game loading data past its first menu, etc.). Emulator
+        // launches keep their effective_cwd (the emulator install dir).
+        let working_dir_owned = if effective_cwd.is_some() {
+            working_dir.to_string()
+        } else {
+            std::path::Path::new(&parsed_launch.command)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| working_dir.to_string())
+        };
 
         let format_args = DropFormatArgs::new(
             target_launch_string,
@@ -405,6 +418,26 @@ impl ProcessManager<'_> {
             "env_vars": &launch_parameters.0.env,
             "working_dir": &working_dir_owned,
         }));
+
+        // Pre-launch guard: if the resolved target is an absolute path that no
+        // longer exists, fail with a clear, actionable error instead of a
+        // silent/black-screen launch — the usual cause is antivirus removing a
+        // game exe or crack DLL. Only fires for absolute, missing paths:
+        // Proton/emulator launches resolve `command` to their wrapper (which
+        // exists), and relative/PATH-resolved commands are left to spawn.
+        {
+            let cmd_path = std::path::Path::new(&launch_parameters.0.command);
+            if cmd_path.is_absolute() && !cmd_path.exists() {
+                info!(
+                    "[LAUNCH] target missing (likely quarantined), refusing: {}",
+                    launch_parameters.0.command
+                );
+                return Err(ProcessError::LaunchTargetMissing(
+                    launch_parameters.0.command.clone(),
+                ));
+            }
+        }
+
         info!(
             "[LAUNCH] spawning (cwd {}): {:?}",
             launch_parameters.1.to_string_lossy(),

@@ -493,6 +493,8 @@ export function useServerApi() {
           take?: number;
           q?: string;
           tags?: string;
+          /** How multiple tags combine server-side: "or" = any (default), "and" = all. */
+          tagMode?: "and" | "or";
           platform?: string;
           library?: string;
           sort?:
@@ -511,6 +513,7 @@ export function useServerApi() {
         if (params.take) qs.set("take", String(params.take));
         if (params.q) qs.set("q", params.q);
         if (params.tags) qs.set("tags", params.tags);
+        if (params.tagMode) qs.set("tagMode", params.tagMode);
         if (params.platform) qs.set("platform", params.platform);
         if (params.library) qs.set("library", params.library);
         if (params.sort) qs.set("sort", params.sort);
