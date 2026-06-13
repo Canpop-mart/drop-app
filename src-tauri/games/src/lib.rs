@@ -1,5 +1,3 @@
-#![feature(lock_value_accessors)]
-
 pub mod collections;
 pub mod downloads;
 pub mod library;

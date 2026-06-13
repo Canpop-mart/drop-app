@@ -526,10 +526,10 @@ fn defender_managed_paths() -> Vec<String> {
             .collect()
     };
     paths.push(DATA_ROOT_DIR.to_string_lossy().to_string());
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            paths.push(dir.to_string_lossy().to_string());
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        paths.push(dir.to_string_lossy().to_string());
     }
     paths.sort();
     paths.dedup();

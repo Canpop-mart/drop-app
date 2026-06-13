@@ -569,6 +569,7 @@ fn detect_proton_version() -> Option<String> {
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn post_result(
     game_id: &str,
     status: CompatStatus,

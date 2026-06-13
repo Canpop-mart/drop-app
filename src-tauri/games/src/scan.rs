@@ -20,7 +20,7 @@
 //!     → import as a complete install (`InstalledGameType::Installed`).
 //!   - `.dropdata` present but `contexts` empty or **any** flag `false`
 //!     → import as `PartiallyInstalled` so the user resumes/repairs rather
-//!       than launching a broken game.
+//!     than launching a broken game.
 //!
 //! The DB still owns the source of truth; the scan only fills gaps. A game
 //! already in `game_statuses` is left untouched.

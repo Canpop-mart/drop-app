@@ -506,15 +506,15 @@ impl GameDownloadAgent {
     ///
     /// Returns:
     ///   - `Ok(true)`  — every manifest file is present at the right size
-    ///                   and every chunk hashes correctly. The caller may
-    ///                   transition the game to `Installed`.
+    ///     and every chunk hashes correctly. The caller may
+    ///     transition the game to `Installed`.
     ///   - `Err(ValidationFailed)` — the install does not match the
-    ///                   manifest. A `bool` of `false` is deliberately NOT
-    ///                   returned here: in the download manager loop `false`
-    ///                   means "re-run download", which for a genuinely
-    ///                   incomplete upstream (the LWIW case) would loop
-    ///                   forever. An error surfaces a clear message to the
-    ///                   user and aborts the install instead.
+    ///     manifest. A `bool` of `false` is deliberately NOT
+    ///     returned here: in the download manager loop `false`
+    ///     means "re-run download", which for a genuinely
+    ///     incomplete upstream (the LWIW case) would loop
+    ///     forever. An error surfaces a clear message to the
+    ///     user and aborts the install instead.
     pub fn validate(&self, app_handle: &AppHandle) -> Result<bool, ApplicationDownloadError> {
         self.setup_validate(app_handle);
 

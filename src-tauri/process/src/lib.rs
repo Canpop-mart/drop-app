@@ -1,7 +1,7 @@
 #![feature(nonpoison_mutex)]
 #![feature(sync_nonpoison)]
 #![feature(extend_one)]
-#![feature(vec_try_remove)]
+#![cfg_attr(target_os = "linux", feature(vec_try_remove))]
 
 use std::{
     collections::HashMap,

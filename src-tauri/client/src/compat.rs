@@ -23,10 +23,15 @@ fn create_new_compat_info() -> Option<CompatInfo> {
     #[cfg(target_os = "windows")]
     return None;
 
-    let has_umu_installed = UMU_LAUNCHER_EXECUTABLE.is_some();
-    Some(CompatInfo {
-        umu_installed: has_umu_installed,
-    })
+    // cfg-gated so the Windows build (where the early return above always
+    // fires) doesn't flag the umu detection below as an unreachable statement.
+    #[cfg(not(target_os = "windows"))]
+    {
+        let has_umu_installed = UMU_LAUNCHER_EXECUTABLE.is_some();
+        Some(CompatInfo {
+            umu_installed: has_umu_installed,
+        })
+    }
 }
 
 const UMU_BASE_LAUNCHER_EXECUTABLE: &str = "umu-run";
