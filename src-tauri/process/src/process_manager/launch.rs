@@ -282,6 +282,14 @@ impl ProcessManager<'_> {
                 &mut emulator_rom_path,
             )?
         } else {
+            // Resolve the executable against the install dir *before* wrapping
+            // it in umu-run. A relative path (e.g. "FarFarWest/FarFarWest.exe")
+            // would otherwise resolve against umu-run's own cwd, so Proton boots
+            // the prefix, finds no exe, and exits 0 — the game never launches.
+            // The NeedsCompat fallback below already does this for the same
+            // reason; the direct Windows/Proton path was the one place missing
+            // it (umu then derives the game's own working dir from the abs exe).
+            target_command.make_absolute(PathBuf::from(install_dir));
             let reconstructed_cmd = target_command.reconstruct();
             let _ = self.app_handle.emit("launch_trace", serde_json::json!({
                 "step": "4_direct_launch",
