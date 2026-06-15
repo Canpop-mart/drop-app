@@ -15,6 +15,11 @@ use crate::process_manager::ProcessManager;
 
 pub static PROCESS_MANAGER: ProcessManagerWrapper = ProcessManagerWrapper::new();
 
+/// Process-launch AppHandle, set once during init. Lets launch-path code that
+/// has no AppHandle of its own (e.g. `prefix_prep`) emit Tauri events so the
+/// UI can surface a "Preparing…" status during slow one-time prefix setup.
+pub static LAUNCH_APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
 /// Global registry of pending conflict resolution channels.
 /// Key: game_id → Sender that unblocks the pre-launch sync.
 pub static CONFLICT_CHANNELS: std::sync::LazyLock<
@@ -38,6 +43,7 @@ impl ProcessManagerWrapper {
         ProcessManagerWrapper(OnceLock::new())
     }
     pub fn init(app_handle: AppHandle) {
+        let _ = LAUNCH_APP_HANDLE.set(app_handle.clone());
         if PROCESS_MANAGER
             .0
             .set(Mutex::new(ProcessManager::new(app_handle)))

@@ -42,6 +42,8 @@
       :game-stats="stats.gameStats"
       :dev-mode="devMode"
       :players="friendsExcludingMe"
+      :launch-in-flight="launchCtl.launchInFlight.value"
+      :prep-status="launchCtl.prepStatus.value"
       @install="installCtl.openInstallFlow()"
       @launch="launchCtl.launch()"
       @launch-incognito="launchCtl.launchIncognito()"

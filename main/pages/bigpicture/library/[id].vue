@@ -1896,6 +1896,20 @@ useListen<{ step: string; game_id: string }>("launch_trace", (event) => {
   if (label) launchStatus.value = label;
 });
 
+// Precise prep status from the backend during a slow, blocking one-time
+// prefix-prep step (e.g. installing the VC++ runtime via winetricks before a
+// umu/Proton launch). Reuses the same launchStatus line as launch_trace — the
+// message wins while prep is active, and the watch below clears it once the
+// launch settles. Linux-only by nature (the backend only emits it on Proton
+// launches).
+useListen<{ gameId: string; active: boolean; message: string }>(
+  "game_prep_status",
+  (event) => {
+    if (event.payload.gameId !== gameId) return;
+    if (event.payload.active) launchStatus.value = event.payload.message;
+  },
+);
+
 // Clear the transient status line when running-state settles or launch errors.
 watch([launchInFlight, () => status.value?.type], ([inFlight, type]) => {
   if (!inFlight && type !== "Running") launchStatus.value = null;

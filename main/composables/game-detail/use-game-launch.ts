@@ -13,6 +13,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { InstalledType } from "~/types";
 import type { Game, GameStatus } from "~/types";
 import type { LaunchResult } from "~/composables/game";
@@ -33,6 +34,29 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
   // `AlreadyRunning`, which would otherwise show an error over a game that's
   // actually starting fine.
   const launchInFlight = ref(false);
+
+  // Precise "Preparing…" message emitted by the backend during a slow,
+  // blocking one-time prefix-prep step (e.g. installing the VC++ runtime via
+  // winetricks before a umu/Proton launch). The first `launch_game` invoke
+  // doesn't return until prep finishes, so without this the window looks
+  // frozen. `undefined` = no prep in flight. Linux-only by nature — the
+  // backend only ever emits this on Proton launches.
+  const prepStatus = ref<string | undefined>(undefined);
+
+  // Listen for backend prep-status events, scoped to this game. The payload
+  // carries the game id (so a sibling page doesn't react), an `active` flag,
+  // and the message to show while active.
+  const unlistenPrepStatus = listen<{
+    gameId: string;
+    active: boolean;
+    message: string;
+  }>("game_prep_status", (event) => {
+    if (event.payload.gameId !== game.id) return;
+    prepStatus.value = event.payload.active ? event.payload.message : undefined;
+  });
+  onScopeDispose(() => {
+    unlistenPrepStatus.then((unlisten) => unlisten());
+  });
 
   // Incognito mode for the *next* launch. When true, the backend won't
   // open a PlaySession, won't heartbeat, won't update Playtime, and won't
@@ -134,6 +158,9 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
       notifyLaunchFailure("run", e);
     } finally {
       launchInFlight.value = false;
+      // The invoke has returned, so any prep step the backend ran is done —
+      // clear the indicator in case a final "clear" event was missed.
+      prepStatus.value = undefined;
     }
   }
 
@@ -169,5 +196,7 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
     uninstall,
     resumeDownload,
     incognitoActive,
+    launchInFlight,
+    prepStatus,
   };
 }

@@ -39,6 +39,8 @@ const REDIST_MARKER: &str = ".drop-redists-v1";
 
 /// Prepare a Proton prefix for a umu launch, running both independent branches.
 ///
+/// * `game_id`     — the game's id, used only to scope the `game_prep_status`
+///   UI events so the right game-detail page picks them up.
 /// * `install_dir` — the game's install directory (working dir of the launch).
 /// * `exe_path`    — the absolute path to the launch executable. Used to sniff
 ///   the PE import table (Branch A) and to locate the OnlineFix payload
@@ -53,6 +55,7 @@ const REDIST_MARKER: &str = ".drop-redists-v1";
 /// targets, or when nothing applies, the returned `Vec` is empty.
 #[cfg(target_os = "linux")]
 pub fn prepare_prefix(
+    game_id: &str,
     install_dir: &str,
     exe_path: &str,
     pfx_dir: &Path,
@@ -67,7 +70,7 @@ pub fn prepare_prefix(
     );
 
     // Branch A: VC++ runtime. Pure side effect, returns no env.
-    prepare_vcredist(exe_path, pfx_dir, proton_path, umu_exe);
+    prepare_vcredist(game_id, exe_path, pfx_dir, proton_path, umu_exe);
 
     // Branch B: OnlineFix. Side effects + the override env the caller appends.
     let env = prepare_onlinefix(exe_path, pfx_dir, proton_path);
@@ -83,14 +86,37 @@ pub fn prepare_prefix(
 /// the unused-variable lint stays quiet under `#![deny]`.
 #[cfg(not(target_os = "linux"))]
 pub fn prepare_prefix(
+    game_id: &str,
     install_dir: &str,
     exe_path: &str,
     pfx_dir: &std::path::Path,
     proton_path: &str,
     umu_exe: &str,
 ) -> Vec<(String, String)> {
-    let _ = (install_dir, exe_path, pfx_dir, proton_path, umu_exe);
+    let _ = (game_id, install_dir, exe_path, pfx_dir, proton_path, umu_exe);
     Vec::new()
+}
+
+/// Emit a `game_prep_status` Tauri event so the game-detail UI can surface a
+/// "Preparing…" status while a slow, blocking prefix-prep step runs (the first
+/// `launch_game` invoke doesn't return until prep finishes, so without this the
+/// window looks frozen). `message: Some(_)` means "prep active, show this text";
+/// `None` means "prep done, clear the indicator". No-op if the launch
+/// AppHandle hasn't been set yet (e.g. unit tests).
+#[cfg(target_os = "linux")]
+fn emit_prep_status(game_id: &str, message: Option<&str>) {
+    use tauri::Emitter;
+
+    if let Some(app_handle) = crate::LAUNCH_APP_HANDLE.get() {
+        let payload = serde_json::json!({
+            "gameId": game_id,
+            "active": message.is_some(),
+            "message": message.unwrap_or(""),
+        });
+        if let Err(e) = app_handle.emit("game_prep_status", payload) {
+            log::warn!("[PrefixPrep] Failed to emit game_prep_status event: {}", e);
+        }
+    }
 }
 
 // ───────────────────────────── Branch A ─────────────────────────────────────
@@ -110,7 +136,13 @@ pub fn prepare_prefix(
 /// interrupted install retries next launch. winetricks itself is also
 /// idempotent ("already installed"), so a redundant run is harmless.
 #[cfg(target_os = "linux")]
-fn prepare_vcredist(exe_path: &str, pfx_dir: &Path, proton_path: &str, umu_exe: &str) {
+fn prepare_vcredist(
+    game_id: &str,
+    exe_path: &str,
+    pfx_dir: &Path,
+    proton_path: &str,
+    umu_exe: &str,
+) {
     let marker = pfx_dir.join(REDIST_MARKER);
     if marker.exists() {
         log::info!("[PrefixPrep/A] VC++ runtime marker present — skipping provision");
@@ -118,10 +150,20 @@ fn prepare_vcredist(exe_path: &str, pfx_dir: &Path, proton_path: &str, umu_exe: 
     }
 
     if !exe_imports_msvc_runtime(exe_path) {
+        // Record the negative result so we don't re-read the exe on every
+        // launch. The marker means "redists resolved for this prefix" — here,
+        // resolved as "not needed". Bump REDIST_MARKER to force a re-check.
         log::info!(
-            "[PrefixPrep/A] {:?} does not import the MSVC runtime — skipping VC++ provision",
+            "[PrefixPrep/A] {:?} does not import the MSVC runtime — recording check, skipping VC++ provision",
             exe_path
         );
+        if let Err(e) = std::fs::write(&marker, b"not-needed\n") {
+            log::warn!(
+                "[PrefixPrep/A] Could not write redist marker {:?}: {}",
+                marker,
+                e
+            );
+        }
         return;
     }
 
@@ -152,7 +194,15 @@ fn prepare_vcredist(exe_path: &str, pfx_dir: &Path, proton_path: &str, umu_exe: 
         .env_remove("PYTHONPATH");
 
     log::info!("[PrefixPrep/A] Spawning winetricks (this can take a while on first run)…");
-    match command.status() {
+    // Surface a precise "installing runtime" status to the UI for the duration
+    // of the blocking winetricks run, then clear it on every outcome below.
+    emit_prep_status(
+        game_id,
+        Some("Installing runtime libraries (one-time setup)..."),
+    );
+    let status_result = command.status();
+    emit_prep_status(game_id, None);
+    match status_result {
         Ok(status) if status.success() => {
             log::info!("[PrefixPrep/A] winetricks finished successfully — writing marker");
             if let Err(e) = std::fs::write(&marker, b"vcrun2022 d3dcompiler_47\n") {

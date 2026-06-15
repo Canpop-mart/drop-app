@@ -14,8 +14,9 @@
        Do not add scale animations to this: https://stackoverflow.com/a/35683068 -->
   <button
     type="button"
-    class="inline-flex uppercase font-display items-center gap-x-2 px-4 py-3 text-md font-semibold shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 rounded-md"
+    class="inline-flex uppercase font-display items-center gap-x-2 px-4 py-3 text-md font-semibold shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
     :class="fetchStatusStyleData($props.status).style"
+    :disabled="disabled"
     @click="onClick"
   >
     <component
@@ -45,7 +46,13 @@ import {
 } from "~/types.js";
 import { TrashIcon } from "@heroicons/vue/24/outline";
 
-const props = defineProps<{ status: GameStatus }>();
+const props = defineProps<{
+  status: GameStatus;
+  // Optional, defaults to off — disables the action while a launch is in
+  // flight so a slow prefix-prep step can't be re-triggered mid-launch.
+  // Existing callers that don't pass it are unaffected.
+  disabled?: boolean;
+}>();
 const emit = defineEmits<{
   (e: "install"): void;
   (e: "launch"): void;

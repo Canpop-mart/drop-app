@@ -288,6 +288,7 @@ impl ProcessHandler for UMUCompatLauncher {
             Vec::new()
         } else {
             crate::prefix_prep::prepare_prefix(
+                &meta.id,
                 current_dir,
                 &exe_path,
                 &pfx_dir,

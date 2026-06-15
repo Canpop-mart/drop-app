@@ -63,6 +63,7 @@
           <!-- Do not add scale animations to this: https://stackoverflow.com/a/35683068 -->
           <GameStatusButton
             :status="status"
+            :disabled="launchInFlight"
             @install="$emit('install')"
             @launch="$emit('launch')"
             @launch-incognito="$emit('launch-incognito')"
@@ -70,6 +71,20 @@
             @kill="$emit('kill')"
             @resume="$emit('resume')"
           />
+          <!-- Launch status line — sits beside the Play button while a launch
+               is in flight. Shows the precise prep message when the backend is
+               doing slow one-time prefix setup, otherwise a generic
+               "Launching…". Renders nothing when idle, so other states are
+               visually unchanged. -->
+          <div
+            v-if="prepStatus || launchInFlight"
+            class="inline-flex items-center gap-x-2 rounded-md bg-zinc-800/60 backdrop-blur-sm px-4 text-sm font-medium text-zinc-200 shadow-xl"
+          >
+            <span
+              class="size-4 rounded-full border-2 border-zinc-500/40 border-t-blue-400 animate-spin"
+            />
+            {{ prepStatus ?? "Launching..." }}
+          </div>
           <!-- Streaming is gated behind dev mode while the Sunshine/Moonlight
                flow is hardened. The button polls the server every 15s for
                available remote sessions, so hiding it also avoids the
@@ -256,6 +271,14 @@ const props = defineProps<{
   // this is non-empty — for solo games the slot stays hidden so the
   // stat bar doesn't gain a permanently-zero row.
   players?: GamePlayerEntry[] | null;
+  // Launch progress (optional; both default to "off" so other callers are
+  // unaffected). `launchInFlight` is true between the Play click and the
+  // backend accepting the launch; `prepStatus` carries a precise message
+  // while a slow one-time prefix-prep step runs (e.g. installing the VC++
+  // runtime). When either is set the header shows a spinner + label beside
+  // the Play button and disables the launch action.
+  launchInFlight?: boolean;
+  prepStatus?: string;
 }>();
 
 defineEmits<{
