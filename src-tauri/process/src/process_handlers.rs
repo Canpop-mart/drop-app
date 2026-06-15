@@ -198,7 +198,7 @@ impl ProcessHandler for UMUCompatLauncher {
         meta: &DownloadableMetadata,
         launch_command: String,
         game_version: &GameVersion,
-        _current_dir: &str,
+        current_dir: &str,
         database: &Database,
     ) -> Result<String, ProcessError> {
         let umu_id_override = game_version
@@ -260,8 +260,57 @@ impl ProcessHandler for UMUCompatLauncher {
             .as_ref()
             .expect("Failed to get UMU_LAUNCHER_EXECUTABLE as ref");
 
+        // One-time, idempotent prefix preparation (Linux-only side effects):
+        // installs the VC++ runtime when the exe needs it, and stages the Steam
+        // DLLs/symlinks an OnlineFix payload requires. Returns extra env pairs
+        // (currently the OnlineFix DLL overrides) to add to the umu command.
+        // Never fails the launch — worst case it returns an empty Vec.
+        //
+        // The exe is the first shell token of `launch_command`; resolve it
+        // against the install dir so prefix_prep sees an absolute path (the
+        // launch string can carry a relative exe + trailing args).
+        let exe_path = match ParsedCommand::parse(launch_command.clone()) {
+            Ok(mut parsed) => {
+                parsed.make_absolute(PathBuf::from(current_dir));
+                parsed.command
+            }
+            Err(e) => {
+                warn!(
+                    "[UMUCompat] Could not parse launch command for prefix prep ({:?}); \
+                     skipping prefix preparation",
+                    e
+                );
+                String::new()
+            }
+        };
+
+        let prep_env = if exe_path.is_empty() {
+            Vec::new()
+        } else {
+            crate::prefix_prep::prepare_prefix(
+                current_dir,
+                &exe_path,
+                &pfx_dir,
+                &proton_path,
+                &umu_exe.to_string_lossy(),
+            )
+        };
+
+        // Prepend each extra env pair to the env section of the command,
+        // matching the shape of the GAMEID=/PROTONPATH=/WINEPREFIX= prefixes.
+        // Values here contain no spaces, but quote defensively if one ever does.
+        let mut prep_env_prefix = String::new();
+        for (key, value) in &prep_env {
+            let quoted = if value.contains(char::is_whitespace) {
+                shell_words::quote(value).into_owned()
+            } else {
+                value.clone()
+            };
+            prep_env_prefix.push_str(&format!("{key}={quoted} "));
+        }
+
         let result = format!(
-            "GAMEID={game_id} {} WINEPREFIX={} {umu:?} {launch}",
+            "{prep_env_prefix}GAMEID={game_id} {} WINEPREFIX={} {umu:?} {launch}",
             proton_env,
             pfx_dir.to_string_lossy(),
             umu = umu_exe,

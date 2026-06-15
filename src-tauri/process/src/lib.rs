@@ -28,6 +28,7 @@ pub mod format;
 pub mod gamepad;
 pub mod m3u;
 mod parser;
+pub mod prefix_prep;
 pub mod process_handlers;
 pub mod process_manager;
 
