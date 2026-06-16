@@ -15,8 +15,14 @@
         status.install_type.type !== InstalledType.PartiallyInstalled
       "
       :show-uninstall="status.type === 'Installed'"
+      :show-install-vcredist="
+        status.type === 'Installed' &&
+        !config.isEmulatedGame.value &&
+        isLinuxHost
+      "
       @configure="configureModalOpen = true"
       @uninstall="launchCtl.uninstall()"
+      @install-vc-runtime="installVcRuntime()"
       @reset-achievements="resetConfirmOpen = true"
       @remove-from-library="removeConfirmOpen = true"
     />
@@ -325,6 +331,8 @@
  * `docs/audit/desktop-frontend-2026.md` for the decomposition rationale.
  */
 import { micromark } from "micromark";
+import { invoke } from "@tauri-apps/api/core";
+import { platform } from "@tauri-apps/plugin-os";
 import { useListen } from "~/composables/useListen";
 import { InstalledType } from "~/types";
 import { rewriteDescriptionImages } from "~/composables/use-server-fetch";
@@ -365,6 +373,10 @@ const installCtl = useGameInstall(game);
 const launchCtl = useGameLaunch(game, status);
 const stats = useGameStats(game.id);
 const config = useGameConfig(game, version);
+
+// VC++ install only applies to Windows games launched via Proton — i.e. on a
+// Linux host. Gate the menu item on this so it never shows on Windows/macOS.
+const isLinuxHost = computed(() => platform() === "linux");
 
 // Clear the active-incognito latch as soon as the backend reports the
 // process has exited. The event payload carries only the game id so we
@@ -449,6 +461,45 @@ onMounted(() => {
 
 function goToQueue() {
   router.push("/queue");
+}
+
+// ── Manual VC++ runtime install ──────────────────────────────────────────
+// Runs winetricks (vcrun2022 + d3dcompiler_47) against this game's Proton
+// prefix on demand. Progress surfaces automatically via the existing
+// `game_prep_status` listener in useGameLaunch (the header shows
+// "Installing Visual C++ runtime..."). The guard prevents a second concurrent
+// run if the user re-opens the menu mid-install.
+const installingVc = ref(false);
+async function installVcRuntime() {
+  if (installingVc.value) return;
+  installingVc.value = true;
+  try {
+    await invoke("install_vcredist", { gameId: game.id });
+    createModal(
+      ModalType.Notification,
+      {
+        title: `Visual C++ runtime — ${game.mName}`,
+        description:
+          "The Visual C++ runtime was installed into this game's Proton prefix. " +
+          "If the game was failing with a missing-DLL error, try launching it again.",
+        buttonText: "OK",
+      },
+      (_e, c) => c(),
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    createModal(
+      ModalType.Notification,
+      {
+        title: "Couldn't install Visual C++ runtime",
+        description: `Drop couldn't install the VC++ runtime for "${game.mName}": ${msg}`,
+        buttonText: "Close",
+      },
+      (_e, c) => c(),
+    );
+  } finally {
+    installingVc.value = false;
+  }
 }
 
 async function executeResetAchievements() {

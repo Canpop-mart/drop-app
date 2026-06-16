@@ -160,6 +160,21 @@
             </button>
           </MenuItem>
 
+          <MenuItem v-if="showInstallVcredist" v-slot="{ active }">
+            <button
+              @click="$emit('install-vc-runtime')"
+              :class="[
+                active
+                  ? 'bg-zinc-800 text-zinc-100 outline-none'
+                  : 'text-zinc-400',
+                'w-full px-4 py-2 text-sm inline-flex justify-between',
+              ]"
+            >
+              Install VC++ Runtime
+              <WrenchScrewdriverIcon class="size-5 text-sky-400" />
+            </button>
+          </MenuItem>
+
           <MenuItem v-if="showUninstall" v-slot="{ active }">
             <button
               @click="$emit('uninstall')"
@@ -214,6 +229,7 @@ import {
   TrashIcon,
   TrophyIcon,
   UserIcon,
+  WrenchScrewdriverIcon,
 } from "@heroicons/vue/24/solid";
 import {
   CONTROLLER_OPTIONS,
@@ -237,6 +253,12 @@ defineProps<{
    * dropdown, now consolidated into this gear menu.
    */
   showUninstall?: boolean;
+  /**
+   * Whether to show the "Install VC++ Runtime" item.  Only meaningful for
+   * installed Windows games that launch via Proton (Linux host) — the parent
+   * gates on that.  Runs winetricks against the game's prefix on demand.
+   */
+  showInstallVcredist?: boolean;
 }>();
 
 defineEmits<{
@@ -244,5 +266,6 @@ defineEmits<{
   (e: "uninstall"): void;
   (e: "reset-achievements"): void;
   (e: "remove-from-library"): void;
+  (e: "install-vc-runtime"): void;
 }>();
 </script>

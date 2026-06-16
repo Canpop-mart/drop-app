@@ -1158,6 +1158,30 @@ function applyProfileName() {
   gameConfig.applyProfileName();
 }
 
+// ── Manual VC++ runtime install ──────────────────────────────────────────
+// Runs winetricks against this game's Proton prefix on demand. Progress shows
+// on the existing launchStatus line (the game_prep_status listener picks up the
+// "Installing Visual C++ runtime..." message); we clear it in finally because
+// the BPM listener only reacts to active=true, not the active=false done edge.
+const installingVc = ref(false);
+async function installVcRuntime() {
+  showOptions.value = false;
+  if (installingVc.value) return;
+  installingVc.value = true;
+  try {
+    await invoke("install_vcredist", { gameId });
+    showInfoToast(
+      "Visual C++ runtime installed. Launch the game again if it was failing.",
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    launchError.value = `Couldn't install the VC++ runtime: ${msg}`;
+  } finally {
+    installingVc.value = false;
+    launchStatus.value = null;
+  }
+}
+
 // ── Options menu: gamepad-navigable list ──────────────────────────────────
 interface OptionsMenuItem {
   id: string;
@@ -1220,6 +1244,19 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
       label: "Proton Version",
       valueLabel: protonLabel.value,
       action: cycleProton,
+    });
+  }
+
+  // VC++ runtime — Windows game on a Linux host (Proton) only.
+  if (
+    isWindowsGame.value &&
+    isLinuxHost.value &&
+    status.value?.type === "Installed"
+  ) {
+    items.push({
+      id: "install-vcredist",
+      label: "Install VC++ Runtime",
+      action: installVcRuntime,
     });
   }
 

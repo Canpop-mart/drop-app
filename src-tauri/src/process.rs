@@ -102,6 +102,21 @@ pub fn kill_game(game_id: String) -> Result<(), ProcessError> {
     Ok(PROCESS_MANAGER.lock().kill_game(game_id)?)
 }
 
+/// Install the Visual C++ runtime into a game's Proton prefix on demand (the
+/// user-triggered "Install VC++ Runtime" action). winetricks can take ~1 min,
+/// so run it off the main thread; progress surfaces via the `game_prep_status`
+/// event the prefix-prep layer emits, and the result is reported as a toast.
+#[tauri::command]
+pub async fn install_vcredist(game_id: String) -> Result<(), String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(process::process_handlers::install_vcredist_for_game(&game_id));
+    });
+    rx.await.unwrap_or_else(|_| {
+        Err("VC++ install thread terminated before returning a result".to_string())
+    })
+}
+
 #[tauri::command]
 pub fn open_process_logs(game_id: String, app_handle: AppHandle) -> Result<(), ProcessError> {
     let process_manager_lock = PROCESS_MANAGER.lock();

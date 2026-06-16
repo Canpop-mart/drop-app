@@ -1,66 +1,55 @@
-//! One-time, idempotent Proton-prefix preparation for umu/Proton launches.
+//! Proton-prefix preparation for umu/Proton launches.
 //!
-//! A freshly-created Proton prefix is bare. Two distinct categories of Windows
-//! game need a prefix touched *before* the first launch or they fail in ways
-//! that look like Drop bugs but are actually missing runtime plumbing. Both
-//! recipes here were reverse-engineered and confirmed working by hand on a
-//! Steam Deck; this module bakes the proven steps into code so users never
-//! have to run winetricks or shuffle DLLs themselves.
+//! A freshly-created Proton prefix is bare. Some Windows games need the prefix
+//! touched before they run, or they fail in ways that look like Drop bugs but
+//! are actually missing runtime plumbing. Both recipes here were
+//! reverse-engineered and confirmed working by hand on a Steam Deck.
 //!
-//! Everything is Linux-only — Windows/macOS keep a no-op stub so the workspace
-//! still compiles with `#![deny]` lints and zero unused warnings. The public
-//! entry point is [`prepare_prefix`]; it performs side effects (installing the
-//! VC++ runtime, copying DLLs, creating symlinks) and returns the extra
-//! `(KEY, VALUE)` env pairs the caller must append to the umu command. It
-//! NEVER fails the launch: anything that goes wrong is logged at `warn` and we
-//! return whatever env we managed to assemble.
+//! Everything is Linux-only — Windows/macOS keep no-op stubs so the workspace
+//! still compiles with `#![deny]` lints and zero unused warnings.
 //!
-//! ## Branch A — VC++ runtime (the "Far Far West" category)
+//! ## OnlineFix staging — automatic, at launch ([`prepare_prefix`])
+//! OnlineFix payloads (online co-op cracks, the "Gunfire Reborn" category) ship
+//! an `OnlineFix64.dll` next to the game exe and expect a live Steam install's
+//! overlay DLL plus Proton's Steam bridge present at hardcoded Windows paths
+//! inside the prefix. [`prepare_prefix`] detects the payload, stages those DLLs,
+//! ensures the Linux-side `steamclient.so` symlinks exist, and returns the
+//! `(KEY, VALUE)` override env the caller appends to the umu command. Detection
+//! is a reliable *file-presence* check, so it runs automatically and NEVER
+//! fails the launch: anything that goes wrong is logged at `warn`.
+//!
+//! ## VC++ runtime — manual, on demand ([`install_vcredist_into_prefix`])
 //! Many Windows games link the MSVC 2015-2022 runtime (`VCRUNTIME140.dll`,
-//! `MSVCP140.dll`). A fresh Proton prefix has none of it, and running the raw
-//! `VC_redist.exe` does nothing under wine — its MSI is blocked by wine's
-//! higher builtin `ucrtbase`. winetricks (which umu runs natively) is the fix.
-//!
-//! ## Branch B — OnlineFix (online co-op cracks, the "Gunfire Reborn" category)
-//! OnlineFix payloads ship an `OnlineFix64.dll` next to the game exe and expect
-//! a live Steam install's overlay DLL plus Proton's Steam bridge present at
-//! hardcoded Windows paths inside the prefix. We stage those DLLs, ensure the
-//! Linux-side `steamclient.so` symlinks exist, and hand back the canonical
-//! DLL-override env set.
+//! `MSVCP140.dll`), but the dependency is routinely imported by a sibling DLL
+//! (`UnityPlayer.dll`, `GameAssembly.dll`) rather than the launch exe — so
+//! reliably auto-detecting the need is a losing game. Instead the user triggers
+//! it explicitly via the "Install VC++ Runtime" action. A fresh Proton prefix
+//! has no runtime, and the raw `VC_redist.exe` does nothing under wine (its MSI
+//! is blocked by wine's higher builtin `ucrtbase`); winetricks (which umu runs
+//! natively) is the fix.
 
 #[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
 
-/// Marker file (relative to the prefix root) recording that Branch A has
-/// already provisioned the VC++ runtime into this prefix. Versioned so a future
-/// recipe change can force a re-provision by bumping the suffix.
-#[cfg(target_os = "linux")]
-const REDIST_MARKER: &str = ".drop-redists-v1";
-
-/// Prepare a Proton prefix for a umu launch, running both independent branches.
+/// Prepare a Proton prefix for a umu launch: stage what an OnlineFix payload
+/// needs. The VC++ runtime is handled separately and on demand by
+/// [`install_vcredist_into_prefix`], not here.
 ///
-/// * `game_id`     — the game's id, used only to scope the `game_prep_status`
-///   UI events so the right game-detail page picks them up.
 /// * `install_dir` — the game's install directory (working dir of the launch).
-/// * `exe_path`    — the absolute path to the launch executable. Used to sniff
-///   the PE import table (Branch A) and to locate the OnlineFix payload
-///   directory (Branch B).
+/// * `exe_path`    — the absolute path to the launch executable. Used to locate
+///   the OnlineFix payload directory (its own folder).
 /// * `pfx_dir`     — the Proton prefix root (`WINEPREFIX`).
 /// * `proton_path` — the resolved `PROTONPATH`: either an absolute Proton
 ///   install dir or a umu keyword like `GE-Proton` that umu auto-resolves.
-/// * `umu_exe`     — the `umu-run` executable Branch A invokes for winetricks.
 ///
-/// Returns the extra `(KEY, VALUE)` env pairs to add to the umu command. The
-/// pairs come solely from Branch B; Branch A is pure side effect. On non-Linux
-/// targets, or when nothing applies, the returned `Vec` is empty.
+/// Returns the extra `(KEY, VALUE)` env pairs to add to the umu command (the
+/// OnlineFix DLL overrides). Empty when the game isn't an OnlineFix payload.
 #[cfg(target_os = "linux")]
 pub fn prepare_prefix(
-    game_id: &str,
     install_dir: &str,
     exe_path: &str,
     pfx_dir: &Path,
     proton_path: &str,
-    umu_exe: &str,
 ) -> Vec<(String, String)> {
     log::info!(
         "[PrefixPrep] Preparing prefix {:?} for exe {:?} (install_dir={:?})",
@@ -69,10 +58,7 @@ pub fn prepare_prefix(
         install_dir
     );
 
-    // Branch A: VC++ runtime. Pure side effect, returns no env.
-    prepare_vcredist(game_id, exe_path, pfx_dir, proton_path, umu_exe);
-
-    // Branch B: OnlineFix. Side effects + the override env the caller appends.
+    // OnlineFix: side effects + the override env the caller appends.
     let env = prepare_onlinefix(exe_path, pfx_dir, proton_path);
 
     log::info!(
@@ -86,23 +72,21 @@ pub fn prepare_prefix(
 /// the unused-variable lint stays quiet under `#![deny]`.
 #[cfg(not(target_os = "linux"))]
 pub fn prepare_prefix(
-    game_id: &str,
     install_dir: &str,
     exe_path: &str,
     pfx_dir: &std::path::Path,
     proton_path: &str,
-    umu_exe: &str,
 ) -> Vec<(String, String)> {
-    let _ = (game_id, install_dir, exe_path, pfx_dir, proton_path, umu_exe);
+    let _ = (install_dir, exe_path, pfx_dir, proton_path);
     Vec::new()
 }
 
 /// Emit a `game_prep_status` Tauri event so the game-detail UI can surface a
 /// "Preparing…" status while a slow, blocking prefix-prep step runs (the first
-/// `launch_game` invoke doesn't return until prep finishes, so without this the
-/// window looks frozen). `message: Some(_)` means "prep active, show this text";
-/// `None` means "prep done, clear the indicator". No-op if the launch
-/// AppHandle hasn't been set yet (e.g. unit tests).
+/// `launch_game` / `install_vcredist` invoke doesn't return until prep
+/// finishes, so without this the window looks frozen). `message: Some(_)` means
+/// "prep active, show this text"; `None` means "prep done, clear the
+/// indicator". No-op if the launch AppHandle hasn't been set yet (e.g. tests).
 #[cfg(target_os = "linux")]
 fn emit_prep_status(game_id: &str, message: Option<&str>) {
     use tauri::Emitter;
@@ -119,62 +103,38 @@ fn emit_prep_status(game_id: &str, message: Option<&str>) {
     }
 }
 
-// ───────────────────────────── Branch A ─────────────────────────────────────
+// ──────────────────────── VC++ runtime (on demand) ──────────────────────────
 
-/// Branch A: provision the MSVC 2015-2022 runtime into the prefix if (and only
-/// if) the launch exe imports it, and only once per prefix.
+/// Install the MSVC 2015-2022 runtime (`vcrun2022`) plus `d3dcompiler_47` into
+/// `pfx_dir` via umu's winetricks. Triggered by the user's "Install VC++
+/// Runtime" action — there is no auto-detection, because the runtime is
+/// routinely imported by a sibling DLL (`UnityPlayer.dll`, `GameAssembly.dll`)
+/// rather than the launch exe, making a reliable sniff impossible.
 ///
-/// Detection is a deliberately crude, dependency-free heuristic: we read up to
-/// the first 64 MiB of the exe and case-insensitively search for the ASCII
-/// needles `VCRUNTIME140` / `MSVCP140`, which appear verbatim as DLL-name
-/// strings in a PE's import table. No PE crate, no parsing — a false positive
-/// merely runs an idempotent winetricks install that no-ops, and a false
-/// negative just skips a runtime the game probably didn't need.
-///
-/// Idempotency is enforced by the [`REDIST_MARKER`] file: present ⇒ skip. The
-/// marker is written ONLY after winetricks exits successfully, so a failed or
-/// interrupted install retries next launch. winetricks itself is also
-/// idempotent ("already installed"), so a redundant run is harmless.
+/// Idempotent: winetricks no-ops ("already installed") on a prefix that already
+/// has it. Blocking — winetricks can take ~1 minute on first run and needs
+/// network. Emits `game_prep_status` so the UI can show progress for the
+/// duration. The `umu-run` child inherits a scrubbed env (no `RUST_LOG`, no
+/// Steam/Gamescope bundled-Python vars that break umu's system Python).
 #[cfg(target_os = "linux")]
-fn prepare_vcredist(
+pub fn install_vcredist_into_prefix(
     game_id: &str,
-    exe_path: &str,
     pfx_dir: &Path,
     proton_path: &str,
     umu_exe: &str,
-) {
-    let marker = pfx_dir.join(REDIST_MARKER);
-    if marker.exists() {
-        log::info!("[PrefixPrep/A] VC++ runtime marker present — skipping provision");
-        return;
-    }
-
-    if !exe_imports_msvc_runtime(exe_path) {
-        // Record the negative result so we don't re-read the exe on every
-        // launch. The marker means "redists resolved for this prefix" — here,
-        // resolved as "not needed". Bump REDIST_MARKER to force a re-check.
-        log::info!(
-            "[PrefixPrep/A] {:?} does not import the MSVC runtime — recording check, skipping VC++ provision",
-            exe_path
-        );
-        if let Err(e) = std::fs::write(&marker, b"not-needed\n") {
-            log::warn!(
-                "[PrefixPrep/A] Could not write redist marker {:?}: {}",
-                marker,
-                e
-            );
-        }
-        return;
+) -> Result<(), String> {
+    if let Err(e) = std::fs::create_dir_all(pfx_dir) {
+        return Err(format!("Could not create prefix dir {pfx_dir:?}: {e}"));
     }
 
     log::info!(
-        "[PrefixPrep/A] {:?} imports the MSVC runtime — installing vcrun2022 + d3dcompiler_47 \
-         via winetricks (umu). First run downloads from aka.ms and needs network.",
-        exe_path
+        "[VCRedist] Installing vcrun2022 + d3dcompiler_47 into {:?} via winetricks \
+         (umu, PROTONPATH={}). First run downloads from aka.ms and needs network.",
+        pfx_dir,
+        proton_path
     );
 
-    // Run winetricks as its own child process — NOT appended to the launch
-    // string. umu runs winetricks natively when handed it as the command:
+    // Run winetricks as umu's command (umu has native winetricks support):
     //   GAMEID=0 STORE=none PROTONPATH=<proton> WINEPREFIX=<pfx> \
     //       <umu-run> winetricks -q vcrun2022 d3dcompiler_47
     let mut command = std::process::Command::new(umu_exe);
@@ -193,99 +153,45 @@ fn prepare_vcredist(
         .env_remove("PYTHONHOME")
         .env_remove("PYTHONPATH");
 
-    log::info!("[PrefixPrep/A] Spawning winetricks (this can take a while on first run)…");
-    // Surface a precise "installing runtime" status to the UI for the duration
-    // of the blocking winetricks run, then clear it on every outcome below.
+    // Surface a precise status to the UI for the duration of the blocking run,
+    // then clear it on every outcome below.
     emit_prep_status(
         game_id,
-        Some("Installing runtime libraries (one-time setup)..."),
+        Some("Installing Visual C++ runtime (one-time, ~1 min)..."),
     );
     let status_result = command.status();
     emit_prep_status(game_id, None);
+
     match status_result {
         Ok(status) if status.success() => {
-            log::info!("[PrefixPrep/A] winetricks finished successfully — writing marker");
-            if let Err(e) = std::fs::write(&marker, b"vcrun2022 d3dcompiler_47\n") {
-                log::warn!(
-                    "[PrefixPrep/A] Could not write redist marker {:?}: {} \
-                     (runtime is installed but we'll re-run winetricks next launch)",
-                    marker,
-                    e
-                );
-            }
+            log::info!("[VCRedist] winetricks finished successfully for {pfx_dir:?}");
+            Ok(())
         }
-        Ok(status) => {
-            log::warn!(
-                "[PrefixPrep/A] winetricks exited with {} — NOT writing marker; \
-                 will retry next launch. The game may still launch without the runtime.",
-                status
-            );
-        }
-        Err(e) => {
-            log::warn!(
-                "[PrefixPrep/A] Failed to spawn winetricks via umu ({:?}): {} — \
-                 continuing launch without the VC++ runtime.",
-                umu_exe,
-                e
-            );
-        }
+        Ok(status) => Err(format!(
+            "winetricks exited with {status} — the VC++ runtime was not installed"
+        )),
+        Err(e) => Err(format!(
+            "Failed to spawn winetricks via umu ({umu_exe:?}): {e}"
+        )),
     }
 }
 
-/// Cheap, PE-crate-free check: does `exe_path` reference the MSVC 2015-2022
-/// runtime DLLs by name? Reads at most the first 64 MiB and searches the raw
-/// bytes (case-insensitively) for `VCRUNTIME140` or `MSVCP140`, the DLL-name
-/// strings a PE carries in its import table. Any read error ⇒ `false` (we'd
-/// rather skip provisioning than block a launch).
-#[cfg(target_os = "linux")]
-fn exe_imports_msvc_runtime(exe_path: &str) -> bool {
-    use std::io::Read;
-
-    /// Cap the read so a giant single-file exe can't balloon memory.
-    const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
-
-    let file = match std::fs::File::open(exe_path) {
-        Ok(f) => f,
-        Err(e) => {
-            log::warn!(
-                "[PrefixPrep/A] Could not open {:?} for MSVC-runtime sniff: {} — assuming no runtime needed",
-                exe_path,
-                e
-            );
-            return false;
-        }
-    };
-
-    let mut buf = Vec::new();
-    if let Err(e) = file.take(MAX_SCAN_BYTES).read_to_end(&mut buf) {
-        log::warn!(
-            "[PrefixPrep/A] Could not read {:?} for MSVC-runtime sniff: {} — assuming no runtime needed",
-            exe_path,
-            e
-        );
-        return false;
-    }
-
-    bytes_contain_ascii_ci(&buf, b"VCRUNTIME140") || bytes_contain_ascii_ci(&buf, b"MSVCP140")
+/// Non-Linux stub: there is no Proton prefix to provision off Linux.
+#[cfg(not(target_os = "linux"))]
+pub fn install_vcredist_into_prefix(
+    game_id: &str,
+    pfx_dir: &std::path::Path,
+    proton_path: &str,
+    umu_exe: &str,
+) -> Result<(), String> {
+    let _ = (game_id, pfx_dir, proton_path, umu_exe);
+    Err("Installing the VC++ runtime is only supported on Linux (Proton).".to_string())
 }
 
-/// Case-insensitive ASCII substring search over raw bytes. `needle` must be
-/// pure ASCII (our literals are). Sliding window — fine for one-off launch-time
-/// scans of bounded buffers; avoids pulling in a regex/aho-corasick dependency.
-#[cfg(target_os = "linux")]
-fn bytes_contain_ascii_ci(haystack: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return needle.is_empty();
-    }
-    haystack
-        .windows(needle.len())
-        .any(|window| window.eq_ignore_ascii_case(needle))
-}
+// ───────────────────────────── OnlineFix ────────────────────────────────────
 
-// ───────────────────────────── Branch B ─────────────────────────────────────
-
-/// Branch B: stage everything an OnlineFix payload needs and return the
-/// canonical DLL-override env set.
+/// Stage everything an OnlineFix payload needs and return the canonical
+/// DLL-override env set.
 ///
 /// Detection: the launch exe's OWN directory contains `OnlineFix64.dll`. If it
 /// doesn't, this is not an OnlineFix game and we return an empty env. When it
@@ -341,7 +247,7 @@ fn prepare_onlinefix(exe_path: &str, pfx_dir: &Path, proton_path: &str) -> Vec<(
     // GameOverlayRenderer64.dll — OnlineFix's SteamOverlay64.dll LoadLibrary's
     // this in its DllMain; absent ⇒ "failed to load steam overlay dll error 126".
     match find_live_steam_overlay_dll() {
-        Some(src) => copy_if_absent(&src, &steam_dir_in_pfx.join("GameOverlayRenderer64.dll")),
+        Some(src) => stage_dll(&src, &steam_dir_in_pfx.join("GameOverlayRenderer64.dll")),
         None => log::warn!(
             "[PrefixPrep/B] Could not find GameOverlayRenderer64.dll in any Steam install — \
              OnlineFix overlay may fail with error 126"
@@ -352,7 +258,7 @@ fn prepare_onlinefix(exe_path: &str, pfx_dir: &Path, proton_path: &str) -> Vec<(
     // bridge; OnlineFix looks for C:\Program Files (x86)\Steam\steamclient64.dll
     // which Proton doesn't populate under umu, so we copy it in under that name.
     match find_proton_lsteamclient(proton_path) {
-        Some(src) => copy_if_absent(&src, &steam_dir_in_pfx.join("steamclient64.dll")),
+        Some(src) => stage_dll(&src, &steam_dir_in_pfx.join("steamclient64.dll")),
         None => log::warn!(
             "[PrefixPrep/B] Could not find Proton's lsteamclient.dll (proton_path={:?}) — \
              OnlineFix Steam bridge will be missing",
@@ -414,6 +320,11 @@ fn find_live_steam_overlay_dll() -> Option<PathBuf> {
 ///   auto-resolves, we can't know the install dir, so we search the standard
 ///   compatibility-tool / umu roots and pick the NEWEST match (most recently
 ///   installed Proton wins).
+///
+/// Either way the result MUST be an `x86_64-windows` DLL: it is copied in as the
+/// 64-bit `steamclient64.dll`, and a 32-bit (`i386-windows`) lsteamclient loaded
+/// under that name fails with error 193 (bad image format). A Proton install
+/// ships both arches under the same filename, so the keyword search filters.
 #[cfg(target_os = "linux")]
 fn find_proton_lsteamclient(proton_path: &str) -> Option<PathBuf> {
     const REL: &str = "files/lib/wine/x86_64-windows/lsteamclient.dll";
@@ -447,6 +358,13 @@ fn find_proton_lsteamclient(proton_path: &str) -> Option<PathBuf> {
     let mut newest: Option<(PathBuf, std::time::SystemTime)> = None;
     for root in &search_roots {
         for hit in find_files_named(Path::new(root), "lsteamclient.dll", 8) {
+            // A Proton install ships BOTH x86_64-windows/ and i386-windows/
+            // copies under the same filename. Only the 64-bit one can be staged
+            // as steamclient64.dll — loading the 32-bit one yields error 193
+            // (bad image format). Never consider a non-x86_64 match.
+            if !hit.to_string_lossy().contains("x86_64-windows") {
+                continue;
+            }
             let mtime = hit
                 .metadata()
                 .and_then(|m| m.modified())
@@ -464,7 +382,7 @@ fn find_proton_lsteamclient(proton_path: &str) -> Option<PathBuf> {
     match newest {
         Some((path, _)) => {
             log::info!(
-                "[PrefixPrep/B] Found newest lsteamclient.dll via keyword search: {:?}",
+                "[PrefixPrep/B] Found newest x86_64 lsteamclient.dll via keyword search: {:?}",
                 path
             );
             Some(path)
@@ -561,14 +479,17 @@ fn find_steam_root_with_runtime() -> Option<PathBuf> {
         .find(|root| root.join("linux64").join("steamclient.so").is_file())
 }
 
-/// Copy `src` to `dest` only if `dest` does not already exist (idempotent
-/// staging). Logs the outcome; a copy failure is a warning, never fatal.
+/// Stage `src` to `dest`, ALWAYS overwriting any existing file.
+///
+/// The OnlineFix bridge DLLs are Drop-managed and MUST match the Proton the
+/// game launches under. We deliberately do NOT keep a previously-staged copy:
+/// an older Drop (which picked lsteamclient arch-blind) or a Proton upgrade can
+/// leave a wrong-architecture or wrong-build `steamclient64.dll` that fails to
+/// load with error 193. Re-copying every launch is cheap (a few MB) and lets a
+/// poisoned prefix self-heal on the next launch. A copy failure is a warning,
+/// never fatal.
 #[cfg(target_os = "linux")]
-fn copy_if_absent(src: &Path, dest: &Path) {
-    if dest.exists() {
-        log::info!("[PrefixPrep/B] {:?} already staged — leaving as-is", dest);
-        return;
-    }
+fn stage_dll(src: &Path, dest: &Path) {
     match std::fs::copy(src, dest) {
         Ok(bytes) => log::info!(
             "[PrefixPrep/B] Staged {:?} → {:?} ({} bytes)",

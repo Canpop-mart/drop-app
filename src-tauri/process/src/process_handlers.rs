@@ -260,11 +260,12 @@ impl ProcessHandler for UMUCompatLauncher {
             .as_ref()
             .expect("Failed to get UMU_LAUNCHER_EXECUTABLE as ref");
 
-        // One-time, idempotent prefix preparation (Linux-only side effects):
-        // installs the VC++ runtime when the exe needs it, and stages the Steam
-        // DLLs/symlinks an OnlineFix payload requires. Returns extra env pairs
-        // (currently the OnlineFix DLL overrides) to add to the umu command.
-        // Never fails the launch — worst case it returns an empty Vec.
+        // Idempotent prefix preparation (Linux-only side effects): stages the
+        // Steam DLLs/symlinks an OnlineFix payload requires, and returns the
+        // extra env pairs (the OnlineFix DLL overrides) to add to the umu
+        // command. The VC++ runtime is NOT handled here — it is installed on
+        // demand via the "Install VC++ Runtime" action (install_vcredist_for_game
+        // → prefix_prep::install_vcredist_into_prefix). Never fails the launch.
         //
         // The exe is the first shell token of `launch_command`; resolve it
         // against the install dir so prefix_prep sees an absolute path (the
@@ -287,14 +288,7 @@ impl ProcessHandler for UMUCompatLauncher {
         let prep_env = if exe_path.is_empty() {
             Vec::new()
         } else {
-            crate::prefix_prep::prepare_prefix(
-                &meta.id,
-                current_dir,
-                &exe_path,
-                &pfx_dir,
-                &proton_path,
-                &umu_exe.to_string_lossy(),
-            )
+            crate::prefix_prep::prepare_prefix(current_dir, &exe_path, &pfx_dir, &proton_path)
         };
 
         // Prepend each extra env pair to the env section of the command,
@@ -331,6 +325,80 @@ impl ProcessHandler for UMUCompatLauncher {
     }
 
     fn modify_command(&self, _command: &mut Command) {}
+}
+
+/// Install the VC++ runtime into a game's Proton prefix on demand — backs the
+/// user-triggered "Install VC++ Runtime" action. Resolves the game's prefix and
+/// Proton exactly as the launcher does, then runs winetricks. The DB lock is
+/// released before the (slow, ~1 min) winetricks call so it never blocks other
+/// work. Windows/Proton games only; returns a user-facing error string otherwise.
+pub fn install_vcredist_for_game(game_id: &str) -> Result<(), String> {
+    // Resolve prefix + Proton under a brief read borrow, then drop the lock so
+    // the long winetricks run holds nothing.
+    let (pfx_dir, proton_path) = {
+        let db = database::borrow_db_checked();
+
+        let meta = db
+            .applications
+            .installed_game_version
+            .get(game_id)
+            .ok_or_else(|| "Game is not installed".to_string())?;
+
+        if meta.target_platform != Platform::Windows {
+            return Err(
+                "The VC++ runtime only applies to Windows games launched via Proton.".to_string(),
+            );
+        }
+
+        let version_id = match db.applications.game_statuses.get(game_id) {
+            Some(database::GameDownloadStatus::Installed { version_id, .. }) => version_id.clone(),
+            _ => return Err("Game is not installed".to_string()),
+        };
+
+        let game_version = db
+            .applications
+            .game_versions
+            .get(&version_id)
+            .ok_or_else(|| "Game version metadata is missing".to_string())?;
+
+        let proton_path: String = game_version
+            .user_configuration
+            .override_proton_path
+            .clone()
+            .or_else(|| db.applications.default_proton_path.clone())
+            .unwrap_or_else(|| DEFAULT_UMU_PROTON.to_string());
+
+        (DATA_ROOT_DIR.join("pfx").join(game_id), proton_path)
+    };
+
+    // Real Proton paths must be valid; umu keywords (GE-Proton, …) are resolved
+    // by umu itself and skip the check. Whole block is Linux-only — read_proton_path
+    // lives in the Linux-only compat module, and Proton is Linux-only anyway.
+    #[cfg(target_os = "linux")]
+    {
+        if !is_umu_proton_keyword(&proton_path) {
+            let valid = crate::compat::read_proton_path(PathBuf::from(&proton_path))
+                .ok()
+                .flatten()
+                .is_some();
+            if !valid {
+                return Err(format!("Configured Proton path is invalid: {proton_path}"));
+            }
+        }
+    }
+
+    let umu_exe = UMU_LAUNCHER_EXECUTABLE
+        .as_ref()
+        .ok_or_else(|| "umu-launcher is unavailable (Proton support is Linux-only).".to_string())?;
+
+    info!("[VCRedist] Manual install requested for game {game_id} (PROTONPATH={proton_path})");
+
+    crate::prefix_prep::install_vcredist_into_prefix(
+        game_id,
+        &pfx_dir,
+        &proton_path,
+        &umu_exe.to_string_lossy(),
+    )
 }
 
 pub struct AsahiMuvmLauncher;
