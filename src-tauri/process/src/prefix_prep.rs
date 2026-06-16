@@ -111,11 +111,13 @@ fn emit_prep_status(game_id: &str, message: Option<&str>) {
 /// routinely imported by a sibling DLL (`UnityPlayer.dll`, `GameAssembly.dll`)
 /// rather than the launch exe, making a reliable sniff impossible.
 ///
-/// Idempotent: winetricks no-ops ("already installed") on a prefix that already
-/// has it. Blocking — winetricks can take ~1 minute on first run and needs
-/// network. Emits `game_prep_status` so the UI can show progress for the
-/// duration. The `umu-run` child inherits a scrubbed env (no `RUST_LOG`, no
-/// Steam/Gamescope bundled-Python vars that break umu's system Python).
+/// Always does a real install (`--force`): GE-Proton pre-seeds stub VC++ redist
+/// registry keys that would otherwise make winetricks skip and leave the redist
+/// unregistered, which breaks games that check the registration. Blocking —
+/// winetricks takes ~1 minute and needs network. Emits `game_prep_status` so the
+/// UI can show progress for the duration. The `umu-run` child inherits a scrubbed
+/// env (no `RUST_LOG`, no Steam/Gamescope bundled-Python vars that break umu's
+/// system Python).
 #[cfg(target_os = "linux")]
 pub fn install_vcredist_into_prefix(
     game_id: &str,
@@ -141,6 +143,14 @@ pub fn install_vcredist_into_prefix(
     command
         .arg("winetricks")
         .arg("-q")
+        // --force past GE-Proton's pre-seeded stub `VC\Runtimes` registry keys:
+        // they fool winetricks into thinking vcrun2022 is already installed, so
+        // it no-ops (a ~0.5s "success") and never writes the real redist
+        // registration. Games that check that registration (e.g. Far Far West)
+        // then refuse to launch ("missing Visual C++ 2015-2022 Redistributable")
+        // even though the runtime DLLs are present. --force makes winetricks
+        // install for real. Fine for a deliberate, on-demand button.
+        .arg("--force")
         .arg("vcrun2022")
         .arg("d3dcompiler_47")
         .env("GAMEID", "0")
