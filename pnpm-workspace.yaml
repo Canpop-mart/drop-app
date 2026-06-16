@@ -45,3 +45,13 @@ overrides:
   postcss@<8.5.10: ">=8.5.10"
   simple-git@<3.36.0: ">=3.36.0"
   ws@>=8.0.0 <8.20.1: ">=8.20.1"
+  # Dependabot 2026-06-16 security bumps — all transitive (Nuxt/Vite build
+  # toolchain). Scoped to the vulnerable range so unrelated copies stay put.
+  # Keep in sync with main/pnpm-workspace.yaml (the standalone frontend build).
+  shell-quote@<1.8.4: ">=1.8.4" # alert #130 critical
+  esbuild@<0.28.1: ">=0.28.1" # alerts #134 high, #133 low
+  vite@>=7.0.0 <7.3.5: ">=7.3.5 <8" # alerts #137 high, #139 medium
+  tar@>=7.0.0 <7.5.16: ">=7.5.16" # alert #140 medium
+  launch-editor@<2.14.1: ">=2.14.1" # alert #138 medium
+  js-yaml@>=4.0.0 <4.2.0: ">=4.2.0" # alert #136 medium
+  "@babel/core@<7.29.6": ">=7.29.6 <8" # alert #135 low
