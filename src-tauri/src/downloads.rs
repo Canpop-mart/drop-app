@@ -185,7 +185,7 @@ pub async fn resume_download(game_id: String) -> Result<(), ApplicationDownloadE
     let install_dir = PathBuf::from(install_dir);
     let install_dir = install_dir
         .parent()
-        .expect("game somehow installed at root");
+        .ok_or(ApplicationDownloadError::InvalidCommand)?;
 
     let game_download_agent = Arc::new(Box::new(
         GameDownloadAgent::new(

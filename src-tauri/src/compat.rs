@@ -543,7 +543,9 @@ fn extract_render_failure_signature(log: &str) -> Option<String> {
         // Trim to a short fingerprint
         let trimmed = err.trim();
         if trimmed.len() > 180 {
-            return Some(trimmed[..180].to_string());
+            // Char-boundary-safe: slicing a &str mid-codepoint panics, and this
+            // runs on every launch's wine-log tail.
+            return Some(trimmed.chars().take(180).collect());
         }
         return Some(trimmed.to_string());
     }
@@ -586,7 +588,13 @@ async fn post_result(
     // anyway, but pre-trimming saves bandwidth when the log is huge.
     let trimmed_log = log_excerpt.map(|s| {
         if s.len() > LOG_EXCERPT_BYTES {
-            &s[s.len() - LOG_EXCERPT_BYTES..]
+            // Take the last LOG_EXCERPT_BYTES bytes, advancing to a char boundary
+            // so slicing a UTF-8 string mid-codepoint can't panic.
+            let mut start = s.len() - LOG_EXCERPT_BYTES;
+            while start < s.len() && !s.is_char_boundary(start) {
+                start += 1;
+            }
+            &s[start..]
         } else {
             s
         }
@@ -794,7 +802,12 @@ fn extract_last_err_line(log: &str) -> Option<&str> {
         .map(|line| {
             let trimmed = line.trim();
             if trimmed.len() > 180 {
-                &trimmed[..180]
+                // Char-boundary-safe truncation (slicing mid-codepoint panics).
+                let mut end = 180;
+                while end > 0 && !trimmed.is_char_boundary(end) {
+                    end -= 1;
+                }
+                &trimmed[..end]
             } else {
                 trimmed
             }

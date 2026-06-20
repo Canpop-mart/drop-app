@@ -472,6 +472,8 @@ pub mod data {
         #[derive(
             Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Clone, Copy,
         )]
+        // Only `Game` is constructed today; Tool/Dlc/Mod are reserved for planned
+        // non-game download types and kept so the serialized enum stays stable.
         pub enum DownloadType {
             Game,
             Tool,

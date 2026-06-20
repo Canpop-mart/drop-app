@@ -155,6 +155,17 @@ pub async fn download_game_chunk(
                 return Ok(false);
             }
             let amount = stream_reader.read(&mut read_buf[0..remaining.min(READ_BUF_LEN)]).await?;
+            if amount == 0 {
+                // Stream closed before delivering the chunk's bytes. Without this
+                // guard `remaining -= 0` would spin forever; surface a retryable IO
+                // error so the chunk gets re-fetched (mirrors validate.rs).
+                return Err(ApplicationDownloadError::IoError(std::sync::Arc::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "download stream ended before the chunk was fully received",
+                    ),
+                )));
+            }
             download_progress.add(amount);
             remaining -= amount;
 

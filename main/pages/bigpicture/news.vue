@@ -105,7 +105,8 @@
 <script setup lang="ts">
 import { ArrowLeftIcon, NewspaperIcon } from "@heroicons/vue/24/outline";
 import { useServerApi, type NewsArticle } from "~/composables/use-server-api";
-import { serverUrl, rewriteDescriptionImages } from "~/composables/use-server-fetch";
+import { serverUrl } from "~/composables/use-server-fetch";
+import { renderMarkdown } from "~/composables/render-markdown";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 
@@ -121,7 +122,7 @@ const selectedArticle = ref<NewsArticle | null>(null);
 
 const renderedContent = computed(() => {
   if (!selectedArticle.value) return "";
-  return rewriteDescriptionImages(selectedArticle.value.content);
+  return renderMarkdown(selectedArticle.value.content);
 });
 
 function objectUrl(id: string): string {

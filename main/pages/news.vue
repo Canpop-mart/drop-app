@@ -138,7 +138,7 @@ import {
   MagnifyingGlassIcon,
   ArrowLeftIcon,
 } from "@heroicons/vue/24/outline";
-import { micromark } from "micromark";
+import { renderMarkdown } from "~/composables/render-markdown";
 import {
   useServerApi,
   type NewsArticle,
@@ -173,18 +173,12 @@ function formatDate(iso: string): string {
 }
 
 const renderedContent = computed(() => {
-  // Articles are markdown — same renderer as game descriptions so the
-  // typography is consistent across the app. Guard against the server
-  // returning null/undefined content (drafts, malformed records) so the
-  // page renders empty body instead of throwing inside micromark.
+  // Articles are markdown — rendered through the shared sanitizing renderer
+  // (renderMarkdown returns "" on a parse error, so a malformed draft just
+  // shows an empty body instead of throwing).
   const raw = selectedArticle.value?.content;
   if (!raw || typeof raw !== "string") return "";
-  try {
-    return micromark(raw);
-  } catch (e) {
-    console.warn("[news] markdown parse failed:", e);
-    return `<p class="text-red-400 text-sm">Couldn't render this article's content.</p>`;
-  }
+  return renderMarkdown(raw);
 });
 
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;

@@ -62,6 +62,6 @@ Used for: library (needs Tauri invoke for install/launch), queue, settings.
 
 - `server://` protocol — Tauri custom protocol that proxies all requests to the Drop backend with auth headers automatically applied.
 - `object://` protocol — Tauri protocol for game media (banners, covers, icons).
-- `serde_json` is available in the `process` crate but NOT in the `remote` crate — use inner `#[derive(Serialize)] struct` instead.
+- `serde_json` is a direct dependency of the `process`, `remote`, and main app crates — use it directly. (The `remote` crate lacked it historically, which is why some older code there still uses inner `#[derive(Serialize)] struct`s.)
 - Achievement polling is in `remote/src/achievements.rs` — polls `/api/v1/client/game/{id}/achievement-config` every 15 seconds.
-- Goldberg file-based achievement detection is NOT yet implemented — currently relies on server-side sync only.
+- Goldberg file-based achievement detection IS implemented in `remote/src/goldberg/` (crack discovery, achievement parsing) and supplements the server-side sync. It scans the game's own install dir; what's not done is push-based / fs-watcher detection or scanning global crack folders.

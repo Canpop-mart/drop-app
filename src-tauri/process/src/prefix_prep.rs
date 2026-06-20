@@ -59,7 +59,7 @@ pub fn prepare_prefix(
     );
 
     // OnlineFix: side effects + the override env the caller appends.
-    let env = prepare_onlinefix(exe_path, pfx_dir, proton_path);
+    let env = prepare_onlinefix(install_dir, exe_path, pfx_dir, proton_path);
 
     log::info!(
         "[PrefixPrep] Prefix preparation finished; returning {} extra env var(s)",
@@ -203,9 +203,10 @@ pub fn install_vcredist_into_prefix(
 /// Stage everything an OnlineFix payload needs and return the canonical
 /// DLL-override env set.
 ///
-/// Detection: the launch exe's OWN directory contains `OnlineFix64.dll`. If it
-/// doesn't, this is not an OnlineFix game and we return an empty env. When it
-/// is, we (idempotently, where file ops are involved):
+/// Detection: `OnlineFix64.dll` next to the launch exe, or — for UE-style games
+/// that launch a thin root stub but nest the crack under `Binaries/Win64/` —
+/// anywhere under the install dir. If absent this is not an OnlineFix game and we
+/// return an empty env. When present, we (idempotently, where file ops involved):
 ///   1. copy `GameOverlayRenderer64.dll` (from the live Steam install) and
 ///      Proton's `lsteamclient.dll` (renamed `steamclient64.dll`) into
 ///      `<pfx>/drive_c/Program Files (x86)/Steam/`;
@@ -217,7 +218,12 @@ pub fn install_vcredist_into_prefix(
 /// `steam_appid.txt` already presents Spacewar(480), and forcing it here would
 /// break Goldberg achievements (which key off the real appid).
 #[cfg(target_os = "linux")]
-fn prepare_onlinefix(exe_path: &str, pfx_dir: &Path, proton_path: &str) -> Vec<(String, String)> {
+fn prepare_onlinefix(
+    install_dir: &str,
+    exe_path: &str,
+    pfx_dir: &Path,
+    proton_path: &str,
+) -> Vec<(String, String)> {
     let exe_dir = match Path::new(exe_path).parent() {
         Some(d) => d.to_path_buf(),
         None => {
@@ -229,11 +235,25 @@ fn prepare_onlinefix(exe_path: &str, pfx_dir: &Path, proton_path: &str) -> Vec<(
         }
     };
 
-    let onlinefix_dll = exe_dir.join("OnlineFix64.dll");
-    if !onlinefix_dll.exists() {
-        log::info!("[PrefixPrep/B] No OnlineFix64.dll next to the exe — not an OnlineFix game");
-        return Vec::new();
-    }
+    // `OnlineFix64.dll` next to the launch exe is the common case (e.g. Gamble).
+    // UE-style games launch a thin root stub (`Goofy.exe`) but ship the crack
+    // nested at `…/Binaries/Win64/OnlineFix64.dll`, so fall back to a bounded
+    // search of the install tree — without it the recipe silently never fires
+    // for those games and OnlineFix can never register Spacewar.
+    let onlinefix_dll = {
+        let beside_exe = exe_dir.join("OnlineFix64.dll");
+        if beside_exe.exists() {
+            beside_exe
+        } else if let Some(found) = find_file_named(Path::new(install_dir), "OnlineFix64.dll", 6) {
+            found
+        } else {
+            log::info!(
+                "[PrefixPrep/B] No OnlineFix64.dll next to the exe or under {:?} — not an OnlineFix game",
+                install_dir
+            );
+            return Vec::new();
+        }
+    };
 
     log::info!(
         "[PrefixPrep/B] OnlineFix payload detected ({:?}) — staging Steam DLLs + symlinks",
@@ -278,6 +298,12 @@ fn prepare_onlinefix(exe_path: &str, pfx_dir: &Path, proton_path: &str) -> Vec<(
 
     // ── Step 2: ensure the Linux-side steamclient.so symlinks exist ──────────
     ensure_steam_sdk_symlinks();
+
+    // ── Step 2b: force the OnlineFix Steam-detection sentinel ────────────────
+    // OnlineFix reads HKCU\Software\Valve\Steam\ActiveProcess\PID and only accepts
+    // Proton's 0xfffe "Steam is here" sentinel; a prefix carrying a real wine pid
+    // makes it abort with "steam is not launched" and never load steamclient64.dll.
+    ensure_steam_active_process_pid(pfx_dir);
 
     // ── Step 4 (best-effort): warn if Steam isn't running ────────────────────
     if !is_steam_running() {
@@ -463,6 +489,91 @@ fn ensure_steam_sdk_symlinks() {
                 e
             ),
         }
+    }
+}
+
+/// Force `HKCU\Software\Valve\Steam\ActiveProcess\PID` to Proton's `0xfffe`
+/// "Steam is here" sentinel inside the prefix's `user.reg`.
+///
+/// OnlineFix's "is Steam running?" check reads that value and rejects a real wine
+/// pid, only accepting `0xfffe`; a prefix that ended up with a real pid (e.g.
+/// written by an earlier non-Steam wine process) makes OnlineFix abort with
+/// "steam is not launched" and never load `steamclient64.dll`. Proton does not
+/// overwrite the value on subsequent launches, so a one-time rewrite sticks.
+///
+/// Best-effort and file-based (no extra wine launch): scoped to the
+/// `ActiveProcess` section so no other key is touched, and silently skipped if
+/// `user.reg` or that section isn't present yet (a brand-new prefix gets it on a
+/// later launch, once Proton has initialised the registry). Never fails a launch.
+#[cfg(target_os = "linux")]
+fn ensure_steam_active_process_pid(pfx_dir: &Path) {
+    const SECTION: &str = "[Software\\\\Valve\\\\Steam\\\\ActiveProcess]";
+    const PID_KEY: &str = "\"PID\"=dword:";
+    const SENTINEL: &str = "\"PID\"=dword:0000fffe";
+
+    let reg_path = pfx_dir.join("user.reg");
+    let content = match std::fs::read_to_string(&reg_path) {
+        Ok(c) => c,
+        Err(_) => {
+            log::info!(
+                "[PrefixPrep/B] user.reg not present yet — ActiveProcess PID will be set on a later launch"
+            );
+            return;
+        }
+    };
+    if !content.contains(SECTION) {
+        log::info!(
+            "[PrefixPrep/B] No ActiveProcess section in user.reg yet — skipping the OnlineFix PID fix this launch"
+        );
+        return;
+    }
+
+    let mut out = String::with_capacity(content.len() + SENTINEL.len() + 1);
+    let mut in_section = false;
+    let mut pid_done = false;
+    let mut changed = false;
+
+    for line in content.lines() {
+        if line.starts_with('[') {
+            // Leaving a section: if it was ActiveProcess and had no PID line, add it.
+            if in_section && !pid_done {
+                out.push_str(SENTINEL);
+                out.push('\n');
+                changed = true;
+            }
+            in_section = line.starts_with(SECTION);
+            pid_done = false;
+        } else if in_section && !pid_done && line.starts_with(PID_KEY) {
+            pid_done = true;
+            if line != SENTINEL {
+                out.push_str(SENTINEL);
+                out.push('\n');
+                changed = true;
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    // The file may end while still inside the ActiveProcess section.
+    if in_section && !pid_done {
+        out.push_str(SENTINEL);
+        out.push('\n');
+        changed = true;
+    }
+
+    if !changed {
+        log::info!("[PrefixPrep/B] ActiveProcess PID already the 0xfffe sentinel — no change");
+        return;
+    }
+    match std::fs::write(&reg_path, &out) {
+        Ok(()) => log::info!(
+            "[PrefixPrep/B] Forced ActiveProcess\\PID to the 0xfffe sentinel (OnlineFix \"steam is not launched\" fix)"
+        ),
+        Err(e) => log::warn!(
+            "[PrefixPrep/B] Could not rewrite user.reg for the PID fix: {} (launch continues)",
+            e
+        ),
     }
 }
 

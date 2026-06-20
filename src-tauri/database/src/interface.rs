@@ -196,21 +196,40 @@ fn handle_invalid_database(
     games_base_dir: PathBuf,
     cache_dir: PathBuf,
 ) -> DatabaseResult<DatabaseInterface> {
-    match &error {
+    // Only genuinely-corrupt databases get reset. A transient I/O fault (flaky
+    // mount, permissions) is NOT corruption — resetting here would rename the real
+    // DB aside and wipe the media cache, destroying every install record and
+    // cached image over a temporary read error.
+    let should_reset = match &error {
         DatabaseError::Io(_) => {
-            warn!("database could not be read due to an I/O error: {error}")
+            error!("database could not be read due to an I/O error: {error}");
+            false
         }
         DatabaseError::InvalidUtf8(_) | DatabaseError::Deserialize(_) => {
-            warn!("database file is corrupt, backing it up and starting fresh: {error}")
+            warn!("database file is corrupt, backing it up and starting fresh: {error}");
+            true
         }
         DatabaseError::UnsupportedVersion { .. } => {
-            warn!("database schema is unsupported by this build: {error}")
+            warn!("database schema is unsupported by this build: {error}");
+            true
         }
         DatabaseError::MigrationFailed { .. } => {
-            warn!("database migration failed, backing up the original: {error}")
+            warn!("database migration failed, backing up the original: {error}");
+            true
         }
-        DatabaseError::Serialize(_) => warn!("database error: {error}"),
+        // Serialize errors only occur while WRITING; reaching this read-recovery
+        // path with one is unexpected, so abort rather than wipe.
+        DatabaseError::Serialize(_) => {
+            error!("unexpected serialize error during database recovery: {error}");
+            false
+        }
+    };
+
+    if !should_reset {
+        // Abort startup with the original error; leave the DB + cache untouched.
+        return Err(error);
     }
+
     let new_path = {
         let time = Utc::now().timestamp();
         let mut base = db_path.clone();

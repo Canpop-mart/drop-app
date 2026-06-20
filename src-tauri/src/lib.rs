@@ -260,8 +260,20 @@ pub fn run() {
     #[cfg(desktop)]
     #[allow(unused_variables)]
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|_app, argv, _cwd| {
-            // when defining deep link schemes at runtime, you must also check `argv` here
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Warm start: when Drop is already running, the OS hands the
+            // `drop://handshake/...` deep link to this *second* instance's argv
+            // (Windows/Linux) and routes it here. Forward it the same way
+            // on_open_url does, or the primary auth path silently no-ops.
+            for arg in &argv {
+                let Some(rest) = arg.strip_prefix("drop://handshake") else {
+                    continue;
+                };
+                // recieve_handshake wants just the path (drop any query/fragment).
+                let path = rest.split(['?', '#']).next().unwrap_or("").to_string();
+                tauri::async_runtime::spawn(recieve_handshake(app.clone(), path));
+                break;
+            }
         }));
     }
 
@@ -277,7 +289,6 @@ pub fn run() {
             collect_bug_report_log_file,
             open_log_folder,
             open_steam_keyboard,
-            open_fs,
             // User utils
             update_settings,
             fetch_settings,

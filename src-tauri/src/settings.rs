@@ -24,9 +24,13 @@ pub fn fetch_download_dir_stats() -> Vec<PathBuf> {
 }
 
 #[tauri::command]
-pub fn delete_download_dir(index: usize) {
+pub fn delete_download_dir(index: usize) -> Result<(), String> {
     let mut lock = borrow_db_mut_checked();
+    if index >= lock.applications.install_dirs.len() {
+        return Err(format!("No install directory at index {index}"));
+    }
     lock.applications.install_dirs.remove(index);
+    Ok(())
 }
 
 #[tauri::command]

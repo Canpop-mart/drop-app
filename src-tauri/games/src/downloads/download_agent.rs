@@ -235,7 +235,10 @@ impl GameDownloadAgent {
             return Err(ApplicationDownloadError::Communication(
                 RemoteAccessError::ManifestDownloadFailed(
                     response.status(),
-                    response.text().await.unwrap(),
+                    response
+                        .text()
+                        .await
+                        .unwrap_or_else(|e| format!("<failed to read error body: {e}>")),
                 ),
             ));
         }

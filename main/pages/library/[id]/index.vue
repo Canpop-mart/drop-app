@@ -330,12 +330,11 @@
  * and the matching `components/game-detail/*` child components. See
  * `docs/audit/desktop-frontend-2026.md` for the decomposition rationale.
  */
-import { micromark } from "micromark";
+import { renderMarkdown } from "~/composables/render-markdown";
 import { invoke } from "@tauri-apps/api/core";
 import { platform } from "@tauri-apps/plugin-os";
 import { useListen } from "~/composables/useListen";
 import { InstalledType } from "~/types";
-import { rewriteDescriptionImages } from "~/composables/use-server-fetch";
 import { useGameInstall } from "~/composables/game-detail/use-game-install";
 import { useGameLaunch } from "~/composables/game-detail/use-game-launch";
 import { useGameStats } from "~/composables/game-detail/use-game-stats";
@@ -364,9 +363,7 @@ const gameCompat = computed(() => compatSummaryRef?.value?.[id]);
 // panel itself is read-only and renders independent of dev mode).
 const devMode = useDevMode();
 
-const htmlDescription = rewriteDescriptionImages(
-  micromark(game.mDescription),
-);
+const htmlDescription = renderMarkdown(game.mDescription);
 
 // ── Composables ──────────────────────────────────────────────────────────
 const installCtl = useGameInstall(game);

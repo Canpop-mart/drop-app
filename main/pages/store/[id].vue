@@ -380,7 +380,7 @@ import {
   PlusIcon,
 } from "@heroicons/vue/24/outline";
 import { TrophyIcon } from "@heroicons/vue/24/solid";
-import { micromark } from "micromark";
+import { renderMarkdown } from "~/composables/render-markdown";
 import BannerFallback from "~/components/BannerFallback.vue";
 import { useGame } from "~/composables/game";
 import {
@@ -388,10 +388,7 @@ import {
   type StoreAchievement,
   type StoreGame,
 } from "~/composables/use-server-api";
-import {
-  rewriteDescriptionImages,
-  serverUrl,
-} from "~/composables/use-server-fetch";
+import { serverUrl } from "~/composables/use-server-fetch";
 import type { Game } from "~/types";
 
 const route = useRoute();
@@ -452,13 +449,12 @@ function achievementTooltip(ach: StoreAchievement): string {
   return parts.join(" — ");
 }
 
-// Game descriptions are authored in Markdown and may embed server-relative
-// image URLs. Render to HTML via micromark, then rewrite image `src`
-// attributes to absolute server:// URLs — the same pipeline the library
-// detail page uses. Empty string until the game loads.
+// Game descriptions are authored in Markdown — rendered through the shared,
+// sanitizing renderMarkdown (micromark → DOMPurify → image rewrite), the same
+// pipeline the library and big-picture pages use. Empty string until loaded.
 const htmlDescription = computed(() =>
   gameRef.value?.mDescription
-    ? rewriteDescriptionImages(micromark(gameRef.value.mDescription))
+    ? renderMarkdown(gameRef.value.mDescription)
     : "",
 );
 
