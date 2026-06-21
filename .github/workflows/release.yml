@@ -161,6 +161,35 @@ jobs:
             fi
           fi
 
+          # Bundle zerotier-one (full client) for co-op virtual-LAN rooms.
+          # Mirrors the proven Steam Deck recipe: stage the Arch package plus the
+          # two libs SteamOS lacks (libminiupnpc, libnatpmp) into usr/bin + usr/lib
+          # so the app can run + setcap a private copy at runtime. Tolerant of any
+          # failure — co-op rooms are optional, so a mirror hiccup ships the
+          # AppImage without them rather than failing the whole release.
+          echo "Bundling zerotier-one..."
+          zt_fetch() {
+            local fn repo
+            for repo in extra core; do
+              fn=$(curl -fsSL "https://archlinux.org/packages/$repo/x86_64/$1/json/" | python3 -c "import sys,json; print(json.load(sys.stdin)['filename'])" 2>/dev/null || true)
+              if [ -n "$fn" ] && curl -fsSL -o "/tmp/$1.pkg.tar.zst" "https://geo.mirror.pkgbuild.com/$repo/os/x86_64/$fn"; then
+                tar -I zstd -xf "/tmp/$1.pkg.tar.zst" -C /tmp usr 2>/dev/null && return 0
+              fi
+            done
+            return 1
+          }
+          if zt_fetch zerotier-one && zt_fetch miniupnpc && zt_fetch libnatpmp \
+             && [ -f /tmp/usr/bin/zerotier-one ]; then
+            mkdir -p squashfs-root/usr/bin squashfs-root/usr/lib
+            cp /tmp/usr/bin/zerotier-one squashfs-root/usr/bin/zerotier-one
+            chmod +x squashfs-root/usr/bin/zerotier-one
+            cp -a /tmp/usr/lib/libminiupnpc.so* squashfs-root/usr/lib/ 2>/dev/null || true
+            cp -a /tmp/usr/lib/libnatpmp.so* squashfs-root/usr/lib/ 2>/dev/null || true
+            echo "Bundled zerotier-one: $(LD_LIBRARY_PATH=squashfs-root/usr/lib squashfs-root/usr/bin/zerotier-one -v 2>&1 || echo ok)"
+          else
+            echo "WARNING: zerotier-one bundle failed (package fetch/extract) — shipping without co-op rooms"
+          fi
+
           # Download appimagetool to repack
           curl -Lo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool

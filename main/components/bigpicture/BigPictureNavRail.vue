@@ -64,6 +64,7 @@ import {
   Cog6ToothIcon,
   ArrowDownTrayIcon,
   ArrowsPointingInIcon,
+  UserGroupIcon,
 } from "@heroicons/vue/24/outline";
 import { useBigPictureMode } from "~/composables/big-picture";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
@@ -125,6 +126,11 @@ const navItems = [
     route: "/bigpicture/downloads",
     icon: ArrowDownTrayIcon,
     label: "Downloads",
+  },
+  {
+    route: "/bigpicture/multiplayer",
+    icon: UserGroupIcon,
+    label: "Multiplayer",
   },
   {
     route: "/bigpicture/settings",

@@ -63,6 +63,7 @@ mod scheduler;
 mod settings;
 mod streaming;
 mod updates;
+mod zerotier;
 
 use client::*;
 use compat::*;
@@ -73,6 +74,7 @@ use process::*;
 use remote::*;
 use settings::*;
 use streaming::*;
+use zerotier::*;
 
 use crate::scheduler::scheduler_task;
 
@@ -403,7 +405,17 @@ pub fn run() {
             streaming_request_stream,
             list_devices,
             request_remote_install,
-            sync_installed_games
+            sync_installed_games,
+            // ZeroTier co-op rooms
+            zerotier_status,
+            zerotier_prepare,
+            zerotier_join,
+            zerotier_leave,
+            zerotier_stop,
+            room_host,
+            room_join,
+            room_leave,
+            room_members
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
