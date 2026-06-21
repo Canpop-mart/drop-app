@@ -634,6 +634,11 @@ pub async fn room_members(room_id: String) -> Result<Value, String> {
     let url = generate_url(&[path.as_str()], &[]).map_err(|e| e.to_string())?;
     let resp = make_authenticated_get(url).await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
+        // A 404 means the room is gone (host ended it / it expired) — surface a
+        // stable marker so the UI can treat it as "session ended", not an error.
+        if resp.status().as_u16() == 404 {
+            return Err("room_not_found".to_string());
+        }
         return Err(format!("Could not fetch room: HTTP {}", resp.status()));
     }
     resp.json::<Value>().await.map_err(|e| e.to_string())

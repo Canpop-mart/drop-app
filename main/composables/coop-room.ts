@@ -33,6 +33,7 @@ export interface RoomMember {
 
 // Module-level so polling is a singleton regardless of how many views mount.
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function useCoopRoom() {
   const room = useState<RoomInfo | null>("coopRoom", () => null);
@@ -41,13 +42,38 @@ export function useCoopRoom() {
   const serverShortCode = useState<string | null>("coopServerCode", () => null);
   const busy = useState("coopBusy", () => false);
   const error = useState("coopError", () => "");
+  // Whether this device is the room's host (drives host-vs-joiner framing).
+  const isHost = useState("coopIsHost", () => false);
+  // Set when a joiner's room vanishes underneath them (host ended it / expired).
+  const sessionEnded = useState("coopSessionEnded", () => false);
+  const codeCopied = useState("coopCodeCopied", () => false);
 
-  const displayCode = computed(
+  // The raw join code (unformatted) — what we copy and what `join` expects.
+  const rawCode = computed(
     () => room.value?.shortCode ?? serverShortCode.value ?? "",
   );
+  // A friendlier, grouped form for display (e.g. "ABC123" -> "ABC-123").
+  const displayCode = computed(() => {
+    const c = rawCode.value;
+    return c.length === 6 ? `${c.slice(0, 3)}-${c.slice(3)}` : c;
+  });
 
   function errMessage(e: unknown): string {
     return e instanceof Error ? e.message : String(e);
+  }
+
+  async function copyCode() {
+    if (!rawCode.value) return;
+    try {
+      await navigator.clipboard.writeText(rawCode.value);
+      codeCopied.value = true;
+      if (copyTimer) clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => {
+        codeCopied.value = false;
+      }, 2000);
+    } catch (e) {
+      console.error("clipboard write failed", e);
+    }
   }
 
   async function loadStatus() {
@@ -68,8 +94,18 @@ export function useCoopRoom() {
       members.value = detail.members ?? [];
       if (detail.shortCode) serverShortCode.value = detail.shortCode;
     } catch (e) {
-      // The host may have torn the room down — leave state as-is, just log.
-      console.error("room_members failed", e);
+      // 404 = the room is gone (host ended it / expired). Treat as a calm
+      // "session ended", not an error. Other failures are transient — keep
+      // polling and stay in the room.
+      if (errMessage(e).includes("room_not_found")) {
+        stopPolling();
+        room.value = null;
+        members.value = [];
+        serverShortCode.value = null;
+        sessionEnded.value = true;
+      } else {
+        console.error("room_members failed", e);
+      }
     }
   }
 
@@ -88,11 +124,13 @@ export function useCoopRoom() {
     if (busy.value) return;
     busy.value = true;
     error.value = "";
+    sessionEnded.value = false;
     try {
       room.value = await invoke<RoomInfo>("room_host", {
         gameId: null,
         name: null,
       });
+      isHost.value = true;
       await pollMembers();
       startPolling();
     } catch (e) {
@@ -103,12 +141,15 @@ export function useCoopRoom() {
   }
 
   async function join(code: string) {
-    const c = code.trim().toUpperCase();
+    // Accept the code in any shape the user might type/paste it.
+    const c = code.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
     if (busy.value || c.length === 0) return;
     busy.value = true;
     error.value = "";
+    sessionEnded.value = false;
     try {
       room.value = await invoke<RoomInfo>("room_join", { shortCode: c });
+      isHost.value = false;
       await pollMembers();
       startPolling();
     } catch (e) {
@@ -136,19 +177,30 @@ export function useCoopRoom() {
     }
   }
 
+  // Dismiss the "session ended" notice and return to the idle view.
+  function dismissSessionEnded() {
+    sessionEnded.value = false;
+  }
+
   return {
     room,
     status,
     members,
     busy,
     error,
+    isHost,
+    sessionEnded,
+    codeCopied,
+    rawCode,
     displayCode,
     loadStatus,
     pollMembers,
     startPolling,
     stopPolling,
+    copyCode,
     host,
     join,
     leave,
+    dismissSessionEnded,
   };
 }
