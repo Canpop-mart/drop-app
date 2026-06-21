@@ -185,6 +185,14 @@ jobs:
             chmod +x squashfs-root/usr/bin/zerotier-one
             cp -a /tmp/usr/lib/libminiupnpc.so* squashfs-root/usr/lib/ 2>/dev/null || true
             cp -a /tmp/usr/lib/libnatpmp.so* squashfs-root/usr/lib/ 2>/dev/null || true
+            # zerotier-one needs CAP_NET_ADMIN at runtime, which makes the dynamic
+            # loader run in secure-execution mode and IGNORE LD_LIBRARY_PATH. Bake
+            # an absolute RPATH to the client's staged libs dir (honored even for a
+            # capability binary) so it still finds libminiupnpc/libnatpmp. SteamOS
+            # always runs as user 'deck', so this runtime path is fixed.
+            sudo apt-get install -y patchelf >/dev/null 2>&1 || true
+            patchelf --set-rpath "/home/deck/.local/share/drop/tools/zerotier/libs" squashfs-root/usr/bin/zerotier-one \
+              && echo "Set zerotier-one RPATH" || echo "WARNING: patchelf rpath failed"
             echo "Bundled zerotier-one: $(LD_LIBRARY_PATH=squashfs-root/usr/lib squashfs-root/usr/bin/zerotier-one -v 2>&1 || echo ok)"
           else
             echo "WARNING: zerotier-one bundle failed (package fetch/extract) — shipping without co-op rooms"
