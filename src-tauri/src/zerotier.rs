@@ -403,63 +403,61 @@ async fn daemon_alive() -> bool {
     }
 }
 
-/// Ensure ZeroTier is ready to use. On Linux this stages, capability-grants, and
-/// spawns our own bundled daemon; on Windows it ensures the official ZeroTier
-/// service is present and we can read its auth token. Safe to call repeatedly.
+/// Ensure ZeroTier is ready — Windows: the official service is installed and its
+/// auth token is readable. Safe to call repeatedly.
+#[cfg(target_os = "windows")]
 async fn ensure_daemon() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        ensure_windows_zerotier()?;
-        if !wait_for_api_ready().await {
-            return Err(
-                "The ZeroTier service isn't responding. Make sure the 'ZeroTier One' service is running."
-                    .to_string(),
-            );
-        }
+    ensure_windows_zerotier()?;
+    if !wait_for_api_ready().await {
+        return Err(
+            "The ZeroTier service isn't responding. Make sure the 'ZeroTier One' service is running."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Ensure ZeroTier is ready — Linux: stage, capability-grant, and spawn our own
+/// bundled daemon. Safe to call repeatedly.
+#[cfg(target_os = "linux")]
+async fn ensure_daemon() -> Result<(), String> {
+    if daemon_alive().await {
         return Ok(());
     }
 
-    #[cfg(target_os = "linux")]
+    let binary = stage_binary()?;
+    ensure_caps(&binary)?;
+
+    std::fs::create_dir_all(zerotier_data_dir())
+        .map_err(|e| format!("Failed to create zerotier data dir: {e}"))?;
+
+    let mut cmd = Command::new(&binary);
+    cmd.arg(format!("-p{ZT_API_PORT}")).arg(zerotier_data_dir());
+    // Point the loader at our staged libs (SteamOS lacks libminiupnpc/libnatpmp).
+    cmd.env("LD_LIBRARY_PATH", zerotier_libs_dir());
+
+    let child = cmd
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to start zerotier-one: {e}"))?;
+    info!("[ZEROTIER] Daemon started (PID {})", child.id());
+
     {
-        if daemon_alive().await {
-            return Ok(());
-        }
-
-        let binary = stage_binary()?;
-        ensure_caps(&binary)?;
-
-        std::fs::create_dir_all(zerotier_data_dir())
-            .map_err(|e| format!("Failed to create zerotier data dir: {e}"))?;
-
-        let mut cmd = Command::new(&binary);
-        cmd.arg(format!("-p{ZT_API_PORT}")).arg(zerotier_data_dir());
-        // Point the loader at our staged libs (SteamOS lacks libminiupnpc/libnatpmp).
-        cmd.env("LD_LIBRARY_PATH", zerotier_libs_dir());
-
-        let child = cmd
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| format!("Failed to start zerotier-one: {e}"))?;
-        info!("[ZEROTIER] Daemon started (PID {})", child.id());
-
-        {
-            let mut guard = ZT_DAEMON.lock().await;
-            *guard = Some(child);
-        }
-
-        if !wait_for_api_ready().await {
-            return Err(
-                "zerotier-one started but its control API never became ready.".to_string(),
-            );
-        }
-        return Ok(());
+        let mut guard = ZT_DAEMON.lock().await;
+        *guard = Some(child);
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-    {
-        Err("Co-op rooms aren't supported on this platform yet.".to_string())
+    if !wait_for_api_ready().await {
+        return Err("zerotier-one started but its control API never became ready.".to_string());
     }
+    Ok(())
+}
+
+/// Co-op rooms aren't supported on this platform yet.
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+async fn ensure_daemon() -> Result<(), String> {
+    Err("Co-op rooms aren't supported on this platform yet.".to_string())
 }
 
 // ── Tauri commands ────────────────────────────────────────────────────
