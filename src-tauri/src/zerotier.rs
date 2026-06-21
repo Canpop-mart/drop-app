@@ -137,6 +137,34 @@ fn find_zerotier() -> Option<PathBuf> {
     None
 }
 
+/// The official ZeroTier service's state dir on Windows (under ProgramData).
+#[cfg(target_os = "windows")]
+fn windows_zt_global_dir() -> PathBuf {
+    let pd = std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".to_string());
+    PathBuf::from(pd).join("ZeroTier").join("One")
+}
+
+/// Whether ZeroTier is available to Drop here — bundled (AppImage), a system
+/// install, or the official Windows service. Drives the UI's "available" state.
+fn is_installed() -> bool {
+    if find_zerotier().is_some() {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if bundled_source().is_some() {
+            return true;
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if windows_zt_global_dir().exists() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Stage zerotier-one (and, on Linux, its libs) into the writable tools dir so we
 /// can run it — and, on Linux, so we can `setcap` it. Idempotent: re-copies if the
 /// bundled binary is newer/missing.
@@ -195,16 +223,6 @@ fn stage_binary() -> Result<PathBuf, String> {
     Ok(target)
 }
 
-#[cfg(target_os = "windows")]
-fn stage_binary() -> Result<PathBuf, String> {
-    // Windows uses the official ZeroTier install (service). Full Windows support
-    // lands in a later milestone; for now we just locate an existing install.
-    find_zerotier().ok_or_else(|| {
-        "ZeroTier is not installed. Install the official ZeroTier client to use co-op rooms."
-            .to_string()
-    })
-}
-
 // ── Capabilities (Linux elevation) ────────────────────────────────────
 
 /// Does the managed binary already have the capabilities it needs?
@@ -218,11 +236,6 @@ fn caps_present(binary: &std::path::Path) -> bool {
         }
         Err(_) => false,
     }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn caps_present(_binary: &std::path::Path) -> bool {
-    true
 }
 
 /// Grant the managed binary CAP_NET_ADMIN/CAP_NET_RAW via a single `pkexec setcap`
@@ -252,8 +265,65 @@ fn ensure_caps(binary: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
-fn ensure_caps(_binary: &std::path::Path) -> Result<(), String> {
+// ── Windows: official-service integration ─────────────────────────────
+
+/// On Windows we drive the officially-installed ZeroTier service. Its auth token
+/// lives in a ProgramData dir only admins can read, so copy it once (via a UAC
+/// prompt) into Drop's data dir, which `read_auth_token` then reads.
+#[cfg(target_os = "windows")]
+fn ensure_windows_zerotier() -> Result<(), String> {
+    let global_token = windows_zt_global_dir().join("authtoken.secret");
+    if !global_token.exists() {
+        return Err(
+            "ZeroTier isn't installed. Install the official ZeroTier client from zerotier.com, \
+             then try again."
+                .to_string(),
+        );
+    }
+    let cached = zerotier_data_dir().join("authtoken.secret");
+    if cached.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(zerotier_data_dir())
+        .map_err(|e| format!("Failed to create zerotier data dir: {e}"))?;
+    copy_authtoken_elevated(&global_token, &cached)?;
+    if !cached.exists() {
+        return Err("Could not read ZeroTier's auth token (the copy did not complete).".to_string());
+    }
+    Ok(())
+}
+
+/// Copy ZeroTier's admin-only auth token into Drop's data dir via one UAC prompt.
+/// Mirrors `settings::add_defender_exclusions`' elevation approach.
+#[cfg(target_os = "windows")]
+fn copy_authtoken_elevated(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let inner = format!(
+        "Copy-Item -LiteralPath '{}' -Destination '{}' -Force; \
+         icacls '{}' /grant:r \"$($env:USERNAME):R\"",
+        src.display().to_string().replace('\'', "''"),
+        dst.display().to_string().replace('\'', "''"),
+        dst.display().to_string().replace('\'', "''"),
+    );
+    let encoded = {
+        let utf16: Vec<u8> = inner.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+        STANDARD.encode(utf16)
+    };
+    let outer = format!(
+        "Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden \
+         -ArgumentList '-NoProfile','-EncodedCommand','{encoded}'"
+    );
+    info!("[ZEROTIER] Requesting one-time elevation to read the ZeroTier auth token");
+    let status = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &outer])
+        .status()
+        .map_err(|e| format!("Failed to start elevated PowerShell: {e}"))?;
+    if !status.success() {
+        return Err(
+            "Elevation was declined. Co-op rooms need to read ZeroTier's auth token once."
+                .to_string(),
+        );
+    }
     Ok(())
 }
 
@@ -333,44 +403,63 @@ async fn daemon_alive() -> bool {
     }
 }
 
-/// Ensure zerotier-one is staged, capable, and running. Safe to call repeatedly.
+/// Ensure ZeroTier is ready to use. On Linux this stages, capability-grants, and
+/// spawns our own bundled daemon; on Windows it ensures the official ZeroTier
+/// service is present and we can read its auth token. Safe to call repeatedly.
 async fn ensure_daemon() -> Result<(), String> {
-    if daemon_alive().await {
+    #[cfg(target_os = "windows")]
+    {
+        ensure_windows_zerotier()?;
+        if !wait_for_api_ready().await {
+            return Err(
+                "The ZeroTier service isn't responding. Make sure the 'ZeroTier One' service is running."
+                    .to_string(),
+            );
+        }
         return Ok(());
     }
 
-    let binary = stage_binary()?;
-    ensure_caps(&binary)?;
-
-    std::fs::create_dir_all(zerotier_data_dir())
-        .map_err(|e| format!("Failed to create zerotier data dir: {e}"))?;
-
-    let mut cmd = Command::new(&binary);
-    cmd.arg(format!("-p{ZT_API_PORT}"))
-        .arg(zerotier_data_dir());
-
     #[cfg(target_os = "linux")]
     {
+        if daemon_alive().await {
+            return Ok(());
+        }
+
+        let binary = stage_binary()?;
+        ensure_caps(&binary)?;
+
+        std::fs::create_dir_all(zerotier_data_dir())
+            .map_err(|e| format!("Failed to create zerotier data dir: {e}"))?;
+
+        let mut cmd = Command::new(&binary);
+        cmd.arg(format!("-p{ZT_API_PORT}")).arg(zerotier_data_dir());
         // Point the loader at our staged libs (SteamOS lacks libminiupnpc/libnatpmp).
         cmd.env("LD_LIBRARY_PATH", zerotier_libs_dir());
+
+        let child = cmd
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Failed to start zerotier-one: {e}"))?;
+        info!("[ZEROTIER] Daemon started (PID {})", child.id());
+
+        {
+            let mut guard = ZT_DAEMON.lock().await;
+            *guard = Some(child);
+        }
+
+        if !wait_for_api_ready().await {
+            return Err(
+                "zerotier-one started but its control API never became ready.".to_string(),
+            );
+        }
+        return Ok(());
     }
 
-    let child = cmd
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Failed to start zerotier-one: {e}"))?;
-    info!("[ZEROTIER] Daemon started (PID {})", child.id());
-
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
-        let mut guard = ZT_DAEMON.lock().await;
-        *guard = Some(child);
+        Err("Co-op rooms aren't supported on this platform yet.".to_string())
     }
-
-    if !wait_for_api_ready().await {
-        return Err("zerotier-one started but its control API never became ready.".to_string());
-    }
-    Ok(())
 }
 
 // ── Tauri commands ────────────────────────────────────────────────────
@@ -378,11 +467,16 @@ async fn ensure_daemon() -> Result<(), String> {
 /// Report the current ZeroTier state for the UI.
 #[tauri::command]
 pub async fn zerotier_status() -> ZerotierStatus {
-    let binary = find_zerotier();
-    let installed = binary.is_some();
-    let caps_ready = binary.as_deref().map(caps_present).unwrap_or(false);
+    let installed = is_installed();
+
+    #[cfg(target_os = "linux")]
+    let caps_ready = find_zerotier().as_deref().map(caps_present).unwrap_or(false);
+    #[cfg(not(target_os = "linux"))]
+    let caps_ready = true;
+
     let running = daemon_alive().await;
     let node_id = if running { fetch_node_id().await } else { None };
+
     ZerotierStatus {
         installed,
         running,

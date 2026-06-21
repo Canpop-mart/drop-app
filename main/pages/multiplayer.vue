@@ -1,22 +1,13 @@
 <template>
-  <div
-    class="px-8 py-6"
-    :style="{
-      backgroundColor: 'var(--bpm-bg)',
-      color: 'var(--bpm-text)',
-      minHeight: '100%',
-    }"
-  >
+  <div class="min-h-full bg-zinc-950 text-zinc-100 px-8 py-8">
     <div class="max-w-2xl mx-auto">
       <div class="flex items-center gap-3 mb-2">
         <UserGroupIcon class="size-7 text-blue-400" />
-        <h1 class="text-2xl font-semibold font-display text-zinc-100">
-          Co-op Rooms
-        </h1>
+        <h1 class="text-2xl font-semibold font-display">Co-op Rooms</h1>
       </div>
       <p class="text-sm text-zinc-500 mb-6">
         Put friends on a private virtual LAN so LAN / co-op games discover each
-        other across the internet.
+        other across the internet — no port-forwarding.
       </p>
 
       <div
@@ -30,8 +21,9 @@
         v-if="status && !status.installed"
         class="px-4 py-3 rounded-lg bg-amber-900/20 border border-amber-500/30 text-amber-200 text-sm"
       >
-        ZeroTier isn't available in this build. Co-op rooms need the bundled
-        client (Steam Deck / Linux AppImage).
+        ZeroTier isn't installed. Install the official ZeroTier client from
+        <span class="font-mono">zerotier.com/download</span>, then reopen this
+        page.
       </div>
 
       <!-- In a room -->
@@ -45,11 +37,7 @@
           >
             {{ displayCode || "…" }}
           </span>
-          <p v-if="room.name" class="text-sm text-zinc-400 mt-2">
-            {{ room.name }}
-          </p>
         </div>
-
         <div>
           <p class="text-sm font-medium text-zinc-400 mb-2">In this room</p>
           <div class="space-y-2">
@@ -71,9 +59,7 @@
             </p>
           </div>
         </div>
-
         <button
-          :ref="(el: any) => registerAction(el, { onSelect: leave })"
           :disabled="busy"
           class="px-5 py-2.5 rounded-lg text-sm font-medium bg-red-900/40 text-red-200 hover:bg-red-900/60 disabled:opacity-50"
           @click="leave"
@@ -94,7 +80,6 @@
             Create a room and share the code with friends.
           </p>
           <button
-            :ref="(el: any) => registerAction(el, { onSelect: host })"
             :disabled="busy"
             class="px-5 py-2.5 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
             @click="host"
@@ -102,7 +87,6 @@
             {{ busy ? "Working…" : "Host a room" }}
           </button>
         </div>
-
         <div class="rounded-xl bg-zinc-900/60 p-6">
           <h2 class="text-lg font-medium text-zinc-200 mb-1">Join a room</h2>
           <p class="text-sm text-zinc-500 mb-4">
@@ -111,14 +95,12 @@
           <div class="flex items-center gap-3">
             <input
               v-model="joinCode"
-              :ref="(el: any) => registerAction(el)"
               placeholder="ABC123"
               maxlength="16"
               class="flex-1 px-4 py-2.5 rounded-lg bg-zinc-800 text-zinc-100 text-lg font-mono tracking-widest uppercase placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
               @keyup.enter="onJoin"
             />
             <button
-              :ref="(el: any) => registerAction(el, { onSelect: onJoin })"
               :disabled="busy || joinCode.trim().length === 0"
               class="px-5 py-2.5 rounded-lg text-sm font-medium bg-zinc-700 text-zinc-100 hover:bg-zinc-600 disabled:opacity-50"
               @click="onJoin"
@@ -127,10 +109,9 @@
             </button>
           </div>
         </div>
-
         <p class="text-xs text-zinc-600">
-          You may be asked for your password once, to let the app set up the
-          virtual network adapter.
+          You may be asked for your password once, to let the app read ZeroTier's
+          settings.
         </p>
       </div>
     </div>
@@ -139,11 +120,7 @@
 
 <script setup lang="ts">
 import { UserGroupIcon } from "@heroicons/vue/24/outline";
-import { useBpFocusableGroup } from "~/composables/bp-focusable";
-import { useFocusNavigation } from "~/composables/focus-navigation";
 import { useCoopRoom } from "~/composables/coop-room";
-
-definePageMeta({ layout: "bigpicture" });
 
 const {
   room,
@@ -166,16 +143,12 @@ function onJoin() {
   join(joinCode.value);
 }
 
-const focusNav = useFocusNavigation();
-const registerAction = useBpFocusableGroup("content");
-
 onMounted(() => {
   loadStatus();
   if (room.value) {
     pollMembers();
     startPolling();
   }
-  focusNav.autoFocusContent("content");
 });
 onUnmounted(() => {
   stopPolling();

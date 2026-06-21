@@ -140,7 +140,9 @@ const router = useRouter();
 const quickActions: Array<QuickActionNav> = [
   {
     icon: UserGroupIcon,
-    action: async () => {},
+    action: async () => {
+      await router.push("/multiplayer");
+    },
   },
   {
     icon: BellIcon,
