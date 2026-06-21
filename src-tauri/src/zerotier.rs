@@ -432,8 +432,14 @@ async fn ensure_daemon() -> Result<(), String> {
         .map_err(|e| format!("Failed to create zerotier data dir: {e}"))?;
 
     let mut cmd = Command::new(&binary);
-    cmd.arg(format!("-p{ZT_API_PORT}")).arg(zerotier_data_dir());
-    // Point the loader at our staged libs (SteamOS lacks libminiupnpc/libnatpmp).
+    // -U skips zerotier-one's "must be run as root" uid check so it runs as the
+    // user, relying on the CAP_NET_ADMIN/CAP_NET_RAW we granted via setcap (caps
+    // alone don't satisfy the uid check). The absolute RPATH baked into the
+    // binary lets it find the staged libs even under secure-execution mode.
+    cmd.arg("-U")
+        .arg(format!("-p{ZT_API_PORT}"))
+        .arg(zerotier_data_dir());
+    // Belt-and-suspenders for non-capability runs (ignored under secure-exec).
     cmd.env("LD_LIBRARY_PATH", zerotier_libs_dir());
 
     let child = cmd
