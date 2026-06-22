@@ -415,7 +415,8 @@ pub fn run() {
             room_host,
             room_join,
             room_leave,
-            room_members
+            room_members,
+            room_browse
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

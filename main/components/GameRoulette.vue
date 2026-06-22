@@ -141,7 +141,7 @@ const caption = computed(() => {
       // any catalog game). The caption is identical and reads off the
       // same alsoPlayedBy enrichment when present.
       const n = result.value.alsoPlayedBy?.length ?? 0;
-      if (n === 0) return "From the Drop catalog — give it a try";
+      if (n === 0) return "From the Drop catalog, give it a try";
       if (n === 1)
         return `${result.value.alsoPlayedBy![0].displayName} has played this`;
       return `${n} on this server have played this`;

@@ -99,6 +99,7 @@
             :key="cluster.key"
             :cluster="cluster"
             @go-to-game="goToGame"
+            @go-to-user="goToUser"
           />
         </div>
       </div>
@@ -136,17 +137,22 @@
             >
               {{ entry.rank }}
             </span>
-            <img
-              v-if="entry.user.profilePictureObjectId"
-              :src="objectUrl(entry.user.profilePictureObjectId)"
-              class="size-7 rounded-full object-cover shrink-0"
-            />
-            <div
-              v-else
-              class="size-7 rounded-full bg-zinc-700 flex items-center justify-center shrink-0"
+            <button
+              class="shrink-0 rounded-full transition-transform hover:scale-110"
+              @click="goToUser(entry.user.id)"
             >
-              <UserIcon class="size-3.5 text-zinc-500" />
-            </div>
+              <img
+                v-if="entry.user.profilePictureObjectId"
+                :src="objectUrl(entry.user.profilePictureObjectId)"
+                class="size-7 rounded-full object-cover"
+              />
+              <div
+                v-else
+                class="size-7 rounded-full bg-zinc-700 flex items-center justify-center"
+              >
+                <UserIcon class="size-3.5 text-zinc-500" />
+              </div>
+            </button>
             <!--
               Two-line cell when the user is currently in a session: name
               + MVP crown on top, pulsing green dot + game name underneath.
@@ -155,9 +161,12 @@
             -->
             <div class="flex-1 min-w-0">
               <div class="text-sm flex items-center gap-1 min-w-0">
-                <span class="font-medium truncate text-zinc-100">{{
-                  entry.user.displayName || entry.user.username
-                }}</span>
+                <button
+                  class="font-medium truncate text-zinc-100 hover:text-blue-400 transition-colors text-left"
+                  @click="goToUser(entry.user.id)"
+                >
+                  {{ entry.user.displayName || entry.user.username }}
+                </button>
                 <span
                   v-if="mvp && entry.user.id === mvp.userId"
                   :title="mvpTooltip"
@@ -252,7 +261,7 @@ const mvpTooltip = computed(() => {
   const hours = Math.max(1, Math.round(mvp.value.sessionSeconds / 3600));
   const playLabel =
     mvp.value.sessionSeconds === 0 ? "no playtime" : `${hours}h playtime`;
-  return `Today's MVP — ${playLabel} · ${mvp.value.achievementsUnlocked} achievement${mvp.value.achievementsUnlocked === 1 ? "" : "s"}`;
+  return `Today's MVP: ${playLabel} · ${mvp.value.achievementsUnlocked} achievement${mvp.value.achievementsUnlocked === 1 ? "" : "s"}`;
 });
 
 function objectUrl(id: string): string {
@@ -268,11 +277,10 @@ function goToGame(gameId: string) {
   router.push(`/store/${gameId}`);
 }
 
-function goToUser(_userId: string) {
-  // The native desktop client doesn't currently surface per-user profile
-  // pages; we just no-op here so weekly-recap slides that link to a user
-  // don't blow up. The BPM surface and the server-rendered iframe
-  // surface both have their own profile routes.
+function goToUser(userId: string) {
+  // Native read-only profile page (main/pages/profile/[id].vue). Mirrors the
+  // BPM surface, which has its own /bigpicture/profile/[id] route.
+  router.push(`/profile/${userId}`);
 }
 
 // "Now playing" presence is the only datum on this page that is genuinely

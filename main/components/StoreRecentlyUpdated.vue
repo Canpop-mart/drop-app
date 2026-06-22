@@ -96,7 +96,7 @@
             >
               {{
                 g.mShortDescription ||
-                "New catalog entry — view details for what changed."
+                "New catalog entry. View details for what changed."
               }}
             </p>
             <p

@@ -475,7 +475,7 @@ async function installVcRuntime() {
     createModal(
       ModalType.Notification,
       {
-        title: `Visual C++ runtime — ${game.mName}`,
+        title: `Visual C++ runtime: ${game.mName}`,
         description:
           "The Visual C++ runtime was installed into this game's Proton prefix. " +
           "If the game was failing with a missing-DLL error, try launching it again.",
@@ -564,13 +564,13 @@ function onCompatTestResult(outcome: unknown) {
   if (o.signature) lines.push(`Signature: ${o.signature}`);
   if (!o.posted) {
     lines.push(
-      "(Server didn't accept the result — may be offline or unauthenticated.)",
+      "(Server didn't accept the result. It may be offline or unauthenticated.)",
     );
   }
   createModal(
     ModalType.Notification,
     {
-      title: `Compatibility test — ${game.mName}`,
+      title: `Compatibility test: ${game.mName}`,
       description: lines.join("\n"),
       buttonText: "OK",
     },

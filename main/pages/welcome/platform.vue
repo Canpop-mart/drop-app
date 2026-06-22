@@ -134,7 +134,7 @@ const title = computed(() =>
 const subtitle = computed(() =>
   isLinux
     ? "Proton lets Drop run Windows games on Linux. Most people should keep the recommended default."
-    : "Running on " + currentPlatform + " — no compatibility layer needed.",
+    : "Running on " + currentPlatform + ". No compatibility layer needed.",
 );
 
 onMounted(async () => {

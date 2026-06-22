@@ -2,17 +2,22 @@
   <div
     class="flex items-center gap-x-3 rounded-xl bg-zinc-800/50 backdrop-blur-sm p-3 ring-1 ring-zinc-700/40 hover:ring-blue-500/40 transition-colors"
   >
-    <img
-      v-if="cluster.user.profilePictureObjectId"
-      :src="objectUrl(cluster.user.profilePictureObjectId)"
-      class="size-10 rounded-full object-cover shrink-0"
-    />
-    <div
-      v-else
-      class="size-10 rounded-full bg-zinc-700 flex items-center justify-center shrink-0"
+    <button
+      class="shrink-0 rounded-full transition-transform hover:scale-105"
+      @click="$emit('go-to-user', cluster.user.id)"
     >
-      <UserIcon class="size-5 text-zinc-500" />
-    </div>
+      <img
+        v-if="cluster.user.profilePictureObjectId"
+        :src="objectUrl(cluster.user.profilePictureObjectId)"
+        class="size-10 rounded-full object-cover"
+      />
+      <div
+        v-else
+        class="size-10 rounded-full bg-zinc-700 flex items-center justify-center"
+      >
+        <UserIcon class="size-5 text-zinc-500" />
+      </div>
+    </button>
 
     <div class="flex-1 min-w-0">
       <!--
@@ -26,7 +31,10 @@
         naturally for sessions that have no recorded duration yet.
       -->
       <p class="text-sm text-zinc-300 leading-snug">
-        <span class="font-medium text-zinc-100">{{ userLabel }}</span>
+        <button
+          class="font-medium text-zinc-100 hover:text-blue-400 transition-colors"
+          @click="$emit('go-to-user', cluster.user.id)"
+        >{{ userLabel }}</button>
         <span>&nbsp;{{ verb }}&nbsp;</span>
         <button
           v-if="cluster.kind !== 'request' && cluster.game"
@@ -102,6 +110,7 @@ const props = defineProps<{
 
 defineEmits<{
   (e: "go-to-game", gameId: string): void;
+  (e: "go-to-user", userId: string): void;
 }>();
 
 const hasPlaytime = computed(

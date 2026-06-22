@@ -928,7 +928,7 @@ const rouletteCaption = computed(() => {
       // Both branches mean "the caller doesn't own this" — provenance
       // differs but the caption reads off the same alsoPlayedBy enrichment.
       const n = rouletteResult.value.alsoPlayedBy?.length ?? 0;
-      if (n === 0) return "From the Drop catalog — give it a try";
+      if (n === 0) return "From the Drop catalog, give it a try";
       if (n === 1)
         return `${rouletteResult.value.alsoPlayedBy![0].displayName} has played this`;
       return `${n} on this server have played this`;

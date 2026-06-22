@@ -446,7 +446,7 @@ function achievementTooltip(ach: StoreAchievement): string {
   } else if (ach.rarity > 0) {
     parts.push(`${ach.rarity.toFixed(1)}% of players have this`);
   }
-  return parts.join(" — ");
+  return parts.join(" · ");
 }
 
 // Game descriptions are authored in Markdown — rendered through the shared,
@@ -532,7 +532,7 @@ async function addToLibrary() {
     inLibrary.value = true;
   } catch (e) {
     console.error("[store/[id]] add to library failed:", e);
-    libraryError.value = "Couldn't add to library — please try again.";
+    libraryError.value = "Couldn't add to library. Please try again.";
   } finally {
     libraryActionLoading.value = false;
   }

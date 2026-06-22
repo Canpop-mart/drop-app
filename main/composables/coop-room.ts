@@ -30,6 +30,17 @@ export interface RoomMember {
   joinedAt: string;
   isHost: boolean;
 }
+export interface BrowsableRoom {
+  roomId: string;
+  shortCode: string;
+  name?: string | null;
+  gameId?: string | null;
+  gameName?: string | null;
+  hostName: string;
+  memberCount: number;
+  createdAt: string;
+  isSelf: boolean;
+}
 
 // Module-level so polling is a singleton regardless of how many views mount.
 let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -47,6 +58,9 @@ export function useCoopRoom() {
   // Set when a joiner's room vanishes underneath them (host ended it / expired).
   const sessionEnded = useState("coopSessionEnded", () => false);
   const codeCopied = useState("coopCodeCopied", () => false);
+  // Browsable open rooms, populated on demand by `browse()`.
+  const browsable = useState<BrowsableRoom[]>("coopBrowsable", () => []);
+  const browsing = useState("coopBrowsing", () => false);
 
   // The raw join code (unformatted) — what we copy and what `join` expects.
   const rawCode = computed(
@@ -159,6 +173,19 @@ export function useCoopRoom() {
     }
   }
 
+  // Fetch the list of open rooms to join. Best-effort: surfaces errors via the
+  // shared `error` state, leaving any previously-loaded list in place.
+  async function browse() {
+    browsing.value = true;
+    try {
+      browsable.value = await invoke<BrowsableRoom[]>("room_browse");
+    } catch (e) {
+      error.value = errMessage(e);
+    } finally {
+      browsing.value = false;
+    }
+  }
+
   async function leave() {
     if (!room.value || busy.value) return;
     busy.value = true;
@@ -191,6 +218,8 @@ export function useCoopRoom() {
     isHost,
     sessionEnded,
     codeCopied,
+    browsable,
+    browsing,
     rawCode,
     displayCode,
     loadStatus,
@@ -200,6 +229,7 @@ export function useCoopRoom() {
     copyCode,
     host,
     join,
+    browse,
     leave,
     dismissSessionEnded,
   };

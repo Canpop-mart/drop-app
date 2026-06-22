@@ -13,7 +13,7 @@
       </div>
       <p class="text-sm text-zinc-500 mb-6">
         Put friends on a private virtual LAN so LAN / co-op games discover each
-        other across the internet — no port-forwarding.
+        other across the internet. No port-forwarding needed.
       </p>
 
       <div
@@ -53,7 +53,7 @@
       <div v-else-if="room" class="space-y-5">
         <div class="rounded-xl bg-zinc-900/60 p-6">
           <p class="text-xs uppercase tracking-wide text-zinc-500 mb-2">
-            {{ isHost ? "Room code — share it with friends" : "Room code" }}
+            {{ isHost ? "Room code (share with friends)" : "Room code" }}
           </p>
           <button
             class="group inline-flex items-center gap-3"
@@ -138,7 +138,7 @@
         </div>
 
         <p class="text-xs text-zinc-600">
-          Now launch your game and use its LAN / "join by IP" option — friends in
+          Now launch your game and use its LAN / "join by IP" option. Friends in
           this room appear as if on your local network.
         </p>
       </div>
@@ -180,6 +180,49 @@
             </button>
           </div>
         </div>
+        <div class="rounded-xl bg-zinc-900/60 p-6">
+          <div class="flex items-center justify-between mb-1">
+            <h2 class="text-lg font-medium text-zinc-200">Open rooms</h2>
+            <button
+              :disabled="browsing"
+              class="text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+              @click="browse"
+            >
+              {{ browsing ? "Refreshing…" : "Refresh" }}
+            </button>
+          </div>
+          <p class="text-sm text-zinc-500 mb-4">
+            Jump into a room someone on this server is hosting.
+          </p>
+          <div v-if="browsable.length" class="space-y-2">
+            <div
+              v-for="r in browsable"
+              :key="r.roomId"
+              class="flex items-center gap-3 rounded-lg bg-zinc-800/50 px-4 py-3"
+            >
+              <div class="min-w-0 flex-1">
+                <p class="text-sm font-medium text-zinc-200 truncate">
+                  {{ r.gameName || r.name || "Co-op room" }}
+                </p>
+                <p class="text-xs text-zinc-500 truncate">
+                  {{ r.hostName }} · {{ r.memberCount }}
+                  {{ r.memberCount === 1 ? "player" : "players" }}
+                </p>
+              </div>
+              <button
+                :disabled="busy"
+                class="shrink-0 px-4 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
+                @click="join(r.shortCode)"
+              >
+                Join
+              </button>
+            </div>
+          </div>
+          <p v-else class="text-sm text-zinc-600">
+            {{ browsing ? "Looking for rooms…" : "No open rooms right now." }}
+          </p>
+        </div>
+
         <p class="text-xs text-zinc-600">
           You may be asked for your password once, to let the app read ZeroTier's
           settings.
@@ -202,6 +245,8 @@ const {
   isHost,
   sessionEnded,
   codeCopied,
+  browsable,
+  browsing,
   displayCode,
   loadStatus,
   pollMembers,
@@ -210,6 +255,7 @@ const {
   copyCode,
   host,
   join,
+  browse,
   leave,
   dismissSessionEnded,
 } = useCoopRoom();
@@ -231,6 +277,8 @@ onMounted(() => {
   if (room.value) {
     pollMembers();
     startPolling();
+  } else {
+    browse();
   }
 });
 onUnmounted(() => {

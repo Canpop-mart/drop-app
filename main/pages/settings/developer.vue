@@ -43,8 +43,8 @@
     >
       <h4 class="text-sm font-medium text-blue-200">Currently revealed</h4>
       <ul class="mt-2 ml-5 list-disc text-sm text-blue-200/85 space-y-1">
-        <li>Streaming (Sunshine/Moonlight) — settings tab, per-game button</li>
-        <li>Cloud save sync (Ludusavi) — Saves tab in Big Picture Mode</li>
+        <li>Streaming (Sunshine/Moonlight): settings tab, per-game button</li>
+        <li>Cloud save sync (Ludusavi): Saves tab in Big Picture Mode</li>
         <li>Per-game compatibility tests and the batch tester</li>
       </ul>
       <p class="mt-3 text-xs text-blue-200/70">

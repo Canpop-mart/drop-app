@@ -643,3 +643,15 @@ pub async fn room_members(room_id: String) -> Result<Value, String> {
     }
     resp.json::<Value>().await.map_err(|e| e.to_string())
 }
+
+/// Fetch the list of currently-joinable rooms from the server, so the user can
+/// join one without the host sharing a code first.
+#[tauri::command]
+pub async fn room_browse() -> Result<Value, String> {
+    let url = generate_url(&["/api/v1/client/room/browse"], &[]).map_err(|e| e.to_string())?;
+    let resp = make_authenticated_get(url).await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("Could not list rooms: HTTP {}", resp.status()));
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}

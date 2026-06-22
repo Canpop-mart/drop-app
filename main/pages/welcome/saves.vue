@@ -2,7 +2,7 @@
   <BpmWizardShell
     step-key="saves"
     title="Cloud saves"
-    subtitle="Drop uses Ludusavi to find and back up game saves. It's a separate, free tool — Drop can install it for you."
+    subtitle="Drop uses Ludusavi to find and back up game saves. It's a separate, free tool. Drop can install it for you."
     :next-disabled="installing"
     :next-label="installed ? 'Continue' : installing ? 'Installing…' : 'Skip for now'"
   >

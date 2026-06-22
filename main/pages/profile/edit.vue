@@ -342,7 +342,7 @@ onMounted(async () => {
     };
   } catch (e) {
     saveError.value =
-      "Couldn't load your profile — " +
+      "Couldn't load your profile. " +
       (e instanceof Error ? e.message : String(e));
   } finally {
     loading.value = false;

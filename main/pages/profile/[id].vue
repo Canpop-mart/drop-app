@@ -8,21 +8,16 @@
       <div
         class="size-4 rounded-full border-2 border-zinc-700 border-t-zinc-300 animate-spin"
       />
-      Loading your profile...
+      Loading profile...
     </div>
 
     <!-- Error -->
-    <div
-      v-else-if="error"
-      class="mx-auto max-w-2xl px-8 py-20 text-center"
-    >
+    <div v-else-if="error" class="mx-auto max-w-2xl px-8 py-20 text-center">
       <p class="text-sm text-red-400">{{ error }}</p>
     </div>
 
     <template v-else-if="profile">
-      <!-- Banner section. Click-to-edit is the desktop convention so the
-           user doesn't need a separate "Open editor" button if their hands
-           are already there. -->
+      <!-- Banner section -->
       <div class="relative h-56">
         <img
           v-if="profile.bannerObjectId"
@@ -40,15 +35,6 @@
         <div
           class="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/40 to-transparent"
         />
-
-        <!-- Edit button — pinned top-right -->
-        <NuxtLink
-          to="/profile/edit"
-          class="absolute top-4 right-4 inline-flex items-center gap-x-2 rounded-md bg-zinc-900/70 backdrop-blur-sm px-4 py-2 text-sm font-semibold text-zinc-100 hover:bg-zinc-800 transition-colors"
-        >
-          <PencilSquareIcon class="size-4" />
-          Edit profile
-        </NuxtLink>
       </div>
 
       <div class="mx-auto max-w-5xl px-8 -mt-16 relative">
@@ -66,27 +52,19 @@
             <UserIcon class="size-14 text-zinc-500" />
           </div>
           <div class="pb-2 flex-1 min-w-0">
-            <h1
-              class="text-3xl font-display font-bold text-zinc-100 truncate"
-            >
+            <h1 class="text-3xl font-display font-bold text-zinc-100 truncate">
               {{ profile.displayName || profile.username }}
             </h1>
             <p class="text-sm text-zinc-400">@{{ profile.username }}</p>
           </div>
         </div>
 
-        <p
-          v-if="profile.bio"
-          class="text-sm text-zinc-300 max-w-2xl mb-8"
-        >
+        <p v-if="profile.bio" class="text-sm text-zinc-300 max-w-2xl mb-8">
           {{ profile.bio }}
         </p>
 
         <!-- Stat cards -->
-        <div
-          v-if="stats"
-          class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-10"
-        >
+        <div v-if="stats" class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-10">
           <div
             class="rounded-xl bg-zinc-800/50 backdrop-blur-sm p-5 ring-1 ring-zinc-700/40"
           >
@@ -206,7 +184,6 @@
 
 <script setup lang="ts">
 import {
-  PencilSquareIcon,
   ClockIcon,
   PlayIcon,
   TrophyIcon,
@@ -227,6 +204,7 @@ import {
 
 useHead({ title: "Profile" });
 
+const route = useRoute();
 const router = useRouter();
 const api = useServerApi();
 
@@ -236,9 +214,8 @@ const showcase = ref<ShowcaseItem[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
 
-// Theme accent for the banner fallback gradient. Server tracks a
-// `profileTheme` enum on the user; map it to a from/to pair here so the
-// page works without a server-rendered theme.
+// Theme accent for the banner fallback gradient, mapped from the user's
+// `profileTheme` enum so the page works without a server-rendered theme.
 const themeColors = computed(() => {
   switch (profile.value?.profileTheme) {
     case "ocean":
@@ -261,25 +238,27 @@ function objectUrl(id: string): string {
 }
 
 function goToGame(gameId: string) {
+  // Viewing someone else's profile is a discovery surface — land on the
+  // store presentation rather than the management UI.
   invoke("fetch_game", { gameId }).catch(() => {});
-  router.push(`/library/${gameId}`);
+  router.push(`/store/${gameId}`);
 }
 
 onMounted(async () => {
+  const id = route.params.id as string;
   try {
-    const me = await api.profile.me();
-    profile.value = me;
+    profile.value = await api.profile.get(id);
     // Stats / showcase can soft-fail without blocking the profile header.
     const [statsRes, showcaseRes] = await Promise.allSettled([
-      api.profile.stats(me.id),
-      api.profile.showcase(me.id),
+      api.profile.stats(id),
+      api.profile.showcase(id),
     ]);
     if (statsRes.status === "fulfilled") stats.value = statsRes.value;
     if (showcaseRes.status === "fulfilled")
       showcase.value = showcaseRes.value.items;
   } catch (e) {
     error.value =
-      "Couldn't load your profile. " +
+      "Couldn't load this profile. " +
       (e instanceof Error ? e.message : String(e));
   } finally {
     loading.value = false;

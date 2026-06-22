@@ -706,7 +706,7 @@ async function reconcile() {
     if (segs.length === 0 && conflicts === 0 && pullFailed === 0) {
       syncMessage.value = "Everything's already in sync.";
     } else {
-      let msg = segs.length > 0 ? `Sync complete — ${segs.join(", ")}.` : "Sync complete.";
+      let msg = segs.length > 0 ? `Sync complete: ${segs.join(", ")}.` : "Sync complete.";
       if (conflicts > 0)
         msg += ` ${conflicts} conflict${conflicts === 1 ? "" : "s"} need${conflicts === 1 ? "s" : ""} a choice below.`;
       if (pullFailed > 0)

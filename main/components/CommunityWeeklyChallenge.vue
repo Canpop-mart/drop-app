@@ -14,7 +14,7 @@
           <p class="text-sm font-medium text-zinc-100 truncate">
             {{ challenge.title }}
             <span class="text-zinc-500 font-normal"
-              >— {{ challenge.description }}</span
+              >· {{ challenge.description }}</span
             >
           </p>
           <span class="text-[10px] text-zinc-500 shrink-0 tabular-nums">{{

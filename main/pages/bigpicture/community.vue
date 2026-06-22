@@ -242,7 +242,7 @@
                 <p class="text-sm font-medium text-zinc-100 truncate">
                   {{ weeklyChallenge.title }}
                   <span class="text-zinc-500 font-normal"
-                    >— {{ weeklyChallenge.description }}</span
+                    >· {{ weeklyChallenge.description }}</span
                   >
                 </p>
                 <span
@@ -832,7 +832,7 @@ const mvpTooltip = computed(() => {
   const hours = Math.max(1, Math.round(mvp.value.sessionSeconds / 3600));
   const playLabel =
     mvp.value.sessionSeconds === 0 ? "no playtime" : `${hours}h playtime`;
-  return `Today's MVP — ${playLabel} · ${mvp.value.achievementsUnlocked} achievement${mvp.value.achievementsUnlocked === 1 ? "" : "s"}`;
+  return `Today's MVP: ${playLabel} · ${mvp.value.achievementsUnlocked} achievement${mvp.value.achievementsUnlocked === 1 ? "" : "s"}`;
 });
 
 let recapTimer: ReturnType<typeof setInterval> | null = null;

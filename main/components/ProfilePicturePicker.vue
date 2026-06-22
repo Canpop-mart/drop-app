@@ -279,7 +279,7 @@ async function confirm() {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[ProfilePicturePicker] upload failed:", err);
-    errorMessage.value = `Couldn't save avatar — ${msg}`;
+    errorMessage.value = `Couldn't save avatar: ${msg}`;
     emit("error", msg);
   } finally {
     uploading.value = false;

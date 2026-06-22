@@ -1809,7 +1809,7 @@ onMounted(async () => {
   const unlistenLaunchError = await listen("launch_external_error", (event) => {
     if (event.payload === gameId) {
       console.error("[BPM:GAME] External launch error for:", gameId);
-      launchError.value = "The game may have failed to launch. Check the game's compatibility — Windows games require Proton/UMU on Linux.";
+      launchError.value = "The game may have failed to launch. Check the game's compatibility. Windows games require Proton/UMU on Linux.";
       runDiagnostics();
     }
   });

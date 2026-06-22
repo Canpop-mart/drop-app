@@ -281,7 +281,7 @@ const title = computed(() => {
 
 const subtitle = computed(() => {
   if (subStep.value === "intro")
-    return "Achievements for retro games. Independent of Drop — skip if you don't play retro.";
+    return "Achievements for retro games. Independent of Drop. Skip if you don't play retro.";
   if (subStep.value === "link")
     return "Already have an account at retroachievements.org? Sign in.";
   return "The difference matters if you care about leaderboards.";

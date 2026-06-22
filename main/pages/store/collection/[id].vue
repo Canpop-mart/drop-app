@@ -156,7 +156,7 @@ async function addToLibrary() {
     added.value = true;
   } catch (e) {
     console.error("[store/collection] add to library failed:", e);
-    addError.value = "Couldn't add the collection — please try again.";
+    addError.value = "Couldn't add the collection. Please try again.";
   } finally {
     adding.value = false;
   }

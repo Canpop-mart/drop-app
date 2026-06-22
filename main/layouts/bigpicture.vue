@@ -86,7 +86,7 @@
         @scroll="onDebugScroll"
       >
         <div v-if="visibleMessages.length === 0" class="text-zinc-600 italic text-[10px] py-1">
-          {{ debugFilter ? "No matches for filter." : "No messages yet — enable dev mode in Settings → Developer." }}
+          {{ debugFilter ? "No matches for filter." : "No messages yet. Enable dev mode in Settings → Developer." }}
         </div>
         <div
           v-if="truncatedByRenderCap"
@@ -253,7 +253,7 @@ async function exportDebugLog() {
     await navigator.clipboard.writeText(logText);
     exportMessage.value = `Copied ${rawBuffer.value.length} lines to clipboard!`;
   } catch {
-    exportMessage.value = "Clipboard unavailable — downloading file...";
+    exportMessage.value = "Clipboard unavailable, downloading file...";
   }
 
   // Also offer a download as a file

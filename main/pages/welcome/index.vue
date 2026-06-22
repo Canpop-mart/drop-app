@@ -39,7 +39,7 @@
       <div class="mt-6 space-y-3 text-sm" :style="{ color: 'var(--bpm-muted)' }">
         <p>In the next few screens we'll cover:</p>
         <ul class="space-y-1.5 list-disc list-inside ml-2">
-          <li>Your profile — display name, avatar, bio</li>
+          <li>Your profile: display name, avatar, bio</li>
           <li>Where games install and how Proton runs Windows titles</li>
           <!-- Cloud saves (Ludusavi) — listed only when dev mode is on,
                since the saves wizard step itself is also gated. -->

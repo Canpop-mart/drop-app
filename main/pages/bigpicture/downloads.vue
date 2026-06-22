@@ -66,7 +66,7 @@
       class="flex items-center gap-2 mb-3 px-4 py-2 rounded-lg bg-blue-600/10 border border-blue-500/30 text-blue-300 text-sm"
     >
       <ArrowsUpDownIcon class="size-4" />
-      <span>Reordering — D-pad up/down to move, A to drop, B to cancel</span>
+      <span>Reordering: D-pad up/down to move, A to drop, B to cancel</span>
     </div>
 
     <!-- Active downloads -->

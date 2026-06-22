@@ -92,7 +92,7 @@ const allCategories: GlossaryCategory[] = [
       },
       {
         message: "GE-Proton is downloading",
-        meaning: "First-launch only — umu fetches GE-Proton (~300 MB) before the game starts.",
+        meaning: "First-launch only. umu fetches GE-Proton (~300 MB) before the game starts.",
         fix: "Wait. Subsequent launches are instant.",
       },
     ],
@@ -103,7 +103,7 @@ const allCategories: GlossaryCategory[] = [
     entries: [
       {
         message: "Checksum mismatch",
-        meaning: "A downloaded chunk doesn't match the server's hash — disk or network corruption.",
+        meaning: "A downloaded chunk doesn't match the server's hash. Likely disk or network corruption.",
         fix: "Drop auto-retries. If it keeps happening, check disk health or switch networks.",
       },
       {
@@ -118,7 +118,7 @@ const allCategories: GlossaryCategory[] = [
       },
       {
         message: "Download paused automatically",
-        meaning: "Network dropped or app went to sleep — paused to avoid corruption.",
+        meaning: "Network dropped or app went to sleep, so the download paused to avoid corruption.",
         fix: "Resume from the Downloads page once connectivity is back.",
       },
     ],
