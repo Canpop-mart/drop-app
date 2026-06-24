@@ -17,7 +17,10 @@ const STEAM_API_DLLS: &[&str] = &["steam_api64.dll", "steam_api.dll", "libsteam_
 const SSE_INI_NAME: &str = "steam_emu.ini";
 
 /// Recursively searches `root` for a Steam API DLL and returns the directory
-/// containing it, or `None` if not found. Walks up to 5 levels deep.
+/// containing it, or `None` if not found. Walks up to 8 levels deep — repacks
+/// often double-nest the game folder and bury the DLL under
+/// `…/<Game>_Data/Plugins/x86_64/`, which is already 5+ levels from the install
+/// root.
 pub fn find_steam_api_dir(root: &Path) -> Option<PathBuf> {
     // Fast path — DLL directly in the install root.
     for dll in STEAM_API_DLLS {
@@ -25,19 +28,18 @@ pub fn find_steam_api_dir(root: &Path) -> Option<PathBuf> {
             return Some(root.to_path_buf());
         }
     }
-    find_steam_api_dir_recursive(root, 0, 5)
+    find_steam_api_dir_recursive(root, 0, 8)
 }
 
 fn find_steam_api_dir_recursive(dir: &Path, depth: u32, max_depth: u32) -> Option<PathBuf> {
-    if depth >= max_depth {
-        return None;
-    }
     let entries: Vec<_> = match std::fs::read_dir(dir) {
         Ok(e) => e.flatten().collect(),
         Err(_) => return None,
     };
 
-    // Files in this directory first.
+    // Check files in THIS directory first — at every depth we reach, including
+    // max_depth itself, so a DLL sitting exactly at the limit isn't skipped (the
+    // old `depth >= max_depth` guard ran before this check and dropped it).
     for entry in &entries {
         let path = entry.path();
         if path.is_file()
@@ -49,7 +51,10 @@ fn find_steam_api_dir_recursive(dir: &Path, depth: u32, max_depth: u32) -> Optio
             }
     }
 
-    // Then recurse into subdirectories.
+    // Recurse into subdirectories only while there's depth budget left.
+    if depth >= max_depth {
+        return None;
+    }
     for entry in &entries {
         let path = entry.path();
         if path.is_dir()

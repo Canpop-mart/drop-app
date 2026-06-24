@@ -129,7 +129,7 @@
             />
             <div
               v-else
-              class="absolute inset-0 bg-gradient-to-br from-blue-900/50 to-purple-900/40"
+              class="absolute inset-0 bg-gradient-to-br from-blue-900/50 to-zinc-900/60"
             />
             <!-- Legibility gradients: dark from the bottom + the left. -->
             <div
@@ -233,6 +233,28 @@
             :name="shelf.name"
             :covers="
               shelf.entries
+                .map((e) => e.game.mCoverObjectId)
+                .filter((c): c is string => !!c)
+            "
+          />
+        </LibraryRow>
+
+        <!-- Consoles — emulated games grouped by system (toggle in settings).
+             Each card opens a console-themed page. -->
+        <LibraryRow
+          v-if="consoleRows.length > 0"
+          title="Consoles"
+          :count="consoleRows.length"
+        >
+          <LibraryConsoleCard
+            v-for="row in consoleRows"
+            :key="row.id"
+            :id="row.id"
+            :name="row.shortName"
+            :maker="row.maker"
+            :count="row.entries.length"
+            :covers="
+              row.entries
                 .map((e) => e.game.mCoverObjectId)
                 .filter((c): c is string => !!c)
             "
@@ -537,12 +559,15 @@ import { useShelves } from "~/composables/shelves";
 import {
   useServerApi,
   type RecentPlaytimeEntry,
+  type ConsoleGroup,
 } from "~/composables/use-server-api";
+import { useConsoleSections } from "~/composables/console-sections";
 import type { Game, GameStatus } from "~/types";
 import { InstalledType } from "~/types";
 import LibraryGrid from "~/components/LibraryGrid.vue";
 import LibraryShelf from "~/components/LibraryShelf.vue";
 import LibraryCollectionCard from "~/components/LibraryCollectionCard.vue";
+import LibraryConsoleCard from "~/components/LibraryConsoleCard.vue";
 import LibraryRow from "~/components/LibraryRow.vue";
 
 interface LibraryEntry {
@@ -563,8 +588,11 @@ const devMode = useDevMode();
 const router = useRouter();
 const api = useServerApi();
 const { shelves, fetchShelves } = useShelves();
+const consoleSections = useConsoleSections();
 
 const entries = ref<LibraryEntry[]>([]);
+// Console groupings for emulated games — only populated when the toggle is on.
+const consoleGroups = ref<ConsoleGroup[]>([]);
 const recentPlaytime = ref<RecentPlaytimeEntry[]>([]);
 const loading = ref(true);
 const searchInput = ref("");
@@ -645,6 +673,34 @@ const collectionShelves = computed(() => {
         .filter((e): e is LibraryEntry => !!e),
     }))
     .filter((s) => s.entries.length > 0);
+});
+
+// ── Console sections (emulation view) ──────────────────────────────────────
+// Resolve each console group's game IDs against the in-memory library, the
+// same way collection shelves do. Only consoles with games you actually have
+// are kept. Off → empty, so the rows + grid filtering are no-ops.
+const consoleRows = computed(() => {
+  if (!consoleSections.enabled.value) return [];
+  const byId = new Map(entries.value.map((e) => [e.game.id, e]));
+  return consoleGroups.value
+    .map((group) => ({
+      ...group,
+      entries: group.gameIds
+        .map((id) => byId.get(id))
+        .filter((e): e is LibraryEntry => !!e),
+    }))
+    .filter((g) => g.entries.length > 0);
+});
+
+// IDs of emulated games we're surfacing in console rows — pulled OUT of the
+// main "All games" grid so they live only under their console (toggle on).
+const emulatedGameIds = computed<Set<string>>(() => {
+  const set = new Set<string>();
+  if (!consoleSections.enabled.value) return set;
+  for (const row of consoleRows.value) {
+    for (const e of row.entries) set.add(e.game.id);
+  }
+  return set;
 });
 
 function toggleCollection(id: string) {
@@ -757,6 +813,11 @@ const currentSortLabel = computed(
 
 const allGamesEntries = computed<LibraryEntry[]>(() => {
   let list = entries.value;
+  // When console sections are on, emulated games live only in their console
+  // row — keep them out of the main grid (search/flat mode still shows all).
+  if (emulatedGameIds.value.size > 0) {
+    list = list.filter((e) => !emulatedGameIds.value.has(e.game.id));
+  }
   if (allView.value === "installed") {
     list = list.filter((e) => e.installed);
   } else if (allView.value === "not-installed") {
@@ -888,9 +949,31 @@ async function loadRecentPlaytime() {
   }
 }
 
+// Only fetch console groupings when the toggle is on (and only once they're
+// needed). Soft-fails: the rows just don't appear if the server can't answer.
+async function loadConsoles() {
+  if (!consoleSections.enabled.value) {
+    consoleGroups.value = [];
+    return;
+  }
+  try {
+    consoleGroups.value = (await api.emulation.consoles()).consoles;
+  } catch (e) {
+    console.warn("[library] console grouping fetch failed:", e);
+    consoleGroups.value = [];
+  }
+}
+
+// React to the toggle being flipped on the settings page while we're mounted.
+watch(
+  () => consoleSections.enabled.value,
+  () => loadConsoles(),
+);
+
 onMounted(() => {
   load();
   loadRecentPlaytime();
+  loadConsoles();
   fetchShelves().catch((e) =>
     console.warn("[library] shelves fetch failed:", e),
   );

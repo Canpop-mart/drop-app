@@ -166,6 +166,31 @@
             />
           </div>
         </div>
+        <div v-if="controllerLabel" class="w-px h-4 bg-zinc-600" />
+        <div v-if="controllerLabel" class="flex items-center gap-2 text-sm">
+          <GamepadIcon class="size-4 text-zinc-400 shrink-0" />
+          <span class="text-zinc-400">Controller</span>
+          <span
+            :class="
+              controllerLabel === 'Full'
+                ? 'text-green-400 font-medium'
+                : 'text-amber-400 font-medium'
+            "
+            >{{ controllerLabel }}</span
+          >
+        </div>
+
+        <!-- HowLongToBeat — Main Story figure inline, full breakdown on hover. -->
+        <div v-if="hltb" class="w-px h-4 bg-zinc-600" />
+        <div
+          v-if="hltb"
+          class="flex items-center gap-2 text-sm"
+          :title="hltb.breakdown"
+        >
+          <FlagIcon class="size-4 text-zinc-400 shrink-0" />
+          <span class="text-zinc-400">To Beat</span>
+          <span class="text-zinc-100 font-medium">{{ hltb.primary }}</span>
+        </div>
 
         <!-- Friends — server-mates who've played this game. Lives inline
              with the other stats now (previously sat in its own row
@@ -242,6 +267,7 @@ import {
   CalendarIcon,
   CheckCircleIcon,
   ClockIcon,
+  FlagIcon,
   TrophyIcon,
   UsersIcon,
   WrenchIcon,
@@ -249,6 +275,7 @@ import {
 import { InstalledType } from "~/types";
 import type { Game, GameStatus, GameVersion } from "~/types";
 import BannerFallback from "~/components/BannerFallback.vue";
+import GamepadIcon from "~/components/Icons/GamepadIcon.vue";
 import type { GamePlayerEntry } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
 import {
@@ -300,5 +327,40 @@ const achievementPercent = computed(() => {
   const { achievementsUnlocked, achievementsTotal } = props.gameStats;
   if (achievementsTotal <= 0) return 0;
   return Math.round((achievementsUnlocked / achievementsTotal) * 100);
+});
+
+// Gamepad support, from Steam's controller_support signal. Hidden when None.
+const controllerLabel = computed(() => {
+  const c = props.game.mControllerSupport;
+  return c === "Full" ? "Full" : c === "Partial" ? "Partial" : null;
+});
+
+// HowLongToBeat completion times. Minutes -> a compact "9½ h" label. The
+// stat bar shows the Main Story figure with the full three-tier breakdown
+// in the hover title, so it stays one slot wide.
+function formatHltbHours(minutes: number): string {
+  const rounded = Math.round((minutes / 60) * 2) / 2; // nearest half hour
+  const whole = Math.floor(rounded);
+  const half = rounded - whole >= 0.5;
+  if (whole === 0) return half ? "½ h" : "0 h";
+  return `${whole}${half ? "½" : ""} h`;
+}
+
+const hltb = computed(() => {
+  const fmt = (m?: number | null) => (m && m > 0 ? formatHltbHours(m) : null);
+  const main = fmt(props.game.mHltbMain);
+  const mainSides = fmt(props.game.mHltbMainSides);
+  const completionist = fmt(props.game.mHltbCompletionist);
+  if (!main && !mainSides && !completionist) return null;
+
+  const breakdown: string[] = [];
+  if (main) breakdown.push(`Main Story ${main}`);
+  if (mainSides) breakdown.push(`Main + Extras ${mainSides}`);
+  if (completionist) breakdown.push(`Completionist ${completionist}`);
+
+  return {
+    primary: main ?? mainSides ?? completionist!,
+    breakdown: breakdown.join(" · "),
+  };
 });
 </script>

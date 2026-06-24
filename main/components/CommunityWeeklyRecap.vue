@@ -1,7 +1,7 @@
 <template>
   <section v-if="slides.length > 0" class="mb-8">
     <div
-      class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-900/40 via-zinc-900/60 to-purple-900/30 ring-1 ring-indigo-500/20"
+      class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-900/40 via-zinc-900/60 to-blue-900/30 ring-1 ring-blue-500/20"
     >
       <!-- Slide stack. Each slide is its own absolutely-positioned card so
            the carousel fade can swap them; the kicker label and dot nav
@@ -21,11 +21,11 @@
                  hints at the slide kind so the layout still has a visual
                  weight on the left edge. -->
             <div
-              class="shrink-0 size-20 sm:size-24 rounded-xl overflow-hidden ring-1 ring-indigo-400/20 flex items-center justify-center"
+              class="shrink-0 size-20 sm:size-24 rounded-xl overflow-hidden ring-1 ring-blue-400/20 flex items-center justify-center"
               :class="
                 activeSlide.coverObjectId || activeSlide.avatarObjectId
                   ? 'bg-zinc-900/80'
-                  : 'bg-indigo-500/15'
+                  : 'bg-blue-500/15'
               "
             >
               <img
@@ -40,7 +40,7 @@
                 :alt="activeSlide.headline"
                 class="w-full h-full object-cover"
               />
-              <span v-else class="text-3xl">{{ slideEmoji }}</span>
+              <component :is="slideIcon" v-else class="size-8 text-zinc-300" />
             </div>
 
             <!-- Text column: kicker → headline → meta. The kicker carries
@@ -49,7 +49,7 @@
                  type, and meta is the quieter supporting line. -->
             <div class="flex-1 min-w-0 pr-12">
               <p
-                class="text-[10px] tracking-[0.2em] uppercase text-indigo-300/80 font-medium mb-1 truncate"
+                class="text-[10px] tracking-[0.2em] uppercase text-blue-300/80 font-medium mb-1 truncate"
               >
                 {{ activeSlide.title }}
               </p>
@@ -80,8 +80,8 @@
           class="size-2 rounded-full transition-all"
           :class="
             i === activeIndex
-              ? 'bg-indigo-300 w-5'
-              : 'bg-indigo-300/30 hover:bg-indigo-300/60'
+              ? 'bg-blue-300 w-5'
+              : 'bg-blue-300/30 hover:bg-blue-300/60'
           "
           :aria-label="`Slide ${i + 1}`"
           @click.stop="goTo(i)"
@@ -92,6 +92,14 @@
 </template>
 
 <script setup lang="ts">
+import {
+  FireIcon,
+  ClockIcon,
+  TrophyIcon,
+  FlagIcon,
+  UserPlusIcon,
+  SparklesIcon,
+} from "@heroicons/vue/24/solid";
 import type { WeeklyRecapSlide } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
 
@@ -109,24 +117,24 @@ const activeSlide = computed(
   () => props.slides[activeIndex.value] ?? props.slides[0],
 );
 
-// Fallback emoji per slide kind, used only when the slide has neither a
-// game cover nor a user avatar to render in the thumbnail slot. Kept
-// inline rather than imported from heroicons so this card is self-
-// contained — it's a one-off display surface, not a reusable widget.
-const slideEmoji = computed(() => {
+// Fallback icon per slide kind, shown only when the slide has neither a
+// game cover nor a user avatar. Uses the same heroicon vocabulary as
+// CommunityWeeklyChallenge so the two community cards stay consistent, and
+// avoids emoji, which render differently across SteamOS and Windows.
+const slideIcon = computed(() => {
   switch (activeSlide.value?.kind) {
     case "top_game":
-      return "🎮";
+      return FireIcon;
     case "longest_session":
-      return "⏱";
+      return ClockIcon;
     case "most_unlocks":
-      return "🏆";
+      return TrophyIcon;
     case "milestone":
-      return "🚀";
+      return FlagIcon;
     case "new_player":
-      return "👋";
+      return UserPlusIcon;
     default:
-      return "✨";
+      return SparklesIcon;
   }
 });
 

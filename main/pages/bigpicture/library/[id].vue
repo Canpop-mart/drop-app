@@ -1164,18 +1164,21 @@ function applyProfileName() {
 // "Installing Visual C++ runtime..." message); we clear it in finally because
 // the BPM listener only reacts to active=true, not the active=false done edge.
 const installingVc = ref(false);
-async function installVcRuntime() {
+async function installRuntimes() {
   showOptions.value = false;
   if (installingVc.value) return;
   installingVc.value = true;
   try {
-    await invoke("install_vcredist", { gameId });
+    await invoke("install_redists", {
+      gameId,
+      runtimes: ["vcpp", "directx"],
+    });
     showInfoToast(
-      "Visual C++ runtime installed. Launch the game again if it was failing.",
+      "Runtimes installed (VC++ + DirectX). Launch the game again if it was failing.",
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    launchError.value = `Couldn't install the VC++ runtime: ${msg}`;
+    launchError.value = `Couldn't install runtimes: ${msg}`;
   } finally {
     installingVc.value = false;
     launchStatus.value = null;
@@ -1254,9 +1257,9 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
     status.value?.type === "Installed"
   ) {
     items.push({
-      id: "install-vcredist",
-      label: "Install VC++ Runtime",
-      action: installVcRuntime,
+      id: "install-runtimes",
+      label: "Install runtimes",
+      action: installRuntimes,
     });
   }
 

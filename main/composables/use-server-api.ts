@@ -467,6 +467,18 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
+// ── Emulation ─────────────────────────────────────────────────────────────
+
+/** A console with the IDs of every emulated game that maps to it. */
+export interface ConsoleGroup {
+  id: string;
+  name: string;
+  shortName: string;
+  maker: string;
+  blurb: string;
+  gameIds: string[];
+}
+
 // ── Store API ───────────────────────────────────────────────────────────────
 
 export function useServerApi() {
@@ -708,6 +720,16 @@ export function useServerApi() {
        */
       recent: () =>
         apiFetch<RecentPlaytimeEntry[]>("api/v1/client/playtime/recent"),
+    },
+
+    emulation: {
+      /**
+       * Console groupings for emulated games — each console with the IDs of
+       * the games that belong to it. The library page intersects these with
+       * the games it actually has installed/visible.
+       */
+      consoles: () =>
+        apiFetch<{ consoles: ConsoleGroup[] }>("api/v1/emulation/consoles"),
     },
 
     games: {

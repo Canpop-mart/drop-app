@@ -8,7 +8,7 @@
     button carry colour.
   -->
   <div
-    class="rounded-xl bg-zinc-800/50 ring-1 ring-zinc-700/40 px-5 py-5 hover:ring-purple-500/40 transition"
+    class="rounded-xl bg-zinc-800/50 ring-1 ring-zinc-700/40 px-5 py-5 hover:ring-blue-500/40 transition"
     :class="{ 'roulette-spinning-surface': spinning }"
   >
     <div class="flex items-center gap-5">
@@ -21,11 +21,11 @@
         class="group relative shrink-0 h-24 w-16 rounded-md overflow-hidden flex items-center justify-center transition-transform"
         :class="[
           spinning || result
-            ? 'bg-zinc-900 ring-1 ring-purple-500/30'
-            : 'bg-purple-500/15 ring-1 ring-purple-400/30',
+            ? 'bg-zinc-900 ring-1 ring-blue-500/30'
+            : 'bg-blue-500/15 ring-1 ring-blue-400/30',
           {
             'cursor-default': spinning || (!result && !empty),
-            'cursor-pointer hover:scale-[1.03] hover:ring-purple-400/60':
+            'cursor-pointer hover:scale-[1.03] hover:ring-blue-400/60':
               !spinning && result,
             'roulette-tada': settled,
           },
@@ -40,7 +40,7 @@
           :class="{ 'roulette-blur': spinning }"
           loading="lazy"
         />
-        <SparklesIcon v-else class="size-7 text-purple-300" />
+        <SparklesIcon v-else class="size-7 text-blue-300" />
       </button>
 
       <div class="flex-1 min-w-0">
@@ -57,7 +57,7 @@
           <p class="text-base font-display font-semibold text-zinc-100 truncate">
             {{ result.game.name }}
           </p>
-          <p class="text-xs text-purple-300/80 truncate mt-0.5">
+          <p class="text-xs text-blue-300/80 truncate mt-0.5">
             {{ caption }}
           </p>
         </template>
@@ -81,7 +81,7 @@
 
       <button
         type="button"
-        class="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-purple-500/20 ring-1 ring-purple-400/40 px-4 py-2 text-sm font-semibold text-purple-100 hover:bg-purple-500/30 transition disabled:cursor-not-allowed disabled:opacity-50"
+        class="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-blue-500/20 ring-1 ring-blue-400/40 px-4 py-2 text-sm font-semibold text-blue-100 hover:bg-blue-500/30 transition disabled:cursor-not-allowed disabled:opacity-50"
         :disabled="spinning"
         @click="spin"
       >
@@ -234,7 +234,7 @@ onUnmounted(() => {
    neutral surface has a hint of motion. Static + settled states stay
    purely neutral, matching the activity rows. */
 .roulette-spinning-surface {
-  background-color: rgb(76 29 149 / 0.08);
+  background-color: rgb(30 58 138 / 0.08);
 }
 
 .roulette-blur {

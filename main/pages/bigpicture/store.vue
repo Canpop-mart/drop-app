@@ -244,7 +244,7 @@
         :ref="
           (el: any) => registerGrid(el, { onSelect: onRouletteCardSelect })
         "
-        class="rounded-xl bg-zinc-800/50 ring-1 ring-zinc-700/40 px-5 py-4 mb-5 cursor-pointer hover:ring-purple-500/40 transition"
+        class="rounded-xl bg-zinc-800/50 ring-1 ring-zinc-700/40 px-5 py-4 mb-5 cursor-pointer hover:ring-blue-500/40 transition"
         :class="{ 'roulette-spinning-surface': rouletteSpinning }"
         @click="onRouletteCardSelect"
       >
@@ -253,8 +253,8 @@
             class="shrink-0 h-20 w-14 rounded-md overflow-hidden flex items-center justify-center"
             :class="
               rouletteSpinning || rouletteResult
-                ? 'bg-zinc-900 ring-1 ring-purple-500/30'
-                : 'bg-purple-500/15'
+                ? 'bg-zinc-900 ring-1 ring-blue-500/30'
+                : 'bg-blue-500/15'
             "
           >
             <img
@@ -267,14 +267,14 @@
               }"
               loading="lazy"
             />
-            <span v-else class="text-xl text-purple-300">🎲</span>
+            <span v-else class="text-xl text-blue-300">🎲</span>
           </div>
           <div class="flex-1 min-w-0">
             <template v-if="rouletteResult">
               <p class="text-base font-display font-semibold text-zinc-100 truncate">
                 {{ rouletteResult.game.name }}
               </p>
-              <p class="text-xs text-purple-300/80 truncate mt-0.5">
+              <p class="text-xs text-blue-300/80 truncate mt-0.5">
                 {{ rouletteCaption }}
               </p>
             </template>
@@ -304,7 +304,7 @@
             </template>
           </div>
           <span
-            class="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-purple-500/20 ring-1 ring-purple-400/40 px-4 py-2 text-sm font-semibold text-purple-100"
+            class="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-blue-500/20 ring-1 ring-blue-400/40 px-4 py-2 text-sm font-semibold text-blue-100"
           >
             <svg
               class="size-4"
@@ -1565,7 +1565,7 @@ const tabs = [
    motion. Static + settled states stay neutral so the card matches
    the filter-summary row above it. */
 .roulette-spinning-surface {
-  background-color: rgb(76 29 149 / 0.08);
+  background-color: rgb(30 58 138 / 0.08);
 }
 
 @keyframes roulette-tada {

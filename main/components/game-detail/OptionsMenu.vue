@@ -82,7 +82,7 @@
             <div class="w-full px-4 py-2 text-sm text-zinc-300">
               <div class="flex justify-between items-center mb-1.5">
                 <span>Quality Preset</span>
-                <SparklesIcon class="size-4 text-purple-400" />
+                <SparklesIcon class="size-4 text-teal-400" />
               </div>
               <div class="flex gap-1">
                 <button
@@ -91,7 +91,7 @@
                   class="flex-1 px-2 py-1 rounded text-xs font-medium transition-colors"
                   :class="
                     config.selectedQuality.value === opt.value
-                      ? 'bg-purple-600 text-white'
+                      ? 'bg-teal-600 text-white'
                       : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600 hover:text-zinc-200'
                   "
                   @click.stop="config.setQuality(opt.value)"
@@ -160,20 +160,50 @@
             </button>
           </MenuItem>
 
-          <MenuItem v-if="showInstallVcredist" v-slot="{ active }">
-            <button
-              @click="$emit('install-vc-runtime')"
-              :class="[
-                active
-                  ? 'bg-zinc-800 text-zinc-100 outline-none'
-                  : 'text-zinc-400',
-                'w-full px-4 py-2 text-sm inline-flex justify-between',
-              ]"
-            >
-              Install VC++ Runtime
-              <WrenchScrewdriverIcon class="size-5 text-sky-400" />
-            </button>
-          </MenuItem>
+          <template v-if="showInstallVcredist">
+            <MenuItem v-slot="{ active }">
+              <button
+                @click="$emit('install-runtime', 'vcpp')"
+                :class="[
+                  active
+                    ? 'bg-zinc-800 text-zinc-100 outline-none'
+                    : 'text-zinc-400',
+                  'w-full px-4 py-2 text-sm inline-flex justify-between',
+                ]"
+              >
+                Install VC++ runtime
+                <WrenchScrewdriverIcon class="size-5 text-sky-400" />
+              </button>
+            </MenuItem>
+            <MenuItem v-slot="{ active }">
+              <button
+                @click="$emit('install-runtime', 'directx')"
+                :class="[
+                  active
+                    ? 'bg-zinc-800 text-zinc-100 outline-none'
+                    : 'text-zinc-400',
+                  'w-full px-4 py-2 text-sm inline-flex justify-between',
+                ]"
+              >
+                Install DirectX runtime
+                <WrenchScrewdriverIcon class="size-5 text-sky-400" />
+              </button>
+            </MenuItem>
+            <MenuItem v-slot="{ active }">
+              <button
+                @click="$emit('install-runtime', 'dotnet')"
+                :class="[
+                  active
+                    ? 'bg-zinc-800 text-zinc-100 outline-none'
+                    : 'text-zinc-400',
+                  'w-full px-4 py-2 text-sm inline-flex justify-between',
+                ]"
+              >
+                Install .NET runtime
+                <WrenchScrewdriverIcon class="size-5 text-sky-400" />
+              </button>
+            </MenuItem>
+          </template>
 
           <MenuItem v-if="showUninstall" v-slot="{ active }">
             <button
@@ -266,6 +296,6 @@ defineEmits<{
   (e: "uninstall"): void;
   (e: "reset-achievements"): void;
   (e: "remove-from-library"): void;
-  (e: "install-vc-runtime"): void;
+  (e: "install-runtime", set: string): void;
 }>();
 </script>

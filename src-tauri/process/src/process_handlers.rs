@@ -327,12 +327,49 @@ impl ProcessHandler for UMUCompatLauncher {
     fn modify_command(&self, _command: &mut Command) {}
 }
 
-/// Install the VC++ runtime into a game's Proton prefix on demand — backs the
-/// user-triggered "Install VC++ Runtime" action. Resolves the game's prefix and
-/// Proton exactly as the launcher does, then runs winetricks. The DB lock is
-/// released before the (slow, ~1 min) winetricks call so it never blocks other
-/// work. Windows/Proton games only; returns a user-facing error string otherwise.
-pub fn install_vcredist_for_game(game_id: &str) -> Result<(), String> {
+/// Map UI runtime "sets" (vcpp / directx / dotnet) to winetricks verbs plus a
+/// human label. Unknown sets are ignored; verbs are de-duplicated in order.
+fn resolve_redist_verbs(sets: &[String]) -> (Vec<&'static str>, String) {
+    let mut verbs: Vec<&'static str> = Vec::new();
+    let mut labels: Vec<&'static str> = Vec::new();
+    for set in sets {
+        match set.as_str() {
+            "vcpp" => {
+                verbs.extend(["vcrun2022", "vcrun2013", "vcrun2010"]);
+                labels.push("Visual C++");
+            }
+            "directx" => {
+                verbs.extend(["d3dcompiler_47", "d3dx9", "xact"]);
+                labels.push("DirectX");
+            }
+            "dotnet" => {
+                verbs.push("dotnet48");
+                labels.push(".NET");
+            }
+            _ => {}
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    verbs.retain(|v| seen.insert(*v));
+    let label = if labels.is_empty() {
+        "runtimes".to_string()
+    } else {
+        labels.join(" + ")
+    };
+    (verbs, label)
+}
+
+/// Install one or more common runtimes (VC++ / DirectX / .NET) into a game's
+/// Proton prefix on demand — backs the user-triggered "Install runtimes" action.
+/// Resolves the game's prefix and Proton exactly as the launcher does, then runs
+/// winetricks. The DB lock is released before the (slow) winetricks call so it
+/// never blocks other work. Windows/Proton games only.
+pub fn install_redists_for_game(game_id: &str, sets: &[String]) -> Result<(), String> {
+    let (verbs, label) = resolve_redist_verbs(sets);
+    if verbs.is_empty() {
+        return Err("No known runtimes were selected.".to_string());
+    }
+
     // Resolve prefix + Proton under a brief read borrow, then drop the lock so
     // the long winetricks run holds nothing.
     let (pfx_dir, proton_path) = {
@@ -346,7 +383,7 @@ pub fn install_vcredist_for_game(game_id: &str) -> Result<(), String> {
 
         if meta.target_platform != Platform::Windows {
             return Err(
-                "The VC++ runtime only applies to Windows games launched via Proton.".to_string(),
+                "Runtimes only apply to Windows games launched via Proton.".to_string(),
             );
         }
 
@@ -391,13 +428,15 @@ pub fn install_vcredist_for_game(game_id: &str) -> Result<(), String> {
         .as_ref()
         .ok_or_else(|| "umu-launcher is unavailable (Proton support is Linux-only).".to_string())?;
 
-    info!("[VCRedist] Manual install requested for game {game_id} (PROTONPATH={proton_path})");
+    info!("[Redist] Install requested for game {game_id}: [{label}] (PROTONPATH={proton_path})");
 
-    crate::prefix_prep::install_vcredist_into_prefix(
+    crate::prefix_prep::install_redists_into_prefix(
         game_id,
         &pfx_dir,
         &proton_path,
         &umu_exe.to_string_lossy(),
+        &verbs,
+        &label,
     )
 }
 

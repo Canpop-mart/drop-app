@@ -252,3 +252,30 @@ $helvetica: (
   0%   { opacity: 1; }
   100% { opacity: 0; filter: contrast(2) brightness(1.5); }
 }
+
+/* ===== Reduced motion ===== */
+/*
+ * Honor the OS "reduce motion" setting (Steam Deck Accessibility, Windows,
+ * GNOME). Collapses decorative motion to near-instant: the named keyframe
+ * animations (pulse dots, the roulette spin, the BPM slide/pixel page
+ * transitions) and long transitions snap rather than animate, and the
+ * cover-art hover-zoom is dropped outright so it doesn't even pop to a
+ * scaled state. Opacity cross-fades survive since they aren't motion.
+ * BpmAnimatedBackground already respects this; this makes it app-wide.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Drop the decorative hover-grow on cover art / tiles entirely. */
+  [class*="hover:scale-"]:hover,
+  .group:hover [class*="group-hover:scale-"] {
+    transform: none !important;
+  }
+}

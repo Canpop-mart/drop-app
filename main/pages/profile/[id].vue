@@ -79,7 +79,7 @@
           <div
             class="rounded-xl bg-zinc-800/50 backdrop-blur-sm p-5 ring-1 ring-zinc-700/40"
           >
-            <PlayIcon class="size-5 text-purple-400 mb-2" />
+            <PlayIcon class="size-5 text-blue-400 mb-2" />
             <p class="text-2xl font-bold text-zinc-100">
               {{ stats.gamesPlayed.toLocaleString() }}
             </p>

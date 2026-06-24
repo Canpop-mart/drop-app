@@ -119,40 +119,45 @@ fn emit_prep_status(game_id: &str, message: Option<&str>) {
 /// env (no `RUST_LOG`, no Steam/Gamescope bundled-Python vars that break umu's
 /// system Python).
 #[cfg(target_os = "linux")]
-pub fn install_vcredist_into_prefix(
+pub fn install_redists_into_prefix(
     game_id: &str,
     pfx_dir: &Path,
     proton_path: &str,
     umu_exe: &str,
+    verbs: &[&str],
+    label: &str,
 ) -> Result<(), String> {
+    if verbs.is_empty() {
+        return Ok(());
+    }
     if let Err(e) = std::fs::create_dir_all(pfx_dir) {
         return Err(format!("Could not create prefix dir {pfx_dir:?}: {e}"));
     }
 
     log::info!(
-        "[VCRedist] Installing vcrun2022 + d3dcompiler_47 into {:?} via winetricks \
-         (umu, PROTONPATH={}). First run downloads from aka.ms and needs network.",
+        "[Redist] Installing [{}] into {:?} via winetricks (umu, PROTONPATH={}). \
+         First run downloads from aka.ms and needs network.",
+        verbs.join(" "),
         pfx_dir,
         proton_path
     );
 
     // Run winetricks as umu's command (umu has native winetricks support):
     //   GAMEID=0 STORE=none PROTONPATH=<proton> WINEPREFIX=<pfx> \
-    //       <umu-run> winetricks -q vcrun2022 d3dcompiler_47
+    //       <umu-run> winetricks -q --force <verbs...>
     let mut command = std::process::Command::new(umu_exe);
+    command.arg("winetricks").arg("-q");
+    // --force past GE-Proton's pre-seeded stub `VC\Runtimes` registry keys: they
+    // fool winetricks into thinking a runtime is already installed, so it no-ops
+    // (a ~0.5s "success") and never writes the real redist registration. Games
+    // that check that registration (e.g. Far Far West) then refuse to launch
+    // even though the DLLs are present. --force makes winetricks install for
+    // real. Fine for a deliberate, on-demand action.
+    command.arg("--force");
+    for verb in verbs {
+        command.arg(verb);
+    }
     command
-        .arg("winetricks")
-        .arg("-q")
-        // --force past GE-Proton's pre-seeded stub `VC\Runtimes` registry keys:
-        // they fool winetricks into thinking vcrun2022 is already installed, so
-        // it no-ops (a ~0.5s "success") and never writes the real redist
-        // registration. Games that check that registration (e.g. Far Far West)
-        // then refuse to launch ("missing Visual C++ 2015-2022 Redistributable")
-        // even though the runtime DLLs are present. --force makes winetricks
-        // install for real. Fine for a deliberate, on-demand button.
-        .arg("--force")
-        .arg("vcrun2022")
-        .arg("d3dcompiler_47")
         .env("GAMEID", "0")
         .env("STORE", "none")
         .env("PROTONPATH", proton_path)
@@ -165,20 +170,18 @@ pub fn install_vcredist_into_prefix(
 
     // Surface a precise status to the UI for the duration of the blocking run,
     // then clear it on every outcome below.
-    emit_prep_status(
-        game_id,
-        Some("Installing Visual C++ runtime (one-time, ~1 min)..."),
-    );
+    let msg = format!("Installing {label} (one-time, may take a few minutes)...");
+    emit_prep_status(game_id, Some(msg.as_str()));
     let status_result = command.status();
     emit_prep_status(game_id, None);
 
     match status_result {
         Ok(status) if status.success() => {
-            log::info!("[VCRedist] winetricks finished successfully for {pfx_dir:?}");
+            log::info!("[Redist] winetricks finished successfully for {pfx_dir:?}");
             Ok(())
         }
         Ok(status) => Err(format!(
-            "winetricks exited with {status} — the VC++ runtime was not installed"
+            "winetricks exited with {status} — {label} was not installed"
         )),
         Err(e) => Err(format!(
             "Failed to spawn winetricks via umu ({umu_exe:?}): {e}"
@@ -188,14 +191,16 @@ pub fn install_vcredist_into_prefix(
 
 /// Non-Linux stub: there is no Proton prefix to provision off Linux.
 #[cfg(not(target_os = "linux"))]
-pub fn install_vcredist_into_prefix(
+pub fn install_redists_into_prefix(
     game_id: &str,
     pfx_dir: &std::path::Path,
     proton_path: &str,
     umu_exe: &str,
+    verbs: &[&str],
+    label: &str,
 ) -> Result<(), String> {
-    let _ = (game_id, pfx_dir, proton_path, umu_exe);
-    Err("Installing the VC++ runtime is only supported on Linux (Proton).".to_string())
+    let _ = (game_id, pfx_dir, proton_path, umu_exe, verbs, label);
+    Err("Installing runtimes is only supported on Linux (Proton).".to_string())
 }
 
 // ───────────────────────────── OnlineFix ────────────────────────────────────

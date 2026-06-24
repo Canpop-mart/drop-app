@@ -359,7 +359,7 @@ pub fn run() {
             open_process_logs,
             read_latest_launch_log,
             get_launch_options,
-            install_vcredist,
+            install_redists,
             list_gamepads,
             // Compatibility testing
             start_compat_test,

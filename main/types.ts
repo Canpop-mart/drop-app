@@ -46,6 +46,12 @@ export type Game = {
   mCoverObjectId: string;
   mImageLibraryObjectIds: string[];
   mImageCarouselObjectIds: string[];
+  /** Gamepad support level from Steam (full/partial/none). */
+  mControllerSupport?: "Full" | "Partial" | "None";
+  /** HowLongToBeat completion times in minutes (best-effort; may be null). */
+  mHltbMain?: number | null;
+  mHltbMainSides?: number | null;
+  mHltbCompletionist?: number | null;
 };
 
 export type Collection = {

@@ -98,7 +98,7 @@
       <div
         v-if="weeklyRecap.length > 0"
         :ref="(el: any) => registerContent(el, { onSelect: onRecapSelect })"
-        class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-900/40 via-zinc-900/60 to-purple-900/30 ring-1 ring-indigo-500/20 cursor-pointer"
+        class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-900/40 via-zinc-900/60 to-blue-900/30 ring-1 ring-blue-500/20 cursor-pointer"
         @click="onRecapSelect"
       >
         <transition name="bpm-slide-fade" mode="out-in">
@@ -110,12 +110,12 @@
             <!-- Thumbnail anchor — cover for game-led slides, avatar for
                  player-led slides, kind emoji as a last resort. -->
             <div
-              class="shrink-0 size-24 rounded-xl overflow-hidden ring-1 ring-indigo-400/20 flex items-center justify-center"
+              class="shrink-0 size-24 rounded-xl overflow-hidden ring-1 ring-blue-400/20 flex items-center justify-center"
               :class="
                 activeRecapSlide.coverObjectId ||
                 activeRecapSlide.avatarObjectId
                   ? 'bg-zinc-900/80'
-                  : 'bg-indigo-500/15'
+                  : 'bg-blue-500/15'
               "
             >
               <img
@@ -130,12 +130,12 @@
                 :alt="activeRecapSlide.headline"
                 class="w-full h-full object-cover"
               />
-              <span v-else class="text-3xl">{{ recapSlideEmoji }}</span>
+              <component :is="recapSlideIcon" v-else class="size-8 text-zinc-300" />
             </div>
 
             <div class="flex-1 min-w-0 pr-12">
               <p
-                class="text-[10px] tracking-[0.2em] uppercase text-indigo-300/80 font-medium mb-1 truncate"
+                class="text-[10px] tracking-[0.2em] uppercase text-blue-300/80 font-medium mb-1 truncate"
               >
                 {{ activeRecapSlide.title }}
               </p>
@@ -158,7 +158,7 @@
             v-for="(_, i) in weeklyRecap"
             :key="i"
             class="size-2 rounded-full transition-all"
-            :class="i === recapIndex ? 'bg-indigo-300 w-5' : 'bg-indigo-300/30'"
+            :class="i === recapIndex ? 'bg-blue-300 w-5' : 'bg-blue-300/30'"
             @click.stop="recapIndex = i"
           />
         </div>
@@ -233,9 +233,12 @@
         >
           <div class="flex items-center gap-3">
             <div
-              class="shrink-0 size-9 rounded-full bg-amber-500/15 flex items-center justify-center text-base"
+              class="shrink-0 size-9 rounded-full bg-amber-500/15 flex items-center justify-center"
             >
-              {{ weeklyChallengeEmoji }}
+              <component
+                :is="weeklyChallengeIcon"
+                class="size-4 text-amber-300"
+              />
             </div>
             <div class="flex-1 min-w-0">
               <div class="flex items-baseline justify-between gap-2">
@@ -352,7 +355,7 @@
               >
               <span
                 v-if="cluster.kind === 'request' && cluster.request"
-                class="text-purple-400"
+                class="text-blue-400"
                 >{{ cluster.request.title }}</span
               >
               <span v-else-if="cluster.game" class="text-blue-400">{{
@@ -721,6 +724,19 @@ import {
   type MvpToday,
   type WeeklyChallenge,
 } from "~/composables/use-server-api";
+import {
+  FireIcon,
+  ClockIcon,
+  TrophyIcon,
+  FlagIcon,
+  UserPlusIcon,
+  SparklesIcon,
+  Squares2X2Icon,
+  ArrowUturnLeftIcon,
+  BoltIcon,
+  MoonIcon,
+  TagIcon,
+} from "@heroicons/vue/24/solid";
 import { serverUrl } from "~/composables/use-server-fetch";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
@@ -797,33 +813,32 @@ function formatChallengeValue(n: number): string {
   return isHours ? `${n}h` : n.toLocaleString();
 }
 
-// Per-kind emoji for the BPM card — mirrors the heroicon mapping in
-// `CommunityWeeklyChallenge.vue` (the desktop variant). Kept inline rather
-// than imported so BPM doesn't have to drag in the heroicons set just for
-// this card.
-const weeklyChallengeEmoji = computed(() => {
-  if (!weeklyChallenge.value) return "⏱";
+// Per-kind icon for the BPM card, matching the heroicon mapping in
+// CommunityWeeklyChallenge.vue (the desktop variant) so the two stay
+// consistent and BPM avoids emoji that vary across SteamOS and Windows.
+const weeklyChallengeIcon = computed(() => {
+  if (!weeklyChallenge.value) return ClockIcon;
   switch (weeklyChallenge.value.kind) {
     case "play_hours":
-      return "⏱";
+      return ClockIcon;
     case "unlock_count":
-      return "🏆";
+      return TrophyIcon;
     case "play_variety":
-      return "🎲";
+      return Squares2X2Icon;
     case "rediscover":
-      return "⏳";
+      return ArrowUturnLeftIcon;
     case "marathon":
-      return "🏃";
+      return BoltIcon;
     case "night_owl":
-      return "🌙";
+      return MoonIcon;
     case "new_to_you":
-      return "✨";
+      return SparklesIcon;
     case "genre_focus":
-      return "🏷";
+      return TagIcon;
     case "fresh_drop":
-      return "🌱";
+      return Squares2X2Icon;
     default:
-      return "⏱";
+      return ClockIcon;
   }
 });
 
@@ -866,23 +881,23 @@ const activeRecapSlide = computed(
   () => weeklyRecap.value[recapIndex.value] ?? weeklyRecap.value[0],
 );
 
-// Per-kind fallback glyph for the thumbnail slot, used only when the
-// slide has neither a game cover nor a user avatar to render. Mirrors
-// the same mapping the desktop CommunityWeeklyRecap component uses.
-const recapSlideEmoji = computed(() => {
+// Per-kind fallback icon for the thumbnail slot, used only when the slide
+// has neither a game cover nor a user avatar. Mirrors the desktop
+// CommunityWeeklyRecap component's icon mapping.
+const recapSlideIcon = computed(() => {
   switch (activeRecapSlide.value?.kind) {
     case "top_game":
-      return "🎮";
+      return FireIcon;
     case "longest_session":
-      return "⏱";
+      return ClockIcon;
     case "most_unlocks":
-      return "🏆";
+      return TrophyIcon;
     case "milestone":
-      return "🚀";
+      return FlagIcon;
     case "new_player":
-      return "👋";
+      return UserPlusIcon;
     default:
-      return "✨";
+      return SparklesIcon;
   }
 });
 

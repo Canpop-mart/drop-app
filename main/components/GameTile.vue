@@ -44,7 +44,7 @@
            mode where it'd dominate the small thumbnail. -->
       <div
         v-if="rom && !compact"
-        class="absolute top-2 left-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-500/30 text-purple-200 backdrop-blur-sm"
+        class="absolute top-2 left-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-teal-500/30 text-teal-200 backdrop-blur-sm"
       >
         ROM
       </div>
@@ -169,7 +169,7 @@ const props = defineProps<{
   installed?: boolean;
   /** Show the blue "Update" pill (takes precedence over the dot). */
   updateAvailable?: boolean;
-  /** Show the purple "ROM" pill for emulated games. */
+  /** Show the teal "ROM" pill for emulated games. */
   rom?: boolean;
   /** Corner radius — `xl` (default) for the main grids, `lg` for denser ones. */
   rounded?: "lg" | "xl";

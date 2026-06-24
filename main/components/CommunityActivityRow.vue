@@ -43,7 +43,7 @@
         >{{ cluster.game.mName }}</button>
         <span
           v-else-if="cluster.kind === 'request' && cluster.request"
-          class="font-medium text-purple-400"
+          class="font-medium text-blue-400"
         >{{ cluster.request.title }}</span>
         <span v-if="suffix">&nbsp;{{ suffix }}</span>
       </p>

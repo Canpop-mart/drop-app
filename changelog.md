@@ -11,8 +11,8 @@ The pre-1.0 raw commit dump from the upstream codebase has been moved to
 ## 2.0.0
 
 First general-use release of the Canpop fork. The 1.x series was effectively
-a long beta — the final shape of the achievement system, BPM, and Steam Deck
-integration only stabilised over rc.1 → rc.4. 2.0 is the cut where every
+a long beta. The final shape of the achievement system, BPM, and Steam Deck
+integration only stabilised over rc.1 to rc.4. 2.0 is the cut where every
 in-development feature is either user-ready or hidden behind dev mode, and
 the typecheck baseline is clean.
 
@@ -57,31 +57,26 @@ the typecheck baseline is clean.
 
 These are the only commits between rc.4 and 2.0:
 
-- **Gate streaming + cloud saves behind dev mode** ([fdc9422](https://github.com/Canpop-mart/drop-app/commit/fdc9422)) —
-  streaming UI (StreamButton, settings tab, BPM section, BPM "Stream from
+- **Gate streaming + cloud saves behind dev mode** ([fdc9422](https://github.com/Canpop-mart/drop-app/commit/fdc9422)). Streaming UI (StreamButton, settings tab, BPM section, BPM "Stream from
   device" play-menu rows) and cloud-save UI (BPM Saves tab, welcome wizard
   saves step, BpmErrorReference Saves category) now follow the same dev-mode
   gating pattern as compat tests. Adds `/settings/developer` so dev mode
   can be toggled without entering BPM.
-- **Refresh transitive deps + drop dead packages** ([1efb649](https://github.com/Canpop-mart/drop-app/commit/1efb649)) —
-  bulk `cargo update` + `pnpm update` clears the dependabot critical
+- **Refresh transitive deps + drop dead packages** ([1efb649](https://github.com/Canpop-mart/drop-app/commit/1efb649)). Bulk `cargo update` + `pnpm update` clears the dependabot critical
   (`simple-git`) and most highs across both ecosystems. Removed dead deps:
   `koa`, `markdown-it`, `scss` placeholder, `tauri@0.15.0` (the
   pre-Tauri-2 npm package), `slice-deque` (declared in Cargo.toml but never
   imported, carrying two double-free advisories). Net: −615 transitive
   packages from the root lockfile.
-- **Include `libs/drop-base` as a pnpm workspace package** ([76f40aa](https://github.com/Canpop-mart/drop-app/commit/76f40aa)) —
-  the Nuxt layer's deps (`@headlessui/vue`, `@heroicons/vue`) now resolve
+- **Include `libs/drop-base` as a pnpm workspace package** ([76f40aa](https://github.com/Canpop-mart/drop-app/commit/76f40aa)). The Nuxt layer's deps (`@headlessui/vue`, `@heroicons/vue`) now resolve
   for typechecking, clearing 32 errors caused by missing `createModal` /
   `ModalType` auto-imports.
-- **Clear remaining typecheck errors** ([5cf9ed4](https://github.com/Canpop-mart/drop-app/commit/5cf9ed4)) —
-  baseline goes from 80 errors → 0. RecentGameEntry now caches `installed`
+- **Clear remaining typecheck errors** ([5cf9ed4](https://github.com/Canpop-mart/drop-app/commit/5cf9ed4)). Baseline goes from 80 errors → 0. RecentGameEntry now caches `installed`
   and `playtimeSeconds` instead of the page reading non-existent fields off
   the GameStatus union; null guards on `dl_progress`; legacy
   `widescreen === true/false` branches removed (the type is now a string
   union); various small one-offs.
-- **Correct error-page redirects + remove dead refs** ([67d7c8b](https://github.com/Canpop-mart/drop-app/commit/67d7c8b)) —
-  error.vue's BPM and desktop branches now redirect correctly per surface
+- **Correct error-page redirects + remove dead refs** ([67d7c8b](https://github.com/Canpop-mart/drop-app/commit/67d7c8b)). Error.vue's BPM and desktop branches now redirect correctly per surface
   (was sending desktop users into BPM on every button); broken `/docs`
   link replaced with `https://docs.droposs.org`; welcome wizard subtitle
   no longer promises a "Settings → Help" section that doesn't exist;
@@ -97,25 +92,25 @@ These are the only commits between rc.4 and 2.0:
 
 ---
 
-## v1.10.0-rc.4 — compat polish + emulator render fixes
+## v1.10.0-rc.4: compat polish + emulator render fixes
 
 Fixed the rc.3 tokio panic, made RetroArch 3D-emulator games actually render
 with CRT shader on, let users clear batch-test review backlog without
 re-launching games, and smoothed out PS2 deinterlace artifacts. See
 [48a4b0c](https://github.com/Canpop-mart/drop-app/commit/48a4b0c).
 
-## v1.10.0-rc.3 — compat round 2
+## v1.10.0-rc.3: compat round 2
 
 `createModal` fix, Proton version detection, batch worker, auto-refresh
 after test, log4rs `append=true`. See
 [d1403b2](https://github.com/Canpop-mart/drop-app/commit/d1403b2).
 
-## v1.10.0-rc.2 — compatibility test orchestrator
+## v1.10.0-rc.2: compatibility test orchestrator
 
 Initial compat orchestrator. See
 [3569b39](https://github.com/Canpop-mart/drop-app/commit/3569b39).
 
-## v1.10.0-rc.1 — dev mode overlay, welcome wizard, BPM stability pass
+## v1.10.0-rc.1: dev mode overlay, welcome wizard, BPM stability pass
 
 Dev mode debug overlay, BPM welcome wizard, BPM stability fixes. See
 [026afcf](https://github.com/Canpop-mart/drop-app/commit/026afcf).

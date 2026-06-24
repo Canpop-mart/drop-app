@@ -2,7 +2,7 @@
   <div class="flex flex-col h-full">
     <div class="mb-3 inline-flex gap-x-2">
       <div
-        class="relative transition-transform duration-300 hover:scale-105 active:scale-95"
+        class="relative"
       >
         <div
           class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3"
@@ -64,7 +64,7 @@
             v-for="item in nav.items"
             :key="nav.id"
             :class="[
-              'transition-all duration-300 rounded-lg flex items-center px-1 py-0.5 hover:scale-105 active:scale-95 hover:shadow-lg hover:shadow-zinc-950/50',
+              'transition-colors duration-200 rounded-lg flex items-center px-1 py-0.5',
               currentNavigation == item.id
                 ? 'bg-zinc-800 text-zinc-100 shadow-md shadow-zinc-950/20'
                 : item.isInstalled.value
@@ -75,10 +75,10 @@
           >
             <div class="flex items-center w-full gap-x-2">
               <div
-                class="flex-none transition-transform duration-300 hover:-rotate-2"
+                class="flex-none"
               >
                 <img
-                  class="size-6 object-cover bg-zinc-900 rounded transition-all duration-300 shadow-sm"
+                  class="size-6 object-cover bg-zinc-900 rounded shadow-sm"
                   :src="useObject(item.icon)"
                   alt=""
                 />

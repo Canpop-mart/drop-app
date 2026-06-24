@@ -22,7 +22,7 @@
       "
       @configure="configureModalOpen = true"
       @uninstall="launchCtl.uninstall()"
-      @install-vc-runtime="installVcRuntime()"
+      @install-runtime="installRuntime"
       @reset-achievements="resetConfirmOpen = true"
       @remove-from-library="removeConfirmOpen = true"
     />
@@ -467,17 +467,17 @@ function goToQueue() {
 // "Installing Visual C++ runtime..."). The guard prevents a second concurrent
 // run if the user re-opens the menu mid-install.
 const installingVc = ref(false);
-async function installVcRuntime() {
+async function installRuntime(set: string) {
   if (installingVc.value) return;
   installingVc.value = true;
   try {
-    await invoke("install_vcredist", { gameId: game.id });
+    await invoke("install_redists", { gameId: game.id, runtimes: [set] });
     createModal(
       ModalType.Notification,
       {
-        title: `Visual C++ runtime: ${game.mName}`,
+        title: `Runtime installed: ${game.mName}`,
         description:
-          "The Visual C++ runtime was installed into this game's Proton prefix. " +
+          "The selected runtime was installed into this game's Proton prefix. " +
           "If the game was failing with a missing-DLL error, try launching it again.",
         buttonText: "OK",
       },
@@ -488,8 +488,8 @@ async function installVcRuntime() {
     createModal(
       ModalType.Notification,
       {
-        title: "Couldn't install Visual C++ runtime",
-        description: `Drop couldn't install the VC++ runtime for "${game.mName}": ${msg}`,
+        title: "Couldn't install runtime",
+        description: `Drop couldn't install the runtime for "${game.mName}": ${msg}`,
         buttonText: "Close",
       },
       (_e, c) => c(),

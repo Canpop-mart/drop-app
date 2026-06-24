@@ -77,6 +77,9 @@
       <div class="flex items-center justify-between mb-2">
         <span class="text-xs text-zinc-400">
           {{ unlockedCount }} / {{ achievements.length }} unlocked
+          <span v-if="totalPoints > 0" class="text-amber-400/80"
+            >· {{ earnedPoints }} / {{ totalPoints }} pts</span
+          >
         </span>
         <div
           class="flex-1 ml-3 h-1.5 bg-zinc-700 rounded-full overflow-hidden"
@@ -181,6 +184,19 @@ const unlockedPercent = computed(() =>
   props.achievements.length > 0
     ? (props.unlockedCount / props.achievements.length) * 100
     : 0,
+);
+
+// Gamerscore-style points (RetroAchievements). Summed from the list, which
+// already carries the max points across provider variants. Hidden when 0
+// (Steam/Goldberg-only games carry no points).
+const totalPoints = computed(() =>
+  props.achievements.reduce((sum, a) => sum + (a.points ?? 0), 0),
+);
+const earnedPoints = computed(() =>
+  props.achievements.reduce(
+    (sum, a) => sum + (a.unlocked ? (a.points ?? 0) : 0),
+    0,
+  ),
 );
 
 /** Preferred rarity label: global (RA/Steam) % if known, else this server's. */
