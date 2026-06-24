@@ -12,21 +12,37 @@
         Library
       </NuxtLink>
       <div class="mt-4 flex flex-wrap items-end justify-between gap-4">
-        <div class="min-w-0">
-          <p
-            v-if="meta?.maker"
-            class="mb-1 text-[11px] font-semibold uppercase tracking-[0.25em] text-blue-300"
-          >
-            {{ meta.maker }}
-          </p>
-          <h1
-            class="font-display text-4xl font-bold leading-none text-white drop-shadow-lg"
-          >
-            {{ meta?.name ?? "Console" }}
-          </h1>
-          <p v-if="meta?.blurb" class="mt-3 max-w-xl text-sm text-zinc-400">
-            {{ meta.blurb }}
-          </p>
+        <div class="flex min-w-0 items-end gap-5">
+          <img
+            v-if="art"
+            :src="art.render"
+            :alt="art.name"
+            class="h-24 w-auto max-w-[10rem] shrink-0 object-contain drop-shadow-lg"
+            :style="art.pixel ? 'image-rendering: pixelated' : ''"
+          />
+          <div class="min-w-0">
+            <img
+              v-if="art?.logo"
+              :src="art.logo"
+              :alt="art.name"
+              class="w-auto max-w-[22rem] object-contain"
+              :class="art.big ? 'h-20' : 'h-14'"
+              :style="
+                art.whiten
+                  ? 'filter: brightness(0) invert(1) drop-shadow(0 2px 3px rgba(0,0,0,0.4))'
+                  : 'filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5))'
+              "
+            />
+            <h1
+              v-else
+              class="font-display text-4xl font-bold leading-none text-white drop-shadow-lg"
+            >
+              {{ displayName }}
+            </h1>
+            <p v-if="meta?.blurb" class="mt-3 max-w-xl text-sm text-zinc-400">
+              {{ meta.blurb }}
+            </p>
+          </div>
         </div>
         <p class="text-sm text-zinc-400">
           {{ consoleEntries.length }} game{{
@@ -83,6 +99,7 @@ import {
 import type { Game, GameStatus } from "~/types";
 import { InstalledType } from "~/types";
 import LibraryGrid from "~/components/LibraryGrid.vue";
+import { consoleArt } from "~/composables/console-art";
 
 interface LibraryEntry {
   game: Game;
@@ -104,6 +121,12 @@ const api = useServerApi();
 
 const consoleId = computed(() => String(route.params.id));
 const meta = ref<Omit<ConsoleGroup, "gameIds"> | null>(null);
+
+// Console render + canonical display name, resolved from the library name.
+const art = computed(() => (meta.value ? consoleArt(meta.value.name) : null));
+const displayName = computed(
+  () => art.value?.name ?? meta.value?.name ?? "Console",
+);
 const consoleEntries = ref<LibraryEntry[]>([]);
 const lastPlayedMap = ref<Map<string, string>>(new Map());
 const loading = ref(true);

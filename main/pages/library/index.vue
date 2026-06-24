@@ -251,7 +251,6 @@
             :key="row.id"
             :id="row.id"
             :name="row.shortName"
-            :maker="row.maker"
             :count="row.entries.length"
             :covers="
               row.entries
