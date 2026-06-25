@@ -51,6 +51,19 @@ pub struct Game {
     pub m_cover_object_id: String,
     pub m_image_library_object_ids: Vec<String>,
     pub m_image_carousel_object_ids: Vec<String>,
+    // Optional metadata: gamepad support + HowLongToBeat times (minutes).
+    // Absent on older servers and on games imported before these existed, so the
+    // detail page hides them when None. They must live on this struct or the
+    // native client silently drops them when deserialising the server payload,
+    // which is why they showed on the web view but not in the app.
+    #[serde(default)]
+    pub m_controller_support: Option<String>,
+    #[serde(default)]
+    pub m_hltb_main: Option<i64>,
+    #[serde(default)]
+    pub m_hltb_main_sides: Option<i64>,
+    #[serde(default)]
+    pub m_hltb_completionist: Option<i64>,
     pub library_path: String,
 }
 impl Game {

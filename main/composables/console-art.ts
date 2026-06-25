@@ -77,10 +77,6 @@ const PNG_LOGOS = new Set(["switch"]);
 // wordmarks at the same height, so they render larger on the cards.
 const BIG_LOGOS = new Set(["switch"]);
 
-// Bump when a bundled logo/render file is edited in place (same filename), so
-// the webview re-fetches it instead of serving its cached copy.
-const ASSET_REV = "2";
-
 function normalize(name: string): string {
   return name
     .toLowerCase()
@@ -106,9 +102,9 @@ export function consoleArt(
   const ext = PNG_LOGOS.has(hit.slug) ? "png" : "svg";
   return {
     ...hit,
-    render: `/console-art/${hit.slug}.png?v=${ASSET_REV}`,
+    render: `/console-art/${hit.slug}.png`,
     logo: LOGO_SLUGS.has(hit.slug)
-      ? `/console-art/logos/${hit.slug}.${ext}?v=${ASSET_REV}`
+      ? `/console-art/logos/${hit.slug}.${ext}`
       : null,
     pixel: PIXEL_SLUGS.has(hit.slug),
     whiten: WHITEN_SLUGS.has(hit.slug),
