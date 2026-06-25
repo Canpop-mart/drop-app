@@ -40,11 +40,19 @@
         </span>
       </div>
 
+      <!-- Console box-art frame for emulated games, the way Big Picture Mode
+           themes its box art. Sits above the cover; the badges and hover
+           layers below carry z-10 so they stay on top of the frame. -->
+      <BpmBoxArtOverlay
+        v-if="!compact && boxartTheme"
+        :theme-id="boxartTheme"
+      />
+
       <!-- "ROM" marker — top-left, for emulated games. Hidden in compact
            mode where it'd dominate the small thumbnail. -->
       <div
         v-if="rom && !compact"
-        class="absolute top-2 left-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-teal-500/30 text-teal-200 backdrop-blur-sm"
+        class="absolute top-2 left-2 z-10 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-teal-500/30 text-teal-200 backdrop-blur-sm"
       >
         ROM
       </div>
@@ -54,7 +62,7 @@
            since the row already shows status text. -->
       <div
         v-if="!compact"
-        class="absolute top-2 right-2 flex flex-col gap-1 items-end"
+        class="absolute top-2 right-2 z-10 flex flex-col gap-1 items-end"
       >
         <span
           v-if="updateAvailable"
@@ -74,7 +82,7 @@
            covers it). -->
       <div
         v-if="!compact"
-        class="absolute inset-0 bg-gradient-to-t from-zinc-950/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity"
+        class="absolute inset-0 z-10 bg-gradient-to-t from-zinc-950/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity"
       />
 
       <!-- Hover "Play / Install" overlay — appears on the cover in
@@ -82,7 +90,7 @@
            parent. Skipped in compact mode. -->
       <div
         v-if="!compact && hoverAction"
-        class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+        class="absolute inset-0 z-10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
       >
         <span
           class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold text-white shadow-lg backdrop-blur-sm"
@@ -160,6 +168,8 @@
  * different protocols — `useObject()` for native `object://` IDs, and
  * `serverUrl("api/v1/object/...")` for store metadata.
  */
+import BpmBoxArtOverlay from "~/components/bigpicture/BpmBoxArtOverlay.vue";
+
 const props = defineProps<{
   /** Fully-resolved cover image URL, or empty/undefined for the fallback. */
   coverUrl?: string | null;
@@ -191,6 +201,12 @@ const props = defineProps<{
    * relative-time meta line under the title ("3 hours ago", "yesterday").
    */
   lastPlayed?: string | null;
+  /**
+   * Big Picture box-art template id for this game's console (from
+   * consoleArt().boxartTheme). On a non-compact tile it overlays the console's
+   * box frame on the cover, the way Big Picture Mode themes its box art.
+   */
+  boxartTheme?: string | null;
 }>();
 
 defineEmits<{

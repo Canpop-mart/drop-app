@@ -94,25 +94,36 @@
                about the game" surfaces. -->
           <div
             v-if="activeDetailTab === 'about'"
-            class="space-y-4"
+            :class="
+              aboutHasAside ? 'grid xl:grid-cols-[1fr_360px] gap-4' : 'space-y-4'
+            "
           >
-            <CollapsibleSection title="Description">
-              <div
-                v-html="htmlDescription"
-                class="prose prose-invert prose-blue max-w-none"
-              />
-            </CollapsibleSection>
+            <div class="min-w-0 space-y-4">
+              <CollapsibleSection title="Description">
+                <div
+                  v-html="htmlDescription"
+                  class="prose prose-invert prose-blue max-w-none"
+                />
+              </CollapsibleSection>
 
-            <CollapsibleSection
-              v-if="game.mImageCarouselObjectIds.length > 0"
-              title="Gallery"
-              :badge="`${game.mImageCarouselObjectIds.length} images`"
-            >
-              <GameDetailGallery
-                :image-ids="game.mImageCarouselObjectIds"
-                :game-name="game.mName"
+              <CollapsibleSection
+                v-if="game.mImageCarouselObjectIds.length > 0"
+                title="Gallery"
+                :badge="`${game.mImageCarouselObjectIds.length} images`"
+              >
+                <GameDetailGallery
+                  :image-ids="game.mImageCarouselObjectIds"
+                  :game-name="game.mName"
+                />
+              </CollapsibleSection>
+            </div>
+            <aside v-if="aboutHasAside" class="space-y-4 min-w-0">
+              <GameDetailHowLongToBeat :game="game" />
+              <GameDetailControllerSupport
+                :game="game"
+                :emulated="isEmulated"
               />
-            </CollapsibleSection>
+            </aside>
           </div>
 
           <!-- Community — two-column layout.  Main column holds the
@@ -416,6 +427,35 @@ const visibleDetailTabs = computed(() =>
 // achievements with a gold ring). Soft-fail to empty arrays so a missing
 // Agent C endpoint doesn't blank the page.
 const api = useServerApi();
+
+// "Emulated" detection. config.isEmulatedGame only sees an emulator once the
+// launch is configured (after install), so it misses uninstalled ROMs. Console
+// membership (emulated games live in a console library) holds either way, so we
+// fetch that too and treat either signal as emulated.
+const inConsoleLibrary = ref(false);
+api.emulation
+  .consoles()
+  .then(({ consoles }) => {
+    inConsoleLibrary.value = consoles.some((c) => c.gameIds.includes(id));
+  })
+  .catch(() => {});
+const isEmulated = computed(
+  () => inConsoleLibrary.value || config.isEmulatedGame.value,
+);
+
+// The About tab gains its right sidebar (HLTB + controller nodes) only when
+// there's something to show. Emulated games always qualify (full controller
+// support); otherwise it checks the controller + HLTB fields, so a game with
+// none doesn't leave an empty 360px column.
+const aboutHasAside = computed(
+  () =>
+    isEmulated.value ||
+    game.mControllerSupport === "Full" ||
+    game.mControllerSupport === "Partial" ||
+    !!game.mHltbMain ||
+    !!game.mHltbMainSides ||
+    !!game.mHltbCompletionist,
+);
 const gamePlayers = ref<GamePlayerEntry[]>([]);
 const gameFirsts = ref<GameAchievementFirst[]>([]);
 

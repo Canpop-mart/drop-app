@@ -349,6 +349,13 @@
               />
             </button>
           </div>
+
+          <GameDetailHowLongToBeat :game="gameRef" />
+
+          <GameDetailControllerSupport
+            :game="gameRef"
+            :emulated="storeMeta?.isEmulated"
+          />
         </aside>
       </div>
     </template>

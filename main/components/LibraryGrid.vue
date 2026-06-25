@@ -29,6 +29,7 @@
       :update-available="entry.updateAvailable"
       :last-played="lastPlayedMap?.get(entry.game.id) ?? null"
       :hover-action="hoverActionFor(entry)"
+      :boxart-theme="boxartTheme"
       @select="$emit('select', entry.game.id)"
     />
   </GameTileGrid>
@@ -75,6 +76,12 @@ const props = defineProps<{
    * navigation).
    */
   showHoverAction?: boolean;
+  /**
+   * Big Picture box-art template id for the console these tiles belong to
+   * (from consoleArt().boxartTheme). When set, each non-compact tile wears its
+   * console's box frame. Used by the per-console library page.
+   */
+  boxartTheme?: string | null;
 }>();
 
 defineEmits<{

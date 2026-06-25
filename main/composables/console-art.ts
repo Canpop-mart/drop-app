@@ -10,7 +10,12 @@
  * Jude Coram (the smooth flat-shaded renders) and the es-theme-pixel theme
  * by Rookervik / ehettervik / TheGemsbok (the pixel renders for the consoles
  * Coram doesn't cover: GameCube, Game Boy Advance/Color, Switch, PS3, 3DS).
+ *
+ * Asset URLs go through usePublicUrl so they pick up the Nuxt baseURL (/main):
+ * the built app serves public/ under .output/main/, so a raw "/console-art/..."
+ * path 404s in the desktop client.
  */
+import { usePublicUrl } from "~/composables/use-public-url";
 export interface ConsoleArt {
   /** Render asset slug (file is /console-art/<slug>.png). */
   slug: string;
@@ -77,6 +82,25 @@ const PNG_LOGOS = new Set(["switch"]);
 // wordmarks at the same height, so they render larger on the cards.
 const BIG_LOGOS = new Set(["switch"]);
 
+// Maps a console to a Big Picture box-art template id (consumed by
+// BpmBoxArtOverlay), so emulated game covers can wear their console's box
+// frame. Only consoles BpmBoxArtOverlay has a template or CSS fallback for are
+// listed; the rest resolve to null and get no overlay.
+const BOXART_THEME: Record<string, string> = {
+  gamecube: "gamecube",
+  snes: "snes",
+  ps2: "ps2",
+  wii: "wii",
+  switch: "switch",
+  gba: "gameboy",
+  gbc: "gameboy",
+  "3ds": "ds",
+  dreamcast: "dreamcast",
+  xbox360: "xbox",
+  ps1: "ps1",
+  n64: "n64",
+};
+
 function normalize(name: string): string {
   return name
     .toLowerCase()
@@ -94,6 +118,7 @@ export function consoleArt(
       pixel: boolean;
       whiten: boolean;
       big: boolean;
+      boxartTheme: string | null;
     })
   | null {
   const n = normalize(name);
@@ -102,12 +127,13 @@ export function consoleArt(
   const ext = PNG_LOGOS.has(hit.slug) ? "png" : "svg";
   return {
     ...hit,
-    render: `/console-art/${hit.slug}.png`,
+    render: usePublicUrl(`/console-art/${hit.slug}.png`),
     logo: LOGO_SLUGS.has(hit.slug)
-      ? `/console-art/logos/${hit.slug}.${ext}`
+      ? usePublicUrl(`/console-art/logos/${hit.slug}.${ext}`)
       : null,
     pixel: PIXEL_SLUGS.has(hit.slug),
     whiten: WHITEN_SLUGS.has(hit.slug),
     big: BIG_LOGOS.has(hit.slug),
+    boxartTheme: BOXART_THEME[hit.slug] ?? null,
   };
 }

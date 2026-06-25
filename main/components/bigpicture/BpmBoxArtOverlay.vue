@@ -9,17 +9,9 @@
       :class="templateBlend"
     />
 
-    <!-- Fallback CSS overlays for themes without templates -->
+    <!-- Fallback CSS overlay for themes without a template image (Steam). -->
     <template v-else>
-      <!-- Steam: bottom gradient fade -->
-      <template v-if="themeId === 'steam'">
-        <div class="steam-bottom-gradient" />
-      </template>
-
-      <!-- Switch: red left spine -->
-      <template v-else-if="themeId === 'switch'">
-        <div class="switch-spine" />
-      </template>
+      <div v-if="themeId === 'steam'" class="steam-bottom-gradient" />
     </template>
   </div>
 </template>
@@ -44,6 +36,9 @@ const templateFiles: Record<string, string> = {
   ds: "img/boxart/templates/ds.png",
   xbox: "img/boxart/templates/xbxo360.png",
   dreamcast: "img/boxart/templates/dreamcast.png",
+  ps1: "img/boxart/templates/ps1.png",
+  switch: "img/boxart/templates/switch.png",
+  n64: "img/boxart/templates/n64.png",
 };
 
 const templateSrc = computed(() => {
@@ -54,7 +49,7 @@ const templateSrc = computed(() => {
 // White-bg templates use "multiply" (white disappears, colored elements show)
 // Dark-bg templates use "screen" (black disappears, light elements show)
 // DS needs no blend — it's a cart frame that should sit fully on top
-const noBlend = new Set(["ds"]);
+const noBlend = new Set(["ds", "ps1", "switch", "n64"]);
 const screenBlend = new Set(["psp"]);
 const templateBlend = computed(() => {
   if (noBlend.has(props.themeId)) return "";
@@ -99,14 +94,4 @@ const templateBlend = computed(() => {
   background: linear-gradient(to top, rgba(23, 26, 33, 0.7) 0%, transparent 100%);
 }
 
-/* ====== Switch (CSS fallback) ====== */
-.switch-spine {
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: 7%;
-  background: linear-gradient(180deg, #e60012 0%, #c00010 100%);
-  opacity: 0.8;
-}
 </style>

@@ -81,6 +81,7 @@
         v-else
         :entries="consoleEntries"
         :last-played-map="lastPlayedMap"
+        :boxart-theme="art?.boxartTheme ?? null"
         show-hover-action
         @select="goToGame"
       />
