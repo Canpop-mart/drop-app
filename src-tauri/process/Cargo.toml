@@ -1,0 +1,26 @@
+[package]
+name = "process"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.42"
+client = { path = "../client", version = "0.1.0" }
+database = { path = "../database", version = "0.1.0" }
+dynfmt = { version = "0.1.5", features = ["curly"] }
+gilrs = "0.11"
+games = { path = "../games", version = "0.1.0" }
+keyvalues-parser = "0.2.3"
+libc = "0.2"
+log = "0.4.28"
+remote = { path = "../remote", version = "0.1.0" }
+page_size = "0.6.0"
+serde = "1.0.228"
+serde_json = "1.0"
+serde_with = "3.15.0"
+tokio = { version = "1", features = ["sync", "time"] }
+shared_child = "1.1.1"
+shell-words = "1.1.1"
+tauri = "*"
+tauri-plugin-opener = "*"
+utils = { path = "../utils", version = "0.1.0" }

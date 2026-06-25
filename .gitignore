@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+pnpm-store/
+yarn-error.log
+
+# Build outputs
+dist/
+build/
+*.exe
+*.AppImage
+*.flatpak
+*.deb
+*.rpm
+*.dmg
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/
+
+# Logs & debug
+*.log
+DEBUG.md
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Personal / temp
+.claude/
+.bashrc
+.nvmrc
+*.local.sh
+
+# Binary documents (planning docs, reports)
+*.docx
+*.doc
+*.xlsx
+*.pptx
+
+# Nuxt build artifacts
+.output/
+.nuxt/
+.data/
+.nitro/
+.cache/
+
+# Config with local settings
+.nuxtrc
+
+# Secrets
+.env
+.env.*
+!.env.example

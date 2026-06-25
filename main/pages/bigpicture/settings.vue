@@ -1,0 +1,1755 @@
+<template>
+  <div class="flex h-full" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
+    <!-- Settings sidebar -->
+    <div class="w-64 border-r py-6" :style="{ backgroundColor: 'var(--bpm-surface)', borderColor: 'var(--bpm-border)' }">
+      <button
+        v-for="section in sections"
+        :key="section.value"
+        :ref="
+          (el: any) =>
+            registerSidebar(el, {
+              onSelect: () => (activeSection = section.value),
+            })
+        "
+        class="w-full px-6 py-3 text-left text-sm font-medium transition-colors"
+        :style="{
+          color: activeSection === section.value ? 'var(--bpm-accent-hex)' : 'var(--bpm-muted)',
+          backgroundColor: activeSection === section.value ? 'color-mix(in srgb, var(--bpm-accent-hex) 10%, transparent)' : 'transparent',
+          borderRight: activeSection === section.value ? '2px solid var(--bpm-accent-hex)' : 'none',
+        }"
+        @click="activeSection = section.value"
+      >
+        {{ section.label }}
+      </button>
+    </div>
+
+    <!-- Settings content -->
+    <div class="flex-1 overflow-y-auto px-8 py-6">
+      <!-- ═══════ Theme ═══════ -->
+      <div
+        v-if="activeSection === 'theme'"
+        class="space-y-5"
+      >
+        <h3 class="text-lg font-semibold font-display" style="color: var(--bpm-text)">
+          Theme
+        </h3>
+
+        <!-- Three-column horizontal layout -->
+        <div class="grid grid-cols-3 gap-6 items-start">
+
+          <!-- ── Column 1: Visual Theme ── -->
+          <div class="space-y-2">
+            <h4 class="text-sm font-medium text-zinc-300 mb-2">Visual Theme</h4>
+            <p class="text-zinc-500 text-xs mb-3">
+              Colors and home layout for Big Picture Mode.
+            </p>
+            <div class="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+              <button
+                v-for="t in themes"
+                :key="t.id"
+                :ref="
+                  (el: any) =>
+                    registerContent(el, {
+                      onSelect: () => (activeThemeId = t.id),
+                    })
+                "
+                class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all"
+                :class="
+                  activeThemeId === t.id
+                    ? 'bg-blue-600/20 ring-2 ring-blue-500/60'
+                    : 'bg-zinc-900/50 hover:bg-zinc-800/50'
+                "
+                @click="activeThemeId = t.id"
+              >
+                <div
+                  class="size-4 rounded-full shrink-0 ring-2 ring-white/20"
+                  :style="{ backgroundColor: themePreviewColors[t.id] }"
+                />
+                <div class="flex-1 min-w-0">
+                  <p class="font-medium text-zinc-200 text-sm truncate">{{ t.label }}</p>
+                  <p class="text-zinc-500 text-xs mt-0.5 truncate">{{ t.description }}</p>
+                </div>
+                <span v-if="activeThemeId === t.id" class="text-xs font-medium text-blue-400 shrink-0">Active</span>
+              </button>
+            </div>
+
+            <!-- Dark / Light Mode toggle — below theme list -->
+            <div
+              :ref="(el: any) => registerContent(el, { onSelect: () => bpmTheme.toggleMode() })"
+              class="flex items-center justify-between rounded-xl cursor-pointer p-3 mt-3"
+              style="background-color: var(--bpm-surface)"
+            >
+              <div class="flex items-center gap-2">
+                <svg v-if="bpmTheme.mode.value === 'dark'" class="size-4" style="color: var(--bpm-muted)" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
+                </svg>
+                <svg v-else class="size-4" style="color: var(--bpm-muted)" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
+                </svg>
+                <span class="text-sm font-medium" style="color: var(--bpm-text)">
+                  {{ bpmTheme.mode.value === 'dark' ? 'Dark' : 'Light' }}
+                </span>
+              </div>
+              <button
+                class="w-10 h-6 rounded-full transition-colors relative shrink-0"
+                :class="bpmTheme.mode.value === 'light' ? 'bg-amber-500' : 'bg-zinc-600'"
+                @click.stop="bpmTheme.toggleMode()"
+              >
+                <div
+                  class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+                  :class="bpmTheme.mode.value === 'light' ? 'translate-x-4' : 'translate-x-0.5'"
+                />
+              </button>
+            </div>
+          </div>
+
+          <!-- ── Column 2: Sound Profile ── -->
+          <div class="space-y-2">
+            <h4 class="text-sm font-medium text-zinc-300 mb-2">Sound Profile</h4>
+            <p class="text-zinc-500 text-xs mb-3">
+              Audio feedback style, independent from visual theme.
+            </p>
+            <div class="space-y-2 max-h-[52vh] overflow-y-auto pr-1">
+              <button
+                v-for="sp in soundProfiles"
+                :key="sp.id"
+                :ref="
+                  (el: any) =>
+                    registerContent(el, {
+                      onSelect: () => { activeSoundProfile = sp.id; audio.setProfile(sp.id); audio.preview(sp.id, 'select'); },
+                    })
+                "
+                class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all"
+                :class="
+                  activeSoundProfile === sp.id
+                    ? 'bg-blue-600/20 ring-2 ring-blue-500/60'
+                    : 'bg-zinc-900/50 hover:bg-zinc-800/50'
+                "
+                @click="activeSoundProfile = sp.id; audio.setProfile(sp.id); audio.preview(sp.id, 'select')"
+              >
+                <div
+                  class="size-4 rounded-full shrink-0 ring-2 ring-white/20 flex items-center justify-center bg-zinc-800"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-2.5 text-zinc-400">
+                    <path d="M10 3.75a.75.75 0 0 0-1.264-.546L4.703 7H3.167a.75.75 0 0 0-.7.48A6.985 6.985 0 0 0 2 10c0 .887.165 1.737.468 2.52.111.29.39.48.7.48h1.535l4.033 3.796A.75.75 0 0 0 10 16.25V3.75ZM15.95 5.05a.75.75 0 0 0-1.06 1.061 5.5 5.5 0 0 1 0 7.778.75.75 0 0 0 1.06 1.06 7 7 0 0 0 0-9.899Z" />
+                    <path d="M13.829 7.172a.75.75 0 0 0-1.061 1.06 2.5 2.5 0 0 1 0 3.536.75.75 0 0 0 1.06 1.06 4 4 0 0 0 0-5.656Z" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <p class="font-medium text-zinc-200 text-sm truncate">{{ sp.label }}</p>
+                  <p class="text-zinc-500 text-xs mt-0.5 truncate">{{ sp.description }}</p>
+                </div>
+                <span v-if="activeSoundProfile === sp.id" class="text-xs font-medium text-blue-400 shrink-0">Active</span>
+              </button>
+            </div>
+
+            <!-- Audio toggle -->
+            <div class="pt-2">
+              <div
+                :ref="
+                  (el: any) =>
+                    registerContent(el, {
+                      onSelect: () => (audioEnabled = !audioEnabled),
+                    })
+                "
+                class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-3"
+              >
+                <div>
+                  <p class="font-medium text-zinc-200 text-sm">Enable Sounds</p>
+                  <p class="text-zinc-500 text-xs mt-0.5">Audio feedback on navigation</p>
+                </div>
+                <button
+                  class="w-11 h-6 rounded-full transition-colors relative shrink-0 ml-3"
+                  :class="audioEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+                  @click.stop="audioEnabled = !audioEnabled"
+                >
+                  <div
+                    class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+                    :class="audioEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+                  />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Column 3: Effects ── -->
+          <div class="space-y-2">
+            <h4 class="text-sm font-medium text-zinc-300 mb-2">Effects</h4>
+            <p class="text-zinc-500 text-xs mb-3">
+              Visual effects and overlays.
+            </p>
+            <div class="space-y-2">
+              <!-- Animated Backgrounds -->
+              <div
+                :ref="(el: any) => registerContent(el, { onSelect: () => toggleEffect('bpm:animBg') })"
+                class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-3"
+              >
+                <div>
+                  <p class="font-medium text-zinc-200 text-sm">Animated BGs</p>
+                  <p class="text-zinc-500 text-xs mt-0.5">Animated theme backgrounds</p>
+                </div>
+                <button
+                  class="w-11 h-6 rounded-full transition-colors relative shrink-0 ml-3"
+                  :class="animBgEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+                  @click.stop="toggleEffect('bpm:animBg')"
+                >
+                  <div
+                    class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+                    :class="animBgEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+                  />
+                </button>
+              </div>
+
+              <!-- CRT Filter -->
+              <div
+                :ref="(el: any) => registerContent(el, { onSelect: () => toggleEffect('bpm:crtFilter') })"
+                class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-3"
+              >
+                <div>
+                  <p class="font-medium text-zinc-200 text-sm">CRT Filter</p>
+                  <p class="text-zinc-500 text-xs mt-0.5">Retro scanline overlay</p>
+                </div>
+                <button
+                  class="w-11 h-6 rounded-full transition-colors relative shrink-0 ml-3"
+                  :class="crtEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+                  @click.stop="toggleEffect('bpm:crtFilter')"
+                >
+                  <div
+                    class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+                    :class="crtEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+                  />
+                </button>
+              </div>
+
+              <!-- Cover Overlays — platform-themed box-art overlays
+                   (Wii, GameCube, DS, PS2, …) drawn over home-page tiles. -->
+              <div
+                :ref="(el: any) => registerContent(el, { onSelect: () => toggleEffect('bpm:boxArtOverlay') })"
+                class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-3"
+              >
+                <div>
+                  <p class="font-medium text-zinc-200 text-sm">Cover Overlays</p>
+                  <p class="text-zinc-500 text-xs mt-0.5">Platform-themed game cover overlays</p>
+                </div>
+                <button
+                  class="w-11 h-6 rounded-full transition-colors relative shrink-0 ml-3"
+                  :class="boxArtOverlayEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+                  @click.stop="toggleEffect('bpm:boxArtOverlay')"
+                >
+                  <div
+                    class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+                    :class="boxArtOverlayEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+                  />
+                </button>
+              </div>
+
+              <!-- Screensaver -->
+              <div
+                :ref="(el: any) => registerContent(el, { onSelect: () => toggleEffect('bpm:screensaver') })"
+                class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-3"
+              >
+                <div>
+                  <p class="font-medium text-zinc-200 text-sm">Screensaver</p>
+                  <p class="text-zinc-500 text-xs mt-0.5">After 5 minutes idle</p>
+                </div>
+                <button
+                  class="w-11 h-6 rounded-full transition-colors relative shrink-0 ml-3"
+                  :class="screensaverEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+                  @click.stop="toggleEffect('bpm:screensaver')"
+                >
+                  <div
+                    class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+                    :class="screensaverEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+                  />
+                </button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ═══════ Interface ═══════ -->
+      <div
+        v-if="activeSection === 'interface'"
+        class="space-y-5 max-w-xl"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          Interface
+        </h3>
+
+        <!-- Start in Big Picture toggle -->
+        <div
+          :ref="
+            (el: any) => registerContent(el, { onSelect: () => toggleStartInBP() })
+          "
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4"
+        >
+          <div>
+            <p class="font-medium text-zinc-200 text-sm">
+              Start in Big Picture Mode
+            </p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Launch Drop in fullscreen Big Picture mode
+            </p>
+          </div>
+          <button
+            class="w-12 h-7 rounded-full transition-colors relative shrink-0 ml-4"
+            :class="startInBP ? 'bg-blue-600' : 'bg-zinc-700'"
+            @click.stop="toggleStartInBP()"
+          >
+            <div
+              class="absolute top-0.5 size-6 rounded-full bg-white shadow transition-transform"
+              :class="startInBP ? 'translate-x-5' : 'translate-x-0.5'"
+            />
+          </button>
+        </div>
+
+        <!-- Hide Game Titles toggle -->
+        <div
+          :ref="
+            (el: any) => registerContent(el, { onSelect: () => toggleHideTitles() })
+          "
+          class="flex items-center justify-between rounded-xl cursor-pointer p-4"
+          style="background-color: var(--bpm-surface)"
+        >
+          <div>
+            <p class="font-medium text-sm" style="color: var(--bpm-text)">
+              Hide Game Titles
+            </p>
+            <p class="text-xs mt-0.5" style="color: var(--bpm-muted)">
+              Hide text labels under game tiles for a cleaner look
+            </p>
+          </div>
+          <button
+            class="w-12 h-7 rounded-full transition-colors relative shrink-0 ml-4"
+            :class="hideTitles ? 'bg-blue-600' : 'bg-zinc-700'"
+            @click.stop="toggleHideTitles()"
+          >
+            <div
+              class="absolute top-0.5 size-6 rounded-full bg-white shadow transition-transform"
+              :class="hideTitles ? 'translate-x-5' : 'translate-x-0.5'"
+            />
+          </button>
+        </div>
+
+        <!-- Reduced Motion (turns off blur/animations on low-end GPUs like the Deck) -->
+        <div
+          :ref="(el: any) => registerContent(el, { onSelect: () => (reducedMotion = !reducedMotion) })"
+          class="flex items-center justify-between rounded-xl cursor-pointer p-4"
+          style="background-color: var(--bpm-surface)"
+        >
+          <div>
+            <p class="font-medium text-sm" style="color: var(--bpm-text)">
+              Reduced Motion
+            </p>
+            <p class="text-xs mt-0.5" style="color: var(--bpm-muted)">
+              Disable backdrop blur and soft animations. Recommended on Steam Deck.
+            </p>
+          </div>
+          <button
+            class="w-12 h-7 rounded-full transition-colors relative shrink-0 ml-4"
+            :class="reducedMotion ? 'bg-blue-600' : 'bg-zinc-700'"
+            @click.stop="reducedMotion = !reducedMotion"
+          >
+            <div
+              class="absolute top-0.5 size-6 rounded-full bg-white shadow transition-transform"
+              :class="reducedMotion ? 'translate-x-5' : 'translate-x-0.5'"
+            />
+          </button>
+        </div>
+
+        <!-- UI Zoom (rescales the whole webview — fixes gamescope "too zoomed out") -->
+        <div class="rounded-xl p-4" style="background-color: var(--bpm-surface)">
+          <div class="mb-3">
+            <p class="font-medium text-sm" style="color: var(--bpm-text)">Interface zoom</p>
+            <p class="text-xs mt-0.5" style="color: var(--bpm-muted)">
+              Rescale the whole interface. Use this if the app looks too small in Steam's Game Mode.
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: () => bumpUiZoom(-0.05) })"
+              :disabled="uiZoom <= uiZoomMin"
+              class="size-9 inline-flex items-center justify-center rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              aria-label="Decrease UI zoom"
+              @click.stop="bumpUiZoom(-0.05)"
+            >
+              <span class="text-lg leading-none">−</span>
+            </button>
+            <div class="flex-1 text-center text-sm tabular-nums text-zinc-200">
+              {{ Math.round(uiZoom * 100) }}%
+            </div>
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: () => bumpUiZoom(0.05) })"
+              :disabled="uiZoom >= uiZoomMax"
+              class="size-9 inline-flex items-center justify-center rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              aria-label="Increase UI zoom"
+              @click.stop="bumpUiZoom(0.05)"
+            >
+              <span class="text-lg leading-none">+</span>
+            </button>
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: () => (uiZoom = 1) })"
+              class="px-3 h-9 inline-flex items-center rounded-lg text-xs font-medium bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-colors"
+              @click.stop="uiZoom = 1"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        <!-- Keyboard preference (custom BPM keyboard vs SteamOS OSK) -->
+        <div class="rounded-xl p-4" style="background-color: var(--bpm-surface)">
+          <div class="mb-3">
+            <p class="font-medium text-sm" style="color: var(--bpm-text)">On-screen keyboard</p>
+            <p class="text-xs mt-0.5" style="color: var(--bpm-muted)">
+              Steam's native keyboard requires Steam to be running; falls back to Drop's built-in keyboard if unavailable.
+            </p>
+          </div>
+          <div class="flex gap-2">
+            <button
+              v-for="option in keyboardOptions"
+              :key="option.value"
+              :ref="(el: any) => registerContent(el, { onSelect: () => (keyboardMode = option.value) })"
+              class="flex-1 py-2.5 rounded-lg text-xs font-medium transition-all border"
+              :class="[
+                keyboardMode === option.value
+                  ? 'bg-blue-600/20 text-blue-400 border-blue-500/50'
+                  : 'bg-zinc-800/50 text-zinc-400 border-zinc-700/50 hover:text-zinc-200 hover:bg-zinc-800',
+              ]"
+              @click="keyboardMode = option.value"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ═══════ Controller ═══════ -->
+      <div
+        v-if="activeSection === 'controller'"
+        class="space-y-5 max-w-xl"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          Controller
+        </h3>
+        <div class="bg-zinc-900/50 rounded-xl p-4">
+          <div class="flex items-center gap-3 mb-3">
+            <div
+              class="size-3 rounded-full"
+              :class="gamepad.connected.value ? 'bg-green-500' : 'bg-zinc-600'"
+            />
+            <p class="font-medium text-zinc-200 text-sm">
+              {{
+                gamepad.connected.value
+                  ? gamepad.controllerName.value || "Controller Connected"
+                  : "No Controller Detected"
+              }}
+            </p>
+          </div>
+          <p class="text-zinc-500 text-xs">
+            Connect a controller to use Big Picture Mode with a gamepad.
+          </p>
+        </div>
+
+        <!-- Haptic feedback toggle -->
+        <div
+          :ref="
+            (el: any) =>
+              registerContent(el, {
+                onSelect: () => (hapticEnabled = !hapticEnabled),
+              })
+          "
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4"
+        >
+          <div>
+            <p class="font-medium text-zinc-200 text-sm">Haptic Feedback</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Vibration on navigation and selection
+            </p>
+          </div>
+          <button
+            class="w-12 h-7 rounded-full transition-colors relative shrink-0 ml-4"
+            :class="hapticEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+            @click.stop="hapticEnabled = !hapticEnabled"
+          >
+            <div
+              class="absolute top-0.5 size-6 rounded-full bg-white shadow transition-transform"
+              :class="hapticEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+            />
+          </button>
+        </div>
+      </div>
+
+      <!-- ═══════ Storage ═══════ -->
+      <div
+        v-if="activeSection === 'storage'"
+        class="space-y-5 max-w-xl"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          Storage
+        </h3>
+
+        <!-- Install directories -->
+        <div class="bg-zinc-900/50 rounded-xl p-4">
+          <div class="mb-3">
+            <p class="font-medium text-zinc-200 text-sm">Install Directories</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Where games are installed on this device
+            </p>
+          </div>
+          <div v-if="installDirs.length > 0" class="space-y-2 mb-3">
+            <div
+              v-for="(dir, idx) in installDirs"
+              :key="idx"
+              class="flex items-center justify-between bg-zinc-800/50 rounded-lg px-3 py-2"
+            >
+              <span class="text-xs text-zinc-300 truncate">{{ dir }}</span>
+            </div>
+          </div>
+          <p v-else class="text-zinc-600 text-xs mb-3">
+            No install directories configured.
+          </p>
+        </div>
+
+        <!-- Max concurrent download threads -->
+        <div class="bg-zinc-900/50 rounded-xl p-4">
+          <div class="mb-3">
+            <p class="font-medium text-zinc-200 text-sm">Concurrent download threads</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Higher values saturate the network faster but use more CPU.
+              1–64 allowed; defaults to 4.
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: () => bumpThreads(-1) })"
+              class="px-3 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm"
+              @click="bumpThreads(-1)"
+            >
+              −
+            </button>
+            <span class="min-w-[2rem] text-center text-sm font-mono text-zinc-200">
+              {{ maxDownloadThreads }}
+            </span>
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: () => bumpThreads(1) })"
+              class="px-3 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm"
+              @click="bumpThreads(1)"
+            >
+              +
+            </button>
+            <span v-if="threadsSaved" class="text-xs text-green-400 ml-2">Saved</span>
+          </div>
+        </div>
+
+        <!-- SD Card / Removable storage -->
+        <div
+          v-if="removableStorage.length > 0"
+          class="bg-zinc-900/50 rounded-xl p-4"
+        >
+          <div class="mb-3">
+            <p class="font-medium text-zinc-200 text-sm">Removable Storage</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              SD cards and USB drives detected on this device
+            </p>
+          </div>
+          <div class="space-y-2">
+            <div
+              v-for="(path, idx) in removableStorage"
+              :key="idx"
+              class="flex items-center justify-between bg-zinc-800/50 rounded-lg px-3 py-2"
+            >
+              <span class="text-xs text-zinc-300 truncate">{{ path }}</span>
+              <button
+                :ref="
+                  (el: any) =>
+                    registerContent(el, {
+                      onSelect: () => addStorageAsInstallDir(path),
+                    })
+                "
+                class="text-xs text-blue-400 hover:text-blue-300 ml-2 whitespace-nowrap"
+                @click="addStorageAsInstallDir(path)"
+              >
+                Use for games
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════ Compatibility ═══════ -->
+      <div
+        v-if="activeSection === 'compatibility'"
+        class="space-y-5 max-w-xl"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          Compatibility
+        </h3>
+
+        <!-- Proton / UMU status -->
+        <div class="bg-zinc-900/50 rounded-xl p-4">
+          <div class="mb-3">
+            <p class="font-medium text-zinc-200 text-sm">
+              Proton (Windows Game Support)
+            </p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Select a Proton installation to run Windows games on Linux.
+            </p>
+          </div>
+
+          <div v-if="protonLoading" class="text-zinc-500 text-xs py-2">
+            Discovering Proton installations...
+          </div>
+
+          <div v-else class="space-y-2">
+            <!-- Auto / GE-Proton — recommended default, umu downloads it on first launch -->
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: () => setAutoProton() })"
+              class="w-full flex items-center justify-between bg-zinc-800/50 rounded-lg px-3 py-2.5 text-left transition-colors"
+              :class="[
+                selectedProtonDefault === null
+                  ? 'ring-1 ring-blue-500/50 bg-blue-600/10'
+                  : 'hover:bg-zinc-700/50',
+              ]"
+              @click="setAutoProton()"
+            >
+              <div class="min-w-0">
+                <span class="text-xs font-medium text-zinc-200 block truncate">
+                  Auto (GE-Proton, recommended)
+                </span>
+                <span class="text-[10px] text-zinc-500 block truncate">
+                  umu-launcher downloads the latest GE-Proton on first launch
+                </span>
+              </div>
+              <div
+                v-if="selectedProtonDefault === null"
+                class="size-2 rounded-full bg-blue-500 shrink-0 ml-2"
+              />
+            </button>
+
+            <div v-if="allProtonPaths.length === 0" class="py-2">
+              <p class="text-zinc-500 text-xs">
+                No local Proton installations detected. Auto works even without
+                one — umu fetches GE-Proton on its own.
+              </p>
+            </div>
+            <button
+              v-for="proton in allProtonPaths"
+              :key="proton.path"
+              :ref="(el: any) => registerContent(el, { onSelect: () => setDefaultProton(proton.path) })"
+              class="w-full flex items-center justify-between bg-zinc-800/50 rounded-lg px-3 py-2.5 text-left transition-colors"
+              :class="[
+                proton.path === selectedProtonDefault
+                  ? 'ring-1 ring-blue-500/50 bg-blue-600/10'
+                  : 'hover:bg-zinc-700/50',
+              ]"
+              @click="setDefaultProton(proton.path)"
+            >
+              <div class="min-w-0">
+                <span class="text-xs font-medium text-zinc-200 block truncate">{{ proton.name }}</span>
+                <span class="text-[10px] text-zinc-500 block truncate">{{ proton.path }}</span>
+              </div>
+              <div
+                v-if="proton.path === selectedProtonDefault"
+                class="size-2 rounded-full bg-blue-500 shrink-0 ml-2"
+              />
+            </button>
+          </div>
+
+          <p v-if="protonSaveError" class="text-red-400/80 text-xs mt-2">
+            {{ protonSaveError }}
+          </p>
+        </div>
+      </div>
+
+      <!-- ═══════ Achievements ═══════ -->
+      <div
+        v-if="activeSection === 'achievements'"
+        class="space-y-5 max-w-xl"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          RetroAchievements
+        </h3>
+        <p class="text-sm text-zinc-400">
+          Link your RetroAchievements account so RetroArch can track unlocks
+          during emulated gameplay. Your password is exchanged for a session
+          token and never stored.
+        </p>
+
+        <div class="bg-zinc-900/50 rounded-xl p-4 space-y-4">
+          <div v-if="raLinked" class="flex items-start gap-3">
+            <div class="flex-1">
+              <p class="text-sm text-zinc-300">
+                Linked as
+                <span class="font-semibold text-zinc-100">{{ raUsername }}</span>
+              </p>
+              <p class="text-xs text-zinc-500 mt-1">
+                RetroArch will authenticate automatically on next launch.
+              </p>
+            </div>
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: unlinkRetroAchievements })"
+              class="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-zinc-300"
+              @click="unlinkRetroAchievements"
+            >
+              Unlink
+            </button>
+          </div>
+          <template v-else>
+            <div>
+              <label class="block text-sm font-medium text-zinc-400 mb-1">Username</label>
+              <input
+                v-model="raUsername"
+                :ref="(el: any) => registerContent(el, {})"
+                type="text"
+                autocomplete="off"
+                class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                placeholder="RetroAchievements username"
+              />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-zinc-400 mb-1">Password</label>
+              <input
+                v-model="raPassword"
+                :ref="(el: any) => registerContent(el, {})"
+                type="password"
+                autocomplete="off"
+                class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                placeholder="Password"
+              />
+            </div>
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: linkRetroAchievements })"
+              :disabled="raStatus === 'linking' || !raUsername || !raPassword"
+              class="w-full px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-400 text-white font-medium rounded-lg transition-colors"
+              @click="linkRetroAchievements"
+            >
+              <span v-if="raStatus === 'linking'">Linking…</span>
+              <span v-else>Link account</span>
+            </button>
+          </template>
+          <p v-if="raStatus === 'linked'" class="text-xs text-green-400">
+            Account linked.
+          </p>
+          <p v-if="raError" class="text-xs text-red-400">{{ raError }}</p>
+        </div>
+      </div>
+
+      <!-- ═══════ Cloud Saves ═══════ -->
+      <div
+        v-if="activeSection === 'cloudsaves' && dev.enabled.value"
+        class="space-y-5 max-w-xl"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          Cloud Saves
+        </h3>
+        <p class="text-sm text-zinc-400">
+          Choose whether Drop syncs save files with your server and how this
+          device shows up in conflict prompts.
+        </p>
+
+        <!-- Sync toggle -->
+        <div
+          :ref="
+            (el: any) =>
+              registerContent(el, {
+                onSelect: () => toggleCloudSaves(),
+              })
+          "
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4"
+          @click="toggleCloudSaves()"
+        >
+          <div class="min-w-0 pr-4">
+            <p class="font-medium text-zinc-200 text-sm">
+              Sync saves to the cloud
+            </p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Upload and restore save files between devices using your Drop
+              server. Turn off to keep saves on this device only.
+            </p>
+          </div>
+          <button
+            class="w-12 h-7 rounded-full transition-colors relative shrink-0 ml-4"
+            :class="cloudSavesEnabled ? 'bg-blue-600' : 'bg-zinc-700'"
+            @click.stop="toggleCloudSaves()"
+          >
+            <div
+              class="absolute top-0.5 size-6 rounded-full bg-white shadow transition-transform"
+              :class="cloudSavesEnabled ? 'translate-x-5' : 'translate-x-0.5'"
+            />
+          </button>
+        </div>
+
+        <!-- Device name input -->
+        <div class="bg-zinc-900/50 rounded-xl p-4 space-y-3">
+          <div>
+            <p class="font-medium text-zinc-200 text-sm">This device's name</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Shown in the conflict dialog as the machine a save came from.
+              Leave blank to use your computer's name.
+            </p>
+          </div>
+          <input
+            v-model="deviceName"
+            :ref="(el: any) => registerContent(el, {})"
+            type="text"
+            maxlength="64"
+            :placeholder="hostnamePlaceholder"
+            class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            @change="saveDeviceName"
+          />
+          <p v-if="cloudSavesSaved" class="text-xs text-green-400">Saved.</p>
+        </div>
+      </div>
+
+      <!-- ═══════ Streaming ═══════ -->
+      <div
+        v-if="activeSection === 'streaming'"
+        class="space-y-5 max-w-xl"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          Streaming (Sunshine)
+        </h3>
+        <p class="text-sm text-zinc-400">
+          Configure Sunshine credentials used when starting a stream from a game page.
+          These are stored locally and used to start the Sunshine process.
+        </p>
+
+        <div class="bg-zinc-900/50 rounded-xl p-4 space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-zinc-400 mb-1">Admin Username</label>
+            <input
+              v-model="streamingUsername"
+              :ref="(el: any) => registerContent(el, {})"
+              type="text"
+              class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              placeholder="sunshine"
+              @change="saveStreamingCredentials"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-zinc-400 mb-1">Admin Password</label>
+            <input
+              v-model="streamingPassword"
+              :ref="(el: any) => registerContent(el, {})"
+              type="password"
+              class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              placeholder="Enter password"
+              @change="saveStreamingCredentials"
+            />
+          </div>
+          <p v-if="streamingSaved" class="text-xs text-green-400">Credentials saved.</p>
+        </div>
+
+        <!-- Stream quality — client-side: what this device requests from
+             Moonlight when it plays a game streamed from another PC. -->
+        <div class="bg-zinc-900/50 rounded-xl p-4 space-y-3">
+          <div>
+            <p class="text-sm font-medium text-zinc-300">Stream quality</p>
+            <p class="text-xs text-zinc-500 mt-0.5">
+              Used when this device plays a game streamed from another PC.
+              Higher quality looks sharper but needs more bandwidth.
+            </p>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              v-for="opt in STREAM_QUALITY_OPTIONS"
+              :key="opt.value"
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-3 py-2 rounded-lg text-sm font-medium transition-colors text-center"
+              :class="streamingQuality === opt.value ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingQuality(opt.value)"
+            >
+              <span class="block">{{ opt.label }}</span>
+              <span class="block text-[10px] opacity-70 mt-0.5">{{ opt.detail }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- HDR — 10-bit passthrough. Best on the OLED Deck or an HDR TV. -->
+        <div class="bg-zinc-900/50 rounded-xl p-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-zinc-300">HDR</p>
+              <p class="text-xs text-zinc-500 mt-0.5">
+                Stream in 10-bit HDR. Great on the OLED Deck or an HDR TV; leave
+                off for SDR screens.
+              </p>
+            </div>
+            <button
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-5 py-2 rounded-lg text-sm font-medium transition-colors shrink-0"
+              :class="streamingHdr ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingHdr(!streamingHdr)"
+            >
+              {{ streamingHdr ? "On" : "Off" }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Auto resolution — stream at this device's current screen size, so
+             docking to a TV just works. Off reveals a fixed-resolution picker. -->
+        <div class="bg-zinc-900/50 rounded-xl p-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-zinc-300">Auto resolution</p>
+              <p class="text-xs text-zinc-500 mt-0.5">
+                Stream at this device's current screen resolution — docking to a
+                TV just works. Turn off to choose a fixed resolution.
+              </p>
+            </div>
+            <button
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-5 py-2 rounded-lg text-sm font-medium transition-colors shrink-0"
+              :class="streamingAutoResolution ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingAutoResolution(!streamingAutoResolution)"
+            >
+              {{ streamingAutoResolution ? "On" : "Off" }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Manual stream resolution — only when auto resolution is off. Match
+             it on the host PC so the captured desktop and the stream line up
+             (otherwise Sunshine up/down-scales). "Don't change" leaves it. -->
+        <div
+          v-if="!streamingAutoResolution"
+          class="bg-zinc-900/50 rounded-xl p-4 space-y-3"
+        >
+          <div>
+            <p class="text-sm font-medium text-zinc-300">Stream resolution</p>
+            <p class="text-xs text-zinc-500 mt-0.5">
+              1280×800 suits the handheld screen; raise it when docked to a TV.
+              Set the same value on the host PC's Streaming settings.
+            </p>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              v-for="opt in STREAM_RESOLUTION_OPTIONS"
+              :key="opt.value"
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-3 py-2 rounded-lg text-sm font-medium transition-colors text-center"
+              :class="streamingResolution === opt.value ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingResolution(opt.value)"
+            >
+              <span class="block">{{ opt.label }}</span>
+              <span class="block text-[10px] opacity-70 mt-0.5">{{ opt.detail }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════ Developer ═══════ -->
+      <div
+        v-if="activeSection === 'developer'"
+        class="space-y-5 max-w-2xl"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          Developer
+        </h3>
+        <p class="text-sm text-zinc-400">
+          Dev mode is a firehose of diagnostic output. When enabled, instrumented
+          code paths log tagged messages that appear in the BPM on-screen debug
+          overlay (toggle the overlay with the Select button). Useful when
+          reporting bugs or chasing controller / focus issues.
+        </p>
+
+        <!-- Master toggle -->
+        <div
+          :ref="(el: any) => registerContent(el, { onSelect: () => dev.toggle() })"
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4 hover:bg-zinc-800/50 transition-colors"
+          @click="dev.toggle()"
+        >
+          <div class="min-w-0 pr-4">
+            <p class="font-medium text-zinc-200 text-sm">Enable dev mode</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Log every gamepad press, focus move, Tauri call, download tick and
+              more to the BPM debug overlay.
+            </p>
+          </div>
+          <button
+            class="w-11 h-6 rounded-full transition-colors relative shrink-0"
+            :class="dev.enabled.value ? 'bg-emerald-500' : 'bg-zinc-700'"
+            @click.stop="dev.toggle()"
+          >
+            <div
+              class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform"
+              :class="dev.enabled.value ? 'translate-x-5' : 'translate-x-0.5'"
+            />
+          </button>
+        </div>
+
+        <!-- Category toggles -->
+        <div
+          class="rounded-xl p-4 space-y-3"
+          :class="dev.enabled.value ? 'bg-zinc-900/50' : 'bg-zinc-900/30 opacity-60'"
+        >
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="font-medium text-zinc-200 text-sm">Categories</p>
+              <p class="text-zinc-500 text-xs mt-0.5">
+                Turn individual firehoses on or off.
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                :ref="(el: any) => registerContent(el, { onSelect: () => dev.setAllCategories(true) })"
+                class="px-3 py-1.5 text-xs rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
+                :disabled="!dev.enabled.value"
+                @click="dev.setAllCategories(true)"
+              >
+                All on
+              </button>
+              <button
+                :ref="(el: any) => registerContent(el, { onSelect: () => dev.setAllCategories(false) })"
+                class="px-3 py-1.5 text-xs rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
+                :disabled="!dev.enabled.value"
+                @click="dev.setAllCategories(false)"
+              >
+                All off
+              </button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div
+              v-for="cat in dev.ALL_CATEGORIES"
+              :key="cat"
+              :ref="(el: any) => registerContent(el, { onSelect: () => dev.toggleCategory(cat) })"
+              class="flex items-center justify-between bg-zinc-900/60 rounded-lg cursor-pointer p-3"
+              :class="{ 'pointer-events-none': !dev.enabled.value }"
+              @click="dev.toggleCategory(cat)"
+            >
+              <div class="min-w-0 pr-2">
+                <p class="font-medium text-zinc-200 text-xs">{{ devCategoryMeta[cat].label }}</p>
+                <p class="text-zinc-500 text-[11px] mt-0.5 truncate">{{ devCategoryMeta[cat].description }}</p>
+              </div>
+              <button
+                class="w-9 h-5 rounded-full transition-colors relative shrink-0"
+                :class="dev.categories.value[cat] ? 'bg-emerald-500' : 'bg-zinc-700'"
+                :disabled="!dev.enabled.value"
+                @click.stop="dev.toggleCategory(cat)"
+              >
+                <div
+                  class="absolute top-0.5 size-4 rounded-full bg-white shadow transition-transform"
+                  :class="dev.categories.value[cat] ? 'translate-x-[18px]' : 'translate-x-0.5'"
+                />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <p class="text-xs text-zinc-500">
+          Tip: press <span class="font-mono text-zinc-300">Select</span> on your
+          controller to show or hide the on-screen overlay.
+        </p>
+      </div>
+
+      <!-- ═══════ About ═══════ -->
+      <div
+        v-if="activeSection === 'about'"
+        class="space-y-5 max-w-xl"
+      >
+        <h3 class="text-lg font-semibold text-zinc-200 font-display">
+          About Drop
+        </h3>
+        <div class="bg-zinc-900/50 rounded-xl p-4 space-y-2">
+          <p class="text-zinc-300 text-sm">
+            Drop is an open-source, self-hosted game distribution platform.
+          </p>
+          <p class="text-zinc-500 text-xs">Big Picture Mode v1.0</p>
+          <div class="border-t border-zinc-800/50 pt-2 mt-2 space-y-1">
+            <p v-if="packageFormat" class="text-zinc-500 text-xs">
+              Package: {{ packageFormatLabel }}
+            </p>
+          </div>
+        </div>
+
+        <!-- Bug Report -->
+        <div
+          :ref="(el: any) => registerContent(el, { onSelect: () => navigateTo('/bigpicture/bugreport') })"
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4 hover:bg-zinc-800/50 transition-colors"
+          @click="navigateTo('/bigpicture/bugreport')"
+        >
+          <div>
+            <p class="font-medium text-zinc-200 text-sm">Submit Bug Report</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Report an issue with system diagnostics and logs attached automatically
+            </p>
+          </div>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-5 text-zinc-500">
+            <path fill-rule="evenodd" d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+          </svg>
+        </div>
+
+        <!-- Run Setup Wizard -->
+        <div
+          :ref="(el: any) => registerContent(el, { onSelect: () => navigateTo('/welcome') })"
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4 hover:bg-zinc-800/50 transition-colors"
+          @click="navigateTo('/welcome')"
+        >
+          <div>
+            <p class="font-medium text-zinc-200 text-sm">Run setup wizard</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Walk through profile, storage, Proton, saves, RetroAchievements and controls again
+            </p>
+          </div>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-5 text-zinc-500">
+            <path fill-rule="evenodd" d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+          </svg>
+        </div>
+
+        <!-- Error Reference -->
+        <div
+          :ref="(el: any) => registerContent(el, { onSelect: () => navigateTo('/help/errors') })"
+          class="flex items-center justify-between bg-zinc-900/50 rounded-xl cursor-pointer p-4 hover:bg-zinc-800/50 transition-colors"
+          @click="navigateTo('/help/errors')"
+        >
+          <div>
+            <p class="font-medium text-zinc-200 text-sm">Error reference</p>
+            <p class="text-zinc-500 text-xs mt-0.5">
+              Common warnings and messages with plain-English explanations and fixes
+            </p>
+          </div>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-5 text-zinc-500">
+            <path fill-rule="evenodd" d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+          </svg>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { invoke } from "@tauri-apps/api/core";
+import { platform } from "@tauri-apps/plugin-os";
+
+import { useGamepad } from "~/composables/gamepad";
+import { useBpFocusableGroup } from "~/composables/bp-focusable";
+import { useBpAudio, soundProfiles, type SoundProfileId } from "~/composables/bp-audio";
+import { useBpmTheme, themes, type ThemeId } from "~/composables/bp-theme";
+import { useDeckMode } from "~/composables/deck-mode";
+import { useUiZoom } from "~/composables/ui-zoom";
+import { useDevMode, devLog, type DevCategory } from "~/composables/dev-mode";
+import { hostname } from "@tauri-apps/plugin-os";
+import { type Ref } from "vue";
+
+definePageMeta({ layout: "bigpicture" });
+
+const gamepad = useGamepad();
+const activeSection = ref("theme");
+
+// C7 fix: persist BPM settings in localStorage
+const startInBP = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("drop:startInBPM") === "true"
+    : false,
+);
+watch(startInBP, (val) => {
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem("drop:startInBPM", String(val));
+  }
+});
+
+function toggleStartInBP() {
+  startInBP.value = !startInBP.value;
+}
+
+const hideTitles = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("drop:hideTitles") === "true"
+    : false,
+);
+watch(hideTitles, (val) => {
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem("drop:hideTitles", String(val));
+  }
+});
+
+function toggleHideTitles() {
+  hideTitles.value = !hideTitles.value;
+}
+
+// ── Reduced motion — persisted via localStorage, consumed by BPM chrome
+//    (backdrop-blur off, animations shortened). Default true when we detect
+//    Steam Deck hardware so first-run is already snappy.
+const deckMode = useDeckMode();
+const reducedMotion = ref(
+  typeof localStorage !== "undefined"
+    ? (localStorage.getItem("bpm:reducedMotion") ?? (deckMode.isSteamDeckHardware.value ? "true" : "false")) === "true"
+    : false,
+);
+watch(reducedMotion, (val) => {
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem("bpm:reducedMotion", String(val));
+    // Broadcast so layout-level providers pick it up without a full reload
+    window.dispatchEvent(new CustomEvent("bpm:reducedMotion", { detail: val }));
+  }
+});
+
+// UI zoom — rescales the entire webview. Useful when gamescope renders the
+// layout smaller than expected.
+const { zoom: uiZoom, minZoom: uiZoomMin, maxZoom: uiZoomMax } = useUiZoom();
+function bumpUiZoom(delta: number) {
+  uiZoom.value = Math.round((uiZoom.value + delta) * 100) / 100;
+}
+
+// Keyboard preference: "custom" uses Drop's on-screen keyboard; "steam"
+// tries steam://open/keyboard first and falls back to custom on failure.
+type KeyboardMode = "custom" | "steam";
+const keyboardOptions: { label: string; value: KeyboardMode }[] = [
+  { label: "Drop (built-in)", value: "custom" },
+  { label: "Steam OSK", value: "steam" },
+];
+const keyboardMode = ref<KeyboardMode>(
+  typeof localStorage !== "undefined"
+    ? ((localStorage.getItem("bpm:keyboardMode") as KeyboardMode) ?? "custom")
+    : "custom",
+);
+watch(keyboardMode, (val) => {
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem("bpm:keyboardMode", val);
+  }
+});
+
+const registerSidebar = useBpFocusableGroup("content");
+const registerContent = useBpFocusableGroup("content");
+
+// Dev mode toggle — declared up here because `sections` below filters
+// itself based on it. The category-toggle UI lower in the file uses the
+// same `dev` ref.
+const dev = useDevMode();
+
+// Compatibility is Linux-only — Proton/umu commands in the Rust backend
+// are `#[cfg(target_os = "linux")]`, so the tab would just show spinner
+// and log errors on Windows/macOS. Hide it entirely there.
+const sections = computed(() => {
+  const base = [
+    { label: "Theme", value: "theme" },
+    { label: "Interface", value: "interface" },
+    { label: "Controller", value: "controller" },
+    { label: "Storage", value: "storage" },
+  ];
+  const tail = [
+    { label: "Achievements", value: "achievements" },
+    // Cloud saves is dev-gated — it doesn't sync seamlessly enough yet.
+    ...(dev.enabled.value
+      ? [{ label: "Cloud Saves", value: "cloudsaves" }]
+      : []),
+    { label: "Streaming", value: "streaming" },
+    { label: "Developer", value: "developer" },
+    { label: "About", value: "about" },
+  ];
+  return platform() === "linux"
+    ? [...base, { label: "Compatibility", value: "compatibility" }, ...tail]
+    : [...base, ...tail];
+});
+
+// ── Developer / Dev Mode ───────────────────────────────────────────────────
+// Firehose debug output toggle. When enabled, instrumented code paths
+// (gamepad, focus-nav, event subscribe, downloads, invoke, etc.) emit
+// [DEV:CATEGORY] tagged console messages — the BPM debug overlay picks
+// them up so they're visible on-device without leaving Gaming Mode.
+// (`dev` itself is declared near the top of this script so `sections` can
+// gate the Streaming entry on it.)
+const devCategoryMeta: Record<DevCategory, { label: string; description: string }> = {
+  gamepad: { label: "Gamepad", description: "Button presses, axis changes, connect/disconnect" },
+  focus: { label: "Focus navigation", description: "applyFocus, cycleGroup, input lock" },
+  route: { label: "Route changes", description: "Page-to-page navigation" },
+  api: { label: "Server API", description: "HTTP fetches to the Drop server" },
+  invoke: { label: "Tauri invoke", description: "Rust backend command calls" },
+  download: { label: "Downloads", description: "Queue, stats, completion events" },
+  launch: { label: "Game launch", description: "Launch/exit, umu env, error dialogs" },
+  audio: { label: "Audio", description: "Profile changes and playback" },
+  theme: { label: "Theme", description: "Theme / mode switches" },
+  state: { label: "App state", description: "BPM mode enter/exit, idle, input lock" },
+  event: { label: "Tauri events", description: "useListen subscriptions and emissions" },
+  lifecycle: { label: "Lifecycle", description: "Component mount / unmount in BPM" },
+  window: { label: "Window", description: "Resize, focus, blur" },
+};
+
+// ── RetroAchievements credentials ──────────────────────────────────────────
+
+const raUsername = ref("");
+const raPassword = ref("");
+const raLinked = ref(false);
+const raStatus = ref<"" | "linking" | "linked" | "error">("");
+const raError = ref("");
+
+onMounted(async () => {
+  try {
+    const settings = await invoke<Record<string, any>>("fetch_settings");
+    if (settings.raUsername) {
+      raUsername.value = settings.raUsername;
+      // Presence of raToken is inferred from Rust Debug redaction — we
+      // just rely on raUsername non-empty as "linked".
+      raLinked.value = !!(settings.raToken && settings.raToken.length > 0);
+    }
+  } catch {
+    // Settings not available yet — keep defaults
+  }
+});
+
+async function linkRetroAchievements() {
+  raError.value = "";
+  raStatus.value = "linking";
+  try {
+    const user = await invoke<string>("ra_login_and_save", {
+      username: raUsername.value,
+      password: raPassword.value,
+    });
+    raUsername.value = user;
+    raPassword.value = "";
+    raLinked.value = true;
+    raStatus.value = "linked";
+    setTimeout(() => {
+      if (raStatus.value === "linked") raStatus.value = "";
+    }, 2500);
+  } catch (e: any) {
+    raError.value = typeof e === "string" ? e : String(e?.message ?? e);
+    raStatus.value = "error";
+  }
+}
+
+async function unlinkRetroAchievements() {
+  try {
+    await invoke("ra_clear_credentials");
+    raUsername.value = "";
+    raPassword.value = "";
+    raLinked.value = false;
+    raStatus.value = "";
+    raError.value = "";
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to clear RA credentials:", e);
+  }
+}
+
+// ── Streaming credentials ──────────────────────────────────────────────────
+
+const streamingUsername = ref("sunshine");
+const streamingPassword = ref("");
+const streamingSaved = ref(false);
+
+// Client-side stream quality preset. Mirrors the StreamQuality enum in
+// src-tauri/src/streaming.rs — the value is read there at Moonlight launch.
+const STREAM_QUALITY_OPTIONS = [
+  { value: "performance", label: "Performance", detail: "60fps · 18 Mbps" },
+  { value: "balanced", label: "Balanced", detail: "60fps · 30 Mbps" },
+  { value: "quality", label: "Quality", detail: "60fps · 50 Mbps" },
+  { value: "ultra", label: "Ultra", detail: "120fps · 80 Mbps" },
+] as const;
+const streamingQuality = ref<string>("balanced");
+
+async function setStreamingQuality(value: string) {
+  streamingQuality.value = value;
+  try {
+    await invoke("update_settings", { newSettings: { streamingQuality: value } });
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save stream quality:", e);
+  }
+}
+
+// Client/host stream resolution. Read by both the host (display switch) and the
+// client (Moonlight `--resolution`) from `streaming_resolution` in Settings.
+const STREAM_RESOLUTION_OPTIONS = [
+  { value: "1280x800", label: "Deck", detail: "1280×800" },
+  { value: "1920x1080", label: "1080p", detail: "1920×1080" },
+  { value: "2560x1440", label: "1440p", detail: "2560×1440" },
+  { value: "3840x2160", label: "4K", detail: "3840×2160" },
+  { value: "native", label: "Don't change", detail: "leave display" },
+] as const;
+const streamingResolution = ref<string>("1280x800");
+
+async function setStreamingResolution(value: string) {
+  streamingResolution.value = value;
+  try {
+    await invoke("update_settings", { newSettings: { streamingResolution: value } });
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save stream resolution:", e);
+  }
+}
+
+// HDR — 10-bit passthrough (Moonlight `--hdr`).
+const streamingHdr = ref<boolean>(false);
+
+async function setStreamingHdr(value: boolean) {
+  streamingHdr.value = value;
+  try {
+    await invoke("update_settings", { newSettings: { streamingHdr: value } });
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save HDR setting:", e);
+  }
+}
+
+// Auto resolution — stream at the client's current display size.
+const streamingAutoResolution = ref<boolean>(true);
+
+async function setStreamingAutoResolution(value: boolean) {
+  streamingAutoResolution.value = value;
+  try {
+    await invoke("update_settings", {
+      newSettings: { streamingAutoResolution: value },
+    });
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save auto-resolution setting:", e);
+  }
+}
+
+onMounted(async () => {
+  try {
+    const settings = await invoke<Record<string, any>>("fetch_settings");
+    if (settings.sunshineUsername) streamingUsername.value = settings.sunshineUsername;
+    if (settings.sunshinePassword) streamingPassword.value = settings.sunshinePassword;
+    if (settings.streamingQuality) streamingQuality.value = settings.streamingQuality;
+    if (settings.streamingResolution) streamingResolution.value = settings.streamingResolution;
+    if (typeof settings.streamingHdr === "boolean")
+      streamingHdr.value = settings.streamingHdr;
+    if (typeof settings.streamingAutoResolution === "boolean")
+      streamingAutoResolution.value = settings.streamingAutoResolution;
+  } catch {
+    // Settings not available yet — keep defaults
+  }
+});
+
+async function saveStreamingCredentials() {
+  try {
+    await invoke("update_settings", {
+      newSettings: {
+        sunshineUsername: streamingUsername.value,
+        sunshinePassword: streamingPassword.value,
+      },
+    });
+    streamingSaved.value = true;
+    setTimeout(() => { streamingSaved.value = false; }, 2000);
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save streaming credentials:", e);
+  }
+}
+
+// ── Cloud saves ─────────────────────────────────────────────────────────────
+// Two settings live here: a master sync toggle and a friendly per-device
+// label shown in the cloud save conflict dialog. The backend (settings.rs)
+// already accepts cloudSavesEnabled (bool) and deviceName (string | null);
+// we just persist whatever the user types. When deviceName is blank the
+// backend falls back to the raw OS hostname.
+
+const cloudSavesEnabled = ref(true);
+const deviceName = ref("");
+const cloudSavesSaved = ref(false);
+const hostnamePlaceholder = ref("Auto-detected");
+
+onMounted(async () => {
+  try {
+    const settings = await invoke<Record<string, any>>("fetch_settings");
+    if (typeof settings.cloudSavesEnabled === "boolean") {
+      cloudSavesEnabled.value = settings.cloudSavesEnabled;
+    }
+    if (typeof settings.deviceName === "string") {
+      deviceName.value = settings.deviceName;
+    }
+  } catch {
+    // Defaults are fine if fetch fails.
+  }
+
+  // Surface the OS hostname as the input placeholder so the user knows
+  // what they'd inherit by leaving the field blank.
+  try {
+    const h = await hostname();
+    if (h && h.trim().length > 0) {
+      hostnamePlaceholder.value = h;
+    }
+  } catch {
+    // Keep "Auto-detected" fallback.
+  }
+});
+
+async function persistCloudSaves() {
+  try {
+    const trimmed = deviceName.value.trim();
+    await invoke("update_settings", {
+      newSettings: {
+        cloudSavesEnabled: cloudSavesEnabled.value,
+        // Send null when blank so the backend stores `None` and falls
+        // back to the OS hostname in the conflict UI.
+        deviceName: trimmed.length === 0 ? null : trimmed,
+      },
+    });
+    cloudSavesSaved.value = true;
+    setTimeout(() => { cloudSavesSaved.value = false; }, 1500);
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save cloud save settings:", e);
+  }
+}
+
+function toggleCloudSaves() {
+  cloudSavesEnabled.value = !cloudSavesEnabled.value;
+  void persistCloudSaves();
+}
+
+function saveDeviceName() {
+  void persistCloudSaves();
+}
+
+// ── Haptic feedback ─────────────────────────────────────────────────────────
+
+const hapticEnabled = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("drop:haptic") !== "false"
+    : true,
+);
+watch(hapticEnabled, (val) => {
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem("drop:haptic", String(val));
+  }
+});
+
+// ── Effects ─────────────────────────────────────────────────────────────────
+
+const animBgEnabled = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("bpm:animBg") !== "false"
+    : true,
+);
+
+const crtEnabled = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("bpm:crtFilter") === "true"
+    : false,
+);
+
+// Default ON — keeps the existing look for users who never opened
+// settings. The home page reads the same key and listens for the
+// `bpm:boxArtOverlay` CustomEvent (below) so toggling here updates
+// the live home-page tiles without a route bounce.
+const boxArtOverlayEnabled = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("bpm:boxArtOverlay") !== "false"
+    : true,
+);
+watch(boxArtOverlayEnabled, (val) => {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("bpm:boxArtOverlay", { detail: val }),
+    );
+  }
+});
+
+const screensaverEnabled = ref(
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("bpm:screensaver") !== "false"
+    : true,
+);
+
+// Map keys to their refs so we can look them up by string
+// (Vue auto-unwraps refs in templates, so we can't pass Ref objects through template bindings)
+const effectRefs: Record<string, Ref<boolean>> = {
+  "bpm:animBg": animBgEnabled,
+  "bpm:crtFilter": crtEnabled,
+  "bpm:boxArtOverlay": boxArtOverlayEnabled,
+  "bpm:screensaver": screensaverEnabled,
+};
+
+function toggleEffect(key: string) {
+  const toggleRef = effectRefs[key];
+  if (!toggleRef) {
+    console.error("[BPM:SETTINGS] Unknown effect key:", key);
+    return;
+  }
+  const newVal = !toggleRef.value;
+  devLog("state","[BPM:SETTINGS] toggleEffect:", key, "->", newVal);
+  toggleRef.value = newVal;
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(key, String(newVal));
+    }
+  } catch (e) {
+    console.warn("[BPM:SETTINGS] localStorage.setItem failed for", key, e);
+  }
+}
+
+// ── Audio feedback ──────────────────────────────────────────────────────────
+
+const audio = useBpAudio();
+const audioEnabled = ref(audio.enabled);
+const activeSoundProfile = ref<SoundProfileId>(audio.profile);
+watch(audioEnabled, (val) => {
+  audio.setEnabled(val);
+});
+
+// ── Theme ──────────────────────────────────────────────────────────────────
+
+const bpmTheme = useBpmTheme();
+const activeThemeId = ref<ThemeId>(bpmTheme.theme);
+
+const themePreviewColors: Record<ThemeId, string> = {
+  steam: "#66c0f4",
+  xbox: "#107c10",
+  wii: "#34beed",
+  ps2: "#2040c0",
+  ds: "#d05028",
+  dreamcast: "#d05010",
+  gamecube: "#524EAA",
+  psp: "#3C5078",
+  gameboy: "#9BBC0F",
+  snes: "#6464B4",
+};
+
+watch(activeThemeId, (id) => {
+  bpmTheme.setTheme(id);
+  // Preview the select sound on theme change
+  audio.preview(id as SoundProfileId, "select");
+});
+
+// ── Package format detection ────────────────────────────────────────────────
+
+const packageFormat = ref<string | null>(null);
+onMounted(async () => {
+  try {
+    packageFormat.value = await invoke("detect_package_format");
+  } catch {
+    // Command may not exist on all platforms
+  }
+});
+
+const packageFormatLabel = computed(() => {
+  switch (packageFormat.value) {
+    case "flatpak": return "Flatpak";
+    case "appImage": return "AppImage (self-updating)";
+    case "systemPackage": return "System package (DEB/RPM)";
+    case "windowsInstaller": return "Windows";
+    case "macOsBundle": return "macOS";
+    default: return packageFormat.value ?? "Unknown";
+  }
+});
+
+// ── Storage / Install dirs ──────────────────────────────────────────────────
+
+const installDirs = ref<string[]>([]);
+const removableStorage = ref<string[]>([]);
+const maxDownloadThreads = ref(4);
+const threadsSaved = ref(false);
+let threadsDirty = false;
+let threadsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+onMounted(async () => {
+  try {
+    const settings = await invoke<{ maxDownloadThreads?: number }>("fetch_settings");
+    if (typeof settings.maxDownloadThreads === "number") {
+      maxDownloadThreads.value = settings.maxDownloadThreads;
+    }
+  } catch { /* ignore */ }
+});
+
+function bumpThreads(delta: number) {
+  const next = Math.max(1, Math.min(64, maxDownloadThreads.value + delta));
+  if (next === maxDownloadThreads.value) return;
+  maxDownloadThreads.value = next;
+  threadsDirty = true;
+  if (threadsSaveTimer) clearTimeout(threadsSaveTimer);
+  // Debounce rapid presses so we only send one update_settings call.
+  threadsSaveTimer = setTimeout(async () => {
+    if (!threadsDirty) return;
+    threadsDirty = false;
+    try {
+      await invoke("update_settings", {
+        newSettings: { maxDownloadThreads: maxDownloadThreads.value },
+      });
+      threadsSaved.value = true;
+      setTimeout(() => { threadsSaved.value = false; }, 1500);
+    } catch (e) {
+      console.warn("[BPM:SETTINGS] Failed to save maxDownloadThreads:", e);
+    }
+  }, 400);
+}
+
+onMounted(async () => {
+  try {
+    installDirs.value = await invoke("fetch_download_dir_stats");
+  } catch { /* ignore */ }
+
+  try {
+    removableStorage.value = await invoke("detect_removable_storage");
+  } catch { /* ignore on non-Linux */ }
+});
+
+async function addStorageAsInstallDir(path: string) {
+  const gameDir = `${path}/drop-games`;
+  try {
+    await invoke("add_download_dir", { newDir: gameDir });
+    installDirs.value = await invoke("fetch_download_dir_stats");
+  } catch (e) {
+    console.error("Failed to add storage dir:", e);
+  }
+}
+
+// ── Proton / Compatibility ─────────────────────────────────────────────────
+
+interface ProtonPath {
+  path: string;
+  name: string;
+}
+
+const protonLoading = ref(true);
+const allProtonPaths = ref<ProtonPath[]>([]);
+const selectedProtonDefault = ref<string | null>(null);
+const protonSaveError = ref<string | null>(null);
+// Proton/umu commands are `#[cfg(target_os = "linux")]` in the Rust side
+// (src-tauri/src/lib.rs:316-329) — on Windows/macOS builds they simply
+// aren't registered, and invoking them throws "command not found".
+// Gate the call so the Compatibility section degrades silently on
+// non-Linux instead of spamming errors into the console.
+const isLinuxPlatform = platform() === "linux";
+
+onMounted(async () => {
+  if (!isLinuxPlatform) {
+    protonLoading.value = false;
+    return;
+  }
+  try {
+    const result = await invoke<{
+      autodiscovered: ProtonPath[];
+      custom: ProtonPath[];
+      default: string | null;
+    }>("fetch_proton_paths");
+
+    allProtonPaths.value = [...result.autodiscovered, ...result.custom];
+    selectedProtonDefault.value = result.default;
+    // No auto-selection here: leaving `default` as null is the "Auto
+    // (GE-Proton)" opt-in, which umu-launcher resolves on first launch.
+    // Previously we silently picked the first discovered Proton, which
+    // made the Auto option impossible to preserve across visits.
+  } catch (e) {
+    console.warn("[BPM:SETTINGS] Proton discovery failed:", e);
+  } finally {
+    protonLoading.value = false;
+  }
+});
+
+async function setDefaultProton(path: string) {
+  protonSaveError.value = null;
+  try {
+    await invoke("set_default", { path });
+    selectedProtonDefault.value = path;
+  } catch (e) {
+    protonSaveError.value = `Failed to set default: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+async function setAutoProton() {
+  protonSaveError.value = null;
+  try {
+    await invoke("clear_default_proton");
+    selectedProtonDefault.value = null;
+  } catch (e) {
+    protonSaveError.value = `Failed to enable Auto: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+</script>

@@ -1,0 +1,12 @@
+[package]
+name = "client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitcode = "*"
+database = { version = "*", path = "../database" }
+log = "*"
+serde = { version = "*", features = ["derive"] }
+tauri = "*"
+tauri-plugin-autostart = "*"

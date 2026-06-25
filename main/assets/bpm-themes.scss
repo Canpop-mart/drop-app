@@ -1,0 +1,519 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// BPM Theme System — Accurate console-inspired color schemes
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Each theme completely transforms the BPM color scheme to match
+// the actual look and feel of the target console's UI.
+
+// ── Accent color remap mixin ────────────────────────────────────────────
+// Remaps all Tailwind blue-* utility classes to the theme's accent colors.
+// $primary:   the main accent (replaces blue-600)
+// $secondary: lighter accent (replaces blue-500)
+// $light:     lightest accent for text (replaces blue-400)
+// $lighter:   very light accent (replaces blue-300)
+
+@mixin accent-remap($primary, $secondary, $light, $lighter) {
+  .bg-blue-600    { background-color: $primary !important; }
+  .bg-blue-600\/10 { background-color: rgba($primary, 0.1) !important; }
+  .bg-blue-600\/20 { background-color: rgba($primary, 0.2) !important; }
+  .bg-blue-600\/30 { background-color: rgba($primary, 0.3) !important; }
+  .bg-blue-500    { background-color: $secondary !important; }
+  .text-blue-400  { color: $light !important; }
+  .text-blue-500  { color: $secondary !important; }
+  .text-blue-300  { color: $lighter !important; }
+  .border-blue-500    { border-color: $secondary !important; }
+  .border-blue-500\/50 { border-color: rgba($secondary, 0.5) !important; }
+  .border-blue-600    { border-color: $primary !important; }
+  .ring-blue-500      { --tw-ring-color: #{$secondary} !important; }
+  .ring-blue-500\/50  { --tw-ring-color: rgba($secondary, 0.5) !important; }
+  .ring-blue-500\/60  { --tw-ring-color: rgba($secondary, 0.6) !important; }
+  .ring-blue-400      { --tw-ring-color: #{$light} !important; }
+  .shadow-blue-600\/20 { --tw-shadow-color: rgba($primary, 0.2) !important; }
+  .shadow-blue-500\/20 { --tw-shadow-color: rgba($secondary, 0.2) !important; }
+  .shadow-blue-500\/30 { --tw-shadow-color: rgba($secondary, 0.3) !important; }
+}
+
+// ── Base rules ──────────────────────────────────────────────────────────
+// Shared overrides applied to any theme: remap zinc backgrounds to
+// CSS custom properties so each theme can set them independently.
+
+[class*="bpm-theme-"] {
+  background-color: var(--bpm-bg-deepest) !important;
+
+  // ── Zinc background overrides ──
+  .bg-zinc-950       { background-color: var(--bpm-bg-deepest) !important; }
+  .bg-zinc-950\/50   { background-color: color-mix(in srgb, var(--bpm-bg-deepest) 50%, transparent) !important; }
+  .bg-zinc-950\/80   { background-color: color-mix(in srgb, var(--bpm-bg-deepest) 80%, transparent) !important; }
+  .bg-zinc-950\/90   { background-color: color-mix(in srgb, var(--bpm-bg-deepest) 90%, transparent) !important; }
+
+  .bg-zinc-900       { background-color: var(--bpm-bg-deep) !important; }
+  .bg-zinc-900\/30   { background-color: color-mix(in srgb, var(--bpm-bg-deep) 30%, transparent) !important; }
+  .bg-zinc-900\/40   { background-color: color-mix(in srgb, var(--bpm-bg-deep) 40%, transparent) !important; }
+  .bg-zinc-900\/50   { background-color: color-mix(in srgb, var(--bpm-bg-deep) 50%, transparent) !important; }
+  .bg-zinc-900\/60   { background-color: color-mix(in srgb, var(--bpm-bg-deep) 60%, transparent) !important; }
+  .bg-zinc-900\/70   { background-color: color-mix(in srgb, var(--bpm-bg-deep) 70%, transparent) !important; }
+  .bg-zinc-900\/80   { background-color: color-mix(in srgb, var(--bpm-bg-deep) 80%, transparent) !important; }
+
+  .bg-zinc-800       { background-color: var(--bpm-bg-mid) !important; }
+  .bg-zinc-800\/30   { background-color: color-mix(in srgb, var(--bpm-bg-mid) 30%, transparent) !important; }
+  .bg-zinc-800\/50   { background-color: color-mix(in srgb, var(--bpm-bg-mid) 50%, transparent) !important; }
+  .bg-zinc-800\/60   { background-color: color-mix(in srgb, var(--bpm-bg-mid) 60%, transparent) !important; }
+  .bg-zinc-800\/80   { background-color: color-mix(in srgb, var(--bpm-bg-mid) 80%, transparent) !important; }
+
+  .bg-zinc-700       { background-color: var(--bpm-bg-raised) !important; }
+  .bg-zinc-700\/50   { background-color: color-mix(in srgb, var(--bpm-bg-raised) 50%, transparent) !important; }
+
+  .bg-zinc-600       { background-color: var(--bpm-bg-hover) !important; }
+
+  // ── Border overrides ──
+  .border-zinc-800\/30 { border-color: var(--bpm-border) !important; }
+  .border-zinc-800\/50 { border-color: var(--bpm-border-strong) !important; }
+  .border-zinc-800     { border-color: var(--bpm-border-strong) !important; }
+  .border-zinc-700     { border-color: var(--bpm-border-strong) !important; }
+  .border-zinc-700\/50 { border-color: var(--bpm-border) !important; }
+  .border-zinc-600     { border-color: var(--bpm-border-strong) !important; }
+
+  // ── Ring overrides ──
+  .ring-zinc-700 { --tw-ring-color: var(--bpm-border-strong) !important; }
+  .ring-zinc-900 { --tw-ring-color: var(--bpm-bg-deep) !important; }
+
+  // ── Text overrides (optional) ──
+  .text-zinc-200 { color: var(--bpm-text-primary, #e4e4e7) !important; }
+  .text-zinc-300 { color: var(--bpm-text-secondary, #d4d4d8) !important; }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STEAM — Faithful to Steam Big Picture / Steam Deck
+// Colors extracted from Steam's actual UI: #171a21, #1b2838, #2a475e, #66c0f4
+// ═══════════════════════════════════════════════════════════════════════════
+.bpm-theme-steam {
+  --bpm-accent: 102 192 244;           // #66c0f4 — Steam's signature blue
+  --bpm-bg-deepest: #171a21;           // Steam's darkest background
+  --bpm-bg-deep:    #1b2838;           // Steam's primary card/sidebar bg
+  --bpm-bg-mid:     #2a475e;           // Steam's secondary surface
+  --bpm-bg-raised:  #3d6b8e;           // Lighter interactive surface
+  --bpm-bg-hover:   #4b8bb5;           // Hover state
+  --bpm-border:        rgba(42, 71, 94, 0.5);
+  --bpm-border-strong: rgba(42, 71, 94, 0.8);
+  --bpm-text-primary:   #c7d5e0;       // Steam's primary text
+  --bpm-text-secondary: #8f98a0;       // Steam's secondary text
+
+  // Steam uses its own cyan-blue, not the default Tailwind blue
+  @include accent-remap(
+    #1a9fff,   // primary (Steam's action button blue)
+    #66c0f4,   // secondary (Steam's signature light blue)
+    #66c0f4,   // light text accent
+    #a4d7f5    // lighter text
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SWITCH — Nintendo Switch Dark Theme
+// Pure blacks with Nintendo Red #e60012 accent
+// The Switch dark theme uses near-pure black backgrounds
+// ═══════════════════════════════════════════════════════════════════════════
+.bpm-theme-switch {
+  --bpm-accent: 230 0 18;              // #e60012 — Nintendo Red
+  --bpm-bg-deepest: #0e0e0e;           // Near-pure black (Switch dark theme bg)
+  --bpm-bg-deep:    #1a1a1a;           // Card/panel background
+  --bpm-bg-mid:     #2d2d2d;           // Secondary surface
+  --bpm-bg-raised:  #3a3a3a;           // Raised element
+  --bpm-bg-hover:   #484848;           // Hover state
+  --bpm-border:        rgba(80, 80, 80, 0.4);
+  --bpm-border-strong: rgba(80, 80, 80, 0.7);
+  --bpm-text-primary:   #ffffff;        // Pure white text (Switch style)
+  --bpm-text-secondary: #aaaaaa;
+
+  @include accent-remap(
+    #e60012,   // Nintendo Red
+    #ff4554,   // Brighter red for bg accents
+    #ff6b78,   // Light red for text accents
+    #ffaab0    // Very light red
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// XBOX — Xbox Series Dashboard
+// Very dark backgrounds with subtle green tint, #107c10 accent
+// ═══════════════════════════════════════════════════════════════════════════
+.bpm-theme-xbox {
+  --bpm-accent: 16 124 16;             // #107c10 — Xbox Green
+  --bpm-bg-deepest: #0a0a0a;           // Xbox dashboard: near-black
+  --bpm-bg-deep:    #1a1a1a;           // Card background
+  --bpm-bg-mid:     #2d2d2d;           // Tile / surface
+  --bpm-bg-raised:  #3a3a3a;           // Interactive surface
+  --bpm-bg-hover:   #484848;           // Hover
+  --bpm-border:        rgba(60, 60, 60, 0.4);
+  --bpm-border-strong: rgba(80, 80, 80, 0.6);
+  --bpm-text-primary:   #ffffff;
+  --bpm-text-secondary: #b0b0b0;
+
+  @include accent-remap(
+    #107c10,   // Xbox Green (official)
+    #2d9f2d,   // Lighter green for UI elements
+    #5dc65d,   // Text accent green
+    #9bf00b    // Xbox bright highlight green
+  );
+}
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WII — Wii Channel Menu (LIGHT MODE)
+// The Wii's actual UI is white/light grey with sky-blue (#34beed) accents.
+// This is the only light-mode theme — backgrounds are white/near-white,
+// text is dark, matching the clean Wii Menu aesthetic.
+// ═══════════════════════════════════════════════════════════════════════════
+.bpm-theme-wii {
+  --bpm-accent: 52 190 237;            // #34beed — Wii Blue
+  --bpm-bg-deepest: #e8eef4;           // Light blue-grey (Wii menu background)
+  --bpm-bg-deep:    #ffffff;           // White panels / cards
+  --bpm-bg-mid:     #f0f4f8;           // Slightly tinted surface
+  --bpm-bg-raised:  #e0e8f0;           // Raised elements
+  --bpm-bg-hover:   #d0dce8;           // Hover state
+  --bpm-border:        rgba(180, 200, 220, 0.6);
+  --bpm-border-strong: rgba(150, 175, 200, 0.8);
+  --bpm-text-primary:   #1a1a2e;       // Dark text for readability
+  --bpm-text-secondary: #4a5568;       // Medium-dark secondary text
+
+  @include accent-remap(
+    #009ac7,   // Wii teal (darker variant for buttons)
+    #34beed,   // Wii blue (signature)
+    #0080a8,   // Darker blue for text (readable on light bg)
+    #006688    // Even darker for small text
+  );
+
+  // ── Light-mode text overrides ──
+  // Override all dark-theme text utilities to dark colors
+  .text-white      { color: #1a1a2e !important; }
+  .text-zinc-100   { color: #1a1a2e !important; }
+  .text-zinc-200   { color: #1a1a2e !important; }
+  .text-zinc-300   { color: #2d3748 !important; }
+  .text-zinc-400   { color: #4a5568 !important; }
+  .text-zinc-500   { color: #5a6577 !important; }
+  .text-zinc-600   { color: #4a5568 !important; }
+
+  // Keep actual white text where it's on colored backgrounds
+  .bg-gradient-to-t .text-white,
+  .bg-gradient-to-b .text-white,
+  [style*="background-color"] .text-white {
+    color: #ffffff !important;
+  }
+
+  // ── Light-mode background overrides for elements that use from-black/to-transparent ──
+  .from-black\/80 { --tw-gradient-from: rgba(0, 0, 0, 0.5) !important; }
+  .from-black\/90 { --tw-gradient-from: rgba(0, 0, 0, 0.6) !important; }
+
+  // ── Scrollbar styling for light mode ──
+  ::-webkit-scrollbar-thumb {
+    background: rgba(52, 190, 237, 0.3);
+  }
+  ::-webkit-scrollbar-track {
+    background: #e8eef4;
+  }
+
+  // ── Focus ring on light backgrounds needs to be more visible ──
+  [data-focusable].bp-focused {
+    outline-color: rgba(0, 154, 199, 0.9) !important;
+    box-shadow:
+      0 0 0 3px rgba(0, 154, 199, 0.6),
+      0 0 12px rgba(52, 190, 237, 0.3) !important;
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PS2 — PlayStation 2 XMB (XrossMediaBar)
+// Deep navy-to-teal gradient with glass-like transparent panels.
+// The PS2's iconic dark interface with blue-purple accents.
+// ═══════════════════════════════════════════════════════════════════════════
+.bpm-theme-ps2 {
+  --bpm-accent: 32 64 192;               // #2040c0 — PS2 Blue
+  --bpm-bg-deepest: #080818;             // Deep navy base
+  --bpm-bg-deep:    #0e1040;             // Blue-purple panels
+  --bpm-bg-mid:     #1a1a5c;             // Mid surface
+  --bpm-bg-raised:  #2a2a70;             // Raised element
+  --bpm-bg-hover:   #3a3a88;             // Hover state
+  --bpm-border:        rgba(40, 40, 120, 0.4);
+  --bpm-border-strong: rgba(60, 60, 150, 0.6);
+  --bpm-text-primary:   #e0e0ff;         // Light blue-white text
+  --bpm-text-secondary: #8888cc;         // Muted blue-grey
+
+  @include accent-remap(
+    #2040c0,   // PS2 Blue (primary)
+    #4060e0,   // Lighter blue for UI
+    #6080ff,   // Light accent for text
+    #90a0ff    // Very light accent
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DS — Nintendo DS Menu (LIGHT MODE)
+// Clean, light aesthetic with silver/white backgrounds.
+// The DS menu features a bright, minimal design with charcoal-blue and red-orange accents.
+// ═══════════════════════════════════════════════════════════════════════════
+.bpm-theme-ds {
+  --bpm-bg-deepest: #e8e8ec;             // Light silver-grey background
+  --bpm-bg-deep:    #ffffff;             // White panels
+  --bpm-bg-mid:     #f2f2f5;             // Slightly tinted surface
+  --bpm-bg-raised:  #e2e2e8;             // Raised elements
+  --bpm-bg-hover:   #d5d5dd;             // Hover state
+  --bpm-border:        rgba(180, 180, 195, 0.6);
+  --bpm-border-strong: rgba(150, 150, 170, 0.8);
+  --bpm-text-primary:   #1a1a2e;         // Dark text for readability
+  --bpm-text-secondary: #4a5568;         // Medium-dark secondary text
+
+  @include accent-remap(
+    #d05028,   // DS Red-orange (primary)
+    #e06040,   // Lighter red-orange
+    #c04020,   // Darker red for text
+    #a03018    // Even darker for small text
+  );
+
+  // ── Light-mode text overrides ──
+  // Override all dark-theme text utilities to dark colors
+  .text-white      { color: #1a1a2e !important; }
+  .text-zinc-100   { color: #1a1a2e !important; }
+  .text-zinc-200   { color: #1a1a2e !important; }
+  .text-zinc-300   { color: #2d3748 !important; }
+  .text-zinc-400   { color: #4a5568 !important; }
+  .text-zinc-500   { color: #5a6577 !important; }
+  .text-zinc-600   { color: #4a5568 !important; }
+
+  // Keep actual white text where it's on colored backgrounds
+  .bg-gradient-to-t .text-white,
+  .bg-gradient-to-b .text-white,
+  [style*="background-color"] .text-white {
+    color: #ffffff !important;
+  }
+
+  // ── Light-mode background overrides for elements that use from-black/to-transparent ──
+  .from-black\/80 { --tw-gradient-from: rgba(0, 0, 0, 0.5) !important; }
+  .from-black\/90 { --tw-gradient-from: rgba(0, 0, 0, 0.6) !important; }
+
+  // ── Scrollbar styling for light mode ──
+  ::-webkit-scrollbar-thumb {
+    background: rgba(208, 80, 40, 0.3);
+  }
+  ::-webkit-scrollbar-track {
+    background: #e8e8ec;
+  }
+
+  // ── Focus ring on light backgrounds needs to be more visible ──
+  [data-focusable].bp-focused {
+    outline-color: rgba(208, 80, 40, 0.9) !important;
+    box-shadow:
+      0 0 0 3px rgba(208, 80, 40, 0.6),
+      0 0 12px rgba(224, 96, 64, 0.3) !important;
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DREAMCAST — Sega Dreamcast Dashboard
+// Teal-aqua gradient background with Sega orange (#d05010) accents.
+// Inspired by the clean, bright Dreamcast OS with its swirl motif
+// and distinctive menu layout with sidebar navigation.
+// ═══════════════════════════════════════════════════════════════════════════
+.bpm-theme-dreamcast {
+  --bpm-accent: 208 80 16;                // #d05010 — Sega Orange
+  --bpm-bg-deepest: #0a2a3a;             // Deep teal-blue (Dreamcast OS bg)
+  --bpm-bg-deep:    #0e3848;             // Panel background
+  --bpm-bg-mid:     #14485c;             // Mid surface
+  --bpm-bg-raised:  #1a5870;             // Raised element
+  --bpm-bg-hover:   #206880;             // Hover state
+  --bpm-border:        rgba(30, 100, 130, 0.5);
+  --bpm-border-strong: rgba(40, 120, 155, 0.7);
+  --bpm-text-primary:   #e8f0f4;         // Bright text
+  --bpm-text-secondary: #8ab0c0;         // Muted teal text
+
+  @include accent-remap(
+    #d05010,   // Sega Orange (primary)
+    #e87030,   // Lighter orange for UI elements
+    #f09050,   // Light orange for text accents
+    #f8b080    // Very light orange
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GAMECUBE — Nintendo GameCube UI
+// Indigo-purple with silver accents, matching the iconic console design.
+// ═══════════════════════════════════════════════════════════════════════════
+.bpm-theme-gamecube {
+  font-family: 'Roboto', sans-serif;
+  --bpm-accent: 82 78 170;                // #524EAA — Indigo-purple
+  --bpm-bg-deepest: #0e0a1e;             // Deep indigo base
+  --bpm-bg-deep:    #1a1440;             // Purple-tinted panel
+  --bpm-bg-mid:     #2a2060;             // Mid surface
+  --bpm-bg-raised:  #3a3080;             // Raised element
+  --bpm-bg-hover:   #4a40a0;             // Hover state
+  --bpm-border:        rgba(80, 70, 160, 0.4);
+  --bpm-border-strong: rgba(100, 90, 180, 0.6);
+  --bpm-text-primary:   #d8d0e8;         // Light lavender text
+  --bpm-text-secondary: #8080b0;         // Muted purple text
+
+  @include accent-remap(
+    #524eaa,   // Indigo-purple (primary)
+    #7070cc,   // Lighter purple
+    #9090dd,   // Light accent
+    #b0b0ee    // Very light accent
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PSP — Sony PSP
+// Dark with subtle blue-grey accents, modern handheld aesthetic.
+// ═══════════════════════════════════════════════════════════════════════════
+.bpm-theme-psp {
+  font-family: 'Nunito Sans', sans-serif;
+  --bpm-accent: 60 80 120;                // #3C5078 — Steel blue
+  --bpm-bg-deepest: #0a0a0e;             // Deep black-grey
+  --bpm-bg-deep:    #1a1a22;             // Dark panel
+  --bpm-bg-mid:     #2a2a35;             // Mid surface
+  --bpm-bg-raised:  #3a3a48;             // Raised element
+  --bpm-bg-hover:   #4a4a5c;             // Hover state
+  --bpm-border:        rgba(80, 100, 140, 0.4);
+  --bpm-border-strong: rgba(100, 120, 160, 0.6);
+  --bpm-text-primary:   #e0e0e8;         // Light grey-white text
+  --bpm-text-secondary: #9099a8;         // Muted grey text
+
+  @include accent-remap(
+    #3c5078,   // Steel blue (primary)
+    #5070a0,   // Lighter blue
+    #7090c0,   // Light accent
+    #90a8d8    // Very light accent
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GAME BOY — Nintendo Game Boy (LIGHT MODE)
+// 4-shade green pixel aesthetic, classic handheld look.
+// Light-mode backgrounds with dark green text for contrast.
+// ═══════════════════════════════════════════════════════════════════════════
+.bpm-theme-gameboy {
+  font-family: 'Press Start 2P', monospace;
+  --bpm-accent: 155 188 15;               // #9BBC0F — Game Boy Green
+  --bpm-bg-deepest: #c4cfa1;             // Light beige (gameboy screen background)
+  --bpm-bg-deep:    #d0d8b0;             // Slightly darker gameboy tone
+  --bpm-bg-mid:     #bbc898;             // Mid tone
+  --bpm-bg-raised:  #a8b888;             // Raised element
+  --bpm-bg-hover:   #98a878;             // Hover state
+  --bpm-border:        rgba(80, 120, 40, 0.5);
+  --bpm-border-strong: rgba(100, 140, 60, 0.7);
+  --bpm-text-primary:   #0f380f;         // Dark green text
+  --bpm-text-secondary: #306230;         // Medium green text
+
+  @include accent-remap(
+    #6b8c00,   // Darker Game Boy green (primary)
+    #9bbc0f,   // Classic Game Boy green
+    #a8d020,   // Light green accent
+    #c0e030    // Very light green
+  );
+
+  // ── Light-mode text overrides ──
+  .text-white      { color: #0f380f !important; }
+  .text-zinc-100   { color: #0f380f !important; }
+  .text-zinc-200   { color: #0f380f !important; }
+  .text-zinc-300   { color: #1a5a1a !important; }
+  .text-zinc-400   { color: #306230 !important; }
+  .text-zinc-500   { color: #4a7a4a !important; }
+  .text-zinc-600   { color: #306230 !important; }
+
+  // Keep actual white text where it's on colored backgrounds
+  .bg-gradient-to-t .text-white,
+  .bg-gradient-to-b .text-white,
+  [style*="background-color"] .text-white {
+    color: #ffffff !important;
+  }
+
+  // ── Light-mode background overrides for elements that use from-black/to-transparent ──
+  .from-black\/80 { --tw-gradient-from: rgba(0, 0, 0, 0.5) !important; }
+  .from-black\/90 { --tw-gradient-from: rgba(0, 0, 0, 0.6) !important; }
+
+  // ── Scrollbar styling for light mode ──
+  ::-webkit-scrollbar-thumb {
+    background: rgba(155, 188, 15, 0.3);
+  }
+  ::-webkit-scrollbar-track {
+    background: #c4cfa1;
+  }
+
+  // ── Focus ring on light backgrounds ──
+  [data-focusable].bp-focused {
+    outline-color: rgba(107, 140, 0, 0.9) !important;
+    box-shadow:
+      0 0 0 3px rgba(155, 188, 15, 0.6),
+      0 0 12px rgba(155, 188, 15, 0.3) !important;
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SNES — Super Nintendo (LIGHT MODE)
+// Light grey with bold button colors, retro console aesthetic.
+// Light-mode backgrounds with dark text for contrast.
+// ═══════════════════════════════════════════════════════════════════════════
+.bpm-theme-snes {
+  font-family: 'Raleway', sans-serif;
+  --bpm-accent: 100 100 180;              // #6464B4 — SNES Purple-blue
+  --bpm-bg-deepest: #e8e8ec;             // Light grey background
+  --bpm-bg-deep:    #f0f0f4;             // Lighter panel
+  --bpm-bg-mid:     #e0e0e8;             // Mid surface
+  --bpm-bg-raised:  #d4d4dc;             // Raised element
+  --bpm-bg-hover:   #c8c8d0;             // Hover state
+  --bpm-border:        rgba(100, 100, 150, 0.5);
+  --bpm-border-strong: rgba(100, 100, 150, 0.7);
+  --bpm-text-primary:   #1a1a2e;         // Dark text
+  --bpm-text-secondary: #4a4a6e;         // Medium-dark text
+
+  @include accent-remap(
+    #6464b4,   // SNES Purple-blue (primary)
+    #8080cc,   // Lighter purple
+    #9999dd,   // Light accent
+    #b0b0ee    // Very light accent
+  );
+
+  // ── Light-mode text overrides ──
+  .text-white      { color: #1a1a2e !important; }
+  .text-zinc-100   { color: #1a1a2e !important; }
+  .text-zinc-200   { color: #1a1a2e !important; }
+  .text-zinc-300   { color: #2d2d48 !important; }
+  .text-zinc-400   { color: #4a4a6e !important; }
+  .text-zinc-500   { color: #5a5a7e !important; }
+  .text-zinc-600   { color: #4a4a6e !important; }
+
+  // Keep actual white text where it's on colored backgrounds
+  .bg-gradient-to-t .text-white,
+  .bg-gradient-to-b .text-white,
+  [style*="background-color"] .text-white {
+    color: #ffffff !important;
+  }
+
+  // ── Light-mode background overrides for elements that use from-black/to-transparent ──
+  .from-black\/80 { --tw-gradient-from: rgba(0, 0, 0, 0.5) !important; }
+  .from-black\/90 { --tw-gradient-from: rgba(0, 0, 0, 0.6) !important; }
+
+  // ── Scrollbar styling for light mode ──
+  ::-webkit-scrollbar-thumb {
+    background: rgba(100, 100, 180, 0.3);
+  }
+  ::-webkit-scrollbar-track {
+    background: #e8e8ec;
+  }
+
+  // ── Focus ring on light backgrounds ──
+  [data-focusable].bp-focused {
+    outline-color: rgba(100, 100, 180, 0.9) !important;
+    box-shadow:
+      0 0 0 3px rgba(100, 100, 180, 0.6),
+      0 0 12px rgba(128, 128, 204, 0.3) !important;
+  }
+}
+

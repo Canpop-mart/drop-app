@@ -1,0 +1,57 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "Drop Desktop Client",
+  "version": "5.1.2",
+  "identifier": "org.droposs.client",
+  "build": {
+    "beforeDevCommand": "pnpm run -C main dev --port 1432",
+    "devUrl": "http://localhost:1432/",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../.output"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self' server: object: asset: http://server.localhost http://object.localhost http://asset.localhost; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: server: object: asset: http://server.localhost http://object.localhost http://asset.localhost https://*.steamstatic.com https://*.akamaihd.net https://retroachievements.org https://media.retroachievements.org; connect-src 'self' server: http://server.localhost; font-src 'self' data:; media-src 'self' data: server: object: asset: http://server.localhost http://object.localhost http://asset.localhost; frame-src server: http://server.localhost",
+      "assetProtocol": {
+        "enable": true,
+        "scope": {}
+      }
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["drop"]
+      }
+    },
+    "updater": {
+      "endpoints": [
+        "https://github.com/Canpop-mart/drop-app/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM0QkM3N0RENDQ4OUM4Q0EKUldUS3lJbEUzWGU4TkI5NmFIRHNzRFZhNEVOM0wrcXlneC9oQlJ2S1pGYklLUWFBUnBGZXViN3MK"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": ["nsis", "deb", "rpm", "dmg", "appimage"],
+    "windows": {
+      "nsis": {
+        "installMode": "both"
+      },
+      "webviewInstallMode": {
+        "silent": true,
+        "type": "embedBootstrapper"
+      },
+      "wix": null
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": []
+  }
+}

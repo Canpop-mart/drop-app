@@ -1,0 +1,501 @@
+use std::{fs::create_dir_all, path::PathBuf, process::Command};
+
+use client::compat::{COMPAT_INFO, UMU_LAUNCHER_EXECUTABLE};
+use database::{
+    Database, DownloadableMetadata, GameVersion, db::DATA_ROOT_DIR, platform::Platform,
+};
+use log::{info, warn};
+
+use crate::{error::ProcessError, parser::ParsedCommand, process_manager::ProcessHandler};
+
+pub struct MacLauncher;
+impl ProcessHandler for MacLauncher {
+    fn create_launch_process(
+        &self,
+        _meta: &DownloadableMetadata,
+        launch_command: String,
+        _game_version: &GameVersion,
+        _current_dir: &str,
+        _database: &Database,
+    ) -> Result<String, ProcessError> {
+        Ok(launch_command)
+    }
+
+    fn valid_for_platform(&self, _db: &Database, _target: &Platform) -> bool {
+        true
+    }
+
+    fn modify_command(&self, _command: &mut Command) {}
+}
+
+#[allow(dead_code)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+pub struct WindowsLauncher;
+impl ProcessHandler for WindowsLauncher {
+    fn create_launch_process(
+        &self,
+        _meta: &DownloadableMetadata,
+        launch_command: String,
+        _game_version: &GameVersion,
+        current_dir: &str,
+        _database: &Database,
+    ) -> Result<String, ProcessError> {
+        // Make the exe path absolute using the game's install directory.
+        // Windows does not search current_dir for executables when given a
+        // relative path, so we must resolve it here. reconstruct() then
+        // shell-quotes any spaces so the path survives re-parsing downstream.
+        let mut parsed = ParsedCommand::parse(launch_command)?;
+        parsed.make_absolute(PathBuf::from(current_dir));
+        Ok(parsed.reconstruct())
+    }
+
+    fn valid_for_platform(&self, _db: &Database, _target: &Platform) -> bool {
+        true
+    }
+
+    #[allow(unused_variables)]
+    fn modify_command(&self, command: &mut Command) {
+        #[cfg(target_os = "windows")]
+        use std::os::windows::process::CommandExt;
+        #[cfg(target_os = "windows")]
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+pub struct NativeLauncher;
+impl ProcessHandler for NativeLauncher {
+    fn create_launch_process(
+        &self,
+        _meta: &DownloadableMetadata,
+        launch_command: String,
+        _game_version: &GameVersion,
+        current_dir: &str,
+        _database: &Database,
+    ) -> Result<String, ProcessError> {
+        info!("[NativeLauncher] create_launch_process: command={:?}, current_dir={:?}", &launch_command, current_dir);
+        let mut parsed = ParsedCommand::parse(launch_command)?;
+        parsed.make_absolute(PathBuf::from(current_dir));
+        info!("[NativeLauncher] absolute command: {:?}", &parsed.command);
+        info!("[NativeLauncher] command exists on disk: {}", std::path::Path::new(&parsed.command).exists());
+
+        #[cfg(target_os = "linux")]
+        {
+            let cmd_lower = parsed.command.to_lowercase();
+            let is_win_ext = cmd_lower.ends_with(".exe")
+                || cmd_lower.ends_with(".bat")
+                || cmd_lower.ends_with(".cmd");
+            let is_pe_binary = if !is_win_ext {
+                match std::fs::File::open(&parsed.command) {
+                    Ok(mut f) => {
+                        use std::io::Read;
+                        let mut magic = [0u8; 2];
+                        match f.read_exact(&mut magic) {
+                            Ok(()) => {
+                                info!("[NativeLauncher] PE check: magic bytes = [{:#04x}, {:#04x}]", magic[0], magic[1]);
+                                magic == [0x4D, 0x5A]
+                            }
+                            Err(e) => {
+                                warn!("[NativeLauncher] could not read magic bytes from {:?}: {}", &parsed.command, e);
+                                false
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("[NativeLauncher] could not open {:?} for PE check: {}", &parsed.command, e);
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+            info!("[NativeLauncher] Windows check: is_win_ext={}, is_pe_binary={}", is_win_ext, is_pe_binary);
+            if is_win_ext || is_pe_binary {
+                info!("[NativeLauncher] → Returning NeedsCompat for {:?}", &parsed.command);
+                return Err(ProcessError::NeedsCompat(parsed.command.clone()));
+            }
+        }
+
+        let result = parsed.reconstruct();
+        info!("[NativeLauncher] → Returning OK: {:?}", &result);
+        Ok(result)
+    }
+
+    fn valid_for_platform(&self, _db: &Database, _target: &Platform) -> bool {
+        true
+    }
+
+    fn modify_command(&self, _command: &mut Command) {}
+}
+
+pub struct UMUNativeLauncher;
+impl ProcessHandler for UMUNativeLauncher {
+    fn create_launch_process(
+        &self,
+        meta: &DownloadableMetadata,
+        launch_command: String,
+        game_version: &GameVersion,
+        _current_dir: &str,
+        _database: &Database,
+    ) -> Result<String, ProcessError> {
+        let umu_id_override = game_version
+            .launches
+            .iter()
+            .find(|v| v.platform == meta.target_platform)
+            .and_then(|v| v.umu_id_override.as_ref())
+            .map_or("", |v| v);
+
+        let game_id = if umu_id_override.is_empty() {
+            &game_version.version_id
+        } else {
+            umu_id_override
+        };
+
+        let pfx_dir = DATA_ROOT_DIR.join("pfx");
+        let pfx_dir = pfx_dir.join(meta.id.clone());
+        create_dir_all(&pfx_dir)?;
+
+        Ok(format!(
+            "GAMEID={game_id} UMU_NO_PROTON=1 WINEPREFIX={} {umu:?} {launch}",
+            pfx_dir.to_string_lossy(),
+            umu = UMU_LAUNCHER_EXECUTABLE
+                .as_ref()
+                .expect("Failed to get UMU_LAUNCHER_EXECUTABLE as ref"),
+            launch = launch_command,
+        ))
+    }
+
+    fn valid_for_platform(&self, _db: &Database, _target: &Platform) -> bool {
+        let Some(compat_info) = &*COMPAT_INFO else {
+            return false;
+        };
+        compat_info.umu_installed
+    }
+
+    fn modify_command(&self, _command: &mut Command) {}
+}
+
+/// umu-launcher reserved shorthands. When PROTONPATH is set to one of these
+/// strings, umu resolves it itself (downloading the latest GE-Proton /
+/// UMU-Proton release into ~/.cache/umu-launcher/ on first run). We must
+/// NOT try to validate these as filesystem paths — they aren't paths.
+fn is_umu_proton_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "GE-Proton" | "GE-Latest" | "UMU-Proton" | "UMU-Latest" | "Proton-GE" | "GE-Proton-Latest"
+    )
+}
+
+/// Default Proton when the user has configured nothing. GE-Proton has the
+/// DXVK/VKD3D/winetricks gamefixes most Windows titles need; umu will
+/// auto-download it on first launch.
+const DEFAULT_UMU_PROTON: &str = "GE-Proton";
+
+pub struct UMUCompatLauncher;
+impl ProcessHandler for UMUCompatLauncher {
+    fn create_launch_process(
+        &self,
+        meta: &DownloadableMetadata,
+        launch_command: String,
+        game_version: &GameVersion,
+        current_dir: &str,
+        database: &Database,
+    ) -> Result<String, ProcessError> {
+        let umu_id_override = game_version
+            .launches
+            .iter()
+            .find(|v| v.platform == meta.target_platform)
+            .and_then(|v| v.umu_id_override.as_ref())
+            .map_or("", |v| v);
+
+        let game_id = if umu_id_override.is_empty() {
+            &game_version.version_id
+        } else {
+            umu_id_override
+        };
+
+        let pfx_dir = DATA_ROOT_DIR.join("pfx");
+        let pfx_dir = pfx_dir.join(meta.id.clone());
+        create_dir_all(&pfx_dir)?;
+
+        // Resolve Proton in priority order: per-game override → global default
+        // → GE-Proton (umu auto-downloads on first use).
+        let proton_path: String = game_version
+            .user_configuration
+            .override_proton_path
+            .clone()
+            .or_else(|| database.applications.default_proton_path.clone())
+            .unwrap_or_else(|| {
+                info!(
+                    "[UMUCompat] No Proton configured — falling back to {DEFAULT_UMU_PROTON}. \
+                     umu-launcher will auto-download it on first launch."
+                );
+                DEFAULT_UMU_PROTON.to_string()
+            });
+
+        info!("[UMUCompat] Using Proton: {}", proton_path);
+
+        // Keywords (GE-Proton, UMU-Proton, etc.) are resolved by umu itself;
+        // skip filesystem validation for those. Real paths still get checked.
+        if !is_umu_proton_keyword(&proton_path) {
+            #[cfg(target_os = "linux")]
+            let proton_valid = crate::compat::read_proton_path(PathBuf::from(&proton_path))
+                .ok()
+                .flatten()
+                .is_some();
+            #[cfg(not(target_os = "linux"))]
+            let proton_valid = false;
+            if !proton_valid {
+                warn!(
+                    "[UMUCompat] Proton path {:?} is invalid (missing proton binary or compatibilitytool.vdf)",
+                    proton_path
+                );
+                return Err(ProcessError::NoCompat);
+            }
+        }
+        let proton_env = format!("PROTONPATH={}", proton_path);
+        info!("[UMUCompat] Proton valid. Building launch command...");
+
+        let umu_exe = UMU_LAUNCHER_EXECUTABLE
+            .as_ref()
+            .expect("Failed to get UMU_LAUNCHER_EXECUTABLE as ref");
+
+        // Idempotent prefix preparation (Linux-only side effects): stages the
+        // Steam DLLs/symlinks an OnlineFix payload requires, and returns the
+        // extra env pairs (the OnlineFix DLL overrides) to add to the umu
+        // command. The VC++ runtime is NOT handled here — it is installed on
+        // demand via the "Install VC++ Runtime" action (install_vcredist_for_game
+        // → prefix_prep::install_vcredist_into_prefix). Never fails the launch.
+        //
+        // The exe is the first shell token of `launch_command`; resolve it
+        // against the install dir so prefix_prep sees an absolute path (the
+        // launch string can carry a relative exe + trailing args).
+        let exe_path = match ParsedCommand::parse(launch_command.clone()) {
+            Ok(mut parsed) => {
+                parsed.make_absolute(PathBuf::from(current_dir));
+                parsed.command
+            }
+            Err(e) => {
+                warn!(
+                    "[UMUCompat] Could not parse launch command for prefix prep ({:?}); \
+                     skipping prefix preparation",
+                    e
+                );
+                String::new()
+            }
+        };
+
+        let prep_env = if exe_path.is_empty() {
+            Vec::new()
+        } else {
+            crate::prefix_prep::prepare_prefix(current_dir, &exe_path, &pfx_dir, &proton_path)
+        };
+
+        // Prepend each extra env pair to the env section of the command,
+        // matching the shape of the GAMEID=/PROTONPATH=/WINEPREFIX= prefixes.
+        // Values here contain no spaces, but quote defensively if one ever does.
+        let mut prep_env_prefix = String::new();
+        for (key, value) in &prep_env {
+            let quoted = if value.contains(char::is_whitespace) {
+                shell_words::quote(value).into_owned()
+            } else {
+                value.clone()
+            };
+            prep_env_prefix.push_str(&format!("{key}={quoted} "));
+        }
+
+        let result = format!(
+            "{prep_env_prefix}GAMEID={game_id} {} WINEPREFIX={} {umu:?} {launch}",
+            proton_env,
+            pfx_dir.to_string_lossy(),
+            umu = umu_exe,
+            launch = launch_command,
+        );
+        info!("[UMUCompat] → Final command: {}", &result);
+        Ok(result)
+    }
+
+    fn valid_for_platform(&self, _db: &Database, _target: &Platform) -> bool {
+        let Some(compat_info) = &*COMPAT_INFO else {
+            info!("[UMUCompat] valid_for_platform: COMPAT_INFO is None");
+            return false;
+        };
+        info!("[UMUCompat] valid_for_platform: umu_installed={}", compat_info.umu_installed);
+        compat_info.umu_installed
+    }
+
+    fn modify_command(&self, _command: &mut Command) {}
+}
+
+/// Map UI runtime "sets" (vcpp / directx / dotnet) to winetricks verbs plus a
+/// human label. Unknown sets are ignored; verbs are de-duplicated in order.
+fn resolve_redist_verbs(sets: &[String]) -> (Vec<&'static str>, String) {
+    let mut verbs: Vec<&'static str> = Vec::new();
+    let mut labels: Vec<&'static str> = Vec::new();
+    for set in sets {
+        match set.as_str() {
+            "vcpp" => {
+                verbs.extend(["vcrun2022", "vcrun2013", "vcrun2010"]);
+                labels.push("Visual C++");
+            }
+            "directx" => {
+                verbs.extend(["d3dcompiler_47", "d3dx9", "xact"]);
+                labels.push("DirectX");
+            }
+            "dotnet" => {
+                verbs.push("dotnet48");
+                labels.push(".NET");
+            }
+            _ => {}
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    verbs.retain(|v| seen.insert(*v));
+    let label = if labels.is_empty() {
+        "runtimes".to_string()
+    } else {
+        labels.join(" + ")
+    };
+    (verbs, label)
+}
+
+/// Install one or more common runtimes (VC++ / DirectX / .NET) into a game's
+/// Proton prefix on demand — backs the user-triggered "Install runtimes" action.
+/// Resolves the game's prefix and Proton exactly as the launcher does, then runs
+/// winetricks. The DB lock is released before the (slow) winetricks call so it
+/// never blocks other work. Windows/Proton games only.
+pub fn install_redists_for_game(game_id: &str, sets: &[String]) -> Result<(), String> {
+    let (verbs, label) = resolve_redist_verbs(sets);
+    if verbs.is_empty() {
+        return Err("No known runtimes were selected.".to_string());
+    }
+
+    // Resolve prefix + Proton under a brief read borrow, then drop the lock so
+    // the long winetricks run holds nothing.
+    let (pfx_dir, proton_path) = {
+        let db = database::borrow_db_checked();
+
+        let meta = db
+            .applications
+            .installed_game_version
+            .get(game_id)
+            .ok_or_else(|| "Game is not installed".to_string())?;
+
+        if meta.target_platform != Platform::Windows {
+            return Err(
+                "Runtimes only apply to Windows games launched via Proton.".to_string(),
+            );
+        }
+
+        let version_id = match db.applications.game_statuses.get(game_id) {
+            Some(database::GameDownloadStatus::Installed { version_id, .. }) => version_id.clone(),
+            _ => return Err("Game is not installed".to_string()),
+        };
+
+        let game_version = db
+            .applications
+            .game_versions
+            .get(&version_id)
+            .ok_or_else(|| "Game version metadata is missing".to_string())?;
+
+        let proton_path: String = game_version
+            .user_configuration
+            .override_proton_path
+            .clone()
+            .or_else(|| db.applications.default_proton_path.clone())
+            .unwrap_or_else(|| DEFAULT_UMU_PROTON.to_string());
+
+        (DATA_ROOT_DIR.join("pfx").join(game_id), proton_path)
+    };
+
+    // Real Proton paths must be valid; umu keywords (GE-Proton, …) are resolved
+    // by umu itself and skip the check. Whole block is Linux-only — read_proton_path
+    // lives in the Linux-only compat module, and Proton is Linux-only anyway.
+    #[cfg(target_os = "linux")]
+    {
+        if !is_umu_proton_keyword(&proton_path) {
+            let valid = crate::compat::read_proton_path(PathBuf::from(&proton_path))
+                .ok()
+                .flatten()
+                .is_some();
+            if !valid {
+                return Err(format!("Configured Proton path is invalid: {proton_path}"));
+            }
+        }
+    }
+
+    let umu_exe = UMU_LAUNCHER_EXECUTABLE
+        .as_ref()
+        .ok_or_else(|| "umu-launcher is unavailable (Proton support is Linux-only).".to_string())?;
+
+    info!("[Redist] Install requested for game {game_id}: [{label}] (PROTONPATH={proton_path})");
+
+    crate::prefix_prep::install_redists_into_prefix(
+        game_id,
+        &pfx_dir,
+        &proton_path,
+        &umu_exe.to_string_lossy(),
+        &verbs,
+        &label,
+    )
+}
+
+pub struct AsahiMuvmLauncher;
+impl ProcessHandler for AsahiMuvmLauncher {
+    fn create_launch_process(
+        &self,
+        meta: &DownloadableMetadata,
+        launch_command: String,
+        game_version: &GameVersion,
+        current_dir: &str,
+        database: &Database,
+    ) -> Result<String, ProcessError> {
+        let umu_launcher = UMUCompatLauncher {};
+        let umu_string = umu_launcher.create_launch_process(
+            meta,
+            launch_command,
+            game_version,
+            current_dir,
+            database,
+        )?;
+        let mut args_cmd = umu_string
+            .split("umu-run")
+            .collect::<Vec<&str>>()
+            .into_iter();
+        let args = args_cmd
+            .next()
+            .ok_or(ProcessError::InvalidArguments(umu_string.clone()))?
+            .trim();
+        let cmd = format!(
+            "umu-run{}",
+            args_cmd
+                .next()
+                .ok_or(ProcessError::InvalidArguments(umu_string.clone()))?
+        );
+
+        Ok(format!("{args} muvm -- {cmd}"))
+    }
+
+    #[allow(unreachable_code)]
+    #[allow(unused_variables)]
+    fn valid_for_platform(&self, _db: &Database, _target: &Platform) -> bool {
+        #[cfg(not(target_os = "linux"))]
+        return false;
+
+        #[cfg(not(target_arch = "aarch64"))]
+        return false;
+
+        let page_size = page_size::get();
+        if page_size != 16384 {
+            return false;
+        }
+
+        let Some(compat_info) = &*COMPAT_INFO else {
+            return false;
+        };
+
+        compat_info.umu_installed
+    }
+
+    fn modify_command(&self, _command: &mut Command) {}
+}

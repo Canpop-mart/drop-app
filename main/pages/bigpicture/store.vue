@@ -1,0 +1,1590 @@
+<template>
+  <div class="flex flex-col h-full" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
+    <!-- Tab navigation -->
+    <div class="flex items-center gap-2 px-8 py-4 border-b" :style="{ borderColor: 'var(--bpm-border)' }">
+      <button
+        v-for="tab in tabs"
+        :key="tab.value"
+        :ref="(el: any) => registerTab(el, { onSelect: () => (activeTab = tab.value) })"
+        class="px-4 py-2 text-sm rounded-lg font-medium transition-colors"
+        :class="[
+          activeTab === tab.value
+            ? 'bg-blue-600/20 text-blue-400'
+            : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50',
+        ]"
+        @click="activeTab = tab.value"
+      >
+        {{ tab.label }}
+      </button>
+
+      <div class="flex-1" />
+
+      <!-- Bulk-select toggle (browse tab only) -->
+      <button
+        v-if="activeTab === 'browse'"
+        :ref="(el: any) => registerTab(el, { onSelect: toggleBulkSelect })"
+        class="flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium transition-colors"
+        :class="bulkSelectMode
+          ? 'bg-blue-600/20 text-blue-400'
+          : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'"
+        @click="toggleBulkSelect"
+      >
+        <CheckIcon class="size-4" />
+        <span>{{ bulkSelectMode ? `${selectedIds.size} selected` : "Select" }}</span>
+      </button>
+
+      <button
+        :ref="(el: any) => registerTab(el, { onSelect: () => (showSearch = true) })"
+        class="flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 transition-colors"
+        @click="showSearch = true"
+      >
+        <MagnifyingGlassIcon class="size-4" />
+        <span v-if="searchQuery">{{ searchQuery }}</span>
+        <span v-else class="text-zinc-600">Search store...</span>
+      </button>
+    </div>
+
+    <!-- On-screen keyboard for search -->
+    <BigPictureKeyboard
+      :visible="showSearch"
+      :model-value="searchQuery"
+      placeholder="Search the store..."
+      @update:model-value="searchQuery = $event"
+      @close="showSearch = false"
+      @submit="showSearch = false; activeTab = 'browse'"
+    />
+
+    <!-- Loading skeleton -->
+    <div v-if="loading" class="flex-1 overflow-y-auto px-8 py-6">
+      <div class="space-y-6">
+        <div class="aspect-[21/9] rounded-2xl bg-zinc-800/50 animate-pulse" />
+        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
+          <div v-for="i in 8" :key="i" class="aspect-[3/4] rounded-xl bg-zinc-800/50 animate-pulse" />
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Featured tab ═══ -->
+    <div v-else-if="activeTab === 'featured'" class="flex-1 overflow-y-auto px-8 py-6" data-bp-scroll>
+      <!-- Hero carousel -->
+      <div v-if="featured.length > 0" class="mb-8">
+        <div
+          class="relative rounded-2xl overflow-hidden cursor-pointer aspect-[21/9]"
+          :ref="(el: any) => registerFeaturedHero(el, { onSelect: () => goToGame(featured[heroIndex]?.id) })"
+          @click="goToGame(featured[heroIndex]?.id)"
+        >
+          <img
+            v-if="featured[heroIndex]?.mBannerObjectId"
+            :src="objectUrl(featured[heroIndex].mBannerObjectId)"
+            :alt="featured[heroIndex].mName"
+            class="w-full h-full object-cover"
+          />
+          <div class="absolute inset-0 bg-gradient-to-t from-zinc-950/90 via-zinc-950/30 to-transparent" />
+          <div class="absolute bottom-0 inset-x-0 p-6">
+            <h2 class="text-3xl font-bold font-display text-white mb-1">
+              {{ featured[heroIndex]?.mName }}
+            </h2>
+            <p class="text-sm text-zinc-300 line-clamp-2 max-w-2xl">
+              {{ featured[heroIndex]?.mShortDescription }}
+            </p>
+            <div v-if="featured[heroIndex]?.tags?.length" class="flex gap-2 mt-3">
+              <span
+                v-for="tag in featured[heroIndex].tags!.slice(0, 4)"
+                :key="tag.id"
+                class="px-2 py-0.5 rounded-full text-xs font-medium"
+                style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
+              >
+                {{ tag.name }}
+              </span>
+            </div>
+          </div>
+          <!-- Carousel dots -->
+          <div v-if="featured.length > 1" class="absolute bottom-4 right-6 flex gap-1.5">
+            <button
+              v-for="(_, i) in featured"
+              :key="i"
+              class="size-2 rounded-full transition-colors"
+              :class="i === heroIndex ? 'bg-blue-500' : 'bg-zinc-600'"
+              @click.stop="heroIndex = i"
+            />
+          </div>
+        </div>
+      </div>
+
+      <!-- Trending section (1 row) -->
+      <div v-if="trending.length > 0" class="mb-8">
+        <h3 class="text-lg font-semibold font-display text-zinc-200 mb-4">
+          Most Played This Week
+        </h3>
+        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
+          <div
+            v-for="game in visibleTrending"
+            :key="game.id"
+            :ref="(el: any) => registerGrid(el, {
+              onSelect: () => goToGame(game.id),
+            })"
+            class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
+          >
+            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl overflow-hidden">
+              <img
+                v-if="game.mCoverObjectId"
+                :src="objectUrl(game.mCoverObjectId)"
+                :alt="game.mName"
+                class="w-full h-full object-cover"
+                loading="lazy"
+              />
+              <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
+              <div
+                v-if="game.updateAvailable"
+                class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
+                style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
+              >
+                Outdated
+              </div>
+              <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
+            </div>
+            <div class="px-2 py-2 bg-zinc-900/80">
+              <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recently added section (1 row) -->
+      <div v-if="recentGames.length > 0" class="mb-8">
+        <h3 class="text-lg font-semibold font-display text-zinc-200 mb-4">
+          Recently Added
+        </h3>
+        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
+          <div
+            v-for="game in visibleRecentGames"
+            :key="game.id"
+            :ref="(el: any) => registerGrid(el, {
+              onSelect: () => goToGame(game.id),
+            })"
+            class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
+          >
+            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl overflow-hidden">
+              <img
+                v-if="game.mCoverObjectId"
+                :src="objectUrl(game.mCoverObjectId)"
+                :alt="game.mName"
+                class="w-full h-full object-cover"
+                loading="lazy"
+              />
+              <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
+              <div
+                v-if="game.updateAvailable"
+                class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
+                style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
+              >
+                Outdated
+              </div>
+              <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
+            </div>
+            <div class="px-2 py-2 bg-zinc-900/80">
+              <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Random picks section (2 rows) -->
+      <div v-if="randomGames.length > 0" class="mb-8">
+        <h3 class="text-lg font-semibold font-display text-zinc-200 mb-4">
+          Random Picks
+        </h3>
+        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
+          <div
+            v-for="game in visibleRandomGames"
+            :key="game.id"
+            :ref="(el: any) => registerGrid(el, {
+              onSelect: () => goToGame(game.id),
+            })"
+            class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
+          >
+            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl overflow-hidden">
+              <img
+                v-if="game.mCoverObjectId"
+                :src="objectUrl(game.mCoverObjectId)"
+                :alt="game.mName"
+                class="w-full h-full object-cover"
+                loading="lazy"
+              />
+              <div v-if="!game.mCoverObjectId" class="w-full h-full flex items-center justify-center">
+                <span class="text-2xl font-bold text-zinc-500">{{ game.mName[0] }}</span>
+              </div>
+              <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
+              <div
+                v-if="game.updateAvailable"
+                class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
+                style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
+              >
+                Outdated
+              </div>
+              <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
+            </div>
+            <div class="px-2 py-2 bg-zinc-900/80">
+              <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Browse tab ═══ -->
+    <div v-else-if="activeTab === 'browse'" class="flex-1 overflow-y-auto px-8 py-6" data-bp-scroll>
+      <!-- Game roulette — muted variant, hand-rolled so we don't drag
+           the shared component into this focusable grid. Card-level
+           activation routes through `onRouletteCardSelect` so a remote
+           or keyboard user gets the same behaviour as a tile press.
+           Registered in the "content" focus group so D-pad reaches it
+           naturally from the tab strip above and the grid below. -->
+      <div
+        :ref="
+          (el: any) => registerGrid(el, { onSelect: onRouletteCardSelect })
+        "
+        class="rounded-xl bg-zinc-800/50 ring-1 ring-zinc-700/40 px-5 py-4 mb-5 cursor-pointer hover:ring-blue-500/40 transition"
+        :class="{ 'roulette-spinning-surface': rouletteSpinning }"
+        @click="onRouletteCardSelect"
+      >
+        <div class="flex items-center gap-4">
+          <div
+            class="shrink-0 h-20 w-14 rounded-md overflow-hidden flex items-center justify-center"
+            :class="
+              rouletteSpinning || rouletteResult
+                ? 'bg-zinc-900 ring-1 ring-blue-500/30'
+                : 'bg-blue-500/15'
+            "
+          >
+            <img
+              v-if="rouletteCoverId"
+              :src="objectUrl(rouletteCoverId)"
+              class="w-full h-full object-cover"
+              :class="{
+                'opacity-90': rouletteSpinning,
+                'roulette-tada': rouletteSettled,
+              }"
+              loading="lazy"
+            />
+            <span v-else class="text-xl text-blue-300">🎲</span>
+          </div>
+          <div class="flex-1 min-w-0">
+            <template v-if="rouletteResult">
+              <p class="text-base font-display font-semibold text-zinc-100 truncate">
+                {{ rouletteResult.game.name }}
+              </p>
+              <p class="text-xs text-blue-300/80 truncate mt-0.5">
+                {{ rouletteCaption }}
+              </p>
+            </template>
+            <template v-else-if="rouletteEmpty">
+              <p class="text-base font-display font-semibold text-zinc-100">
+                Nothing to spin yet
+              </p>
+              <p class="text-sm text-zinc-500 mt-0.5">
+                No games on the Drop catalog yet.
+              </p>
+            </template>
+            <template v-else-if="rouletteSpinning">
+              <p class="text-base font-display font-semibold text-zinc-100">
+                Spinning...
+              </p>
+              <p class="text-sm text-zinc-500 mt-0.5">
+                Picking something for you.
+              </p>
+            </template>
+            <template v-else>
+              <p class="text-base font-display font-semibold text-zinc-100">
+                Can't decide?
+              </p>
+              <p class="text-sm text-zinc-500 mt-0.5">
+                Spin to land on a random game from across the Drop catalog.
+              </p>
+            </template>
+          </div>
+          <span
+            class="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-blue-500/20 ring-1 ring-blue-400/40 px-4 py-2 text-sm font-semibold text-blue-100"
+          >
+            <svg
+              class="size-4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              :class="{ 'animate-spin': rouletteSpinning }"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"
+              />
+            </svg>
+            {{ rouletteSpinning ? "Spinning" : rouletteResult ? "Spin again" : "Spin" }}
+          </span>
+        </div>
+      </div>
+
+      <!-- Filter summary bar -->
+      <div class="flex items-center gap-3 mb-4">
+        <div class="flex items-center gap-2 text-sm text-zinc-400">
+          <ArrowsUpDownIcon class="size-4" />
+          <span>{{ browseSortLabel }}</span>
+          <template v-if="browseLibraryFilter || browseAchievementFilter">
+            <span class="text-zinc-600">|</span>
+            <FunnelIcon class="size-3.5" />
+            <span v-if="browseLibraryFilter" class="text-blue-400">{{ browseLibraryLabel.replace('Library: ', '') }}</span>
+            <span v-if="browseAchievementFilter" class="text-blue-400">Has Achievements</span>
+          </template>
+        </div>
+      </div>
+
+      <!-- Sort & Filter overlay -->
+      <Teleport to="body">
+        <Transition
+          enter-active-class="transition-opacity duration-200"
+          leave-active-class="transition-opacity duration-200"
+          enter-from-class="opacity-0"
+          leave-to-class="opacity-0"
+        >
+          <div
+            v-if="showFilterMenu"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          >
+            <div class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-6 max-w-3xl w-full mx-4">
+              <h2 class="text-xl font-semibold font-display text-zinc-100 mb-5">Sort & Filter</h2>
+
+              <div class="grid grid-cols-3 gap-6">
+                <!-- Sort section -->
+                <div>
+                  <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Sort By</p>
+                  <div class="space-y-1.5">
+                    <button
+                      v-for="(label, key) in browseSortLabels"
+                      :key="key"
+                      class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors"
+                      :class="browseSort === key
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                        : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                      :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseSort = key; } })"
+                      @click="browseSort = key"
+                    >
+                      <span class="font-medium">{{ label }}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Library filter section -->
+                <div v-if="libraries.length > 0">
+                  <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Library</p>
+                  <div class="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                    <button
+                      class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors"
+                      :class="!browseLibraryFilter
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                        : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                      :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseLibraryFilter = ''; } })"
+                      @click="browseLibraryFilter = ''"
+                    >
+                      <span class="font-medium">All Libraries</span>
+                    </button>
+                    <button
+                      v-for="lib in libraries"
+                      :key="lib.id"
+                      class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors"
+                      :class="browseLibraryFilter === lib.id
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                        : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                      :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseLibraryFilter = lib.id; } })"
+                      @click="browseLibraryFilter = lib.id"
+                    >
+                      <span class="font-medium">{{ lib.name }}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Achievements filter -->
+                <div>
+                  <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Achievements</p>
+                  <div class="space-y-1.5">
+                    <button
+                      class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors"
+                      :class="!browseAchievementFilter
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                        : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                      :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseAchievementFilter = ''; } })"
+                      @click="browseAchievementFilter = ''"
+                    >
+                      <span class="font-medium">All Games</span>
+                    </button>
+                    <button
+                      class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors"
+                      :class="browseAchievementFilter === 'has_achievements'
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                        : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
+                      :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseAchievementFilter = 'has_achievements'; } })"
+                      @click="browseAchievementFilter = 'has_achievements'"
+                    >
+                      <span class="font-medium">Has Achievements</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Close -->
+              <button
+                :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { showFilterMenu = false; } })"
+                class="w-full mt-5 px-4 py-3 rounded-xl text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+                @click="showFilterMenu = false"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </Transition>
+      </Teleport>
+
+      <div
+        v-if="browseResults.length > 0"
+        ref="browseGridEl"
+        class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7"
+      >
+        <div
+          v-for="game in browsePageResults"
+          :key="game.id"
+          :ref="(el: any) => registerGrid(el, {
+            onSelect: () => onTileSelect(game.id),
+            // Controller long-press: focus-nav fires this after A is held
+            // ~450ms. Enters bulk mode (if off) and toggles the focused
+            // tile's selection — mirrors the pointer long-press below.
+            onHold: () => enterBulkViaHold(game.id),
+          })"
+          class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
+          :class="{ 'ring-2 ring-blue-500 ring-offset-2 ring-offset-zinc-950': bulkSelectMode && selectedIds.has(game.id) }"
+          @pointerdown="startLongPress(game.id)"
+          @pointerup="cancelLongPress"
+          @pointerleave="cancelLongPress"
+          @pointercancel="cancelLongPress"
+          @click="onTileClick(game.id)"
+          @contextmenu.prevent
+        >
+          <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl overflow-hidden">
+            <img
+              v-if="game.mCoverObjectId"
+              :src="objectUrl(game.mCoverObjectId)"
+              :alt="game.mName"
+              class="w-full h-full object-cover"
+              loading="lazy"
+            />
+            <div v-if="!game.mCoverObjectId" class="w-full h-full flex items-center justify-center">
+              <span class="text-2xl font-bold text-zinc-500">{{ game.mName[0] }}</span>
+            </div>
+            <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
+            <!-- Bulk-select checkbox overlay -->
+            <div
+              v-if="bulkSelectMode"
+              class="absolute top-2 left-2 z-20 size-6 rounded-md border-2 flex items-center justify-center transition-colors"
+              :class="selectedIds.has(game.id)
+                ? 'bg-blue-500 border-blue-300'
+                : 'bg-zinc-900/80 border-zinc-500'"
+            >
+              <CheckIcon v-if="selectedIds.has(game.id)" class="size-4 text-white" />
+            </div>
+            <div
+              v-if="game.updateAvailable"
+              class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
+              style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
+            >
+              Outdated
+            </div>
+            <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
+          </div>
+          <div class="px-2 py-2 bg-zinc-900/80">
+            <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pagination -->
+      <div v-if="browseTotalPages > 1" class="flex items-center justify-center gap-4 py-6">
+        <button
+          :ref="(el: any) => registerTab(el, { onSelect: browsePrevPage })"
+          :disabled="browsePage === 0"
+          class="px-4 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm font-medium hover:bg-zinc-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          @click="browsePrevPage"
+        >
+          Previous
+        </button>
+        <span class="text-sm text-zinc-500">
+          Page {{ browsePage + 1 }} of {{ browseTotalPages }}
+        </span>
+        <button
+          :ref="(el: any) => registerTab(el, { onSelect: browseNextPage })"
+          :disabled="browsePage >= browseTotalPages - 1"
+          class="px-4 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm font-medium hover:bg-zinc-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          @click="browseNextPage"
+        >
+          Next
+        </button>
+      </div>
+
+      <div v-if="browseResults.length === 0 && !browseLoading" class="flex items-center justify-center py-24">
+        <div class="text-center">
+          <MagnifyingGlassIcon class="size-16 mx-auto mb-4 text-zinc-600" />
+          <h3 class="text-2xl font-semibold text-zinc-400 mb-2">
+            {{ searchQuery ? `No results for "${searchQuery}"` : 'No games found' }}
+          </h3>
+          <p class="text-zinc-600">Try a different search or filter</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Collections tab ═══ -->
+    <div
+      v-else-if="activeTab === 'collections'"
+      class="flex-1 overflow-y-auto px-8 py-6"
+      data-bp-scroll
+    >
+      <!-- Detail view (in-page): a selected collection's games + bulk add. -->
+      <template v-if="viewingCollection">
+        <div class="mb-6 flex items-start gap-4">
+          <button
+            :ref="(el: any) => registerTab(el, { onSelect: closeCollection })"
+            class="bp-focus-delegate shrink-0 rounded-lg bg-zinc-800/60 p-2 text-zinc-100 transition-colors hover:bg-zinc-700"
+            @click="closeCollection"
+          >
+            <ArrowLeftIcon class="size-5" />
+          </button>
+          <div class="min-w-0 flex-1">
+            <h2 class="font-display text-3xl font-bold text-zinc-100">
+              {{ viewingCollection.name }}
+            </h2>
+            <p
+              v-if="viewingCollection.description"
+              class="mt-1 line-clamp-2 max-w-3xl text-sm text-zinc-400"
+            >
+              {{ viewingCollection.description }}
+            </p>
+          </div>
+          <button
+            v-if="viewingCollection.games.length > 0"
+            :ref="(el: any) => registerTab(el, { onSelect: addViewingCollectionToLibrary })"
+            :disabled="addingCollection || addedCollection"
+            class="bp-focus-delegate shrink-0 inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors disabled:opacity-50"
+            :class="
+              addedCollection
+                ? 'bg-emerald-600 text-white'
+                : 'bg-blue-600 text-white hover:bg-blue-500'
+            "
+            @click="addViewingCollectionToLibrary"
+          >
+            <CheckIcon v-if="addedCollection" class="size-4" />
+            <PlusIcon v-else class="size-4" />
+            {{
+              addedCollection
+                ? "Added to library"
+                : addingCollection
+                  ? "Adding…"
+                  : "Add entire collection"
+            }}
+          </button>
+        </div>
+
+        <div
+          v-if="viewingCollection.games.length > 0"
+          class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7"
+        >
+          <div
+            v-for="game in viewingCollection.games"
+            :key="game.id"
+            :ref="(el: any) => registerGrid(el, { onSelect: () => goToGame(game.id) })"
+            class="group bp-focus-delegate relative flex cursor-pointer flex-col rounded-xl transition-all duration-200"
+            @click="goToGame(game.id)"
+          >
+            <div
+              class="bp-focus-ring relative aspect-[3/4] overflow-hidden rounded-xl bg-zinc-800"
+            >
+              <img
+                v-if="game.mCoverObjectId"
+                :src="objectUrl(game.mCoverObjectId)"
+                :alt="game.mName"
+                class="h-full w-full object-cover"
+                loading="lazy"
+              />
+              <div
+                v-else
+                class="flex h-full w-full items-center justify-center"
+              >
+                <span class="text-2xl font-bold text-zinc-500">{{
+                  game.mName[0]
+                }}</span>
+              </div>
+              <div
+                class="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent"
+              />
+            </div>
+            <div class="bg-zinc-900/80 px-2 py-2">
+              <p class="truncate text-sm font-medium text-zinc-200">
+                {{ game.mName }}
+              </p>
+            </div>
+          </div>
+        </div>
+        <div v-else class="py-20 text-center text-zinc-500">
+          This collection has no games yet.
+        </div>
+      </template>
+
+      <!-- List view: curated collection cards. -->
+      <template v-else>
+        <div
+          v-if="collectionsLoading && collections.length === 0"
+          class="py-20 text-center text-zinc-500"
+        >
+          Loading collections...
+        </div>
+        <div v-else-if="collections.length === 0" class="py-24 text-center">
+          <RectangleStackIcon class="mx-auto mb-4 size-16 text-zinc-600" />
+          <h3 class="text-2xl font-semibold text-zinc-400">
+            No collections yet
+          </h3>
+        </div>
+        <div
+          v-else
+          class="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+        >
+          <div
+            v-for="c in collections"
+            :key="c.id"
+            :ref="(el: any) => registerGrid(el, { onSelect: () => openCollection(c.id) })"
+            class="group bp-focus-delegate relative cursor-pointer overflow-hidden rounded-2xl bg-zinc-900 ring-1 ring-zinc-800/60"
+            @click="openCollection(c.id)"
+          >
+            <div
+              class="bp-focus-ring relative aspect-[16/9] overflow-hidden bg-zinc-800"
+            >
+              <img
+                v-if="c.coverObjectId"
+                :src="objectUrl(c.coverObjectId)"
+                :alt="c.name"
+                class="h-full w-full object-cover"
+                loading="lazy"
+              />
+              <div
+                v-else
+                class="flex h-full w-full items-center justify-center"
+              >
+                <RectangleStackIcon class="size-10 text-zinc-600" />
+              </div>
+              <div
+                class="absolute inset-0 bg-gradient-to-t from-zinc-950/90 via-zinc-950/20 to-transparent"
+              />
+              <div class="absolute inset-x-0 bottom-0 p-4">
+                <h3
+                  class="font-display text-lg font-bold text-zinc-100 drop-shadow"
+                >
+                  {{ c.name }}
+                </h3>
+                <p class="mt-0.5 text-xs text-zinc-400">
+                  {{ c.gameCount }} game{{ c.gameCount === 1 ? "" : "s" }}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Floating bulk-action bar -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-all duration-200"
+        leave-active-class="transition-all duration-200"
+        enter-from-class="opacity-0 translate-y-4"
+        leave-to-class="opacity-0 translate-y-4"
+      >
+        <div
+          v-if="bulkSelectMode"
+          class="fixed bottom-24 left-1/2 -translate-x-1/2 z-[90] flex items-center gap-3 px-5 py-3 rounded-2xl bg-zinc-900/95 border border-zinc-700/60 shadow-2xl backdrop-blur-sm"
+        >
+          <span class="text-sm text-zinc-300 min-w-[6rem]">
+            <span class="font-semibold text-blue-400">{{ selectedIds.size }}</span>
+            selected
+          </span>
+          <button
+            :ref="(el: any) => registerBulkAction(el, { onSelect: addSelectedToLibrary })"
+            :disabled="selectedIds.size === 0 || bulkApplying"
+            class="px-4 py-2 rounded-xl text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            @click="addSelectedToLibrary"
+          >
+            Add to Library
+          </button>
+          <button
+            :ref="(el: any) => registerBulkAction(el, { onSelect: () => (showBulkShelfPicker = true) })"
+            :disabled="selectedIds.size === 0 || bulkApplying"
+            class="px-4 py-2 rounded-xl text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            @click="showBulkShelfPicker = true"
+          >
+            Add to Shelf
+          </button>
+          <button
+            :ref="(el: any) => registerBulkAction(el, { onSelect: exitBulkMode })"
+            class="px-4 py-2 rounded-xl text-sm font-medium bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-colors"
+            @click="exitBulkMode"
+          >
+            Cancel
+          </button>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- Bulk shelf picker overlay -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-opacity duration-200"
+        leave-active-class="transition-opacity duration-200"
+        enter-from-class="opacity-0"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="showBulkShelfPicker"
+          class="fixed inset-0 z-[110] flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          @click.self="showBulkShelfPicker = false"
+        >
+          <div class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4">
+            <h2 class="text-xl font-semibold font-display text-zinc-100 mb-1">Add to Shelf</h2>
+            <p class="text-sm text-zinc-500 mb-4">
+              Adding <span class="text-blue-400 font-medium">{{ selectedIds.size }}</span>
+              {{ selectedIds.size === 1 ? "game" : "games" }}
+            </p>
+
+            <div v-if="shelvesData.shelves.value.length > 0" class="space-y-2 max-h-80 overflow-y-auto pr-1">
+              <button
+                v-for="shelf in shelvesData.shelves.value"
+                :key="shelf.id"
+                :ref="(el: any) => registerShelfPicker(el, { onSelect: () => addSelectedToShelf(shelf.id) })"
+                :disabled="bulkApplying"
+                class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm bg-zinc-800/50 text-zinc-200 hover:bg-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                @click="addSelectedToShelf(shelf.id)"
+              >
+                <span class="font-medium">{{ shelf.name }}</span>
+                <span class="text-xs text-zinc-500">{{ shelf.entries.length }}</span>
+              </button>
+            </div>
+            <div v-else class="text-sm text-zinc-500 text-center py-6">
+              No shelves yet. Create one from the library page.
+            </div>
+
+            <button
+              :ref="(el: any) => registerShelfPicker(el, { onSelect: () => (showBulkShelfPicker = false) })"
+              :disabled="bulkApplying"
+              class="w-full mt-5 px-4 py-3 rounded-xl text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+              @click="showBulkShelfPicker = false"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { devLog } from "~/composables/dev-mode";
+import { MagnifyingGlassIcon, ArrowsUpDownIcon, FunnelIcon, CheckIcon, ArrowLeftIcon, PlusIcon, RectangleStackIcon } from "@heroicons/vue/24/outline";
+import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
+import {
+  useServerApi,
+  type StoreGame,
+  type TrendingGame,
+  type RouletteResult,
+  type StoreCollectionSummary,
+  type StoreCollectionDetail,
+} from "~/composables/use-server-api";
+import { serverUrl } from "~/composables/use-server-fetch";
+import { deduplicatedInvoke } from "~/composables/game";
+import { useBpFocusableGroup } from "~/composables/bp-focusable";
+import { useFocusNavigation } from "~/composables/focus-navigation";
+import { GamepadButton, useGamepad } from "~/composables/gamepad";
+import { useDeckMode } from "~/composables/deck-mode";
+import { useShelves } from "~/composables/shelves";
+
+definePageMeta({ layout: "bigpicture" });
+
+const api = useServerApi();
+const router = useRouter();
+const focusNav = useFocusNavigation();
+const gamepad = useGamepad();
+
+// Focus groups — all in "content" so D-pad naturally reaches game tiles
+const registerTab = useBpFocusableGroup("content");
+const registerFeaturedHero = useBpFocusableGroup("content");
+const registerGrid = useBpFocusableGroup("content");
+const registerFilterMenu = useBpFocusableGroup("filter-menu");
+// Bulk-action bar shares the "content" group so spatial D-pad Down from the
+// bottom row of tiles reaches it naturally — putting it in its own group
+// forced the user to rely on cross-group fallback, which the nav rail was
+// winning (rail items are in the Down cone from some grid columns).
+const registerBulkAction = useBpFocusableGroup("content");
+const registerShelfPicker = useBpFocusableGroup("shelf-picker");
+
+// State
+const loading = ref(true);
+const browseLoading = ref(false);
+const activeTab = ref<string>(focusNav.getRouteState<string>("activeTab") ?? "featured");
+const showSearch = ref(false);
+const showFilterMenu = ref(false);
+const searchQuery = ref("");
+const heroIndex = ref(0);
+const browseSort = ref("default");
+
+// Bulk selection (browse tab only — letting the user mass-assign games to
+// a shelf without opening each one individually).
+const bulkSelectMode = ref(false);
+const selectedIds = ref<Set<string>>(new Set());
+const showBulkShelfPicker = ref(false);
+const bulkApplying = ref(false);
+const shelvesData = useShelves();
+
+const browseSortLabels: Record<string, string> = {
+  default: "Default",
+  newest: "Newest",
+  name: "Name",
+  recent: "Recently Updated",
+};
+const browseSortLabel = computed(() => browseSortLabels[browseSort.value] ?? "Default");
+
+function cycleBrowseSort() {
+  const modes = ["default", "newest", "name", "recent"];
+  const idx = modes.indexOf(browseSort.value);
+  browseSort.value = modes[(idx + 1) % modes.length];
+}
+
+// Browse filters & pagination
+const browseLibraryFilter = ref("");
+const browseAchievementFilter = ref("");
+const libraries = ref<Array<{ id: string; name: string }>>([]);
+const browsePage = ref(0);
+const browseGridEl = ref<HTMLElement | null>(null);
+
+// Data
+const featured = ref<StoreGame[]>([]);
+const trending = ref<TrendingGame[]>([]);
+const recentGames = ref<StoreGame[]>([]);
+const randomGames = ref<StoreGame[]>([]);
+const browseResults = ref<StoreGame[]>([]);
+const browseTotal = ref(0);
+
+// Compute grid column count from window width to match Tailwind breakpoints:
+// grid-cols-2 sm:3 md:4 lg:5 xl:6 2xl:7
+const gridCols = ref(7);
+
+function updateGridCols() {
+  const w = window.innerWidth;
+  if (w >= 1536) gridCols.value = 7;       // 2xl
+  else if (w >= 1280) gridCols.value = 6;  // xl
+  else if (w >= 1024) gridCols.value = 5;  // lg
+  else if (w >= 768) gridCols.value = 4;   // md
+  else if (w >= 640) gridCols.value = 3;   // sm
+  else gridCols.value = 2;
+}
+
+// Slice data to exact row counts so hidden overflow items aren't focusable
+const visibleTrending = computed(() => trending.value.slice(0, gridCols.value));
+const visibleRecentGames = computed(() => recentGames.value.slice(0, gridCols.value));
+const visibleRandomGames = computed(() => randomGames.value.slice(0, gridCols.value * 2));
+
+function objectUrl(id: string): string {
+  return serverUrl(`api/v1/object/${id}`);
+}
+
+// ── Roulette state (BPM-side, hand-rolled so we don't need to wrap the
+// shared component for focus delegate registration). Lives on the
+// Browse tab — "I want to play something" energy belongs next to the
+// game grid, not on the community page.
+const rouletteResult = ref<RouletteResult | null>(null);
+const rouletteSpinning = ref(false);
+const rouletteEmpty = ref(false);
+const rouletteSettled = ref(false);
+const roulettePreviewCoverId = ref<string | null>(null);
+let rouletteCycleTimer: ReturnType<typeof setInterval> | null = null;
+let rouletteTadaTimer: ReturnType<typeof setTimeout> | null = null;
+
+const rouletteCoverId = computed(() => {
+  if (rouletteSpinning.value) return roulettePreviewCoverId.value;
+  return rouletteResult.value?.game.coverObjectId ?? null;
+});
+
+const rouletteCaption = computed(() => {
+  if (!rouletteResult.value) return "";
+  switch (rouletteResult.value.source) {
+    case "rediscovery":
+      return "You haven't played in a while";
+    case "library":
+      return "From your library";
+    case "social":
+    case "discover": {
+      // Both branches mean "the caller doesn't own this" — provenance
+      // differs but the caption reads off the same alsoPlayedBy enrichment.
+      const n = rouletteResult.value.alsoPlayedBy?.length ?? 0;
+      if (n === 0) return "From the Drop catalog, give it a try";
+      if (n === 1)
+        return `${rouletteResult.value.alsoPlayedBy![0].displayName} has played this`;
+      return `${n} on this server have played this`;
+    }
+    default:
+      return "";
+  }
+});
+
+// Seed the spin animation from whatever covers are already loaded for
+// other surfaces of this page (featured, trending, recents, randoms,
+// current browse page). De-duped + capped at 40. By the time the user
+// reaches the Browse tab at least one of these is populated.
+const rouletteCoverPool = computed(() => {
+  const pool = new Set<string>();
+  for (const g of featured.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  for (const g of trending.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  for (const g of recentGames.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  for (const g of randomGames.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  for (const g of browseResults.value) {
+    if (g.mCoverObjectId) pool.add(g.mCoverObjectId);
+  }
+  return [...pool].slice(0, 40);
+});
+
+function pickRouletteCover(): string | null {
+  const pool = rouletteCoverPool.value;
+  if (pool.length === 0) return roulettePreviewCoverId.value;
+  return pool[Math.floor(Math.random() * pool.length)] ?? null;
+}
+
+async function spinRoulette() {
+  if (rouletteSpinning.value) return;
+  rouletteEmpty.value = false;
+  rouletteSettled.value = false;
+  rouletteSpinning.value = true;
+
+  const cycleMs = 80;
+  const minCycles = 8;
+  const maxCycles = 12;
+  const targetCycles =
+    minCycles + Math.floor(Math.random() * (maxCycles - minCycles + 1));
+  const minDurationMs = targetCycles * cycleMs;
+
+  if (rouletteCycleTimer) clearInterval(rouletteCycleTimer);
+  rouletteCycleTimer = setInterval(() => {
+    roulettePreviewCoverId.value = pickRouletteCover();
+  }, cycleMs);
+
+  const [fetched] = await Promise.all([
+    api.community.roulette().catch((e) => {
+      console.warn("[bpm roulette] fetch failed:", e);
+      return null;
+    }),
+    new Promise((r) => setTimeout(r, minDurationMs)),
+  ]);
+
+  if (rouletteCycleTimer) {
+    clearInterval(rouletteCycleTimer);
+    rouletteCycleTimer = null;
+  }
+
+  rouletteSpinning.value = false;
+  if (fetched) {
+    rouletteResult.value = fetched;
+    rouletteEmpty.value = false;
+    rouletteSettled.value = true;
+    if (rouletteTadaTimer) clearTimeout(rouletteTadaTimer);
+    rouletteTadaTimer = setTimeout(() => {
+      rouletteSettled.value = false;
+    }, 700);
+  } else {
+    rouletteResult.value = null;
+    rouletteEmpty.value = true;
+  }
+}
+
+/**
+ * Card-level activation. First press kicks off the spin; subsequent
+ * presses with a settled pick drill into that game's BPM library page.
+ * `rediscovery` / `library` picks are owned, `social` / `discover` are
+ * not — BPM's library page handles the install/play flow for both, so
+ * we can route everything through the same destination.
+ */
+function onRouletteCardSelect() {
+  if (rouletteSpinning.value) return;
+  if (!rouletteResult.value) {
+    spinRoulette();
+    return;
+  }
+  const gameId = rouletteResult.value.game.id;
+  const target = `/bigpicture/library/${gameId}`;
+  focusNav.setRouteState("backTo", "/bigpicture/store", target);
+  router.push(target);
+}
+
+function goToGame(gameId?: string) {
+  if (!gameId) return;
+  devLog("state",`[BPM:STORE] Navigating to game: ${gameId}`);
+  focusNav.saveFocusSnapshot("/bigpicture/store");
+  const target = `/bigpicture/library/${gameId}`;
+  // Tell focus-nav's B handler to return to the store (preserving pagination /
+  // tab state via saveFocusSnapshot above) rather than the default library grid.
+  focusNav.setRouteState("backTo", "/bigpicture/store", target);
+  router.push(target).then(() => {
+    devLog("state",`[BPM:STORE] Navigation complete for: ${gameId}`);
+  }).catch((e) => {
+    console.error(`[BPM:STORE] Navigation FAILED for ${gameId}:`, e);
+  });
+}
+
+// ── Collections (curated store collections) ───────────────────────────────
+// The Collections tab shows curated collection cards; selecting one opens an
+// in-page detail view (its games + an "add the whole thing" action) instead
+// of a separate route, so we reuse this page's existing focus groups.
+const collections = ref<StoreCollectionSummary[]>([]);
+const collectionsLoading = ref(false);
+const viewingCollection = ref<StoreCollectionDetail | null>(null);
+const addingCollection = ref(false);
+const addedCollection = ref(false);
+
+async function loadCollections() {
+  if (collections.value.length > 0 || collectionsLoading.value) return;
+  collectionsLoading.value = true;
+  try {
+    collections.value = await api.store.collections();
+  } catch (e) {
+    console.error("[BPM:STORE] Failed to load collections:", e);
+  } finally {
+    collectionsLoading.value = false;
+  }
+}
+
+async function openCollection(id: string) {
+  addedCollection.value = false;
+  try {
+    viewingCollection.value = await api.store.collection(id);
+    // Move controller focus onto the freshly-rendered games grid.
+    nextTick(() => focusNav.autoFocusContent("content"));
+  } catch (e) {
+    console.error("[BPM:STORE] Failed to load collection:", e);
+  }
+}
+
+function closeCollection() {
+  viewingCollection.value = null;
+  addedCollection.value = false;
+  nextTick(() => focusNav.autoFocusContent("content"));
+}
+
+async function addViewingCollectionToLibrary() {
+  if (
+    !viewingCollection.value ||
+    addingCollection.value ||
+    addedCollection.value
+  )
+    return;
+  addingCollection.value = true;
+  try {
+    await api.store.addCollectionToLibrary(viewingCollection.value.id);
+    addedCollection.value = true;
+  } catch (e) {
+    console.error("[BPM:STORE] Failed to add collection to library:", e);
+  } finally {
+    addingCollection.value = false;
+  }
+}
+
+// ── Bulk selection helpers ──────────────────────────────────────────────
+function onTileSelect(gameId: string) {
+  if (bulkSelectMode.value) {
+    toggleSelection(gameId);
+  } else {
+    goToGame(gameId);
+  }
+}
+
+function toggleBulkSelect() {
+  bulkSelectMode.value = !bulkSelectMode.value;
+  if (!bulkSelectMode.value) {
+    selectedIds.value = new Set();
+    showBulkShelfPicker.value = false;
+  } else {
+    // Ensure shelves are up to date before the user opens the picker.
+    shelvesData.fetchShelves();
+  }
+}
+
+// Long-press on a tile enters bulk-select and selects that tile in one
+// gesture — matches the mobile/touch convention the user expected.
+const LONG_PRESS_MS = 450;
+let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+const longPressTriggered = ref(false);
+
+function startLongPress(gameId: string) {
+  longPressTriggered.value = false;
+  if (longPressTimer) clearTimeout(longPressTimer);
+  longPressTimer = setTimeout(() => {
+    longPressTriggered.value = true;
+    if (!bulkSelectMode.value) {
+      bulkSelectMode.value = true;
+      shelvesData.fetchShelves();
+    }
+    toggleSelection(gameId);
+    // Tactile confirmation if available
+    gamepad.vibrate?.("medium");
+  }, LONG_PRESS_MS);
+}
+
+function cancelLongPress() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+}
+
+function onTileClick(gameId: string) {
+  // A long-press already fired — suppress the trailing click so we don't
+  // navigate into the tile the user just meant to select.
+  if (longPressTriggered.value) {
+    longPressTriggered.value = false;
+    return;
+  }
+  onTileSelect(gameId);
+}
+
+// Controller long-press equivalent. focus-nav swallows the release event
+// after onHold fires, so we don't also get an onSelect → goToGame call.
+function enterBulkViaHold(gameId: string) {
+  if (!bulkSelectMode.value) {
+    bulkSelectMode.value = true;
+    shelvesData.fetchShelves();
+  }
+  toggleSelection(gameId);
+}
+
+function toggleSelection(gameId: string) {
+  const next = new Set(selectedIds.value);
+  if (next.has(gameId)) next.delete(gameId);
+  else next.add(gameId);
+  selectedIds.value = next;
+}
+
+function exitBulkMode() {
+  bulkSelectMode.value = false;
+  selectedIds.value = new Set();
+  showBulkShelfPicker.value = false;
+}
+
+async function addSelectedToShelf(shelfId: string) {
+  if (!selectedIds.value.size || bulkApplying.value) return;
+  bulkApplying.value = true;
+  try {
+    const ids = [...selectedIds.value];
+    // Serial rather than Promise.all — fetchShelves on every add would
+    // thrash the server, and failing one shouldn't abort the others.
+    for (const id of ids) {
+      await shelvesData.addToShelf(shelfId, id);
+    }
+  } finally {
+    bulkApplying.value = false;
+    exitBulkMode();
+  }
+}
+
+// "Add to Library" = POST each selected game id to the user's default
+// collection, which is what `/bigpicture/library` lists. The endpoint
+// pattern mirrors the per-game button at `library/[id].vue:addToLibrary`.
+async function addSelectedToLibrary() {
+  if (!selectedIds.value.size || bulkApplying.value) return;
+  bulkApplying.value = true;
+  let added = 0;
+  let failed = 0;
+  try {
+    const ids = [...selectedIds.value];
+    for (const id of ids) {
+      try {
+        const res = await fetch(serverUrl("api/v1/collection/default/entry"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        });
+        if (res.ok) added++;
+        else failed++;
+      } catch (e) {
+        console.error(`[BPM:STORE] Failed to add ${id} to library:`, e);
+        failed++;
+      }
+    }
+    devLog("state",`[BPM:STORE] Bulk add to library: ${added} added, ${failed} failed`);
+  } finally {
+    bulkApplying.value = false;
+    exitBulkMode();
+  }
+}
+
+// Hero auto-advance
+let heroTimer: ReturnType<typeof setInterval> | null = null;
+
+function startHeroTimer() {
+  stopHeroTimer();
+  if (featured.value.length <= 1) return;
+  heroTimer = setInterval(() => {
+    heroIndex.value = (heroIndex.value + 1) % featured.value.length;
+  }, 8000);
+}
+
+function stopHeroTimer() {
+  if (heroTimer) {
+    clearInterval(heroTimer);
+    heroTimer = null;
+  }
+}
+
+// Pagination: compute how many items per page based on grid columns × 4 rows
+// We fetch a generous batch and paginate client-side so column-count changes
+// don't cause jank. Fall back to 28 (7 cols × 4 rows) when we can't measure.
+const itemsPerPage = computed(() => {
+  const el = browseGridEl.value;
+  if (!el) return 28;
+  const style = getComputedStyle(el);
+  const cols = style.getPropertyValue("grid-template-columns").split(" ").length;
+  return cols * 4;
+});
+
+const browsePageResults = computed(() => {
+  const start = browsePage.value * itemsPerPage.value;
+  // Slice to exactly 4 rows worth of items so no overflow items get gamepad focus
+  const maxItems = gridCols.value * 4;
+  return browseResults.value.slice(start, start + Math.min(itemsPerPage.value, maxItems));
+});
+
+const browseTotalPages = computed(() => {
+  if (browseResults.value.length === 0) return 0;
+  return Math.ceil(browseTotal.value / itemsPerPage.value);
+});
+
+function browseNextPage() {
+  if (browsePage.value < browseTotalPages.value - 1) {
+    browsePage.value++;
+    // If we're near the end of loaded results but server has more, fetch next batch
+    const nextStart = browsePage.value * itemsPerPage.value;
+    if (nextStart + itemsPerPage.value > browseResults.value.length && browseResults.value.length < browseTotal.value) {
+      loadBrowseMore();
+    }
+  }
+}
+
+function browsePrevPage() {
+  if (browsePage.value > 0) {
+    browsePage.value--;
+  }
+}
+
+const browseLibraryLabel = computed(() => {
+  if (!browseLibraryFilter.value) return "Library: All";
+  const lib = libraries.value.find((l) => l.id === browseLibraryFilter.value);
+  return `Library: ${lib?.name ?? "All"}`;
+});
+
+function cycleLibraryFilter() {
+  const opts = ["", ...libraries.value.map((l) => l.id)];
+  const idx = opts.indexOf(browseLibraryFilter.value);
+  browseLibraryFilter.value = opts[(idx + 1) % opts.length];
+}
+
+function toggleAchievementFilter() {
+  browseAchievementFilter.value = browseAchievementFilter.value
+    ? ""
+    : "has_achievements";
+}
+
+function clearBrowseFilters() {
+  searchQuery.value = "";
+  browseLibraryFilter.value = "";
+  browseAchievementFilter.value = "";
+  browsePage.value = 0;
+  loadBrowse(true);
+}
+
+// Browse functionality
+async function loadBrowse(reset = false) {
+  if (reset) {
+    browseResults.value = [];
+    browsePage.value = 0;
+  }
+  browseLoading.value = true;
+  try {
+    const effectiveSort = searchQuery.value
+      ? "relevance"
+      : (browseSort.value as any) || "default";
+    const data = await api.store.browse({
+      skip: 0,
+      take: 55,
+      q: searchQuery.value || undefined,
+      library: browseLibraryFilter.value || undefined,
+      sort: effectiveSort,
+      order: effectiveSort === "name" ? "asc" : undefined,
+    });
+    browseResults.value = data.results;
+    browseTotal.value = data.count;
+  } catch (e) {
+    console.error("Failed to load browse:", e);
+  } finally {
+    browseLoading.value = false;
+  }
+}
+
+async function loadBrowseMore() {
+  browseLoading.value = true;
+  try {
+    const effectiveSort = searchQuery.value
+      ? "relevance"
+      : (browseSort.value as any) || "default";
+    const data = await api.store.browse({
+      skip: browseResults.value.length,
+      take: 55,
+      q: searchQuery.value || undefined,
+      library: browseLibraryFilter.value || undefined,
+      sort: effectiveSort,
+      order: effectiveSort === "name" ? "asc" : undefined,
+    });
+    browseResults.value.push(...data.results);
+    browseTotal.value = data.count;
+  } catch (e) {
+    console.error("Failed to load more browse:", e);
+  } finally {
+    browseLoading.value = false;
+  }
+}
+
+// Handle focus restriction when filter menu opens/closes via any method
+watch(showFilterMenu, (open) => {
+  if (open) {
+    focusNav.restrictFocus("filter-menu");
+    nextTick(() => focusNav.autoFocusContent("filter-menu"));
+  } else {
+    focusNav.unrestrictFocus("content");
+  }
+});
+
+// Shelf picker modal — trap focus on its buttons.
+watch(showBulkShelfPicker, (open) => {
+  if (open) {
+    focusNav.restrictFocus("shelf-picker");
+    nextTick(() => focusNav.autoFocusContent("shelf-picker"));
+  } else {
+    // Bulk-action bar lives in the "content" group now, so either way we
+    // release focus back there. Vue DOM ordering will put the bar buttons
+    // after the grid, so the next D-pad move from the grid finds them.
+    focusNav.unrestrictFocus("content");
+  }
+});
+
+// Reload browse when tab switches to browse; persist tab across back-nav.
+watch(activeTab, (tab) => {
+  focusNav.setRouteState("activeTab", tab);
+  // Leaving Browse mid-selection drops bulk state so the floating bar doesn't
+  // linger on an unrelated tab; leaving Collections resets any open detail.
+  if (tab !== "browse" && bulkSelectMode.value) exitBulkMode();
+  if (tab !== "collections") viewingCollection.value = null;
+  if (tab === "browse") {
+    loadBrowse(true);
+  } else if (tab === "collections") {
+    loadCollections();
+  }
+});
+
+// Reload browse when sort or filters change
+watch(browseSort, () => {
+  if (activeTab.value === "browse") {
+    loadBrowse(true);
+  }
+});
+
+watch([browseLibraryFilter, browseAchievementFilter], () => {
+  if (activeTab.value === "browse") {
+    loadBrowse(true);
+  }
+});
+
+// Reload browse when search changes (with debounce)
+let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+watch(searchQuery, () => {
+  if (activeTab.value === "browse") {
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => loadBrowse(true), 300);
+  }
+});
+
+// Face button handlers for Search (Y) and Sort (X).
+// On Steam Deck (Gamescope), the Web Gamepad API reports physical Y as index 2
+// (mapped to West) and physical X as index 3 (mapped to North). Instead of
+// relying on a button-map swap, we register the handlers on the correct
+// logical buttons per-platform so the physical buttons always match the
+// context bar labels (Y glyph = Search, X glyph = Sort).
+const { isGamescope } = useDeckMode();
+const searchButton = isGamescope.value ? GamepadButton.West : GamepadButton.North;
+const sortButton = isGamescope.value ? GamepadButton.North : GamepadButton.West;
+
+const _unsubs: (() => void)[] = [];
+_unsubs.push(
+  gamepad.onButton(searchButton, () => {
+    if (showFilterMenu.value) return; // ignore while filter menu open
+    showSearch.value = !showSearch.value;
+    if (showSearch.value) activeTab.value = "browse";
+  }),
+);
+// X / West button — open Sort & Filter overlay (only on Browse tab)
+_unsubs.push(
+  gamepad.onButton(sortButton, () => {
+    if (showSearch.value) return;
+    if (activeTab.value === "browse") {
+      showFilterMenu.value = !showFilterMenu.value;
+    }
+  }),
+);
+// B / East — close overlays / exit bulk mode. Order matters: if the user
+// has the shelf picker open on top of bulk mode, one press should just
+// close the picker, not wipe the selection.
+_unsubs.push(
+  gamepad.onButton(GamepadButton.East, () => {
+    if (showBulkShelfPicker.value) {
+      showBulkShelfPicker.value = false;
+      return;
+    }
+    if (showFilterMenu.value) {
+      showFilterMenu.value = false;
+      return;
+    }
+    if (viewingCollection.value) {
+      closeCollection();
+      return;
+    }
+    if (bulkSelectMode.value) {
+      exitBulkMode();
+      return;
+    }
+  }),
+);
+// Start — toggle bulk-select (browse tab only). Dedicated button rather
+// than a long-press-A because gamepad long-press conflicts with autorepeat.
+_unsubs.push(
+  gamepad.onButton(GamepadButton.Start, () => {
+    if (activeTab.value !== "browse") return;
+    if (showSearch.value || showFilterMenu.value || showBulkShelfPicker.value) return;
+    toggleBulkSelect();
+  }),
+);
+
+// Initial data load
+onMounted(async () => {
+  updateGridCols();
+  window.addEventListener("resize", updateGridCols);
+  try {
+    const [featuredData, trendingData, recentData, randomData, librariesData] = await Promise.all([
+      api.store.featured().catch(() => [] as StoreGame[]),
+      api.store.trending(10, 7).catch(() => ({ results: [] as TrendingGame[] })),
+      api.store.browse({ take: 10, sort: "recent" }).catch(() => ({ results: [] as StoreGame[], count: 0 })),
+      api.store.browse({ take: 20, sort: "random" }).catch(() => ({ results: [] as StoreGame[], count: 0 })),
+      api.store.libraries().catch(() => [] as Array<{ id: string; name: string }>),
+    ]);
+
+    featured.value = featuredData;
+    trending.value = trendingData.results;
+    recentGames.value = recentData.results;
+    randomGames.value = randomData.results;
+    libraries.value = librariesData;
+
+    startHeroTimer();
+  } catch (e) {
+    console.error("Failed to load store data:", e);
+  } finally {
+    loading.value = false;
+    // If route state restored the tab to 'browse', the watch(activeTab)
+    // below only fires on change — so on re-entry the browse grid would
+    // render empty forever. Kick the fetch off manually here.
+    if (activeTab.value === "browse") {
+      loadBrowse(true);
+    } else if (activeTab.value === "collections") {
+      loadCollections();
+    }
+    nextTick(() => {
+      if (!focusNav.restoreFocusSnapshot("/bigpicture/store")) {
+        focusNav.autoFocusContent("content");
+      }
+    });
+  }
+});
+
+onUnmounted(() => {
+  stopHeroTimer();
+  window.removeEventListener("resize", updateGridCols);
+  if (searchDebounce) clearTimeout(searchDebounce);
+  if (rouletteCycleTimer) clearInterval(rouletteCycleTimer);
+  if (rouletteTadaTimer) clearTimeout(rouletteTadaTimer);
+  for (const unsub of _unsubs) unsub();
+  _unsubs.length = 0;
+});
+
+const tabs = [
+  { label: "Featured", value: "featured" },
+  { label: "Browse", value: "browse" },
+  { label: "Collections", value: "collections" },
+];
+</script>
+
+<style scoped>
+/*
+ * CRT scanline overlay for ROM game covers.
+ * Subtle horizontal lines + slight vignette to give a retro feel.
+ */
+.rom-scanlines {
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.08) 2px,
+    rgba(0, 0, 0, 0.08) 4px
+  );
+  /* Vignette effect */
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.15);
+}
+
+/* Subtle purple tint on the roulette surface while the wheel is in
+   motion. Static + settled states stay neutral so the card matches
+   the filter-summary row above it. */
+.roulette-spinning-surface {
+  background-color: rgb(30 58 138 / 0.08);
+}
+
+@keyframes roulette-tada {
+  0% {
+    transform: scale(1);
+  }
+  30% {
+    transform: scale(1.08);
+  }
+  60% {
+    transform: scale(0.97);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.roulette-tada {
+  animation: roulette-tada 700ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+</style>

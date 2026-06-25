@@ -1,0 +1,228 @@
+name: "publish"
+
+on:
+  workflow_dispatch: {}
+  release:
+    types: [published]
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "ubuntu-22.04"
+            args: ""
+          - platform: "windows-latest"
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      # Pinned to match src-tauri/rust-toolchain.toml — see the comment
+      # in that file for why nightly is dated rather than tracking latest.
+      - name: install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-04-20
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libudev-dev libssl-dev libgtk-3-dev libglib2.0-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libfuse2 libarchive-dev
+
+      - name: install frontend dependencies
+        run: pnpm install
+
+      - uses: tauri-apps/tauri-action@v0
+        id: tauri-build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NO_STRIP: true
+          # Updater code-signing. Generate locally with
+          # `pnpm tauri signer generate -w ~/.tauri/drop.key`, then add both as
+          # repo Actions secrets. When present, tauri-action signs each artifact
+          # and emits `latest.json` (the in-app updater endpoint).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          # Use the tag from the release event so we don't create a second release.
+          # Falls back to v__VERSION__ for manual workflow_dispatch triggers.
+          tagName: ${{ github.event.release.tag_name || 'v__VERSION__' }}
+          releaseName: ${{ github.event.release.tag_name || 'v__VERSION__' }}
+          releaseBody: "See the assets to download this version and install."
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      # Repack the AppImage: keep WebKitGTK and its dependencies (needed on
+      # SteamOS which doesn't ship webkit2gtk-4.1), but remove libs that clash
+      # with the host (glib, EGL/mesa — cause crashes due to symbol mismatches
+      # between Ubuntu 22.04 build env and SteamOS runtime).
+      # Also bundles umu-launcher so Windows game compatibility works out of the box.
+      - name: Fix AppImage for SteamOS compatibility
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "No AppImage found, skipping"
+            exit 0
+          fi
+          echo "Fixing AppImage: $APPIMAGE"
+
+          chmod +x "$APPIMAGE"
+          "$APPIMAGE" --appimage-extract
+
+          # Remove libs that conflict with SteamOS host, but KEEP WebKitGTK
+          # and its dependencies so the app works without system webkit installed.
+          if [ -d squashfs-root/usr/lib ]; then
+            cd squashfs-root/usr/lib
+            # Remove problematic glib/gio/mesa/EGL libs that cause symbol clashes
+            rm -f libglib-2.0.so* libgio-2.0.so* libgobject-2.0.so* libgmodule-2.0.so*
+            rm -f libEGL*.so* libGL*.so* libGLX*.so* libGLdispatch*.so*
+            rm -f libdrm*.so* libgbm*.so* libwayland*.so*
+            rm -f libffi*.so* libpcre2*.so* libmount*.so* libblkid*.so*
+            # Keep: libwebkit2gtk-4.1, libjavascriptcoregtk-4.1, libsoup-3.0,
+            #        and any other non-conflicting deps Tauri bundled
+            echo "Kept bundled libs:"
+            ls -la *.so* 2>/dev/null || echo "(none remaining)"
+            cd ../../..
+          fi
+
+          # Bundle umu-launcher (zipapp) so Windows-game compat works out of
+          # the box. Same approach as the Flatpak build script — downloads the
+          # standalone zipapp release which is a single self-contained
+          # executable.
+          #
+          # The GitHub API call is authenticated against the workflow's
+          # GITHUB_TOKEN so we don't hit the 60-req/hr anonymous rate limit —
+          # that's what 403'd the publish run and then crashed the downstream
+          # python `json.load` with an empty stdin. Whole umu-bundle block is
+          # also tolerant of any failure: if curl/json-parse/download/extract
+          # goes sideways we log a WARNING and ship the AppImage without umu
+          # pre-bundled rather than failing the whole release build — users
+          # can install umu-launcher separately, Windows-game compat still
+          # works on their machine, just not out of the box.
+          echo "Downloading umu-launcher..."
+          UMU_API_JSON=$(curl -fsSL \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Open-Wine-Components/umu-launcher/releases/latest" || true)
+          if [ -z "$UMU_API_JSON" ]; then
+            echo "WARNING: GitHub API request for umu-launcher failed (rate-limit, network, or auth) — skipping bundle"
+          else
+            UMU_URL=$(echo "$UMU_API_JSON" | python3 -c "
+          import sys, json
+          try:
+              d = json.load(sys.stdin)
+              print(next((a['browser_download_url'] for a in d['assets'] if 'zipapp.tar' in a['name']), ''))
+          except Exception:
+              pass
+          " || true)
+            if [ -z "$UMU_URL" ]; then
+              echo "WARNING: Could not find umu-launcher zipapp asset URL, skipping bundle"
+            elif curl -fsSL -o /tmp/umu.tar "$UMU_URL"; then
+              tar -xf /tmp/umu.tar -C /tmp/
+              UMU_BIN=$(find /tmp -maxdepth 4 -name "umu-run" -type f | head -1)
+              if [ -n "$UMU_BIN" ]; then
+                mkdir -p squashfs-root/usr/bin
+                cp "$UMU_BIN" squashfs-root/usr/bin/umu-run
+                chmod +x squashfs-root/usr/bin/umu-run
+                echo "Bundled umu-run: $(squashfs-root/usr/bin/umu-run --version 2>&1 || echo 'ok')"
+              else
+                echo "WARNING: umu-run not found in archive, skipping bundle"
+              fi
+              rm -f /tmp/umu.tar
+            else
+              echo "WARNING: umu-launcher download failed, skipping bundle"
+            fi
+          fi
+
+          # Bundle zerotier-one (full client) for co-op virtual-LAN rooms.
+          # Mirrors the proven Steam Deck recipe: stage the Arch package plus the
+          # two libs SteamOS lacks (libminiupnpc, libnatpmp) into usr/bin + usr/lib
+          # so the app can run + setcap a private copy at runtime. Tolerant of any
+          # failure — co-op rooms are optional, so a mirror hiccup ships the
+          # AppImage without them rather than failing the whole release.
+          echo "Bundling zerotier-one..."
+          zt_fetch() {
+            local fn repo
+            for repo in extra core; do
+              fn=$(curl -fsSL "https://archlinux.org/packages/$repo/x86_64/$1/json/" | python3 -c "import sys,json; print(json.load(sys.stdin)['filename'])" 2>/dev/null || true)
+              if [ -n "$fn" ] && curl -fsSL -o "/tmp/$1.pkg.tar.zst" "https://geo.mirror.pkgbuild.com/$repo/os/x86_64/$fn"; then
+                tar -I zstd -xf "/tmp/$1.pkg.tar.zst" -C /tmp usr 2>/dev/null && return 0
+              fi
+            done
+            return 1
+          }
+          if zt_fetch zerotier-one && zt_fetch miniupnpc && zt_fetch libnatpmp \
+             && [ -f /tmp/usr/bin/zerotier-one ]; then
+            mkdir -p squashfs-root/usr/bin squashfs-root/usr/lib
+            cp /tmp/usr/bin/zerotier-one squashfs-root/usr/bin/zerotier-one
+            chmod +x squashfs-root/usr/bin/zerotier-one
+            cp -a /tmp/usr/lib/libminiupnpc.so* squashfs-root/usr/lib/ 2>/dev/null || true
+            cp -a /tmp/usr/lib/libnatpmp.so* squashfs-root/usr/lib/ 2>/dev/null || true
+            # zerotier-one needs CAP_NET_ADMIN at runtime, which makes the dynamic
+            # loader run in secure-execution mode and IGNORE LD_LIBRARY_PATH. Bake
+            # an absolute RPATH to the client's staged libs dir (honored even for a
+            # capability binary) so it still finds libminiupnpc/libnatpmp. SteamOS
+            # always runs as user 'deck', so this runtime path is fixed.
+            sudo apt-get install -y patchelf >/dev/null 2>&1 || true
+            patchelf --set-rpath "/home/deck/.local/share/drop/tools/zerotier/libs" squashfs-root/usr/bin/zerotier-one \
+              && echo "Set zerotier-one RPATH" || echo "WARNING: patchelf rpath failed"
+            echo "Bundled zerotier-one: $(LD_LIBRARY_PATH=squashfs-root/usr/lib squashfs-root/usr/bin/zerotier-one -v 2>&1 || echo ok)"
+          else
+            echo "WARNING: zerotier-one bundle failed (package fetch/extract) — shipping without co-op rooms"
+          fi
+
+          # Download appimagetool to repack
+          curl -Lo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+
+          # Repack the AppImage
+          ARCH=x86_64 ./appimagetool squashfs-root "$APPIMAGE"
+          rm -rf squashfs-root appimagetool
+
+      # Re-upload the fixed AppImage to the release
+      - name: Upload fixed AppImage
+        if: matrix.platform == 'ubuntu-22.04'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
+          if [ -z "$APPIMAGE" ]; then exit 0; fi
+          FILENAME=$(basename "$APPIMAGE")
+          TAG_NAME="${{ github.event.release.tag_name }}"
+          if [ -z "$TAG_NAME" ]; then
+            TAG_NAME=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
+          fi
+
+          # Delete the old AppImage asset and upload the fixed one
+          RELEASE_ID=$(gh release view "$TAG_NAME" --json id -q .id 2>/dev/null || true)
+          if [ -n "$RELEASE_ID" ]; then
+            gh release delete-asset "$TAG_NAME" "$FILENAME" --yes 2>/dev/null || true
+            gh release upload "$TAG_NAME" "$APPIMAGE" --clobber
+          fi
