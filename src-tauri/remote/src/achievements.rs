@@ -73,7 +73,15 @@ struct AchievementReportBody {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AchievementReportResponse {
+    /// Reports the server matched to a stored definition.
     pub recorded: u32,
+    /// Rows the server actually created on this call (first-time unlocks).
+    #[serde(default)]
+    pub newly_unlocked: u32,
+    /// Reports with NO matching server definition — a silent drop
+    /// (externalId/definition mismatch). Older servers omit this field.
+    #[serde(default)]
+    pub skipped: u32,
 }
 
 /// Helper to get current time in seconds
@@ -158,7 +166,10 @@ pub async fn report_achievements(
     let body = AchievementReportBody { achievements };
     let data: AchievementReportResponse =
         remote_request(RemoteRequest::post(url, &body)).await?;
-    info!("{TAG} Server recorded {} achievements for {game_id}", data.recorded);
+    info!(
+        "{TAG} Server report for {game_id}: matched {}, newly unlocked {}, not-found {}",
+        data.recorded, data.newly_unlocked, data.skipped
+    );
     Ok(data)
 }
 
@@ -547,11 +558,11 @@ pub async fn poll_achievements(
                     );
                     match report_achievements(&game_id, new_reports.clone()).await {
                         Ok(resp) => {
-                            if (resp.recorded as usize) < new_reports.len() {
+                            if resp.skipped > 0 {
                                 warn!(
-                                    "{TAG} Server recorded {} of {} reported achievements for {} \
-                                     — the rest were already known or rejected",
-                                    resp.recorded, new_reports.len(), game_id
+                                    "{TAG} {} of {} reported achievements for {} had NO matching \
+                                     server definition (externalId/definition mismatch) and were dropped",
+                                    resp.skipped, new_reports.len(), game_id
                                 );
                             }
                             // Mark all sent as known. The on-disk save file is the

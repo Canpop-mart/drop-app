@@ -41,6 +41,25 @@ use super::drop_data::DropData;
 
 static RETRY_COUNT: usize = 3;
 
+/// Top-level directories inside an install dir that hold USER data created at
+/// runtime (saves, NAND, configs) rather than files shipped in the server
+/// manifest. The reconcile sweep in `run()` deletes anything not in the
+/// manifest to clear stale files left by a previous version; without this
+/// guard it also deletes these, wiping the player's saves on every
+/// re-download. Standalone emulators are the acute case: Eden/Yuzu/Ryujinx
+/// keep per-title saves under `user/` (portable mode) and Cemu under `mlc01/`;
+/// RetroArch saves live in `drop-saves/`. `remove_file` is a hard unlink (no
+/// Recycle Bin), so a wrong delete here is irreversible.
+const PROTECTED_DATA_DIRS: &[&str] = &[
+    "user",       // Eden / Yuzu / Ryujinx / Citron / Suyu / Sudachi portable data
+    "mlc01",      // Cemu NAND (saves + updates + DLC)
+    "drop-saves", // RetroArch per-game saves/states (Drop-managed)
+    "saves",
+    "states",
+    "nand",
+    "sdmc",
+];
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadInformation {
@@ -313,12 +332,37 @@ impl GameDownloadAgent {
         let current_file_tree = self.scan_filetree(base_path)?;
 
         for file in current_file_tree {
-            let filename = file.strip_prefix(base_path)?.to_string_lossy().to_string();
+            let relative = file.strip_prefix(base_path)?;
+            let filename = relative.to_string_lossy().to_string();
             let needed = file_list.contains_key(&filename) || filename == ".dropdata";
-            if !needed {
-                debug!("deleted {}", file.display());
-                remove_file(file)?;
+            if needed {
+                continue;
             }
+
+            // Never delete runtime/user data that lives inside the install dir
+            // but isn't part of any manifest (emulator saves/NAND/configs).
+            // The sweep exists to remove files left over from a *previous Drop
+            // install*, not data the user or a standalone emulator wrote at
+            // runtime. See PROTECTED_DATA_DIRS — installing a second game that
+            // shares an emulator re-runs this agent over the shared install
+            // dir, and without the guard it wipes every title's saves.
+            let top_component = relative
+                .components()
+                .next()
+                .and_then(|c| c.as_os_str().to_str());
+            let in_protected_dir = match top_component {
+                Some(top) => PROTECTED_DATA_DIRS
+                    .iter()
+                    .any(|dir| dir.eq_ignore_ascii_case(top)),
+                None => false,
+            };
+            if in_protected_dir {
+                debug!("preserving user data (not in manifest): {}", file.display());
+                continue;
+            }
+
+            debug!("deleted {}", file.display());
+            remove_file(file)?;
         }
 
         let local_completed_chunks = completed_chunks.clone();

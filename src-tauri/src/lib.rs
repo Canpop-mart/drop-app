@@ -412,6 +412,7 @@ pub fn run() {
             zerotier_join,
             zerotier_leave,
             zerotier_stop,
+            zerotier_network_ip,
             room_host,
             room_join,
             room_leave,
@@ -437,6 +438,14 @@ pub fn run() {
 
                 // Start background poller for incoming stream requests
                 streaming::spawn_stream_request_poller();
+
+                // Clean up ZeroTier room networks orphaned by a previous crash
+                // before any new co-op join (prevents the duplicate-IP / 169.254
+                // link-local adapter pileup). No-op if ZeroTier isn't installed
+                // or we've never hosted/joined a room.
+                tokio::spawn(async {
+                    crate::zerotier::startup_cleanup().await;
+                });
 
                 // Sync installed games to server (fire and forget, only if authenticated)
                 tokio::spawn(async {

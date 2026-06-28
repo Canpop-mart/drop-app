@@ -39,10 +39,36 @@ async fn enqueue_game_impl(
 
     {
         let db = borrow_db_checked();
-        let status = db.applications.transient_statuses.get(&meta);
 
-        if status.is_some() {
+        // Already downloading or queued — don't double-queue.
+        if db.applications.transient_statuses.get(&meta).is_some() {
             return Ok(());
+        }
+
+        // Already fully installed at this exact version — skip the re-download.
+        // Re-running the download agent reconciles the install dir against the
+        // server manifest and deletes anything not in it, which for a shared
+        // standalone emulator (Eden/Yuzu/Cemu) means the player's saves: that
+        // NAND/user data lives inside the install dir and is never in the
+        // manifest. Installing a second game that depends on an
+        // already-installed emulator must not re-trigger that sweep. A genuine
+        // update targets a different version_id, and a partial/interrupted
+        // install resumes via `resume_download`, so neither is skipped here.
+        if let Some(GameDownloadStatus::Installed {
+            install_type,
+            version_id,
+            ..
+        }) = db.applications.game_statuses.get(&meta.id)
+        {
+            let complete =
+                !matches!(install_type, InstalledGameType::PartiallyInstalled { .. });
+            if complete && *version_id == meta.version {
+                info!(
+                    "skipping download for {} — already installed at version {}",
+                    meta.id, meta.version
+                );
+                return Ok(());
+            }
         }
     };
 

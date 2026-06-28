@@ -45,6 +45,7 @@ export interface BrowsableRoom {
 // Module-level so polling is a singleton regardless of how many views mount.
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let copyTimer: ReturnType<typeof setTimeout> | null = null;
+let hostIpCopyTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function useCoopRoom() {
   const room = useState<RoomInfo | null>("coopRoom", () => null);
@@ -58,6 +59,10 @@ export function useCoopRoom() {
   // Set when a joiner's room vanishes underneath them (host ended it / expired).
   const sessionEnded = useState("coopSessionEnded", () => false);
   const codeCopied = useState("coopCodeCopied", () => false);
+  // The host's ZeroTier IP for this room (what joiners enter in the game's "join
+  // by IP"). Set from the member poll once the host reports it.
+  const hostIp = useState<string | null>("coopHostIp", () => null);
+  const hostIpCopied = useState("coopHostIpCopied", () => false);
   // Browsable open rooms, populated on demand by `browse()`.
   const browsable = useState<BrowsableRoom[]>("coopBrowsable", () => []);
   const browsing = useState("coopBrowsing", () => false);
@@ -90,6 +95,20 @@ export function useCoopRoom() {
     }
   }
 
+  async function copyHostIp() {
+    if (!hostIp.value) return;
+    try {
+      await navigator.clipboard.writeText(hostIp.value);
+      hostIpCopied.value = true;
+      if (hostIpCopyTimer) clearTimeout(hostIpCopyTimer);
+      hostIpCopyTimer = setTimeout(() => {
+        hostIpCopied.value = false;
+      }, 2000);
+    } catch (e) {
+      console.error("clipboard write failed", e);
+    }
+  }
+
   async function loadStatus() {
     try {
       status.value = await invoke<ZerotierStatus>("zerotier_status");
@@ -103,10 +122,14 @@ export function useCoopRoom() {
     try {
       const detail = await invoke<{
         shortCode?: string;
+        hostAddress?: string | null;
         members: RoomMember[];
       }>("room_members", { roomId: room.value.roomId });
       members.value = detail.members ?? [];
       if (detail.shortCode) serverShortCode.value = detail.shortCode;
+      // Once the host reports its ZeroTier IP it doesn't change for the room, so
+      // only ever set it — never clear it on a transient poll that omits it.
+      if (detail.hostAddress) hostIp.value = detail.hostAddress;
     } catch (e) {
       // 404 = the room is gone (host ended it / expired). Treat as a calm
       // "session ended", not an error. Other failures are transient — keep
@@ -116,6 +139,7 @@ export function useCoopRoom() {
         room.value = null;
         members.value = [];
         serverShortCode.value = null;
+        hostIp.value = null;
         sessionEnded.value = true;
       } else {
         console.error("room_members failed", e);
@@ -200,6 +224,7 @@ export function useCoopRoom() {
       room.value = null;
       members.value = [];
       serverShortCode.value = null;
+      hostIp.value = null;
       busy.value = false;
     }
   }
@@ -218,6 +243,8 @@ export function useCoopRoom() {
     isHost,
     sessionEnded,
     codeCopied,
+    hostIp,
+    hostIpCopied,
     browsable,
     browsing,
     rawCode,
@@ -227,6 +254,7 @@ export function useCoopRoom() {
     startPolling,
     stopPolling,
     copyCode,
+    copyHostIp,
     host,
     join,
     browse,

@@ -137,10 +137,33 @@
           </div>
         </div>
 
-        <p class="text-xs text-zinc-600">
-          Now launch your game and use its LAN / "join by IP" option. Friends in
-          this room appear as if on your local network.
-        </p>
+        <!-- Connect address — what every player enters in the game's join-by-IP -->
+        <div class="rounded-xl bg-zinc-900/60 p-5">
+          <p class="text-xs uppercase tracking-wide text-zinc-500 mb-2">
+            Connect address
+          </p>
+          <button
+            v-if="hostIp"
+            class="group inline-flex items-center gap-3"
+            title="Click to copy"
+            @click="copyHostIp"
+          >
+            <span class="text-xl font-mono font-bold text-blue-300">{{
+              hostIp
+            }}</span>
+            <span
+              class="text-xs font-medium"
+              :class="hostIpCopied ? 'text-green-400' : 'text-zinc-500 group-hover:text-zinc-300'"
+            >
+              {{ hostIpCopied ? "✓ Copied!" : "Copy" }}
+            </span>
+          </button>
+          <p v-else class="text-sm text-zinc-500">Waiting for the host's address…</p>
+          <p class="text-xs text-zinc-600 mt-2">
+            In your game, choose "join by IP" / "direct connect" and enter this
+            address. The LAN browser won't list it, so connect directly.
+          </p>
+        </div>
       </div>
 
       <!-- Not in a room -->
@@ -245,6 +268,8 @@ const {
   isHost,
   sessionEnded,
   codeCopied,
+  hostIp,
+  hostIpCopied,
   browsable,
   browsing,
   displayCode,
@@ -253,6 +278,7 @@ const {
   startPolling,
   stopPolling,
   copyCode,
+  copyHostIp,
   host,
   join,
   browse,

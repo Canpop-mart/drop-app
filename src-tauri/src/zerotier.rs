@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use log::info;
+use log::{info, warn};
 use remote::requests::{generate_url, make_authenticated_get, make_authenticated_post};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -403,6 +403,89 @@ async fn daemon_alive() -> bool {
     }
 }
 
+/// Is ZeroTier usable here? On Linux that's our managed daemon being alive; on
+/// Windows Drop drives the OFFICIAL service and owns no child, so "usable" means
+/// the local control API answers. Works on both via the same probe.
+async fn zt_available() -> bool {
+    daemon_alive().await || zt_api(reqwest::Method::GET, "/status", None).await.is_ok()
+}
+
+// ── Drop-network identification (for the stale-network sweep) ─────────
+
+/// Where we cache the Drop controller's 10-hex node id — it prefixes every room
+/// network id the controller mints, so the sweep can tell a Drop room network
+/// from the user's hand-joined networks without a server round-trip at startup.
+fn controller_id_cache_path() -> PathBuf {
+    zerotier_dir().join("controller_node_id")
+}
+
+/// Read the cached Drop controller node id, if we've ever joined a room.
+fn read_cached_controller_node_id() -> Option<String> {
+    let s = std::fs::read_to_string(controller_id_cache_path()).ok()?;
+    let s = s.trim().to_lowercase();
+    (s.len() == 10 && s.chars().all(|c| c.is_ascii_hexdigit())).then_some(s)
+}
+
+/// Cache the controller node id from a room network id we just joined. The first
+/// 10 hex of a 16-hex network id is the minting controller's node id.
+fn cache_controller_node_id(network_id: &str) {
+    let id = network_id.to_lowercase();
+    if id.len() < 10 || !id[..10].chars().all(|c| c.is_ascii_hexdigit()) {
+        return;
+    }
+    let prefix = &id[..10];
+    if read_cached_controller_node_id().as_deref() != Some(prefix) {
+        let _ = std::fs::create_dir_all(zerotier_dir());
+        let _ = std::fs::write(controller_id_cache_path(), prefix);
+    }
+}
+
+/// Leave every Drop room network this node has joined except `current` (the room
+/// it's actively in). A Drop network is one whose 16-hex id is prefixed by our
+/// cached controller node id, so the user's hand-joined ZeroTier networks are
+/// never touched. Fails CLOSED: with no validated controller id, nothing is left.
+async fn leave_all_drop_networks(current: Option<&str>) {
+    if !zt_available().await {
+        return;
+    }
+    let controller = match read_cached_controller_node_id() {
+        Some(c) => c,
+        None => return,
+    };
+    let networks = match zt_api(reqwest::Method::GET, "/network", None).await {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let Some(arr) = networks.as_array() else {
+        return;
+    };
+    for net in arr {
+        let Some(id) = net.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let id = id.to_lowercase();
+        if id.len() != 16 || !id.starts_with(&controller) {
+            continue; // not a Drop network — leave it alone
+        }
+        if current.is_some_and(|c| c.eq_ignore_ascii_case(&id)) {
+            continue; // keep the room we're actively in
+        }
+        match zt_api(reqwest::Method::DELETE, &format!("/network/{id}"), None).await {
+            Ok(_) => info!("[ZEROTIER] sweep: left stale Drop network {id}"),
+            Err(e) => warn!("[ZEROTIER] sweep: failed to leave {id}: {e}"),
+        }
+    }
+}
+
+/// Startup cleanup: leave any Drop room networks orphaned by a previous crash so
+/// their adapters don't collide with the next join. No-op when ZeroTier isn't
+/// installed or we've never joined a Drop room.
+pub async fn startup_cleanup() {
+    if is_installed() {
+        leave_all_drop_networks(None).await;
+    }
+}
+
 /// Ensure ZeroTier is ready — Windows: the official service is installed and its
 /// auth token is readable. Safe to call repeatedly.
 #[cfg(target_os = "windows")]
@@ -478,7 +561,7 @@ pub async fn zerotier_status() -> ZerotierStatus {
     #[cfg(not(target_os = "linux"))]
     let caps_ready = true;
 
-    let running = daemon_alive().await;
+    let running = zt_available().await;
     let node_id = if running { fetch_node_id().await } else { None };
 
     ZerotierStatus {
@@ -519,15 +602,18 @@ pub async fn zerotier_join(network_id: String) -> Result<(), String> {
 /// Leave a room's network.
 #[tauri::command]
 pub async fn zerotier_leave(network_id: String) -> Result<(), String> {
-    if !daemon_alive().await {
+    if !zt_available().await {
         return Ok(());
     }
-    let _ = zt_api(
+    if let Err(e) = zt_api(
         reqwest::Method::DELETE,
         &format!("/network/{}", network_id.to_lowercase()),
         None,
     )
-    .await;
+    .await
+    {
+        warn!("[ZEROTIER] Failed to leave network {network_id}: {e}");
+    }
     info!("[ZEROTIER] Left network {network_id}");
     Ok(())
 }
@@ -535,11 +621,12 @@ pub async fn zerotier_leave(network_id: String) -> Result<(), String> {
 /// Stop the daemon entirely (e.g. when the last room session ends).
 #[tauri::command]
 pub async fn zerotier_stop() -> Result<(), String> {
-    let mut guard = ZT_DAEMON.lock().await;
-    if let Some(mut child) = guard.take() {
-        info!("[ZEROTIER] Stopping daemon (PID {})", child.id());
-        #[cfg(unix)]
-        {
+    // Unix: stop the managed daemon we spawned.
+    #[cfg(unix)]
+    {
+        let mut guard = ZT_DAEMON.lock().await;
+        if let Some(mut child) = guard.take() {
+            info!("[ZEROTIER] Stopping daemon (PID {})", child.id());
             unsafe {
                 libc::kill(child.id() as i32, libc::SIGTERM);
             }
@@ -547,14 +634,61 @@ pub async fn zerotier_stop() -> Result<(), String> {
             if child.try_wait().map_or(true, |s| s.is_none()) {
                 let _ = child.kill();
             }
+            let _ = child.wait();
         }
-        #[cfg(not(unix))]
-        {
-            let _ = child.kill();
-        }
-        let _ = child.wait();
+    }
+    // Windows: Drop drives the OFFICIAL ZeroTier service and owns no child —
+    // never kill it (admin-required, and it would tear down the user's other
+    // networks). Release Drop's room adapters by leaving every Drop room network
+    // instead; hand-joined networks are left untouched.
+    #[cfg(not(unix))]
+    {
+        leave_all_drop_networks(None).await;
     }
     Ok(())
+}
+
+/// Read this node's assigned ZeroTier IPv4 on a network (e.g. "10.242.7.153"),
+/// or None if ZeroTier hasn't assigned one yet. The host self-reports this so
+/// joiners can connect to the game by IP.
+#[tauri::command]
+pub async fn zerotier_network_ip(network_id: String) -> Result<Option<String>, String> {
+    if !is_valid_network_id(&network_id) {
+        return Err("Invalid network id.".to_string());
+    }
+    let net = zt_api(
+        reqwest::Method::GET,
+        &format!("/network/{}", network_id.to_lowercase()),
+        None,
+    )
+    .await?;
+    let ip = net
+        .get("assignedAddresses")
+        .and_then(|a| a.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str())
+        .map(|s| s.split('/').next().unwrap_or(s).to_string());
+    Ok(ip)
+}
+
+/// POST the host's assigned ZeroTier IP to the server so joiners read it back.
+async fn report_host_address(room_id: &str, address: &str) {
+    let path = format!("/api/v1/client/room/{room_id}/address");
+    let url = match generate_url(&[path.as_str()], &[]) {
+        Ok(u) => u,
+        Err(e) => {
+            warn!("[ZEROTIER] could not build address-report url: {e}");
+            return;
+        }
+    };
+    let body = serde_json::json!({ "address": address });
+    match make_authenticated_post(url, &body).await {
+        Ok(resp) if resp.status().is_success() => {
+            info!("[ZEROTIER] reported host address {address} for room {room_id}")
+        }
+        Ok(resp) => warn!("[ZEROTIER] host-address report rejected: HTTP {}", resp.status()),
+        Err(e) => warn!("[ZEROTIER] host-address report failed: {e}"),
+    }
 }
 
 // ── Co-op rooms (orchestration: daemon + drop-server controller) ──────
@@ -595,6 +729,24 @@ pub async fn room_host(
     }
     let info: RoomInfo = resp.json().await.map_err(|e| e.to_string())?;
     zerotier_join(info.network_id.clone()).await?;
+    cache_controller_node_id(&info.network_id);
+
+    // ZeroTier assigns our IP asynchronously after join; poll briefly in the
+    // background, then self-report it so joiners can connect by IP. Best-effort —
+    // hosting never fails just because the address is slow to land.
+    let network_id = info.network_id.clone();
+    let room_id = info.room_id.clone();
+    tokio::spawn(async move {
+        for _ in 0..15 {
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+            if let Ok(Some(ip)) = zerotier_network_ip(network_id.clone()).await {
+                report_host_address(&room_id, &ip).await;
+                return;
+            }
+        }
+        warn!("[ZEROTIER] host IP not assigned in time for room {room_id}");
+    });
+
     Ok(info)
 }
 
@@ -613,6 +765,7 @@ pub async fn room_join(short_code: String) -> Result<RoomInfo, String> {
     }
     let info: RoomInfo = resp.json().await.map_err(|e| e.to_string())?;
     zerotier_join(info.network_id.clone()).await?;
+    cache_controller_node_id(&info.network_id);
     Ok(info)
 }
 
