@@ -730,6 +730,7 @@ pub async fn room_host(
     let info: RoomInfo = resp.json().await.map_err(|e| e.to_string())?;
     zerotier_join(info.network_id.clone()).await?;
     cache_controller_node_id(&info.network_id);
+    remote::coop::set_active_room(&info.room_id);
 
     // ZeroTier assigns our IP asynchronously after join; poll briefly in the
     // background, then self-report it so joiners can connect by IP. Best-effort —
@@ -766,12 +767,14 @@ pub async fn room_join(short_code: String) -> Result<RoomInfo, String> {
     let info: RoomInfo = resp.json().await.map_err(|e| e.to_string())?;
     zerotier_join(info.network_id.clone()).await?;
     cache_controller_node_id(&info.network_id);
+    remote::coop::set_active_room(&info.room_id);
     Ok(info)
 }
 
 /// Leave a room: tell the server (best-effort), drop off the overlay, stop the daemon.
 #[tauri::command]
 pub async fn room_leave(room_id: String, network_id: String) -> Result<(), String> {
+    remote::coop::clear_active_room();
     let path = format!("/api/v1/client/room/{room_id}/leave");
     if let Ok(url) = generate_url(&[path.as_str()], &[]) {
         let _ = make_authenticated_post(url, &serde_json::json!({})).await;

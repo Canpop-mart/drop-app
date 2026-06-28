@@ -66,6 +66,7 @@ use std::path::PathBuf;
 // Re-export the public surface so existing `remote::goldberg::*` call sites
 // in the `process`, `games` and achievements code keep compiling unchanged.
 pub use achievements::GoldbergAchievement;
+pub use config::write_custom_broadcasts;
 
 /// The folder name Drop tells Goldberg to use via `local_save_path`.
 /// Saves end up at `<dll_dir>/drop-goldberg/<AppID>/`.
@@ -119,6 +120,15 @@ impl EmulatorInfo {
             | SteamEmulator::SmartSteamEmu { dll_dir, .. }
             | SteamEmulator::Unknown { dll_dir } => dll_dir,
         }
+    }
+
+    /// `true` for Goldberg/GBE (and Unknown, which Drop treats as Goldberg).
+    /// SSE manages its own networking, so co-op broadcast seeding skips it.
+    pub fn is_goldberg_like(&self) -> bool {
+        matches!(
+            self.emulator,
+            SteamEmulator::Goldberg { .. } | SteamEmulator::Unknown { .. }
+        )
     }
 
     /// The directory to search for achievement save files, by emulator type.

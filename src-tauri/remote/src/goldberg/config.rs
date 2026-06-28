@@ -17,8 +17,6 @@ use super::DROP_GSE_FOLDER;
 /// `[user::saves]` `local_save_path` — controls where Goldberg writes saves.
 const INI_SECTION: &str = "[user::saves]";
 const INI_KEY: &str = "local_save_path";
-/// The relative path (from the game DLL/exe) Goldberg saves into.
-const INI_VALUE: &str = "./drop-goldberg";
 
 /// `[user::general]` `account_name` — the player's display name.
 const INI_GENERAL_SECTION: &str = "[user::general]";
@@ -42,11 +40,21 @@ pub fn configure_goldberg(dll_dir: &Path, display_name: Option<&str>) {
         info!("[EMU] Created {} for Goldberg config", steam_settings.display());
     }
 
+    // Absolute, DLL-anchored save path. Goldberg resolves a relative
+    // local_save_path against the process CWD, so a launch whose CWD isn't the
+    // DLL dir would spawn a stray drop-goldberg next to the CWD. Anchoring it at
+    // the DLL dir makes the location CWD-independent. Forward slashes keep the
+    // value valid under both Windows and Proton/wine; the path is written
+    // unquoted (Goldberg reads the rest of the line verbatim, spaces included).
+    let save_dir = dll_dir.join(DROP_GSE_FOLDER);
+    let _ = std::fs::create_dir_all(&save_dir);
+    let save_value = save_dir.to_string_lossy().replace('\\', "/");
+
     let ini_path = steam_settings.join("configs.user.ini");
-    let desired_save_line = format!("{INI_KEY}={INI_VALUE}");
+    let desired_save_line = format!("{INI_KEY}={save_value}");
     let existing = std::fs::read_to_string(&ini_path).unwrap_or_default();
 
-    let saves_ok = has_correct_setting(&existing);
+    let saves_ok = has_correct_setting(&existing, &save_value);
     let name_ok = display_name
         .map(|n| has_correct_account_name(&existing, n))
         .unwrap_or(true);
@@ -68,7 +76,7 @@ pub fn configure_goldberg(dll_dir: &Path, display_name: Option<&str>) {
 
     match std::fs::write(&ini_path, &updated) {
         Ok(_) => info!(
-            "[EMU] Configured Goldberg for {} (saves -> {DROP_GSE_FOLDER}, name -> {:?})",
+            "[EMU] Configured Goldberg for {} (saves -> {save_value}, name -> {:?})",
             dll_dir.display(),
             display_name.unwrap_or("<unchanged>")
         ),
@@ -76,14 +84,54 @@ pub fn configure_goldberg(dll_dir: &Path, display_name: Option<&str>) {
     }
 }
 
-/// `true` if `[user::saves]` already carries the correct `local_save_path`.
-fn has_correct_setting(content: &str) -> bool {
-    let target = format!("{INI_KEY}={INI_VALUE}");
-    let target_spaced = format!("{INI_KEY} = {INI_VALUE}");
+/// `true` if `[user::saves]` already carries `local_save_path=<expected>`.
+/// Parses the line as key=value so paths containing spaces compare correctly
+/// (a blanket space-strip would corrupt a value like `C:/My Games/...`).
+fn has_correct_setting(content: &str, expected: &str) -> bool {
     section_has(content, INI_SECTION, |trimmed| {
-        let normalized = trimmed.replace(' ', "");
-        normalized == target || trimmed == target_spaced
+        match trimmed.split_once('=') {
+            Some((k, v)) => k.trim() == INI_KEY && v.trim() == expected,
+            None => false,
+        }
     })
+}
+
+/// Seeds (or clears) `steam_settings/custom_broadcasts.txt` with a co-op room's
+/// peer IPs. gbe_fork unicasts its LAN announce to each listed IP, which is how
+/// Goldberg discovery works over a ZeroTier overlay (broadcast is dropped on
+/// L3). An empty list removes the file so a stale peer set from a previous room
+/// never leaks into a later solo launch. Best-effort: failures are logged, never
+/// propagated — co-op seeding must not block a launch.
+pub fn write_custom_broadcasts(dll_dir: &Path, peer_ips: &[String]) {
+    let steam_settings = dll_dir.join("steam_settings");
+    let path = steam_settings.join("custom_broadcasts.txt");
+
+    if peer_ips.is_empty() {
+        if path.exists() {
+            match std::fs::remove_file(&path) {
+                Ok(_) => info!("[COOP] cleared {}", path.display()),
+                Err(e) => warn!("[COOP] could not remove {}: {e}", path.display()),
+            }
+        }
+        return;
+    }
+
+    if !steam_settings.is_dir()
+        && let Err(e) = std::fs::create_dir_all(&steam_settings)
+    {
+        warn!("[COOP] could not create {}: {e}", steam_settings.display());
+        return;
+    }
+
+    let body = format!("{}\n", peer_ips.join("\n"));
+    match std::fs::write(&path, body) {
+        Ok(_) => info!(
+            "[COOP] seeded {} peer IP(s) -> {}",
+            peer_ips.len(),
+            path.display()
+        ),
+        Err(e) => warn!("[COOP] could not write {}: {e}", path.display()),
+    }
 }
 
 /// `true` if `[user::general]` already carries the correct `account_name`.

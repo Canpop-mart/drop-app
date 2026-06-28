@@ -53,7 +53,11 @@ static RETRY_COUNT: usize = 3;
 const PROTECTED_DATA_DIRS: &[&str] = &[
     "user",       // Eden / Yuzu / Ryujinx / Citron / Suyu / Sudachi portable data
     "mlc01",      // Cemu NAND (saves + updates + DLC)
-    "drop-saves", // RetroArch per-game saves/states (Drop-managed)
+    "drop-saves",    // RetroArch per-game saves/states (Drop-managed)
+    "drop-goldberg", // Goldberg/GBE per-AppID earned achievements + saves
+    "steam_settings", // GBE config the CLIENT writes at launch (configs.user.ini
+                      // absolute save path + custom_broadcasts.txt co-op peers) —
+                      // not in the manifest, so the sweep would otherwise unlink it
     "saves",
     "states",
     "nand",

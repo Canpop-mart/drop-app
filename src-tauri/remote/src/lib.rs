@@ -5,6 +5,7 @@ pub mod achievements;
 pub mod auth;
 #[macro_use]
 pub mod cache;
+pub mod coop;
 pub mod error;
 pub mod fetch_object;
 pub mod goldberg;

@@ -880,6 +880,27 @@ impl ProcessManager<'_> {
             display_name.as_deref(),
         );
 
+        // Co-op: seed Goldberg's custom_broadcasts.txt with the active room's
+        // peer IPs so LAN discovery works over the ZeroTier overlay (which drops
+        // broadcast). Empty list (not in a room) clears any stale file. Bounded
+        // + best-effort — slow/absent server must never delay or block a launch.
+        if let Some(info) = &emulator_info
+            && info.is_goldberg_like()
+        {
+            let peers = tauri::async_runtime::block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    remote::coop::current_peer_ips(),
+                )
+                .await
+                .unwrap_or_default()
+            });
+            remote::goldberg::write_custom_broadcasts(
+                std::path::Path::new(info.dll_dir()),
+                &peers,
+            );
+        }
+
         // RetroArch config injection for emulator launches.
         if let Some(emu_dir) = effective_cwd {
             self.configure_retroarch(
