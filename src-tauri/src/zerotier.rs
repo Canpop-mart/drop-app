@@ -711,6 +711,22 @@ pub struct RoomInfo {
     pub name: Option<String>,
 }
 
+/// While `room_id` stays the active room, periodically re-seed every co-op
+/// game's `custom_broadcasts.txt` with the room's current peers, so a peer who
+/// joins after you launched a game is picked up without a relaunch. Exits when
+/// the active room changes (leave / rejoin), so only one loop runs at a time.
+fn spawn_coop_reseed_loop(room_id: String) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(12)).await;
+            if remote::coop::current_room_id().as_deref() != Some(room_id.as_str()) {
+                break;
+            }
+            remote::coop::reseed_all().await;
+        }
+    });
+}
+
 /// Host a new co-op room: bring the daemon up, ask the server to mint a network
 /// and authorize this node, then join it. Returns the shareable short code.
 #[tauri::command]
@@ -731,6 +747,7 @@ pub async fn room_host(
     zerotier_join(info.network_id.clone()).await?;
     cache_controller_node_id(&info.network_id);
     remote::coop::set_active_room(&info.room_id);
+    spawn_coop_reseed_loop(info.room_id.clone());
 
     // ZeroTier assigns our IP asynchronously after join; poll briefly in the
     // background, then self-report it so joiners can connect by IP. Best-effort —
@@ -738,14 +755,19 @@ pub async fn room_host(
     let network_id = info.network_id.clone();
     let room_id = info.room_id.clone();
     tokio::spawn(async move {
-        for _ in 0..15 {
-            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        // ZeroTier can take 20-40s to assign an IP on a freshly-minted network,
+        // so poll for up to ~60s (the old 9s window often expired first). The
+        // server also derives the host address straight from the controller, so
+        // this self-report is a fallback — but keep it for the controller-miss
+        // case and older servers.
+        for _ in 0..60 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             if let Ok(Some(ip)) = zerotier_network_ip(network_id.clone()).await {
                 report_host_address(&room_id, &ip).await;
                 return;
             }
         }
-        warn!("[ZEROTIER] host IP not assigned in time for room {room_id}");
+        warn!("[ZEROTIER] host IP not assigned within 60s for room {room_id}");
     });
 
     Ok(info)
@@ -768,6 +790,7 @@ pub async fn room_join(short_code: String) -> Result<RoomInfo, String> {
     zerotier_join(info.network_id.clone()).await?;
     cache_controller_node_id(&info.network_id);
     remote::coop::set_active_room(&info.room_id);
+    spawn_coop_reseed_loop(info.room_id.clone());
     Ok(info)
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "drop-app"
-version = "5.2.0"
+version = "5.2.1"
 description = "The client application for the open-source, self-hosted game distribution platform Drop"
 authors = ["Drop OSS"]
 edition = "2024"

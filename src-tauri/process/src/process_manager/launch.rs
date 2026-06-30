@@ -895,7 +895,7 @@ impl ProcessManager<'_> {
                 .await
                 .unwrap_or_default()
             });
-            remote::goldberg::write_custom_broadcasts(
+            remote::coop::seed_and_record(
                 std::path::Path::new(info.dll_dir()),
                 &peers,
             );
