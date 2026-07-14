@@ -598,14 +598,25 @@ impl GameDownloadAgent {
                     mismatched: mismatched.clone(),
                 }
                 .describe();
-                error!(
-                    "validation failed for {}: {} missing, {} mismatched — install will NOT be marked Installed",
-                    self.metadata.id,
-                    missing.len(),
-                    mismatched.len()
-                );
-                // Demote to PartiallyInstalled so the user can retry/resume
-                // rather than being left with a phantom "Installed" game.
+
+                // Invalidate exactly the chunks the validation implicated so the
+                // next download pass re-fetches ONLY them and skips the
+                // (verified-good) remainder. Without this the bad chunk stays
+                // marked complete in .dropdata, so any resume skips it and
+                // re-fails on the same chunk forever — the user's only escape
+                // was wiping .dropdata and re-downloading the entire game.
+                let total_chunks = {
+                    let dl_info = lock!(self.dl_info);
+                    dl_info
+                        .as_ref()
+                        .map(|d| d.manifests.values().map(|m| m.chunks.len()).sum())
+                        .unwrap_or(0usize)
+                };
+                let invalidated = self.invalidate_failed_chunks(&missing, &mismatched);
+
+                // Demote to PartiallyInstalled and persist the cleared contexts,
+                // so a manual resume also re-fetches only the bad chunks rather
+                // than the whole game.
                 set_partially_installed(
                     &self.metadata(),
                     self.dropdata.base_path.display().to_string(),
@@ -613,9 +624,86 @@ impl GameDownloadAgent {
                     self.configuration.clone(),
                 );
                 self.dropdata.write();
-                Err(ApplicationDownloadError::ValidationFailed(summary))
+
+                // A handful of bad chunks is a transient corruption: return
+                // Ok(false) to drive the download manager's bounded repair loop
+                // (MAX_DOWNLOAD_PASSES), which re-downloads just the invalidated
+                // chunks and re-validates. If a large fraction failed the cause
+                // is systemic (stale server manifest, wrong depot, truncated
+                // upstream) and re-fetching cannot fix it — fail loudly instead
+                // of looping (the LWIW lesson). Small games get an absolute floor
+                // so one bad chunk out of three still counts as repairable.
+                const REPAIRABLE_CHUNK_FLOOR: usize = 64;
+                let repairable = invalidated > 0
+                    && (invalidated <= REPAIRABLE_CHUNK_FLOOR
+                        || invalidated.saturating_mul(4) <= total_chunks);
+                if repairable {
+                    warn!(
+                        "validation failed for {}: {} missing, {} mismatched — invalidated {}/{} chunk(s); requesting targeted re-download",
+                        self.metadata.id,
+                        missing.len(),
+                        mismatched.len(),
+                        invalidated,
+                        total_chunks
+                    );
+                    Ok(false)
+                } else {
+                    error!(
+                        "validation failed for {}: {} missing, {} mismatched — {}/{} chunk(s) bad, too broad to repair by re-download; aborting",
+                        self.metadata.id,
+                        missing.len(),
+                        mismatched.len(),
+                        invalidated,
+                        total_chunks
+                    );
+                    Err(ApplicationDownloadError::ValidationFailed(summary))
+                }
             }
         }
+    }
+
+    /// Mark every chunk implicated by a failed validation as incomplete in
+    /// `.dropdata`, so the next download pass re-fetches exactly those chunks
+    /// and skips the verified-good remainder. Mismatched chunks are cleared by
+    /// id; missing/short files carry no chunk id, so they are mapped back to
+    /// every chunk that writes any byte into them. Returns the count of
+    /// distinct chunks invalidated.
+    fn invalidate_failed_chunks(
+        &self,
+        missing: &[crate::downloads::validate::MissingFile],
+        mismatched: &[crate::downloads::validate::MismatchedChunk],
+    ) -> usize {
+        use std::collections::HashSet;
+        let mut to_clear: HashSet<String> = HashSet::new();
+
+        for chunk in mismatched {
+            to_clear.insert(chunk.chunk_id.clone());
+        }
+
+        if !missing.is_empty() {
+            let missing_files: HashSet<&str> =
+                missing.iter().map(|m| m.filename.as_str()).collect();
+            let dl_info = lock!(self.dl_info);
+            if let Some(dl_info) = dl_info.as_ref() {
+                for manifest in dl_info.manifests.values() {
+                    for (chunk_id, chunk_data) in &manifest.chunks {
+                        if chunk_data
+                            .files
+                            .iter()
+                            .any(|f| missing_files.contains(f.filename.as_str()))
+                        {
+                            to_clear.insert(chunk_id.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        for chunk_id in &to_clear {
+            self.dropdata.set_context(chunk_id.clone(), false);
+        }
+
+        to_clear.len()
     }
 
     pub fn cancel(&self, app_handle: &AppHandle) {
