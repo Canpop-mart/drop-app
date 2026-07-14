@@ -337,7 +337,20 @@ impl GameDownloadAgent {
 
         for file in current_file_tree {
             let relative = file.strip_prefix(base_path)?;
-            let filename = relative.to_string_lossy().to_string();
+            // The server's file_list keys are POSIX paths (forward slashes).
+            // On Windows relative.to_string_lossy() yields BACKSLASH separators,
+            // so a subdirectory file ("game\asset\x") never matches the manifest
+            // key ("game/asset/x") — and the sweep below would then DELETE every
+            // file in a subdirectory on any re-run of run() (a validation repair
+            // pass or a resumed download), destroying a working install. Join the
+            // components with "/" so the key matches on every OS. Literal
+            // backslashes inside a single Unix filename are preserved (they are
+            // one Normal component, not a separator).
+            let filename = relative
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
             let needed = file_list.contains_key(&filename) || filename == ".dropdata";
             if needed {
                 continue;
