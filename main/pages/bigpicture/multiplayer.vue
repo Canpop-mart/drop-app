@@ -9,22 +9,54 @@
   >
     <div class="max-w-2xl mx-auto">
       <div class="flex items-center gap-3 mb-2">
-        <UserGroupIcon class="size-7 text-blue-400" />
+        <UserGroupIcon
+          class="size-7"
+          :class="tab === 'coop' ? 'text-blue-400' : 'text-purple-400'"
+        />
         <h1 class="text-2xl font-semibold font-display text-zinc-100">
-          Co-op Rooms
+          {{ tab === "coop" ? "Co-op Rooms" : "Archipelago" }}
         </h1>
         <span
-          v-if="room && members.length"
+          v-if="tab === 'coop' && room && members.length"
           class="text-sm text-zinc-500 font-medium"
         >
           · {{ members.length }} {{ members.length === 1 ? "player" : "players" }}
         </span>
       </div>
-      <p class="text-sm text-zinc-500 mb-6">
-        Put friends on a private virtual LAN so LAN / co-op games discover each
-        other across the internet.
+      <p class="text-sm text-zinc-500 mb-5">
+        {{
+          tab === "coop"
+            ? "Put friends on a private virtual LAN so LAN / co-op games discover each other across the internet."
+            : "Your active multiworld and where to connect. Set sessions up from Drop on the desktop."
+        }}
       </p>
 
+      <div class="flex gap-1 mb-6 p-1 rounded-lg bg-zinc-900/60 w-fit">
+        <button
+          v-for="t in tabs"
+          :key="t.id"
+          :ref="(el: any) => registerAction(el, { onSelect: () => (tab = t.id) })"
+          class="px-4 py-1.5 rounded-md text-sm font-medium transition-colors"
+          :class="
+            tab === t.id
+              ? 'bg-zinc-700 text-zinc-100'
+              : 'text-zinc-400 hover:text-zinc-200'
+          "
+          @click="tab = t.id"
+        >
+          {{ t.label }}
+        </button>
+      </div>
+
+      <!--
+        Read-only here: picking a YAML file with a controller isn't practical, so
+        setup lives on the desktop and Big Picture just shows the connect
+        address. `compact` also drops the copy buttons, keeping this view free of
+        elements the focus system would need to register.
+      -->
+      <ArchipelagoPanel v-if="tab === 'archipelago'" compact />
+
+      <template v-else>
       <div
         v-if="error"
         class="mb-4 px-4 py-3 rounded-lg bg-red-900/30 border border-red-500/30 text-red-200 text-sm"
@@ -266,6 +298,7 @@
           virtual network adapter.
         </p>
       </div>
+      </template>
     </div>
 
     <BigPictureKeyboard
@@ -314,6 +347,12 @@ const {
   leave,
   dismissSessionEnded,
 } = useCoopRoom();
+
+const tabs = [
+  { id: "coop" as const, label: "Co-op" },
+  { id: "archipelago" as const, label: "Archipelago" },
+];
+const tab = ref<"coop" | "archipelago">("coop");
 
 const joinCode = ref("");
 const confirmingLeave = ref(false);

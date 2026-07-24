@@ -834,3 +834,176 @@ pub async fn room_browse() -> Result<Value, String> {
     }
     resp.json::<Value>().await.map_err(|e| e.to_string())
 }
+
+// ── Archipelago sessions ──────────────────────────────────────────────
+//
+// Archipelago reuses the ZeroTier machinery above but differs in two ways:
+// the server itself is ON the overlay (it hosts the Archipelago server, so
+// players need a route to it), and there is ONE long-lived network for all
+// sessions rather than one per room — Archipelago reads its advertised address
+// from a config file at startup, so that address has to stay stable.
+
+/// A session as returned by drop-server.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ApSessionInfo {
+    pub session_id: String,
+    #[serde(default)]
+    pub short_code: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub network_id: String,
+    /// The server's own overlay IP — what Archipelago should advertise.
+    #[serde(default)]
+    pub server_address: Option<String>,
+}
+
+/// Pull the server's human-readable reason out of a failed response.
+///
+/// Worth the effort here specifically because YAML validation errors ("that slot
+/// name is already taken", "missing a `game`") are the whole point of uploading
+/// through Drop — collapsing them into "HTTP 409" would throw away the feature.
+async fn server_error_message(resp: reqwest::Response, fallback: &str) -> String {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if let Ok(v) = serde_json::from_str::<Value>(&body) {
+        for key in ["statusMessage", "message"] {
+            if let Some(msg) = v.get(key).and_then(|m| m.as_str())
+                && !msg.is_empty()
+            {
+                return msg.to_string();
+            }
+        }
+    }
+    format!("{fallback}: HTTP {status}")
+}
+
+/// Start a session: ensure the shared overlay exists (server-side), authorize
+/// this device onto it, and join it locally.
+#[tauri::command]
+pub async fn ap_session_create(name: Option<String>) -> Result<ApSessionInfo, String> {
+    let node_id = zerotier_prepare().await?;
+    let url = generate_url(&["/api/v1/client/archipelago"], &[]).map_err(|e| e.to_string())?;
+    let body = serde_json::json!({ "zerotierNodeId": node_id, "name": name });
+    let resp = make_authenticated_post(url, &body)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(server_error_message(resp, "Could not start a session").await);
+    }
+    let info: ApSessionInfo = resp.json().await.map_err(|e| e.to_string())?;
+    zerotier_join(info.network_id.clone()).await?;
+    Ok(info)
+}
+
+/// Join a session by short code.
+#[tauri::command]
+pub async fn ap_session_join(short_code: String) -> Result<ApSessionInfo, String> {
+    let node_id = zerotier_prepare().await?;
+    let url = generate_url(&["/api/v1/client/archipelago/join"], &[]).map_err(|e| e.to_string())?;
+    let body = serde_json::json!({ "shortCode": short_code, "zerotierNodeId": node_id });
+    let resp = make_authenticated_post(url, &body)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(server_error_message(resp, "Could not join that session").await);
+    }
+    let info: ApSessionInfo = resp.json().await.map_err(|e| e.to_string())?;
+    zerotier_join(info.network_id.clone()).await?;
+    Ok(info)
+}
+
+/// Current session state: slots, who has uploaded a YAML, and the connect info.
+#[tauri::command]
+pub async fn ap_session_get(session_id: String) -> Result<Value, String> {
+    let path = format!("/api/v1/client/archipelago/{session_id}");
+    let url = generate_url(&[path.as_str()], &[]).map_err(|e| e.to_string())?;
+    let resp = make_authenticated_get(url).await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        // Mirrors `room_members`: a stable marker so the UI can show "session
+        // ended" rather than an error.
+        if resp.status().as_u16() == 404 {
+            return Err("session_not_found".to_string());
+        }
+        return Err(server_error_message(resp, "Could not fetch session").await);
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+/// The caller's open sessions, so a restarted client can offer to rejoin.
+#[tauri::command]
+pub async fn ap_session_list() -> Result<Value, String> {
+    let url = generate_url(&["/api/v1/client/archipelago"], &[]).map_err(|e| e.to_string())?;
+    let resp = make_authenticated_get(url).await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(server_error_message(resp, "Could not list sessions").await);
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+/// Upload a player YAML from disk. The frontend picks the file with the dialog
+/// plugin and passes its path.
+#[tauri::command]
+pub async fn ap_yaml_upload(session_id: String, file_path: String) -> Result<Value, String> {
+    let text = tokio::fs::read_to_string(&file_path)
+        .await
+        .map_err(|e| format!("Could not read {file_path}: {e}"))?;
+
+    let path = format!("/api/v1/client/archipelago/{session_id}/yaml");
+    let url = generate_url(&[path.as_str()], &[]).map_err(|e| e.to_string())?;
+    let resp = make_authenticated_post(url, &serde_json::json!({ "yaml": text }))
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(server_error_message(resp, "That YAML was rejected").await);
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+/// Host records the connect string from the Archipelago room page.
+#[tauri::command]
+pub async fn ap_connect_set(session_id: String, connect_address: String) -> Result<Value, String> {
+    let path = format!("/api/v1/client/archipelago/{session_id}/connect");
+    let url = generate_url(&[path.as_str()], &[]).map_err(|e| e.to_string())?;
+    let resp = make_authenticated_post(url, &serde_json::json!({ "connectAddress": connect_address }))
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(server_error_message(resp, "Could not save the connect address").await);
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+/// Download every valid slot's YAML as one multi-document file, written to
+/// `dest_path` (chosen by the frontend's save dialog). Returns the path written.
+#[tauri::command]
+pub async fn ap_bundle_save(session_id: String, dest_path: String) -> Result<String, String> {
+    let path = format!("/api/v1/client/archipelago/{session_id}/bundle");
+    let url = generate_url(&[path.as_str()], &[]).map_err(|e| e.to_string())?;
+    let resp = make_authenticated_get(url).await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(server_error_message(resp, "Could not build the bundle").await);
+    }
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    tokio::fs::write(&dest_path, body)
+        .await
+        .map_err(|e| format!("Could not write {dest_path}: {e}"))?;
+    Ok(dest_path)
+}
+
+/// Leave a session, drop off the overlay and stop the daemon.
+///
+/// Note the overlay is shared across Archipelago sessions, so this disconnects
+/// any other session too. Acceptable for now: running two multiworlds at once
+/// isn't a supported flow.
+#[tauri::command]
+pub async fn ap_session_leave(session_id: String, network_id: Option<String>) -> Result<(), String> {
+    let path = format!("/api/v1/client/archipelago/{session_id}/leave");
+    if let Ok(url) = generate_url(&[path.as_str()], &[]) {
+        let _ = make_authenticated_post(url, &serde_json::json!({})).await;
+    }
+    if let Some(nid) = network_id {
+        let _ = zerotier_leave(nid).await;
+    }
+    zerotier_stop().await
+}

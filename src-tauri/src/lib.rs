@@ -417,7 +417,15 @@ pub fn run() {
             room_join,
             room_leave,
             room_members,
-            room_browse
+            room_browse,
+            ap_session_create,
+            ap_session_join,
+            ap_session_get,
+            ap_session_list,
+            ap_yaml_upload,
+            ap_connect_set,
+            ap_bundle_save,
+            ap_session_leave
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

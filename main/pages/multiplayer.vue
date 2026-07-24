@@ -2,20 +2,48 @@
   <div class="min-h-full bg-zinc-950 text-zinc-100 px-8 py-8">
     <div class="max-w-2xl mx-auto">
       <div class="flex items-center gap-3 mb-2">
-        <UserGroupIcon class="size-7 text-blue-400" />
-        <h1 class="text-2xl font-semibold font-display">Co-op Rooms</h1>
+        <UserGroupIcon
+          class="size-7"
+          :class="tab === 'coop' ? 'text-blue-400' : 'text-purple-400'"
+        />
+        <h1 class="text-2xl font-semibold font-display">
+          {{ tab === "coop" ? "Co-op Rooms" : "Archipelago" }}
+        </h1>
         <span
-          v-if="room && members.length"
+          v-if="tab === 'coop' && room && members.length"
           class="text-sm text-zinc-500 font-medium"
         >
           · {{ members.length }} {{ members.length === 1 ? "player" : "players" }}
         </span>
       </div>
-      <p class="text-sm text-zinc-500 mb-6">
-        Put friends on a private virtual LAN so LAN / co-op games discover each
-        other across the internet. No port-forwarding needed.
+      <p class="text-sm text-zinc-500 mb-5">
+        {{
+          tab === "coop"
+            ? "Put friends on a private virtual LAN so LAN / co-op games discover each other across the internet. No port-forwarding needed."
+            : "Run a multiworld randomizer together. Drop collects everyone's settings and hands out the connect address."
+        }}
       </p>
 
+      <!-- Both modes ride the same ZeroTier overlay, so they share this page. -->
+      <div class="flex gap-1 mb-6 p-1 rounded-lg bg-zinc-900/60 w-fit">
+        <button
+          v-for="t in tabs"
+          :key="t.id"
+          class="px-4 py-1.5 rounded-md text-sm font-medium transition-colors"
+          :class="
+            tab === t.id
+              ? 'bg-zinc-700 text-zinc-100'
+              : 'text-zinc-400 hover:text-zinc-200'
+          "
+          @click="tab = t.id"
+        >
+          {{ t.label }}
+        </button>
+      </div>
+
+      <ArchipelagoPanel v-if="tab === 'archipelago'" />
+
+      <template v-else>
       <div
         v-if="error"
         class="mb-4 px-4 py-3 rounded-lg bg-red-900/30 border border-red-500/30 text-red-200 text-sm"
@@ -251,6 +279,7 @@
           settings.
         </p>
       </div>
+      </template>
     </div>
   </div>
 </template>
@@ -285,6 +314,12 @@ const {
   leave,
   dismissSessionEnded,
 } = useCoopRoom();
+
+const tabs = [
+  { id: "coop" as const, label: "Co-op" },
+  { id: "archipelago" as const, label: "Archipelago" },
+];
+const tab = ref<"coop" | "archipelago">("coop");
 
 const joinCode = ref("");
 const confirmingLeave = ref(false);
