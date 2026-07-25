@@ -21,10 +21,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { platform } from "@tauri-apps/plugin-os";
 import { devLog } from "~/composables/dev-mode";
+import {
+  mangohudLabel as mangohudLabelOf,
+  nextMangohud,
+} from "~/composables/game-detail/emulator-options";
 import type {
   AspectRatio,
   ControllerType,
   GameVersion,
+  MangoHudPreset,
   QualityPreset,
 } from "~/types";
 
@@ -69,6 +74,8 @@ export function useBpmGameConfig(
   const selectedQuality = ref<QualityPreset | null>(null);
   const aspectRatio = ref<AspectRatio>("Standard");
   const crtShaderEnabled = ref(false);
+  const fullscreen = ref<boolean>(true);
+  const mangohud = ref<MangoHudPreset | null>(null);
   const selectedProtonPath = ref<string | null>(null);
 
   // Proton override picker: list starts with just "Default" so it works on
@@ -111,6 +118,8 @@ export function useBpmGameConfig(
     // AspectRatio. Keep a null guard for forward-compat with malformed data.
     aspectRatio.value = ver.userConfiguration.widescreen ?? "Standard";
     crtShaderEnabled.value = ver.userConfiguration.crtShader ?? false;
+    fullscreen.value = ver.userConfiguration.fullscreen ?? true;
+    mangohud.value = ver.userConfiguration.mangohud ?? null;
     selectedProtonPath.value = ver.userConfiguration.overrideProtonPath ?? null;
   }
 
@@ -131,6 +140,8 @@ export function useBpmGameConfig(
           qualityPreset: selectedQuality.value,
           widescreen: aspectRatio.value,
           crtShader: crtShaderEnabled.value,
+          fullscreen: fullscreen.value,
+          mangohud: mangohud.value,
           overrideProtonPath: selectedProtonPath.value,
         },
       });
@@ -181,6 +192,18 @@ export function useBpmGameConfig(
     crtShaderEnabled.value = !crtShaderEnabled.value;
     saveUserConfig();
     showToast(`CRT Shader: ${crtShaderEnabled.value ? "On" : "Off"}`);
+  }
+
+  function toggleFullscreen() {
+    fullscreen.value = !fullscreen.value;
+    saveUserConfig();
+    showToast(`Fullscreen: ${fullscreen.value ? "On" : "Off"}`);
+  }
+
+  function cycleMangohud() {
+    mangohud.value = nextMangohud(mangohud.value);
+    saveUserConfig();
+    showToast(`MangoHud: ${mangohudLabelOf(mangohud.value)}`);
   }
 
   /**
@@ -236,6 +259,7 @@ export function useBpmGameConfig(
       protonOptions.value.find((o) => o.path === selectedProtonPath.value)
         ?.label ?? "Default",
   );
+  const mangohudLabel = computed(() => mangohudLabelOf(mangohud.value));
 
   // Kick off the Linux Proton-path fetch eagerly — no `await` here so the
   // composable returns synchronously and the BPM page can mount; the
@@ -247,11 +271,14 @@ export function useBpmGameConfig(
     selectedQuality,
     aspectRatio,
     crtShaderEnabled,
+    fullscreen,
+    mangohud,
     selectedProtonPath,
     protonOptions,
     controllerLabel,
     qualityLabel,
     aspectLabel,
+    mangohudLabel,
     protonLabel,
     syncFromVersion,
     saveUserConfig,
@@ -261,6 +288,8 @@ export function useBpmGameConfig(
     cycleQuality,
     toggleWidescreen,
     toggleCrtShader,
+    toggleFullscreen,
+    cycleMangohud,
     cycleProton,
     applyProfileName,
   };

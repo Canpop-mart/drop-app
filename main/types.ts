@@ -75,6 +75,9 @@ export type GameVersion = {
     controllerType: ControllerType | null;
     qualityPreset: QualityPreset | null;
     widescreen: AspectRatio;
+    // Backend stores Option<bool>: null = no explicit preference (RetroArch
+    // default, which is fullscreen on). The UI collapses null/true into "on".
+    fullscreen: boolean | null;
     mangohud: MangoHudPreset | null;
     crtShader: boolean;
   };

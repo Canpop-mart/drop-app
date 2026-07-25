@@ -8,12 +8,13 @@
          on the Play button (consolidated v3.6 — single discoverable
          options surface). -->
     <GameDetailOptionsMenu
-      :config="config"
       :has-achievements="stats.achievements.value.length > 0"
       :show-configure="
         status.type === 'Installed' &&
         status.install_type.type !== InstalledType.PartiallyInstalled
       "
+      :show-account-name="config.isNativeGame.value && status.type === 'Installed'"
+      :show-open-folder="status.type === 'Installed'"
       :show-uninstall="status.type === 'Installed'"
       :show-install-vcredist="
         status.type === 'Installed' &&
@@ -21,6 +22,8 @@
         isLinuxHost
       "
       @configure="configureModalOpen = true"
+      @set-account-name="config.applyProfileName()"
+      @open-install-folder="openInstallFolder"
       @uninstall="launchCtl.uninstall()"
       @install-runtime="installRuntime"
       @reset-achievements="resetConfirmOpen = true"
@@ -498,6 +501,15 @@ onMounted(() => {
 
 function goToQueue() {
   router.push("/queue");
+}
+
+// ── Open the game's install folder in the OS file manager ────────────────
+async function openInstallFolder() {
+  try {
+    await invoke("open_game_install_dir", { gameId: game.id });
+  } catch (e) {
+    console.error("[library] open install folder failed:", e);
+  }
 }
 
 // ── Manual VC++ runtime install ──────────────────────────────────────────

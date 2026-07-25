@@ -54,7 +54,10 @@ pub struct FetchLibraryResponse {
 
 pub async fn fetch_library_logic(
     state: tauri::State<'_, Mutex<AppState>>,
-    app_handle: AppHandle,
+    // Kept for signature parity with fetch_library_logic_offline (the offline!
+    // macro passes it to both). No longer used here — it previously drove the
+    // uninstall-on-cache-miss data-loss bug, now removed.
+    _app_handle: AppHandle,
     hard_refresh: Option<bool>,
 ) -> Result<FetchLibraryResponse, RemoteAccessError> {
     let do_hard_refresh = hard_refresh.unwrap_or(false);
@@ -121,20 +124,25 @@ pub async fn fetch_library_logic(
         if all_game_ids.contains(meta.id.as_str()) {
             continue;
         }
-        // We should always have a cache of the object
-        // Pass db_handle because otherwise we get a gridlock
-        let game = match get_cached_object::<Game>(&meta.id.clone()) {
+        // Metadata is cached under "game/{id}" (see the bulk-cache write above
+        // and fetch_game_logic) — read the SAME key. A bare-id read here always
+        // missed, which sent installed-but-delisted games into the delete path
+        // below.
+        let game = match get_cached_object::<Game>(&format!("game/{}", meta.id)) {
             Ok(game) => game,
             Err(err) => {
+                // Metadata cache miss (e.g. a disk-scanned game never in the
+                // server library and never opened). We can't render it without
+                // its Game object — but DO NOT uninstall it. Deleting a real
+                // on-disk install because a metadata lookup missed is
+                // catastrophic data loss (this used to run remove_dir_all here).
+                // Skip it for this list; it stays installed and reappears once
+                // its metadata is cached.
                 warn!(
-                    "{} is installed, but encountered error fetching its error: {}.",
-                    meta.id, err
+                    "{} is installed but its metadata isn't cached ({err}); \
+                     skipping it in the library list (NOT uninstalling).",
+                    meta.id
                 );
-                /*
-                 * We can't return a dummy object here because it needs to be in the cache to work
-                 * So we uninstall the game so we don't "lose" it
-                 */
-                uninstall_game_logic(meta.clone(), &app_handle);
                 continue;
             }
         };
@@ -458,6 +466,28 @@ pub fn configure_game_emulator(game_id: String) -> Result<String, LibraryError> 
         }
         None => Ok("No Steam emulator detected for this game.".to_string()),
     }
+}
+
+/// Open an installed game's folder in the OS file manager. Game-id-keyed
+/// (resolving the path server-side from `game_statuses`) rather than taking a
+/// path, mirroring `open_download_dir` / `open_process_logs` — the codebase
+/// deliberately keeps arbitrary-path openers off the IPC surface.
+#[tauri::command]
+pub fn open_game_install_dir(game_id: String, app_handle: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let install_dir = {
+        let db_lock = borrow_db_checked();
+        match db_lock.applications.game_statuses.get(&game_id) {
+            Some(GameDownloadStatus::Installed { install_dir, .. }) => install_dir.clone(),
+            _ => return Err("Game is not installed.".to_string()),
+        }
+    };
+
+    app_handle
+        .opener()
+        .open_path(install_dir, None::<&str>)
+        .map_err(|e| format!("Failed to open install folder: {e}"))
 }
 
 #[tauri::command]

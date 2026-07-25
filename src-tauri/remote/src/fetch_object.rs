@@ -1,4 +1,8 @@
-use http::{Response, header::CONTENT_TYPE, response::Builder as ResponseBuilder};
+use http::{
+    Response,
+    header::{CACHE_CONTROL, CONTENT_TYPE},
+    response::Builder as ResponseBuilder,
+};
 use log::{debug, warn};
 use tauri::UriSchemeResponder;
 
@@ -67,6 +71,7 @@ pub async fn fetch_object(
                 Ok(data) => {
                     let resp = ResponseBuilder::new()
                         .header(CONTENT_TYPE, content_type)
+                        .header(CACHE_CONTROL, crate::cache::OBJECT_CACHE_CONTROL)
                         .body(data)
                         .map_err(CacheError::ConstructionError)?;
                     // Only refresh the cache on a *real* body — never poison it

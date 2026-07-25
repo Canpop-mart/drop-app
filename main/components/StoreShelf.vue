@@ -59,6 +59,7 @@
           :name="game.mName"
           :rom="game.isEmulated"
           :update-available="game.updateAvailable ?? false"
+          update-variant="older-build"
           @select="$emit('select', game.id)"
         />
       </div>

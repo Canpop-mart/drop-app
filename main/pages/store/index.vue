@@ -375,6 +375,7 @@
           :name="game.mName"
           :rom="game.isEmulated"
           :update-available="game.updateAvailable ?? false"
+          update-variant="older-build"
           @select="goToGame(game.id)"
         />
       </GameTileGrid>

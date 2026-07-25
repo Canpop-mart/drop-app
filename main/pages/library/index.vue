@@ -596,21 +596,26 @@ const recentPlaytime = ref<RecentPlaytimeEntry[]>([]);
 const loading = ref(true);
 const searchInput = ref("");
 
-// Layout density — lives in the filter drawer now (header stays calm).
-const density = ref<"cover" | "compact">("cover");
+// Filter / sort / view state persists across navigation (see composable).
+// Local `ref`s here would reset every time you open a game and come back.
+const {
+  density,
+  installStateFilter,
+  typeFilter,
+  sortOrder,
+  selectedCollectionIds,
+  allGamesCollapsed,
+  allView,
+  allSort,
+} = useLibraryFilters();
+
 const densityOptions = [
   { label: "Cover", value: "cover" as const, icon: Squares2X2Icon },
   { label: "Compact", value: "compact" as const, icon: Bars3Icon },
 ];
 
-// ── Filter state — local predicates over the in-memory entry list. ──
+// Transient UI state — should reset on navigation, so it stays local.
 const filterDrawerOpen = ref(false);
-const installStateFilter = ref<
-  "all" | "installed" | "not-installed" | "updates"
->("all");
-const typeFilter = ref<"all" | "game" | "tool">("all");
-const sortOrder = ref<"name-asc" | "name-desc">("name-asc");
-const selectedCollectionIds = ref<string[]>([]);
 
 const installStateOptions = [
   { label: "All", value: "all" as const },
@@ -781,11 +786,8 @@ const playtimeMap = computed(() => {
 });
 
 // ── "All games" grid — Steam-style view switcher + sort. ──
-const allGamesCollapsed = ref(false);
-const allView = ref<string>("all");
-const allSort = ref<"name-asc" | "name-desc" | "last-played" | "most-played">(
-  "name-asc",
-);
+// (allGamesCollapsed / allView / allSort come from useLibraryFilters above so
+// they survive back-navigation.)
 
 const viewOptions = [
   { label: "All games", value: "all" },
@@ -898,6 +900,10 @@ async function load() {
       ...lib.library,
       ...lib.collections.flatMap((c) => c.entries.map((e) => e.game)),
       ...lib.other,
+      // Installed games no longer in the server library ("delisted"). Big
+      // Picture and the sidebar search already include these; the desktop grid
+      // was dropping them, so an installed game could silently vanish here.
+      ...lib.missing,
     ].filter((g, i, a) => a.findIndex((x) => x.id === g.id) === i);
 
     const built: LibraryEntry[] = [];

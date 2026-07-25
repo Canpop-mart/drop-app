@@ -9,7 +9,11 @@ use std::{
 
 use bitcode::{Decode, DecodeOwned, Encode};
 use database::{Database, borrow_db_checked};
-use http::{Response, header::CONTENT_TYPE, response::Builder as ResponseBuilder};
+use http::{
+    Response,
+    header::{CACHE_CONTROL, CONTENT_TYPE},
+    response::Builder as ResponseBuilder,
+};
 use once_cell::sync::Lazy;
 
 use crate::error::{CacheError, RemoteAccessError};
@@ -28,7 +32,18 @@ static MEMORY_CACHE: Lazy<Arc<Mutex<HashMap<String, MemoryCacheEntry>>>> =
 /// Hard cap on the in-memory cache. When full, expired entries are dropped
 /// first and, if still full, 25% of entries are evicted — so memory use is
 /// bounded regardless of how many distinct objects are fetched.
-const MAX_MEMORY_CACHE_SIZE: usize = 100;
+///
+/// 100 was too small for a real library — covers + banners + icons run ~3
+/// objects per game, so a ~150-game library thrashed the cache and pushed most
+/// reads to disk-decode. Raised so a sizeable library's art stays resident.
+const MAX_MEMORY_CACHE_SIZE: usize = 600;
+
+/// `Cache-Control` sent on every object response so the WebView caches images in
+/// its OWN store and stops re-hitting this protocol (and re-decoding) on every
+/// library↔detail navigation. Matches the in-memory TTL below; object art is
+/// effectively stable, and a day of staleness on a cover is fine (the disk cache
+/// already serves it indefinitely offline).
+pub const OBJECT_CACHE_CONTROL: &str = "max-age=86400";
 
 /// Default time-to-live for a cached entry, in seconds (24 hours).
 ///
@@ -213,7 +228,9 @@ impl TryFrom<Response<Vec<u8>>> for ObjectCache {
 impl TryFrom<ObjectCache> for Response<Vec<u8>> {
     type Error = CacheError;
     fn try_from(value: ObjectCache) -> Result<Self, Self::Error> {
-        let resp_builder = ResponseBuilder::new().header(CONTENT_TYPE, value.content_type);
+        let resp_builder = ResponseBuilder::new()
+            .header(CONTENT_TYPE, value.content_type)
+            .header(CACHE_CONTROL, OBJECT_CACHE_CONTROL);
         resp_builder
             .body(value.body)
             .map_err(CacheError::ConstructionError)
@@ -223,7 +240,9 @@ impl TryFrom<&ObjectCache> for Response<Vec<u8>> {
     type Error = CacheError;
 
     fn try_from(value: &ObjectCache) -> Result<Self, Self::Error> {
-        let resp_builder = ResponseBuilder::new().header(CONTENT_TYPE, value.content_type.clone());
+        let resp_builder = ResponseBuilder::new()
+            .header(CONTENT_TYPE, value.content_type.clone())
+            .header(CACHE_CONTROL, OBJECT_CACHE_CONTROL);
         resp_builder
             .body(value.body.clone())
             .map_err(CacheError::ConstructionError)

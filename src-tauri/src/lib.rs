@@ -322,6 +322,7 @@ pub fn run() {
             fetch_game_version_options,
             update_game_configuration,
             configure_game_emulator,
+            open_game_install_dir,
             get_install_size,
             list_game_saves,
             delete_game_save,

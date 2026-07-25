@@ -1081,9 +1081,12 @@ const renderedDescription = computed(() =>
 const isEmulatedGame = computed(() => {
   const ver = version.value;
   if (!ver?.launches) return false;
-  // Check if ALL launches use an emulator. If any launch is native (no emulator),
-  // this is a native game — the emulator buttons shouldn't show.
-  return ver.launches.length > 0 && ver.launches.every((l) => l.emulator != null);
+  // ALL launches must have a REAL emulator reference (a truthy `gameId`). A PC
+  // game's launch can carry an empty/placeholder emulator object that a bare
+  // `!= null` check wrongly treats as emulated.
+  return (
+    ver.launches.length > 0 && ver.launches.every((l) => !!l.emulator?.gameId)
+  );
 });
 const isNativeGame = computed(() => !isEmulatedGame.value);
 const isWindowsGame = computed(() => {
@@ -1136,15 +1139,19 @@ const {
   selectedQuality,
   aspectRatio,
   crtShaderEnabled,
+  fullscreen,
   controllerLabel,
   qualityLabel,
   aspectLabel,
+  mangohudLabel,
   protonLabel,
   protonOptions,
   cycleController,
   cycleQuality,
   toggleWidescreen,
   toggleCrtShader,
+  toggleFullscreen,
+  cycleMangohud,
   cycleProton,
 } = gameConfig;
 
@@ -1156,6 +1163,15 @@ const isLinuxHost = computed(() => platform() === "linux");
 function applyProfileName() {
   showOptions.value = false;
   gameConfig.applyProfileName();
+}
+
+async function openInstallFolder() {
+  showOptions.value = false;
+  try {
+    await invoke("open_game_install_dir", { gameId });
+  } catch (e) {
+    console.error("[BPM] open install folder failed:", e);
+  }
 }
 
 // ── Manual VC++ runtime install ──────────────────────────────────────────
@@ -1221,6 +1237,22 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
       valueLabel: crtShaderEnabled.value ? "On" : "Off",
       action: toggleCrtShader,
     });
+    items.push({
+      id: "fullscreen",
+      label: "Fullscreen",
+      valueLabel: (fullscreen.value ?? true) ? "On" : "Off",
+      action: toggleFullscreen,
+    });
+  }
+
+  // MangoHud is a Linux perf overlay for any game (not emulator-specific).
+  if (isLinuxHost.value && status.value?.type === "Installed") {
+    items.push({
+      id: "mangohud",
+      label: "MangoHud",
+      valueLabel: mangohudLabel.value,
+      action: cycleMangohud,
+    });
   }
 
   if (isNativeGame.value && isWindowsGame.value && status.value?.type === "Installed") {
@@ -1280,6 +1312,14 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
       showShelfPicker.value = true;
     },
   });
+
+  if (status.value?.type === "Installed") {
+    items.push({
+      id: "open-install-folder",
+      label: "Open install folder",
+      action: openInstallFolder,
+    });
+  }
 
   items.push({
     id: "remove-library",

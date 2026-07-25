@@ -41,6 +41,16 @@ use super::drop_data::DropData;
 
 static RETRY_COUNT: usize = 3;
 
+/// Whether a download error is a full disk — which no amount of retrying fixes.
+/// Matches ENOSPC (28) on Unix and ERROR_DISK_FULL (112) / ERROR_HANDLE_DISK_FULL
+/// (39) on Windows, since `io::ErrorKind::StorageFull` isn't stable.
+fn is_disk_full(e: &ApplicationDownloadError) -> bool {
+    if let ApplicationDownloadError::IoError(io) = e {
+        return matches!(io.raw_os_error(), Some(28) | Some(112) | Some(39));
+    }
+    false
+}
+
 /// Top-level directories inside an install dir that hold USER data created at
 /// runtime (saves, NAND, configs) rather than files shipped in the server
 /// manifest. The reconcile sweep in `run()` deletes anything not in the
@@ -471,13 +481,11 @@ impl GameDownloadAgent {
                             Err(e) => {
                                 warn!("got error for chunk id {}: {e:?}", chunk_id);
 
-                                let retry = true; /*matches!(
-                                &e,
-                                ApplicationDownloadError::Communication(_)
-                                | ApplicationDownloadError::Checksum
-                                | ApplicationDownloadError::Lock
-                                | ApplicationDownloadError::IoError(_)
-                                );*/
+                                // Retry transient failures. A full disk is the
+                                // exception — it won't clear itself, so fail
+                                // fast rather than burning the backoff retries
+                                // on a write that can't succeed.
+                                let retry = !is_disk_full(&e);
 
                                 if i == RETRY_COUNT - 1 || !retry {
                                     warn!("retry logic failed after {} attempts, not re-attempting.", i + 1);

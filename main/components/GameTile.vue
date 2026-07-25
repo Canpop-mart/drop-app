@@ -24,6 +24,7 @@
         :alt="name"
         class="w-full h-full object-cover"
         loading="lazy"
+        decoding="async"
       />
       <!-- Styled fallback when there's no cover. Big initial on a
            gradient that's derived from the game name so it's stable
@@ -66,9 +67,19 @@
       >
         <span
           v-if="updateAvailable"
-          class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/30 text-blue-200 backdrop-blur-sm"
+          :title="
+            updateVariant === 'older-build'
+              ? 'Drop\'s copy of this game is an older build than the latest release. It still installs and plays normally, and needs no action from you.'
+              : undefined
+          "
+          class="px-1.5 py-0.5 rounded text-[10px] font-bold backdrop-blur-sm"
+          :class="
+            updateVariant === 'older-build'
+              ? 'bg-amber-500/25 text-amber-200'
+              : 'uppercase bg-blue-500/30 text-blue-200'
+          "
         >
-          Update
+          {{ updateVariant === "older-build" ? "Older build" : "Update" }}
         </span>
         <span
           v-else-if="installed"
@@ -177,8 +188,15 @@ const props = defineProps<{
   name: string;
   /** Show the green "installed" dot. */
   installed?: boolean;
-  /** Show the blue "Update" pill (takes precedence over the dot). */
+  /** Show the update pill (takes precedence over the dot). */
   updateAvailable?: boolean;
+  /**
+   * What the update pill means. "update" (default, library) = your installed
+   * copy has a newer version, so it's actionable → blue "Update". "older-build"
+   * (store) = Drop's hosted copy is behind the source (Steam) build, which
+   * needs no user action → calm amber "Older build".
+   */
+  updateVariant?: "update" | "older-build";
   /** Show the teal "ROM" pill for emulated games. */
   rom?: boolean;
   /** Corner radius — `xl` (default) for the main grids, `lg` for denser ones. */
@@ -283,7 +301,10 @@ const metaLine = computed(() => {
     : "";
   if (props.compact) {
     const parts: string[] = [];
-    if (props.updateAvailable) parts.push("Update available");
+    if (props.updateAvailable)
+      parts.push(
+        props.updateVariant === "older-build" ? "Older build" : "Update available",
+      );
     else if (props.installed) parts.push("Installed");
     else parts.push("Not installed");
     if (lastPlayedText) parts.push(lastPlayedText);

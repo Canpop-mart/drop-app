@@ -23,16 +23,48 @@
     </p>
 
     <ProtonSelector v-model="model" v-if="$props.protonEnabled" />
+
+    <!-- MangoHud is a Linux performance overlay for any launched game, so it
+         lives here with the launch/Proton settings rather than in the
+         emulator-only Video tab. -->
+    <div v-if="isLinux" class="mt-6">
+      <label class="block text-sm font-medium text-zinc-100 mb-2">
+        MangoHud overlay
+      </label>
+      <div class="grid grid-cols-4 gap-2">
+        <button
+          v-for="opt in MANGOHUD_OPTIONS"
+          :key="opt.value"
+          type="button"
+          :class="[
+            'px-2 py-1.5 rounded text-xs font-medium transition-colors truncate',
+            (model.mangohud ?? 'off') === opt.value
+              ? 'bg-blue-600 text-white'
+              : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600 hover:text-zinc-100',
+          ]"
+          @click="model.mangohud = opt.value"
+        >
+          {{ opt.label }}
+        </button>
+      </div>
+      <p class="mt-2 text-xs text-zinc-500">
+        An on-screen performance overlay (FPS, frametimes) while the game runs.
+      </p>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { platform } from "@tauri-apps/plugin-os";
 import type { GameVersion } from "~/types";
 import ProtonSelector from "./ProtonSelector.vue";
+import { MANGOHUD_OPTIONS } from "~/composables/game-detail/emulator-options";
 
 const model = defineModel<GameVersion["userConfiguration"]>({ required: true });
 
-const props = defineProps<{
+defineProps<{
   protonEnabled: boolean;
 }>();
+
+const isLinux = platform() === "linux";
 </script>

@@ -139,7 +139,7 @@
                 class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
                 style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
               >
-                Outdated
+                Older build
               </div>
               <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
             </div>
@@ -178,7 +178,7 @@
                 class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
                 style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
               >
-                Outdated
+                Older build
               </div>
               <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
             </div>
@@ -220,7 +220,7 @@
                 class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
                 style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
               >
-                Outdated
+                Older build
               </div>
               <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
             </div>
@@ -495,7 +495,7 @@
               class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
               style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
             >
-              Outdated
+              Older build
             </div>
             <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
           </div>

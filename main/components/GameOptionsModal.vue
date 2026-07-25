@@ -1,7 +1,10 @@
 <template>
   <ModalTemplate size-class="max-w-4xl" v-model="open">
     <template #default>
-      <div class="flex flex-row gap-x-4 h-96">
+      <!-- Grow to fit the active tab (the Video tab is taller than the old
+           fixed h-96), but never past the viewport — then the content pane
+           scrolls instead of the whole modal overflowing. -->
+      <div class="flex flex-row gap-x-4 min-h-[20rem] max-h-[70vh]">
         <nav class="flex flex-1 flex-col" aria-label="Sidebar">
           <ul role="list" class="-mx-2 space-y-1">
             <li v-for="(tab, tabIdx) in tabs" :key="tab.name">
@@ -30,12 +33,14 @@
           </ul>
         </nav>
         <div
-          class="border-l-2 border-zinc-800 w-full grow pl-4 overflow-y-scroll"
+          class="border-l-2 border-zinc-800 w-full grow pl-4 overflow-y-auto min-h-0"
         >
           <component
             v-model="configuration"
             :is="tabs[currentTabIndex]?.page"
             :proton-enabled="protonEnabled"
+            :game-id="game.game.id"
+            :install-dir="installDir"
           />
         </div>
       </div>
@@ -76,13 +81,15 @@
 <script setup lang="ts">
 import type { Component } from "vue";
 import {
+  AdjustmentsHorizontalIcon,
   RocketLaunchIcon,
   ServerIcon,
-  TrashIcon,
   XCircleIcon,
 } from "@heroicons/vue/20/solid";
 import Launch from "./GameOptions/Launch.vue";
 import Updates from "./GameOptions/Updates.vue";
+import Video from "./GameOptions/Video.vue";
+import Storage from "./GameOptions/Storage.vue";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowPathIcon } from "@heroicons/vue/24/solid";
 import type { GameVersion } from "~/types";
@@ -106,23 +113,38 @@ const protonEnabled = !!(
   appState.value!.umuState !== "NotNeeded" && hasWindows
 );
 
-const tabs: Array<{ name: string; icon: Component; page: Component }> = [
-  {
-    name: "Launch",
-    icon: RocketLaunchIcon,
-    page: Launch,
-  },
-  {
-    name: "Updates",
-    icon: ArrowPathIcon,
-    page: Updates,
-  },
-  {
-    name: "Storage",
-    icon: ServerIcon,
-    page: h("div"),
-  },
-];
+// Emulated games get a "Video & Controls" tab (RetroArch presets). It's listed
+// first for them, so the default `currentTabIndex = 0` opens straight to it when
+// you hit Configure on a ROM.
+//
+// Require a real emulator reference (a truthy `gameId`) rather than just
+// `emulator != null`: a PC game's launch can carry an empty/placeholder
+// `emulator` object that `!= null` wrongly treats as emulated (this showed the
+// tab on native games like Vampire Survivors).
+const isEmulatedGame = computed(
+  () => game.version.value?.launches?.some((l) => !!l.emulator?.gameId) ?? false,
+);
+const installDir = computed(() => {
+  const s = game.status.value;
+  return s && s.type === "Installed" ? s.install_dir : null;
+});
+
+const tabs = computed<Array<{ name: string; icon: Component; page: Component }>>(
+  () => [
+    ...(isEmulatedGame.value
+      ? [
+          {
+            name: "Video & Controls",
+            icon: AdjustmentsHorizontalIcon,
+            page: Video,
+          },
+        ]
+      : []),
+    { name: "Launch", icon: RocketLaunchIcon, page: Launch },
+    { name: "Updates", icon: ArrowPathIcon, page: Updates },
+    { name: "Storage", icon: ServerIcon, page: Storage },
+  ],
+);
 const currentTabIndex = ref(0);
 
 const saveLoading = ref(false);

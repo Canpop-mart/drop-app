@@ -1,9 +1,14 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{self, Read, Write},
+    io::{self, Read},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+// Monotonic suffix so two concurrent writers (the per-chunk download thread and
+// a racing cancel()) never share a temp filename and clobber each other's file.
+static DROPDATA_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 use database::{models::data::UserConfiguration, platform::Platform};
 use log::error;
@@ -75,14 +80,28 @@ impl DropData {
                 }
                 v
             }
-            Err(_) => DropData::new(
-                game_id,
-                game_version,
-                target_platform,
-                base_path,
-                configuration,
-                None,
-            ),
+            Err(e) => {
+                // Normally this just means "no .dropdata yet" (a fresh
+                // download). But if the file EXISTS and still failed to read,
+                // it's corrupt — and starting fresh silently re-downloads the
+                // whole game, so surface that loudly rather than swallowing it.
+                // (Atomic writes above should prevent corruption; this catches
+                // the disk-error case.)
+                if base_path.join(DROPDATA_PATH).exists() {
+                    error!(
+                        "corrupt .dropdata for {game_id} ({e}); resume progress lost, \
+                         re-downloading from scratch",
+                    );
+                }
+                DropData::new(
+                    game_id,
+                    game_version,
+                    target_platform,
+                    base_path,
+                    configuration,
+                    None,
+                )
+            }
         }
     }
     pub fn read(base_path: &Path) -> Result<Self, io::Error> {
@@ -111,17 +130,31 @@ impl DropData {
             }
         };
 
-        let mut file = match File::create(self.base_path.join(DROPDATA_PATH)) {
-            Ok(file) => file,
-            Err(e) => {
-                error!("{e}");
-                return;
-            }
-        };
+        // Atomic write. The old code did `File::create` (which truncates the
+        // existing file to zero) then `write_all` — a crash/kill between those
+        // two left .dropdata empty or half-written. Because this is written
+        // once per completed chunk, that window was hit often, and a corrupt
+        // ledger decodes as "no chunks complete" (see `generate`), so resume
+        // re-downloaded the ENTIRE game. Write a uniquely-named temp file, then
+        // rename it over the real one (rename is atomic on the same
+        // filesystem). Mirrors the DB's own atomic write in
+        // database/src/interface.rs. No fsync: this guards against a process
+        // crash (page cache survives), which is the reported case; per-chunk
+        // fsync would throttle the download.
+        let final_path = self.base_path.join(DROPDATA_PATH);
+        let seq = DROPDATA_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp_path = self
+            .base_path
+            .join(format!("{DROPDATA_PATH}.tmp.{seq}"));
 
-        match file.write_all(&manifest_raw) {
-            Ok(()) => {}
-            Err(e) => error!("{e}"),
+        if let Err(e) = std::fs::write(&tmp_path, &manifest_raw) {
+            error!("failed to write temp .dropdata for {}: {e}", self.game_id);
+            let _ = std::fs::remove_file(&tmp_path);
+            return;
+        }
+        if let Err(e) = std::fs::rename(&tmp_path, &final_path) {
+            error!("failed to commit .dropdata for {}: {e}", self.game_id);
+            let _ = std::fs::remove_file(&tmp_path);
         }
     }
     pub fn set_contexts(&self, completed_contexts: &[(String, bool)]) {
