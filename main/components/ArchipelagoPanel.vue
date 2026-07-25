@@ -209,9 +209,15 @@
           </div>
         </div>
 
-        <!-- Shown once: Archipelago needs to advertise the overlay address -->
+        <!--
+          Shown until dismissed: Archipelago has to advertise the overlay
+          address. Drop can't tell whether it's been set (that's a config file
+          in a different container), so the host confirms it by hand. Dismissal
+          is keyed by the address, so it stays hidden unless the address ever
+          changes — which would mean the setup genuinely has to be redone.
+        -->
         <div
-          v-if="detail.isHost && detail.serverAddress"
+          v-if="showSetupBanner"
           class="rounded-xl bg-amber-900/15 border border-amber-500/25 p-5"
         >
           <h3 class="text-sm font-medium text-amber-200 mb-1">
@@ -227,6 +233,12 @@
           >
             HOST_ADDRESS: {{ detail.serverAddress }}
           </code>
+          <button
+            class="mt-3 px-4 py-1.5 rounded-md text-sm font-medium bg-amber-600/30 text-amber-100 hover:bg-amber-600/50"
+            @click="dismissSetup"
+          >
+            I've done this — hide
+          </button>
         </div>
 
         <div v-if="!confirmingLeave">
@@ -365,6 +377,34 @@ const connectInput = ref("");
 const confirmingLeave = ref(false);
 
 const mySlot = computed(() => detail.value?.slots.find((s) => s.isSelf));
+
+// The HOST_ADDRESS setup is a one-time, per-server chore, but Drop can't detect
+// that it's been done (it's a file in the Archipelago container). So the host
+// dismisses the banner explicitly, and we remember that against the address —
+// the banner only returns if the address changes, i.e. the setup really is
+// stale. Persisted in localStorage so it survives restarts (this is host-local
+// guidance, not shared state).
+const setupAckKey = computed(() =>
+  detail.value?.serverAddress
+    ? `ap-setup-ack:${detail.value.serverAddress}`
+    : null,
+);
+const setupDismissed = ref(false);
+watchEffect(() => {
+  setupDismissed.value =
+    import.meta.client && setupAckKey.value
+      ? localStorage.getItem(setupAckKey.value) === "1"
+      : false;
+});
+const showSetupBanner = computed(
+  () => !!detail.value?.isHost && !!detail.value?.serverAddress && !setupDismissed.value,
+);
+function dismissSetup() {
+  if (import.meta.client && setupAckKey.value) {
+    localStorage.setItem(setupAckKey.value, "1");
+    setupDismissed.value = true;
+  }
+}
 
 async function submitConnect() {
   await setConnect(connectInput.value);
