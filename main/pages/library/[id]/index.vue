@@ -297,6 +297,13 @@
                     >
                       {{ mod.mShortDescription }}
                     </p>
+                    <p
+                      v-if="mod.requiredMods && mod.requiredMods.length > 0"
+                      class="text-xs text-amber-400/80 truncate"
+                    >
+                      Requires:
+                      {{ mod.requiredMods.map((r) => r.name).join(", ") }}
+                    </p>
                   </div>
                   <span
                     v-if="isModInstalled(mod.id)"
@@ -534,6 +541,21 @@
             <span class="text-zinc-200 font-medium">{{ game.mName }}</span
             >? Only this mod's files are removed. The base game isn't touched.
           </p>
+          <p
+            v-if="modDependents(modToUninstall).length > 0"
+            class="mt-2 text-sm text-amber-400"
+          >
+            Heads up:
+            <span class="font-medium">{{
+              modDependents(modToUninstall).join(", ")
+            }}</span>
+            {{
+              modDependents(modToUninstall).length === 1
+                ? "requires"
+                : "require"
+            }}
+            this mod and may stop working.
+          </p>
         </div>
         <div class="flex justify-end gap-3 border-t border-zinc-700 px-6 py-4">
           <button
@@ -681,6 +703,7 @@ type AvailableMod = {
   mName: string;
   mShortDescription: string;
   mIconObjectId: string;
+  requiredMods?: Array<{ gameId: string; name: string }>;
 };
 const availableMods = ref<AvailableMod[]>([]);
 const modInstall = useModInstall(id);
@@ -715,6 +738,20 @@ async function confirmUninstallMod() {
   if (!modId) return;
   await installedModsCtl.uninstall(modId);
   modToUninstall.value = null;
+}
+
+/** Installed mods on this game that require `modId` (by name) — surfaced as a
+ *  warning before uninstalling a prerequisite like SMAPI. */
+function modDependents(modId: string | null): string[] {
+  if (!modId) return [];
+  return installedModsCtl.installedMods.value
+    .filter((m) => m.gameId !== modId)
+    .filter((m) =>
+      availableMods.value
+        .find((a) => a.id === m.gameId)
+        ?.requiredMods?.some((r) => r.gameId === modId),
+    )
+    .map((m) => installedModName(m.gameId));
 }
 
 // ── Installed versions (multi-version install) ───────────────────────────────

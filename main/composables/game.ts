@@ -247,6 +247,14 @@ export type VersionOption = {
       downloadSize: number;
     };
   }>;
+  /** Mod prerequisites (type=Mod versions): other mods this one requires,
+   *  enough to resolve + install them onto the same parent game. */
+  requiredMods?: Array<{
+    gameId: string;
+    versionId: string;
+    name: string;
+    iconObjectId: string;
+  }>;
 };
 
 export type ProtonPath = {

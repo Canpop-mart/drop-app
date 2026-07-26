@@ -287,6 +287,15 @@ struct VersionDownloadOptionRequiredContent {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct VersionDownloadOptionRequiredMod {
+    game_id: String,
+    version_id: String,
+    name: String,
+    icon_object_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VersionDownloadOption {
     pub game_id: String,
     pub version_id: String,
@@ -303,6 +312,10 @@ pub struct VersionDownloadOption {
     pub mod_install_dir: String,
     #[serde(default)]
     pub launch_override: Option<String>,
+    // Mod prerequisites (type=Mod versions): other mods this one requires. Same
+    // serde(default) pass-through reasoning as the mod placement fields above.
+    #[serde(default)]
+    required_mods: Vec<VersionDownloadOptionRequiredMod>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -667,6 +680,14 @@ pub async fn fetch_game_version_options(
     fetch_game_version_options_logic(game_id, state).await
 }
 
+/// A prerequisite mod (name + id), for the "Requires: X" hint on the mods list.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModRequirement {
+    pub game_id: String,
+    pub name: String,
+}
+
 /// A mod available for a base game, as listed by the server's
 /// `/client/game/{id}/mods` endpoint.
 #[derive(Serialize, Deserialize)]
@@ -676,6 +697,10 @@ pub struct ModListing {
     pub m_name: String,
     pub m_short_description: String,
     pub m_icon_object_id: String,
+    // Prerequisite mods this mod needs (from its latest version). serde(default)
+    // keeps older-server responses (which omit it) deserialising.
+    #[serde(default)]
+    pub required_mods: Vec<ModRequirement>,
 }
 
 /// List the mods available for a base game. Fetched via a command (not a raw
