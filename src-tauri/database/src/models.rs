@@ -26,17 +26,27 @@ pub mod data {
     pub type ControllerType = v1::ControllerType;
     pub type QualityPreset = v1::QualityPreset;
     pub type AspectRatio = v1::AspectRatio;
+    pub type InstallRecord = v1::InstallRecord;
 
     use std::collections::HashMap;
 
+    // Multi-version install: identity is (id, version, download_type). `version`
+    // used to be ignored here, which meant two versions of one game collided to
+    // the same key in the download registry, queue, and transient_statuses —
+    // making it impossible to have (or download) more than one at a time. Status
+    // resolution (GameStatusManager::fetch_state) matches on id + download_type
+    // by iterating, so it is unaffected by this key change.
     impl PartialEq for DownloadableMetadata {
         fn eq(&self, other: &Self) -> bool {
-            self.id == other.id && self.download_type == other.download_type
+            self.id == other.id
+                && self.version == other.version
+                && self.download_type == other.download_type
         }
     }
     impl Hash for DownloadableMetadata {
         fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
             self.id.hash(state);
+            self.version.hash(state);
             self.download_type.hash(state);
         }
     }
@@ -330,6 +340,11 @@ pub mod data {
             /// hostname. Defaults to `None` for new installs.
             #[serde(default)]
             pub device_name: Option<String>,
+            /// Name shown to others in multiplayer (co-op rooms + Archipelago).
+            /// When `None` or empty, the client falls back to the account name.
+            /// Applied to the server-side client record; defaults to `None`.
+            #[serde(default)]
+            pub display_name: Option<String>,
             /// Game-streaming quality profile: `"performance"`, `"balanced"`
             /// (default), `"quality"`, or `"ultra"`. Drives the fps + bitrate
             /// handed to Moonlight. (Legacy `"dataSaver"`/`"highQuality"` map to
@@ -382,6 +397,7 @@ pub mod data {
                     )
                     .field("cloud_saves_enabled", &self.cloud_saves_enabled)
                     .field("device_name", &self.device_name)
+                    .field("display_name", &self.display_name)
                     .field("streaming_quality", &self.streaming_quality)
                     .field("streaming_resolution", &self.streaming_resolution)
                     .field("streaming_hdr", &self.streaming_hdr)
@@ -419,6 +435,7 @@ pub mod data {
                     ra_token: String::new(),
                     cloud_saves_enabled: default_true(),
                     device_name: None,
+                    display_name: None,
                     streaming_quality: default_streaming_quality(),
                     streaming_resolution: default_streaming_resolution(),
                     streaming_hdr: false,
@@ -520,6 +537,23 @@ pub mod data {
             pub enable_updates: bool,
         }
 
+        /// One installed (or partially-installed) version of a game — the unit
+        /// that makes multiple concurrent versions of one game possible, since
+        /// each record carries its own `install_dir`. Keyed in
+        /// `DatabaseApplications::installs` by `"{game_id}::{version_id}"`.
+        /// Mirrors the data previously split across `installed_game_version`
+        /// (platform) + `game_statuses[..].Installed` (dir/type/update flag).
+        #[derive(Serialize, Clone, Deserialize, Debug)]
+        #[serde(rename_all = "camelCase")]
+        pub struct InstallRecord {
+            pub game_id: String,
+            pub version_id: String,
+            pub target_platform: Platform,
+            pub install_dir: String,
+            pub install_type: InstalledGameType,
+            pub update_available: bool,
+        }
+
         #[serde_as]
         #[derive(Serialize, Clone, Deserialize, Default)]
         #[serde(rename_all = "camelCase")]
@@ -540,6 +574,14 @@ pub mod data {
             /// lacked this field) loadable.
             #[serde(default)]
             pub pending_queue: Vec<PendingQueueEntry>,
+
+            /// Per-(game,version) install records — the multi-version-install
+            /// source of truth. `#[serde(default)]` keeps older DBs (which
+            /// lacked it) loadable; seeded from the legacy
+            /// `installed_game_version` + `game_statuses` on load via
+            /// `rebuild_installs_from_legacy` until writers move onto it.
+            #[serde(default)]
+            pub installs: HashMap<String, InstallRecord>,
 
             #[serde(skip)]
             pub transient_statuses: HashMap<DownloadableMetadata, ApplicationTransientStatus>,
@@ -575,6 +617,7 @@ pub mod data {
                     additional_proton_paths: Vec::new(),
                     default_proton_path: None,
                     pending_queue: Vec::new(),
+                    installs: HashMap::new(),
                 },
                 prev_database,
                 base_url: String::new(),
@@ -582,6 +625,88 @@ pub mod data {
                 settings: Settings::default(),
                 cache_dir,
             }
+        }
+    }
+
+    /// Build the `installs` map key for a (game, version) pair.
+    pub fn install_key(game_id: &str, version_id: &str) -> String {
+        format!("{game_id}::{version_id}")
+    }
+
+    impl DatabaseApplications {
+        /// Look up a specific install of a game.
+        pub fn get_install(&self, game_id: &str, version_id: &str) -> Option<&InstallRecord> {
+            self.installs.get(&install_key(game_id, version_id))
+        }
+
+        /// Mutable lookup of a specific install (e.g. to flip its install_type).
+        pub fn get_install_mut(
+            &mut self,
+            game_id: &str,
+            version_id: &str,
+        ) -> Option<&mut InstallRecord> {
+            self.installs.get_mut(&install_key(game_id, version_id))
+        }
+
+        /// All installs of a given game (any version), in arbitrary order.
+        pub fn installs_for_game(&self, game_id: &str) -> Vec<&InstallRecord> {
+            self.installs
+                .values()
+                .filter(|r| r.game_id == game_id)
+                .collect()
+        }
+
+        /// Insert or replace an install record.
+        pub fn upsert_install(&mut self, record: InstallRecord) {
+            let key = install_key(&record.game_id, &record.version_id);
+            self.installs.insert(key, record);
+        }
+
+        /// Remove an install record, returning it if present.
+        pub fn remove_install(
+            &mut self,
+            game_id: &str,
+            version_id: &str,
+        ) -> Option<InstallRecord> {
+            self.installs.remove(&install_key(game_id, version_id))
+        }
+
+        /// One-time seed of `installs` from the legacy single-install-per-game
+        /// fields, for DBs created before the multi-version map existed.
+        ///
+        /// Guarded on emptiness: once `installs` has entries it is the
+        /// authoritative, persisted source of truth and must NOT be rebuilt from
+        /// `game_statuses` — that map is game-id-keyed and holds only the latest
+        /// version per game, so rebuilding would silently drop every other
+        /// installed version on each launch. Write-through (upsert_install /
+        /// remove_install) keeps it current from here on.
+        pub fn seed_installs_from_legacy(&mut self) {
+            if !self.installs.is_empty() {
+                return;
+            }
+            let mut installs = HashMap::new();
+            for (game_id, meta) in &self.installed_game_version {
+                if let Some(GameDownloadStatus::Installed {
+                    install_type,
+                    version_id,
+                    install_dir,
+                    update_available,
+                }) = self.game_statuses.get(game_id)
+                {
+                    installs.insert(
+                        install_key(game_id, version_id),
+                        InstallRecord {
+                            game_id: game_id.clone(),
+                            version_id: version_id.clone(),
+                            target_platform: meta.target_platform.clone(),
+                            install_dir: install_dir.clone(),
+                            install_type: install_type.clone(),
+                            update_available: *update_available,
+                        },
+                    );
+                }
+            }
+            self.installs = installs;
         }
     }
     impl DatabaseAuth {

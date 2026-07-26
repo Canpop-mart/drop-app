@@ -64,6 +64,11 @@ use crate::{
 /// A game process Drop is currently tracking.
 pub struct RunningProcess {
     pub(crate) handle: Arc<SharedChild>,
+    /// The exact (game, version) that was launched. Multi-version install: the
+    /// running version isn't necessarily the game's current install, so the
+    /// exit path must clear the transient status + report the version using
+    /// THIS meta, not `installed_game_version[game_id]`.
+    pub(crate) meta: database::DownloadableMetadata,
     /// Monotonic clock at launch — used for session duration. Deliberately
     /// `Instant` rather than `SystemTime` so a clock change during the
     /// session (NTP correction, user editing the system clock) doesn't make

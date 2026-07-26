@@ -109,7 +109,10 @@ impl DatabaseInterface {
         // schema version this build understands. A schema bump therefore
         // never breaks an existing client's DB — see `crate::migrations`.
         let envelope: VersionedDatabase = ron::from_str(&database_data)?;
-        let database = migrations::migrate_to_latest(envelope)?;
+        let mut database = migrations::migrate_to_latest(envelope)?;
+        // One-time seed of the per-install map from the legacy single-install
+        // fields (no-op once it has been populated + persisted).
+        database.applications.seed_installs_from_legacy();
 
         Ok(Some(DatabaseInterface {
             data: RwLock::new(database),

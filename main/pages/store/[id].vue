@@ -128,6 +128,48 @@
             />
           </section>
 
+          <!-- Available Mods — discovery only. Installing needs the base game
+               installed, which happens on the library page, so this section
+               surfaces that mods exist and points the user there. -->
+          <section
+            v-if="availableMods.length > 0"
+            class="rounded-xl bg-zinc-900/50 ring-1 ring-zinc-800/60 p-6"
+          >
+            <h2 class="text-lg font-display font-semibold text-zinc-100 mb-4">
+              Available Mods
+            </h2>
+            <ul class="divide-y divide-zinc-800">
+              <li
+                v-for="mod in availableMods"
+                :key="mod.id"
+                class="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
+              >
+                <img
+                  v-if="mod.mIconObjectId"
+                  :src="useObject(mod.mIconObjectId)"
+                  class="size-10 rounded object-cover shrink-0"
+                />
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-medium text-zinc-100 truncate">
+                    {{ mod.mName }}
+                  </p>
+                  <p
+                    v-if="mod.mShortDescription"
+                    class="text-xs text-zinc-400 truncate"
+                  >
+                    {{ mod.mShortDescription }}
+                  </p>
+                </div>
+              </li>
+            </ul>
+            <p class="mt-4 text-xs text-zinc-500">
+              {{
+                inLibrary === true
+                  ? "Open this game in your library and install it to add mods."
+                  : "Add this game to your library and install it to add mods."
+              }}
+            </p>
+          </section>
         </div>
 
         <!-- Right column — action panel + metadata. Sticky on lg+ so it
@@ -396,6 +438,7 @@ import {
   type StoreGame,
 } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
+import { invoke } from "@tauri-apps/api/core";
 import type { Game } from "~/types";
 
 const route = useRoute();
@@ -409,6 +452,17 @@ useHead({ title: "Store" });
 const gameRef = ref<Game | null>(null);
 const storeMeta = ref<StoreGame | null>(null);
 const currentImage = ref(0);
+
+// Available mods for this game — discovery only. Installing a mod needs the base
+// game installed, which happens on the library page, so the store just surfaces
+// that mods exist and points the user there.
+type AvailableMod = {
+  id: string;
+  mName: string;
+  mShortDescription: string;
+  mIconObjectId: string;
+};
+const availableMods = ref<AvailableMod[]>([]);
 
 // Library membership — `null` while still checking, then `true` / `false`.
 const inLibrary = ref<boolean | null>(null);
@@ -489,6 +543,22 @@ async function loadStoreMeta() {
   }
 }
 
+/** Mods available for this game (discovery only — install happens in the
+ *  library). Soft-fails to an empty list so the section hides cleanly. */
+async function loadMods() {
+  if (!gameId.value) return;
+  try {
+    // Via a Tauri command so the JWT client auth header is attached — a raw
+    // server:// fetch to /client/* arrives unauthenticated (403).
+    availableMods.value = await invoke<AvailableMod[]>("fetch_game_mods", {
+      gameId: gameId.value,
+    });
+  } catch (e) {
+    console.warn("[store/[id]] failed to load mods:", e);
+    availableMods.value = [];
+  }
+}
+
 /** Per-game achievement list with the caller's unlock state baked in.
  *  Soft-fails to an empty list so the section hides cleanly when the
  *  endpoint isn't available (no provider linked, network down, etc.). */
@@ -566,6 +636,7 @@ onMounted(async () => {
   loadStoreMeta();
   checkInLibrary();
   loadAchievements();
+  loadMods();
 });
 
 // Watch gameId for navigation between different store/[id] pages without
@@ -578,9 +649,11 @@ watch(gameId, async () => {
   libraryError.value = null;
   achievements.value = [];
   achievementsExpanded.value = false;
+  availableMods.value = [];
   await load();
   loadStoreMeta();
   checkInLibrary();
   loadAchievements();
+  loadMods();
 });
 </script>

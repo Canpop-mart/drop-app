@@ -43,15 +43,23 @@ export function useGameInstall(game: Game) {
     installError.value = undefined;
 
     try {
-      versionOptions.value = await invoke("fetch_game_version_options", {
-        gameId: game.id,
-      });
+      const allOptions = await invoke<Array<VersionOption>>(
+        "fetch_game_version_options",
+        { gameId: game.id },
+      );
+      // Hide already-installed versions — "Install another version" should only
+      // offer versions you don't already have (multi-version install).
+      const installed = await invoke<Array<{ versionId: string }>>(
+        "fetch_game_installs",
+        { gameId: game.id },
+      );
+      const installedIds = new Set(installed.map((i) => i.versionId));
+      versionOptions.value = allOptions.filter(
+        (o) => !installedIds.has(o.versionId),
+      );
       console.log(
-        `[install] fetch_game_version_options -> ${
-          Array.isArray(versionOptions.value)
-            ? `${versionOptions.value.length} option(s)`
-            : String(versionOptions.value)
-        }`,
+        `[install] fetch_game_version_options -> ${allOptions.length} option(s), ` +
+          `${versionOptions.value.length} not yet installed`,
       );
       installDirs.value = await invoke("fetch_download_dir_stats");
       console.log(

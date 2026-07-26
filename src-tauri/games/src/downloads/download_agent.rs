@@ -39,12 +39,35 @@ use crate::state::GameStatusManager;
 use super::download_logic::download_game_chunk;
 use super::drop_data::DropData;
 
-static RETRY_COUNT: usize = 3;
+pub(crate) static RETRY_COUNT: usize = 3;
+
+/// Make a version identifier safe to use as a single path segment (fresh
+/// installs live under `<base>/<library_path>/<version>`). Keeps alphanumerics
+/// plus `-_.`, replaces anything else with `_`, and never yields an empty or
+/// dot-only segment.
+fn sanitize_version_segment(version: &str) -> String {
+    let cleaned: String = version
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim_matches('.');
+    if trimmed.is_empty() {
+        "version".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
 
 /// Whether a download error is a full disk — which no amount of retrying fixes.
 /// Matches ENOSPC (28) on Unix and ERROR_DISK_FULL (112) / ERROR_HANDLE_DISK_FULL
 /// (39) on Windows, since `io::ErrorKind::StorageFull` isn't stable.
-fn is_disk_full(e: &ApplicationDownloadError) -> bool {
+pub(crate) fn is_disk_full(e: &ApplicationDownloadError) -> bool {
     if let ApplicationDownloadError::IoError(io) = e {
         return matches!(io.raw_os_error(), Some(28) | Some(112) | Some(39));
     }
@@ -117,9 +140,21 @@ impl GameDownloadAgent {
             .map(|v| v.library_path)
             .unwrap_or(metadata.id.clone());
 
-        let base_dir_path = Path::new(&base_dir);
-        info!("base dir {}", base_dir_path.display());
-        let data_base_dir_path = base_dir_path.join(game_name);
+        info!("base dir {}", Path::new(&base_dir).display());
+        // Multi-version install: an existing install of this exact (game,
+        // version) keeps its recorded directory, so updates/resumes land in the
+        // same place and pre-multi-version single-version installs aren't
+        // orphaned. A fresh install goes under a per-version subfolder, so two
+        // versions of one game never collide on disk and overwrite each other.
+        let data_base_dir_path = borrow_db_checked()
+            .applications
+            .get_install(&metadata.id, &metadata.version)
+            .map(|r| PathBuf::from(&r.install_dir))
+            .unwrap_or_else(|| {
+                Path::new(&base_dir)
+                    .join(&game_name)
+                    .join(sanitize_version_segment(&metadata.version))
+            });
         info!("data dir path {}", data_base_dir_path.display());
 
         create_dir_all(data_base_dir_path.clone())?;
@@ -129,7 +164,6 @@ impl GameDownloadAgent {
             metadata.version.clone(),
             metadata.target_platform,
             data_base_dir_path.clone(),
-            configuration.clone(),
         );
 
         let result = Self {
@@ -793,10 +827,23 @@ impl Downloadable for GameDownloadAgent {
             .transient_statuses
             .remove(&self.metadata());
 
+        // Pass the installed version. push_game_update SKIPS refreshes for an
+        // Installed game when version is None (see its guard) — so a failed
+        // re-download/update of an already-installed game left the UI frozen on
+        // "Downloading" with no way to retry. With the version present the guard
+        // passes and the game resets to its real (playable, retryable) status.
+        // A never-installed game has no entry here → None, and its post-error
+        // state is Remote, which the guard doesn't skip anyway.
+        let version = handle
+            .applications
+            .installed_game_version
+            .get(&self.metadata.id)
+            .and_then(|m| handle.applications.game_versions.get(&m.version).cloned());
+
         push_game_update(
             app_handle,
             &self.metadata.id,
-            None,
+            version,
             GameStatusManager::fetch_state(&self.metadata.id, &handle),
         );
     }

@@ -100,6 +100,7 @@ const ALLOWED_SETTINGS_KEYS: &[&str] = &[
     "raToken",
     "cloudSavesEnabled",
     "deviceName",
+    "displayName",
     "streamingQuality",
     "streamingResolution",
     "streamingHdr",

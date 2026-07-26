@@ -1,8 +1,8 @@
 use bitcode::{Decode, Encode};
 use database::{
-    ApplicationTransientStatus, Database, DownloadableMetadata, GameDownloadStatus, GameVersion,
-    borrow_db_checked, borrow_db_mut_checked,
-    models::data::{InstalledGameType, UserConfiguration},
+    ApplicationTransientStatus, Database, DownloadType, DownloadableMetadata, GameDownloadStatus,
+    GameVersion, borrow_db_checked, borrow_db_mut_checked,
+    models::data::{InstallRecord, InstalledGameType, UserConfiguration},
 };
 use log::{debug, error, warn};
 use remote::{
@@ -108,9 +108,11 @@ pub fn set_partially_installed_db(
     db_lock.applications.game_statuses.insert(
         meta.id.clone(),
         GameDownloadStatus::Installed {
-            install_type: InstalledGameType::PartiallyInstalled { configuration },
+            install_type: InstalledGameType::PartiallyInstalled {
+                configuration: configuration.clone(),
+            },
             version_id: meta.version.clone(),
-            install_dir,
+            install_dir: install_dir.clone(),
             update_available: false,
         },
     );
@@ -118,6 +120,15 @@ pub fn set_partially_installed_db(
         .applications
         .installed_game_version
         .insert(meta.id.clone(), meta.clone());
+    // Write-through to the per-install map (the multi-version source of truth).
+    db_lock.applications.upsert_install(InstallRecord {
+        game_id: meta.id.clone(),
+        version_id: meta.version.clone(),
+        target_platform: meta.target_platform.clone(),
+        install_dir,
+        install_type: InstalledGameType::PartiallyInstalled { configuration },
+        update_available: false,
+    });
 
     if let Some(app_handle) = app_handle {
         push_game_update(
@@ -145,17 +156,23 @@ pub fn uninstall_game_logic(meta: DownloadableMetadata, app_handle: &AppHandle) 
         GameStatusManager::fetch_state(&meta.id, &db_handle),
     );
 
-    // Extract install_dir by reference to avoid cloning the entire GameDownloadStatus
-    let install_dir = match db_handle.applications.game_statuses.get(&meta.id) {
-        Some(GameDownloadStatus::Installed { install_dir, .. }) => install_dir.clone(),
-        Some(_) => {
-            warn!("invalid previous state for uninstall, failing silently.");
-            return;
-        }
-        None => {
-            warn!("uninstall job doesn't have previous state, failing silently");
-            return;
-        }
+    // The directory for THIS specific version (multi-version): prefer the
+    // per-install record, fall back to the game-level status for a legacy
+    // single install.
+    let install_dir = db_handle
+        .applications
+        .get_install(&meta.id, &meta.version)
+        .map(|r| r.install_dir.clone())
+        .or_else(|| match db_handle.applications.game_statuses.get(&meta.id) {
+            Some(GameDownloadStatus::Installed { install_dir, .. }) => Some(install_dir.clone()),
+            _ => None,
+        });
+    let Some(install_dir) = install_dir else {
+        warn!(
+            "uninstall job for {} has no known install dir, failing silently",
+            meta.id
+        );
+        return;
     };
 
     drop(db_handle);
@@ -166,16 +183,62 @@ pub fn uninstall_game_logic(meta: DownloadableMetadata, app_handle: &AppHandle) 
             error!("{e}");
         }
         let mut db_handle = borrow_db_mut_checked();
-        transition_from_db(&db_handle, &meta.id, StatusKind::Remote);
         db_handle.applications.transient_statuses.remove(&meta);
         db_handle
             .applications
-            .installed_game_version
-            .remove(&meta.id);
-        db_handle
-            .applications
-            .game_statuses
-            .insert(meta.id.clone(), GameDownloadStatus::Remote {});
+            .remove_install(&meta.id, &meta.version);
+
+        // Repoint the game-level status. Only touch it if it pointed at the
+        // version we just removed (or was already gone): if another install of
+        // this game remains, point game_statuses at it so the game still shows
+        // installed; otherwise the game becomes fully Remote.
+        let should_repoint = match db_handle.applications.game_statuses.get(&meta.id) {
+            Some(GameDownloadStatus::Installed { version_id, .. }) => *version_id == meta.version,
+            _ => true,
+        };
+        if should_repoint {
+            let remaining = db_handle
+                .applications
+                .installs_for_game(&meta.id)
+                .into_iter()
+                .next()
+                .cloned();
+            match remaining {
+                Some(rec) => {
+                    let status = GameDownloadStatus::Installed {
+                        install_type: rec.install_type.clone(),
+                        version_id: rec.version_id.clone(),
+                        install_dir: rec.install_dir.clone(),
+                        update_available: rec.update_available,
+                    };
+                    transition_from_db(&db_handle, &meta.id, StatusKind::from_persistent(&status));
+                    db_handle.applications.installed_game_version.insert(
+                        meta.id.clone(),
+                        DownloadableMetadata::new(
+                            meta.id.clone(),
+                            rec.version_id.clone(),
+                            rec.target_platform.clone(),
+                            DownloadType::Game,
+                        ),
+                    );
+                    db_handle
+                        .applications
+                        .game_statuses
+                        .insert(meta.id.clone(), status);
+                }
+                None => {
+                    transition_from_db(&db_handle, &meta.id, StatusKind::Remote);
+                    db_handle
+                        .applications
+                        .installed_game_version
+                        .remove(&meta.id);
+                    db_handle
+                        .applications
+                        .game_statuses
+                        .insert(meta.id.clone(), GameDownloadStatus::Remote {});
+                }
+            }
+        }
 
         push_game_update(
             &app_handle,
@@ -238,14 +301,15 @@ pub async fn on_game_complete(
         .iter()
         .find(|v| v.platform == meta.target_platform);
 
+    let install_type = if setup_configuration.is_none() {
+        InstalledGameType::Installed
+    } else {
+        InstalledGameType::SetupRequired
+    };
     let status = GameDownloadStatus::Installed {
         version_id: meta.version.clone(),
-        install_dir,
-        install_type: if setup_configuration.is_none() {
-            InstalledGameType::Installed
-        } else {
-            InstalledGameType::SetupRequired
-        },
+        install_dir: install_dir.clone(),
+        install_type: install_type.clone(),
         update_available: false,
     };
 
@@ -260,6 +324,15 @@ pub async fn on_game_complete(
         .game_statuses
         .insert(meta.id.clone(), status.clone());
     db_handle.applications.transient_statuses.remove(meta);
+    // Write-through to the per-install map (the multi-version source of truth).
+    db_handle.applications.upsert_install(InstallRecord {
+        game_id: meta.id.clone(),
+        version_id: meta.version.clone(),
+        target_platform: meta.target_platform.clone(),
+        install_dir,
+        install_type,
+        update_available: false,
+    });
     drop(db_handle);
     app_emit!(
         app_handle,

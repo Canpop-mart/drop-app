@@ -941,6 +941,20 @@ pub async fn ap_session_list() -> Result<Value, String> {
     resp.json::<Value>().await.map_err(|e| e.to_string())
 }
 
+/// WebHost integration config: the browser-openable Archipelago WebHost URL the
+/// operator configured (if any) plus the games it supports, so the client can
+/// link to it and deep-link to a game's options page. Returns
+/// `{ webHostUrl: string | null, games: string[] }`.
+#[tauri::command]
+pub async fn ap_web_host() -> Result<Value, String> {
+    let url = generate_url(&["/api/v1/client/archipelago/config"], &[]).map_err(|e| e.to_string())?;
+    let resp = make_authenticated_get(url).await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(server_error_message(resp, "Could not fetch Archipelago config").await);
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
 /// Upload a player YAML from disk. The frontend picks the file with the dialog
 /// plugin and passes its path.
 #[tauri::command]

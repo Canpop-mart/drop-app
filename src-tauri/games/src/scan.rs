@@ -29,7 +29,7 @@ use std::fs;
 
 use database::{
     GameDownloadStatus, borrow_db_mut_checked,
-    models::data::InstalledGameType,
+    models::data::{InstallRecord, InstalledGameType},
 };
 use log::{info, warn};
 
@@ -110,7 +110,7 @@ pub fn scan_install_dirs() {
                     GameDownloadStatus::Installed {
                         install_type: InstalledGameType::Installed,
                         version_id: metadata.version.clone(),
-                        install_dir: install_dir_str,
+                        install_dir: install_dir_str.clone(),
                         update_available: false,
                     },
                 );
@@ -118,6 +118,14 @@ pub fn scan_install_dirs() {
                     .applications
                     .installed_game_version
                     .insert(metadata.id.clone(), metadata.clone());
+                db_lock.applications.upsert_install(InstallRecord {
+                    game_id: metadata.id.clone(),
+                    version_id: metadata.version.clone(),
+                    target_platform: metadata.target_platform.clone(),
+                    install_dir: install_dir_str,
+                    install_type: InstalledGameType::Installed,
+                    update_available: false,
+                });
                 imported += 1;
             } else {
                 warn!(
@@ -130,7 +138,10 @@ pub fn scan_install_dirs() {
                     &metadata,
                     install_dir_str,
                     None,
-                    drop_data.configuration.clone(),
+                    // Offline scan can't recover the download-time config; the
+                    // full GameVersion (with the real config) is re-fetched on
+                    // the next online library sync (see the Installed branch).
+                    Default::default(),
                 );
                 imported_partial += 1;
             }

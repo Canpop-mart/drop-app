@@ -317,6 +317,7 @@ import { UserGroupIcon } from "@heroicons/vue/24/outline";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { useCoopRoom } from "~/composables/coop-room";
+import { useDisplayName } from "~/composables/use-display-name";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
 
 definePageMeta({ layout: "bigpicture" });
@@ -374,6 +375,9 @@ const focusNav = useFocusNavigation();
 const registerAction = useBpFocusableGroup("content");
 
 onMounted(() => {
+  // Flip an old hostname label to the account name (or a custom one) so it's
+  // correct in both co-op and Archipelago before anyone sees it.
+  useDisplayName().ensure();
   loadStatus();
   if (room.value) {
     pollMembers();

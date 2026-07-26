@@ -39,8 +39,8 @@ use std::{
 };
 
 use database::{
-    ApplicationTransientStatus, GameDownloadStatus, borrow_db_checked, borrow_db_mut_checked,
-    models::data::InstalledGameType, platform::Platform,
+    ApplicationTransientStatus, DownloadType, DownloadableMetadata, GameDownloadStatus,
+    borrow_db_checked, borrow_db_mut_checked, models::data::InstalledGameType, platform::Platform,
 };
 use dynfmt::{Format, SimpleCurlyFormat};
 use games::{
@@ -75,8 +75,9 @@ impl ProcessManager<'_> {
         game_id: String,
         launch_process_index: usize,
         incognito: bool,
+        version_id: Option<String>,
     ) -> Result<(), ProcessError> {
-        self.launch_process_inner(game_id, launch_process_index, false, None, incognito)
+        self.launch_process_inner(game_id, launch_process_index, false, None, incognito, version_id)
     }
 
     /// Launch a game process for streaming.
@@ -96,7 +97,7 @@ impl ProcessManager<'_> {
         // Streaming never goes incognito — the receiver expects credit for
         // their play time. Incognito is a deliberate user-facing toggle
         // and the streaming flow has no surface to expose it.
-        self.launch_process_inner(game_id, launch_process_index, true, config_override, false)
+        self.launch_process_inner(game_id, launch_process_index, true, config_override, false, None)
     }
 
     fn launch_process_inner(
@@ -106,6 +107,10 @@ impl ProcessManager<'_> {
         streaming: bool,
         config_override: Option<database::models::data::UserConfiguration>,
         incognito: bool,
+        // Which installed version to launch. `None` = the game's current single
+        // install (unchanged legacy behaviour); `Some` selects a specific
+        // install from the multi-version map (the frontend's per-version launch).
+        version_id: Option<String>,
     ) -> Result<(), ProcessError> {
         if self.processes.contains_key(&game_id) {
             return Err(ProcessError::AlreadyRunning);
@@ -116,27 +121,58 @@ impl ProcessManager<'_> {
         // immutable borrow here keeps launch from blocking concurrent reads.
         let db_lock = borrow_db_checked();
 
-        let meta = db_lock
-            .applications
-            .installed_game_version
-            .get(&game_id)
-            .cloned()
-            .ok_or(ProcessError::NotInstalled)?;
-
-        let game_status = db_lock
-            .applications
-            .game_statuses
-            .get(&game_id)
-            .ok_or(ProcessError::NotInstalled)?;
-
-        let (version_name, install_dir) = match game_status {
-            GameDownloadStatus::Installed {
-                version_id: version_name,
-                install_dir,
-                install_type: InstalledGameType::Installed | InstalledGameType::SetupRequired,
-                ..
-            } => (version_name, install_dir),
-            _ => return Err(ProcessError::NotInstalled),
+        // Resolve which install to launch. An explicit version_id (the
+        // frontend's per-version launch) selects that install from the
+        // multi-version map; without one we launch the game's current single
+        // install exactly as before, so existing callers are unchanged.
+        let (meta, version_name, install_dir, install_type): (
+            DownloadableMetadata,
+            &String,
+            &String,
+            &InstalledGameType,
+        ) = if let Some(v) = &version_id {
+            let install = db_lock
+                .applications
+                .get_install(&game_id, v)
+                .ok_or(ProcessError::NotInstalled)?;
+            if matches!(
+                install.install_type,
+                InstalledGameType::PartiallyInstalled { .. }
+            ) {
+                return Err(ProcessError::NotInstalled);
+            }
+            let meta = DownloadableMetadata::new(
+                game_id.clone(),
+                install.version_id.clone(),
+                install.target_platform.clone(),
+                DownloadType::Game,
+            );
+            (
+                meta,
+                &install.version_id,
+                &install.install_dir,
+                &install.install_type,
+            )
+        } else {
+            let meta = db_lock
+                .applications
+                .installed_game_version
+                .get(&game_id)
+                .cloned()
+                .ok_or(ProcessError::NotInstalled)?;
+            let (version_name, install_dir, install_type) =
+                match db_lock.applications.game_statuses.get(&game_id) {
+                    Some(GameDownloadStatus::Installed {
+                        version_id: version_name,
+                        install_dir,
+                        install_type:
+                            install_type @ (InstalledGameType::Installed
+                            | InstalledGameType::SetupRequired),
+                        ..
+                    }) => (version_name, install_dir, install_type),
+                    _ => return Err(ProcessError::NotInstalled),
+                };
+            (meta, version_name, install_dir, install_type)
         };
 
         let game_version = db_lock
@@ -179,10 +215,7 @@ impl ProcessManager<'_> {
             "target_platform": format!("{:?}", target_platform),
             "version_id": version_name,
             "install_dir": install_dir,
-            "install_type": match game_status {
-                GameDownloadStatus::Installed { install_type, .. } => format!("{:?}", install_type),
-                other => format!("{:?}", other),
-            },
+            "install_type": format!("{:?}", install_type),
             "launch_template": &game_version.user_configuration.launch_template,
             "override_proton_path": &game_version.user_configuration.override_proton_path,
         }));
@@ -196,11 +229,8 @@ impl ProcessManager<'_> {
         let mut needs_platform_correction = false;
 
         // ── STEP 2: Select launch config ───────────────────────────────────
-        let (target_command, emulator, disc_paths) = match game_status {
-            GameDownloadStatus::Installed {
-                install_type: InstalledGameType::Installed,
-                ..
-            } => {
+        let (target_command, emulator, disc_paths) = match install_type {
+            InstalledGameType::Installed => {
                 let (_, launch_config) = game_version
                     .launches
                     .iter()
@@ -220,10 +250,7 @@ impl ProcessManager<'_> {
                     launch_config.disc_paths.clone(),
                 )
             }
-            GameDownloadStatus::Installed {
-                install_type: InstalledGameType::SetupRequired,
-                ..
-            } => {
+            InstalledGameType::SetupRequired => {
                 let setup_config = game_version
                     .setups
                     .iter()
@@ -240,6 +267,27 @@ impl ProcessManager<'_> {
         };
 
         let mut target_command = ParsedCommand::parse(target_command)?;
+
+        // ── STEP 2b: Mod launch override ───────────────────────────────────
+        // If an installed mod (e.g. SMAPI) declares a launch override, swap the
+        // game's executable for it. The override is relative to install_dir, the
+        // same as the base command, so it absolutises identically below. Args
+        // are preserved. Emulator launches are left alone (the ROM path must not
+        // be replaced). When the mod is uninstalled its ledger is gone, so this
+        // returns None and the game launches normally again.
+        if emulator.is_none()
+            && let Some(override_exe) = games::downloads::mod_data::find_launch_override(
+                std::path::Path::new(install_dir),
+            )
+        {
+            info!("[LAUNCH] mod launch override active for {game_id}: {override_exe}");
+            let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                "step": "2b_mod_launch_override",
+                "game_id": &game_id,
+                "override": &override_exe,
+            }));
+            target_command.command = override_exe;
+        }
 
         // ── STEP 3: Handler selection ──────────────────────────────────────
         // For an emulator launch the handler must target the *emulator's*
@@ -653,6 +701,7 @@ impl ProcessManager<'_> {
             game_id.clone(),
             RunningProcess {
                 handle: launch_process_handle,
+                meta: meta.clone(),
                 start: Instant::now(),
                 manually_killed: false,
                 playtime_session_id,

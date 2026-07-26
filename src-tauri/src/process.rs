@@ -28,6 +28,8 @@ pub async fn launch_game(
     id: String,
     index: usize,
     incognito: Option<bool>,
+    // Which installed version to launch; omit for the game's current install.
+    version: Option<String>,
 ) -> Result<LaunchResult, ProcessError> {
     // launch_game_inner holds the PROCESS_MANAGER lock and, on a save-sync
     // conflict, blocks on the UI-resolution channel for up to 5 minutes
@@ -46,6 +48,7 @@ pub async fn launch_game(
             false,
             None,
             incognito.unwrap_or(false),
+            version,
         ));
     });
     rx.await.unwrap_or_else(|_| {
@@ -63,7 +66,7 @@ pub fn launch_game_streaming(
     index: usize,
     config_override: Option<database::models::data::UserConfiguration>,
 ) -> Result<LaunchResult, ProcessError> {
-    launch_game_inner(id, index, true, config_override, false)
+    launch_game_inner(id, index, true, config_override, false, None)
 }
 
 fn launch_game_inner(
@@ -72,6 +75,7 @@ fn launch_game_inner(
     streaming: bool,
     config_override: Option<database::models::data::UserConfiguration>,
     incognito: bool,
+    version: Option<String>,
 ) -> Result<LaunchResult, ProcessError> {
     let result = {
         let mut process_manager_lock = PROCESS_MANAGER.lock();
@@ -79,7 +83,7 @@ fn launch_game_inner(
         if streaming {
             process_manager_lock.launch_process_streaming(id, index, config_override)
         } else {
-            process_manager_lock.launch_process(id, index, incognito)
+            process_manager_lock.launch_process(id, index, incognito, version)
         }
     };
 

@@ -232,6 +232,10 @@ export type VersionOption = {
     installSize: number;
     downloadSize: number;
   };
+  /** Mod placement (type=Mod versions): where the mod overlays + optional
+   *  launch override, relative to the base game's install dir. */
+  modInstallDir?: string;
+  launchOverride?: string | null;
   requiredContent: Array<{
     gameId: string;
     versionId: string;

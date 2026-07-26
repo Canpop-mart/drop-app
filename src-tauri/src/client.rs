@@ -3,7 +3,7 @@ use std::sync::nonpoison::Mutex;
 use database::{borrow_db_checked, borrow_db_mut_checked};
 use download_manager::DOWNLOAD_MANAGER;
 use log::{debug, error};
-use remote::requests::{generate_url, make_authenticated_get};
+use remote::requests::{generate_url, make_authenticated_get, make_authenticated_post};
 use tauri::AppHandle;
 use tauri_plugin_autostart::ManagerExt;
 
@@ -82,4 +82,23 @@ pub fn get_autostart_enabled(app: AppHandle) -> Result<bool, tauri_plugin_autost
 pub async fn check_online() -> Result<bool, ()> {
     let online = make_authenticated_get(generate_url(&["/api/v1/"], &[]).unwrap()).await.is_ok();
     Ok(online)
+}
+
+/// Rename this device on the server. This is the name shown to others in
+/// multiplayer (co-op rooms + Archipelago). Scoped server-side to the calling
+/// client, so it can only rename itself.
+#[tauri::command]
+pub async fn rename_client(name: String) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 64 {
+        return Err("Name must be between 1 and 64 characters".to_string());
+    }
+    let url = generate_url(&["/api/v1/client/name"], &[]).map_err(|e| e.to_string())?;
+    let resp = make_authenticated_post(url, &serde_json::json!({ "name": trimmed }))
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("Could not rename device: HTTP {}", resp.status()));
+    }
+    Ok(())
 }

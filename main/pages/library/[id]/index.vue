@@ -54,7 +54,7 @@
       :launch-in-flight="launchCtl.launchInFlight.value"
       :prep-status="launchCtl.prepStatus.value"
       @install="installCtl.openInstallFlow()"
-      @launch="launchCtl.launch()"
+      @launch="launchCtl.launch(selectedVersionId ?? undefined)"
       @launch-incognito="launchCtl.launchIncognito()"
       @queue="goToQueue()"
       @kill="launchCtl.kill()"
@@ -62,6 +62,89 @@
       @compat-result="onCompatTestResult"
       @open-community="activeDetailTab = 'community'"
     />
+
+    <!-- Installed versions — the multi-version install manager. The full list
+         (per-version Play / Uninstall) shows when more than one version is
+         installed; a single install just gets an "Install another version"
+         affordance. -->
+    <div v-if="installs.length > 0" class="relative z-10 mx-8 mt-4">
+      <div
+        v-if="installs.length > 1"
+        class="rounded-xl border border-zinc-800 bg-zinc-900 p-4"
+      >
+        <div class="mb-3 flex items-center justify-between">
+          <h3 class="text-sm font-medium text-zinc-200">Installed versions</h3>
+          <button
+            class="text-sm text-blue-400 hover:text-blue-300"
+            @click="installCtl.openInstallFlow()"
+          >
+            Install another version
+          </button>
+        </div>
+        <p class="mb-2 text-xs text-zinc-500">
+          Select which version the Play button launches.
+        </p>
+        <div class="space-y-2">
+          <div
+            v-for="inst in installs"
+            :key="inst.versionId"
+            class="flex items-center gap-3 rounded-lg px-3 py-2"
+            :class="
+              selectedVersionId === inst.versionId
+                ? 'bg-blue-600/15 ring-1 ring-blue-500/60'
+                : 'bg-zinc-800/50'
+            "
+          >
+            <button
+              type="button"
+              class="flex min-w-0 flex-1 items-center gap-3 text-left"
+              @click="selectedVersionId = inst.versionId"
+            >
+              <span
+                class="size-4 shrink-0 rounded-full border-2"
+                :class="
+                  selectedVersionId === inst.versionId
+                    ? 'border-blue-400 bg-blue-500'
+                    : 'border-zinc-500'
+                "
+              />
+              <span class="min-w-0 text-sm text-zinc-200">
+                {{ versionLabel(inst.versionId) }}
+                <span
+                  v-if="inst.installType === 'PartiallyInstalled'"
+                  class="ml-1 text-xs text-amber-300"
+                  >Incomplete</span
+                >
+                <span
+                  v-else-if="inst.installType === 'SetupRequired'"
+                  class="ml-1 text-xs text-amber-300"
+                  >Setup needed</span
+                >
+                <span
+                  v-if="inst.updateAvailable"
+                  class="ml-1 text-xs text-blue-300"
+                  >Update available</span
+                >
+              </span>
+            </button>
+            <button
+              type="button"
+              class="shrink-0 rounded-md bg-zinc-700 px-3 py-1.5 text-sm font-medium text-zinc-200 hover:bg-zinc-600"
+              @click="versionToUninstall = inst.versionId"
+            >
+              Uninstall
+            </button>
+          </div>
+        </div>
+      </div>
+      <button
+        v-else
+        class="text-sm text-blue-400 hover:text-blue-300"
+        @click="installCtl.openInstallFlow()"
+      >
+        Install another version
+      </button>
+    </div>
 
     <!-- Tabbed content — About / Gallery / Achievements / Community /
          Cloud Saves. Cloud Saves used to sit perma-visible below the
@@ -175,6 +258,104 @@
                 />
               </CollapsibleSection>
             </aside>
+          </div>
+
+          <!-- Mods — available (install) + installed (uninstall). Only shown
+               when the base game is installed and it has mods. -->
+          <div
+            v-else-if="activeDetailTab === 'mods'"
+            class="space-y-4"
+          >
+            <CollapsibleSection
+              title="Available Mods"
+              :badge="`${availableMods.length}`"
+            >
+              <p
+                v-if="availableMods.length === 0"
+                class="text-sm text-zinc-400 py-2"
+              >
+                No mods are available for this game yet.
+              </p>
+              <ul v-else class="divide-y divide-zinc-800">
+                <li
+                  v-for="mod in availableMods"
+                  :key="mod.id"
+                  class="flex items-center gap-3 py-3"
+                >
+                  <img
+                    v-if="mod.mIconObjectId"
+                    :src="useObject(mod.mIconObjectId)"
+                    class="size-10 rounded object-cover shrink-0"
+                  />
+                  <div class="min-w-0 flex-1">
+                    <p class="text-sm font-medium text-zinc-100 truncate">
+                      {{ mod.mName }}
+                    </p>
+                    <p
+                      v-if="mod.mShortDescription"
+                      class="text-xs text-zinc-400 truncate"
+                    >
+                      {{ mod.mShortDescription }}
+                    </p>
+                  </div>
+                  <span
+                    v-if="isModInstalled(mod.id)"
+                    class="text-xs font-medium text-green-400 shrink-0"
+                  >
+                    Installed
+                  </span>
+                  <button
+                    v-else
+                    :disabled="modInstall.installingModId.value === mod.id"
+                    class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50 shrink-0"
+                    @click="modInstall.installMod(mod)"
+                  >
+                    {{
+                      modInstall.installingModId.value === mod.id
+                        ? "Installing…"
+                        : "Install"
+                    }}
+                  </button>
+                </li>
+              </ul>
+              <p
+                v-if="modInstall.modError.value"
+                class="mt-2 text-sm text-red-400"
+              >
+                {{ modInstall.modError.value }}
+              </p>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              v-if="installedModsCtl.installedMods.value.length > 0"
+              title="Installed Mods"
+              :badge="`${installedModsCtl.installedMods.value.length}`"
+            >
+              <ul class="divide-y divide-zinc-800">
+                <li
+                  v-for="m in installedModsCtl.installedMods.value"
+                  :key="m.gameId"
+                  class="flex items-center gap-3 py-3"
+                >
+                  <div class="min-w-0 flex-1">
+                    <p class="text-sm font-medium text-zinc-100 truncate">
+                      {{ installedModName(m.gameId) }}
+                    </p>
+                    <p class="text-xs text-zinc-500">
+                      {{ m.fileCount }}
+                      {{ m.fileCount === 1 ? "file" : "files" }}
+                    </p>
+                  </div>
+                  <button
+                    :disabled="installedModsCtl.uninstallingModId.value === m.gameId"
+                    class="rounded-md bg-red-600/90 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-red-600 disabled:opacity-50 shrink-0"
+                    @click="modToUninstall = m.gameId"
+                  >
+                    Uninstall
+                  </button>
+                </li>
+              </ul>
+            </CollapsibleSection>
           </div>
 
           <CloudSavesPanel
@@ -323,6 +504,109 @@
     </div>
   </Transition>
 
+  <!-- Mod uninstall confirmation. -->
+  <Transition
+    enter-active-class="ease-out duration-200"
+    enter-from-class="opacity-0"
+    enter-to-class="opacity-100"
+    leave-active-class="ease-in duration-150"
+    leave-from-class="opacity-100"
+    leave-to-class="opacity-0"
+  >
+    <div
+      v-if="modToUninstall"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      @click.self="modToUninstall = null"
+    >
+      <div
+        class="w-full max-w-sm rounded-xl bg-zinc-900 border border-zinc-700 shadow-2xl"
+      >
+        <div class="px-6 py-5">
+          <h3 class="text-base font-semibold font-display text-zinc-100">
+            Uninstall Mod
+          </h3>
+          <p class="mt-2 text-sm text-zinc-400">
+            Remove
+            <span class="text-zinc-200 font-medium">{{
+              installedModName(modToUninstall)
+            }}</span>
+            from
+            <span class="text-zinc-200 font-medium">{{ game.mName }}</span
+            >? Only this mod's files are removed. The base game isn't touched.
+          </p>
+        </div>
+        <div class="flex justify-end gap-3 border-t border-zinc-700 px-6 py-4">
+          <button
+            @click="modToUninstall = null"
+            class="rounded-md px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            @click="confirmUninstallMod"
+            :disabled="installedModsCtl.uninstallingModId.value !== null"
+            class="rounded-md px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 transition-colors"
+          >
+            {{
+              installedModsCtl.uninstallingModId.value !== null
+                ? "Uninstalling..."
+                : "Uninstall"
+            }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+
+  <!-- Per-version uninstall confirmation (multi-version install). -->
+  <Transition
+    enter-active-class="ease-out duration-200"
+    enter-from-class="opacity-0"
+    enter-to-class="opacity-100"
+    leave-active-class="ease-in duration-150"
+    leave-from-class="opacity-100"
+    leave-to-class="opacity-0"
+  >
+    <div
+      v-if="versionToUninstall"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      @click.self="versionToUninstall = null"
+    >
+      <div
+        class="w-full max-w-sm rounded-xl bg-zinc-900 border border-zinc-700 shadow-2xl"
+      >
+        <div class="px-6 py-5">
+          <h3 class="text-base font-semibold font-display text-zinc-100">
+            Uninstall version
+          </h3>
+          <p class="mt-2 text-sm text-zinc-400">
+            Remove
+            <span class="text-zinc-200 font-medium">{{
+              versionLabel(versionToUninstall)
+            }}</span>
+            of
+            <span class="text-zinc-200 font-medium">{{ game.mName }}</span
+            >? Other installed versions are left untouched.
+          </p>
+        </div>
+        <div class="flex justify-end gap-3 border-t border-zinc-700 px-6 py-4">
+          <button
+            @click="versionToUninstall = null"
+            class="rounded-md px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            @click="confirmUninstallVersion"
+            class="rounded-md px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 transition-colors"
+          >
+            Uninstall
+          </button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+
   <!-- Cloud save conflict resolution. -->
   <SaveConflictDialog
     v-model="saveConflictOpen"
@@ -353,6 +637,8 @@ import { useGameInstall } from "~/composables/game-detail/use-game-install";
 import { useGameLaunch } from "~/composables/game-detail/use-game-launch";
 import { useGameStats } from "~/composables/game-detail/use-game-stats";
 import { useGameConfig } from "~/composables/game-detail/use-game-config";
+import { useModInstall } from "~/composables/game-detail/use-mod-install";
+import { useInstalledMods } from "~/composables/game-detail/use-installed-mods";
 import {
   useServerApi,
   type GamePlayerEntry,
@@ -385,6 +671,116 @@ const launchCtl = useGameLaunch(game, status);
 const stats = useGameStats(game.id);
 const config = useGameConfig(game, version);
 
+// ── Mods ───────────────────────────────────────────────────────────────────
+// A mod is a Game (type=Mod) whose files overlay into this game's install dir.
+// "Available" mods come from the server; "installed" mods are read from the
+// client's on-disk `.moddata` ledgers. Both live under the Mods tab, which only
+// appears once the base game is installed.
+type AvailableMod = {
+  id: string;
+  mName: string;
+  mShortDescription: string;
+  mIconObjectId: string;
+};
+const availableMods = ref<AvailableMod[]>([]);
+const modInstall = useModInstall(id);
+const installedModsCtl = useInstalledMods(id);
+const modToUninstall = ref<string | null>(null);
+
+function isModInstalled(modId: string): boolean {
+  return installedModsCtl.installedMods.value.some((m) => m.gameId === modId);
+}
+
+/** Name for an installed mod (the ledger only stores ids), falling back to the
+ *  id when the mod is no longer listed by the server. */
+function installedModName(modId: string): string {
+  return availableMods.value.find((m) => m.id === modId)?.mName ?? modId;
+}
+
+async function loadAvailableMods() {
+  try {
+    // Must go through a Tauri command: the /client/* endpoints need the JWT
+    // client auth header, which a raw server:// fetch doesn't carry (→ 403).
+    availableMods.value = await invoke<AvailableMod[]>("fetch_game_mods", {
+      gameId: id,
+    });
+  } catch (e) {
+    console.warn("[library/[id]] failed to load available mods:", e);
+    availableMods.value = [];
+  }
+}
+
+async function confirmUninstallMod() {
+  const modId = modToUninstall.value;
+  if (!modId) return;
+  await installedModsCtl.uninstall(modId);
+  modToUninstall.value = null;
+}
+
+// ── Installed versions (multi-version install) ───────────────────────────────
+// A game can have several versions installed side by side. `installs` lists
+// them (from the per-install map); the panel below the header shows each with
+// per-version Play / Uninstall, plus "Install another version".
+type InstalledVersion = {
+  versionId: string;
+  installType: string;
+  updateAvailable: boolean;
+};
+const installs = ref<InstalledVersion[]>([]);
+const versionLabels = ref<Record<string, string>>({});
+const versionToUninstall = ref<string | null>(null);
+// The version the main Play button launches (multi-version install). Defaults
+// to the first install and follows the user's selection in the versions panel.
+const selectedVersionId = ref<string | null>(null);
+
+async function refreshInstalls() {
+  try {
+    installs.value = await invoke<InstalledVersion[]>("fetch_game_installs", {
+      gameId: id,
+    });
+    // Keep the Play-button selection pointed at a still-installed version.
+    if (installs.value.length > 0) {
+      const stillValid = installs.value.some(
+        (i) => i.versionId === selectedVersionId.value,
+      );
+      if (!stillValid) selectedVersionId.value = installs.value[0].versionId;
+    } else {
+      selectedVersionId.value = null;
+    }
+  } catch (e) {
+    console.warn("[library/[id]] failed to load installs:", e);
+    installs.value = [];
+  }
+}
+
+/** Best-effort display names for version ids (falls back to the raw id). */
+async function loadVersionLabels() {
+  try {
+    const opts = await invoke<
+      Array<{ versionId: string; displayName?: string; versionPath?: string }>
+    >("fetch_game_version_options", { gameId: id });
+    const map: Record<string, string> = {};
+    for (const o of opts) {
+      map[o.versionId] = o.displayName || o.versionPath || o.versionId;
+    }
+    versionLabels.value = map;
+  } catch {
+    // Labels are best-effort; the panel falls back to the raw version id.
+  }
+}
+
+function versionLabel(versionId: string | null): string {
+  if (!versionId) return "";
+  return versionLabels.value[versionId] || versionId;
+}
+
+async function confirmUninstallVersion() {
+  const v = versionToUninstall.value;
+  if (!v) return;
+  versionToUninstall.value = null;
+  await launchCtl.uninstall(v);
+}
+
 // VC++ install only applies to Windows games launched via Proton — i.e. on a
 // Linux host. Gate the menu item on this so it never shows on Windows/macOS.
 const isLinuxHost = computed(() => platform() === "linux");
@@ -413,14 +809,23 @@ const removeError = ref<string | undefined>();
 const detailTabs = [
   { label: "About", value: "about" },
   { label: "Community", value: "community" },
+  { label: "Mods", value: "mods" },
   { label: "Cloud Saves", value: "saves" },
 ] as const;
 const activeDetailTab =
   ref<(typeof detailTabs)[number]["value"]>("about");
 
-// Cloud saves is dev-gated, so its tab only appears when dev mode is on.
+const isInstalled = computed(() => status.value.type === "Installed");
+
+// Cloud saves is dev-gated; the Mods tab appears whenever the base game is
+// installed (an empty state covers the no-mods-yet case), so it's discoverable
+// even before any mod is wired up.
 const visibleDetailTabs = computed(() =>
-  detailTabs.filter((t) => t.value !== "saves" || devMode.enabled.value),
+  detailTabs.filter((t) => {
+    if (t.value === "saves") return devMode.enabled.value;
+    if (t.value === "mods") return isInstalled.value;
+    return true;
+  }),
 );
 
 // ── Community surfaces ───────────────────────────────────────────────────
@@ -497,6 +902,31 @@ onMounted(() => {
     .me()
     .then((me) => (myUserId.value = me.id))
     .catch(() => (myUserId.value = null));
+
+  // Mods: always load the available list (drives the tab's visibility); load
+  // the installed list only when the base game is present.
+  loadAvailableMods();
+  if (isInstalled.value) installedModsCtl.refresh();
+
+  // Multi-version install: the installed-versions list + label map.
+  refreshInstalls();
+  loadVersionLabels();
+});
+
+// A completed mod install/uninstall emits update_library; re-read the on-disk
+// ledgers so the Mods tab reflects the new state without a page reload.
+useListen("update_library", () => {
+  if (isInstalled.value) installedModsCtl.refresh();
+  refreshInstalls();
+});
+
+// Belt-and-suspenders: refresh whenever the Mods tab is opened, so it always
+// reflects on-disk state even if an install-completion event was missed.
+watch(activeDetailTab, (tab) => {
+  if (tab === "mods" && isInstalled.value) {
+    loadAvailableMods();
+    installedModsCtl.refresh();
+  }
 });
 
 function goToQueue() {

@@ -10,7 +10,7 @@ use std::{
 // a racing cancel()) never share a temp filename and clobber each other's file.
 static DROPDATA_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
 
-use database::{models::data::UserConfiguration, platform::Platform};
+use database::platform::Platform;
 use log::error;
 use utils::lock;
 
@@ -21,7 +21,7 @@ pub static DROPDATA_PATH: &str = ".dropdata";
 pub mod v1 {
     use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
-    use database::{models::data::UserConfiguration, platform::Platform};
+    use database::platform::Platform;
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize, Debug)]
@@ -29,8 +29,12 @@ pub mod v1 {
         pub game_id: String,
         pub game_version: String,
         pub target_platform: Platform,
-        #[serde(default)]
-        pub configuration: UserConfiguration,
+        // NOTE: no UserConfiguration here. `pot` cannot round-trip a struct with
+        // `#[serde(default)]` fields (UserConfiguration has several), so
+        // embedding it made `read()` fail to decode what `write()` produced —
+        // every `.dropdata` looked "corrupt" and the game re-downloaded from
+        // scratch. The field was write-only anyway (the agent carries its own
+        // configuration). See the round-trip test below.
         pub contexts: Mutex<HashMap<String, bool>>,
         pub base_path: PathBuf,
         pub previously_installed_version: Option<String>,
@@ -42,7 +46,6 @@ pub mod v1 {
             game_version: String,
             target_platform: Platform,
             base_path: PathBuf,
-            configuration: UserConfiguration,
             previously_installed_version: Option<String>,
         ) -> Self {
             Self {
@@ -51,7 +54,6 @@ pub mod v1 {
                 game_version,
                 target_platform,
                 contexts: Mutex::new(HashMap::new()),
-                configuration,
                 previously_installed_version,
             }
         }
@@ -64,7 +66,6 @@ impl DropData {
         game_version: String,
         target_platform: Platform,
         base_path: PathBuf,
-        configuration: UserConfiguration,
     ) -> Self {
         match DropData::read(&base_path) {
             Ok(v) => {
@@ -74,7 +75,6 @@ impl DropData {
                         game_version,
                         target_platform,
                         base_path,
-                        configuration,
                         Some(v.game_version),
                     );
                 }
@@ -93,14 +93,7 @@ impl DropData {
                          re-downloading from scratch",
                     );
                 }
-                DropData::new(
-                    game_id,
-                    game_version,
-                    target_platform,
-                    base_path,
-                    configuration,
-                    None,
-                )
+                DropData::new(game_id, game_version, target_platform, base_path, None)
             }
         }
     }
@@ -168,5 +161,31 @@ impl DropData {
     }
     pub fn get_contexts(&self) -> HashMap<String, bool> {
         lock!(self.contexts).clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use database::platform::Platform;
+
+    /// Regression: `.dropdata` that `write()` produced must decode via `read()`.
+    /// It didn't while DropData embedded UserConfiguration, because `pot` can't
+    /// round-trip a struct with `#[serde(default)]` fields — so every resume saw
+    /// a "corrupt" ledger and re-downloaded the whole game.
+    #[test]
+    fn dropdata_roundtrips_through_pot() {
+        let d = DropData::new(
+            "g".to_string(),
+            "v".to_string(),
+            Platform::Windows,
+            PathBuf::from("C:/base"),
+            None,
+        );
+        d.set_context("chunk1".to_string(), true);
+        let bytes = pot::to_vec(&d).expect("serialize");
+        let decoded: DropData = pot::from_slice(&bytes).expect("deserialize");
+        assert_eq!(decoded.game_id, "g");
+        assert_eq!(decoded.get_contexts().len(), 1);
     }
 }

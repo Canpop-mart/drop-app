@@ -37,7 +37,7 @@ export type AppState = {
 
 export type Game = {
   id: string;
-  type: "Game" | "Executor" | "Redist";
+  type: "Game" | "Executor" | "Redist" | "Mod";
   mName: string;
   mShortDescription: string;
   mDescription: string;
@@ -158,4 +158,7 @@ export type Settings = {
   /** Friendly per-device label shown in the cloud save conflict UI.
    * When null/empty, the backend falls back to the OS hostname. */
   deviceName?: string | null;
+  /** Name shown to others in multiplayer (co-op + Archipelago).
+   * When null/empty, falls back to the account name. */
+  displayName?: string | null;
 };

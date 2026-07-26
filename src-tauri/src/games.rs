@@ -1,18 +1,23 @@
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::nonpoison::Mutex;
 
 use bitcode::{Decode, Encode};
 use database::{
-    DownloadableMetadata, GameDownloadStatus, borrow_db_checked, borrow_db_mut_checked,
+    DownloadType, DownloadableMetadata, GameDownloadStatus, borrow_db_checked,
+    borrow_db_mut_checked,
     models::data::{InstalledGameType, UserConfiguration}, platform::Platform,
 };
 use games::{
     collections::collection::Collection,
     downloads::error::LibraryError,
-    library::{FetchGameStruct, Game, get_current_meta, uninstall_game_logic},
+    downloads::mod_data::{MODS_DIR, ModData, moddata_path},
+    library::{FetchGameStruct, Game, get_current_meta, push_game_update, uninstall_game_logic},
     state::{GameStatusManager, GameStatusWithTransient},
+    status::{StatusKind, transition_from_db},
 };
-use log::warn;
+use log::{info, warn};
+use utils::{app_emit, path_guard};
 use process::PROCESS_MANAGER;
 use remote::{
     auth::generate_authorization_header,
@@ -146,10 +151,14 @@ pub async fn fetch_library_logic(
                 continue;
             }
         };
-        if game.game_type == "Game" {
-            missing.push(game);
-        } else {
-            other.push(game);
+        match game.game_type.as_str() {
+            "Game" => missing.push(game),
+            // Mods are managed on their parent game's page (store/library "Mods"
+            // sections), never as standalone library tiles — and a mod's
+            // install_dir is the PARENT's dir, so surfacing it here would also
+            // offer a generic uninstall that deletes the base game.
+            "Mod" => {}
+            _ => other.push(game),
         }
     }
 
@@ -286,6 +295,14 @@ pub struct VersionDownloadOption {
     pub platform: Platform,
     size: GameSize,
     required_content: Vec<VersionDownloadOptionRequiredContent>,
+    // Mod placement (type=Mod versions). MUST be listed here or serde drops the
+    // server's values when this struct is deserialized + re-serialized to the
+    // frontend, so the mod would overlay at the install root. #[serde(default)]
+    // keeps non-mod / older-server responses (which omit them) deserialising.
+    #[serde(default)]
+    pub mod_install_dir: String,
+    #[serde(default)]
+    pub launch_override: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -393,6 +410,42 @@ pub fn fetch_game_status(id: String) -> GameStatusWithTransient {
     GameStatusManager::fetch_state(&id, &db_handle)
 }
 
+/// One installed version of a game, for the multi-version install list on the
+/// game page. The frontend maps `versionId` to a display name via the version
+/// options it already fetches.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallInfo {
+    pub version_id: String,
+    /// "Installed" | "SetupRequired" | "PartiallyInstalled".
+    pub install_type: String,
+    pub update_available: bool,
+}
+
+/// Every installed version of a game (any state), so the UI can show them side
+/// by side and launch/uninstall each. Empty when nothing is installed.
+#[tauri::command]
+pub fn fetch_game_installs(game_id: String) -> Vec<InstallInfo> {
+    let db = borrow_db_checked();
+    let mut installs: Vec<InstallInfo> = db
+        .applications
+        .installs_for_game(&game_id)
+        .into_iter()
+        .map(|r| InstallInfo {
+            version_id: r.version_id.clone(),
+            install_type: match &r.install_type {
+                InstalledGameType::Installed => "Installed",
+                InstalledGameType::SetupRequired => "SetupRequired",
+                InstalledGameType::PartiallyInstalled { .. } => "PartiallyInstalled",
+            }
+            .to_string(),
+            update_available: r.update_available,
+        })
+        .collect();
+    installs.sort_by(|a, b| a.version_id.cmp(&b.version_id));
+    installs
+}
+
 /// Batch-fetch statuses for many games in a single IPC call.
 /// Returns a Vec of (id, status) pairs in the same order as the input.
 #[tauri::command]
@@ -407,14 +460,212 @@ pub fn fetch_game_statuses(ids: Vec<String>) -> Vec<(String, GameStatusWithTrans
 }
 
 #[tauri::command]
-pub fn uninstall_game(game_id: String, app_handle: AppHandle) -> Result<(), LibraryError> {
-    let meta = match get_current_meta(&game_id) {
-        Some(data) => data,
-        None => return Err(LibraryError::MetaNotFound(game_id)),
+pub fn uninstall_game(
+    game_id: String,
+    // Which installed version to remove; omit to remove the game's current install.
+    version: Option<String>,
+    app_handle: AppHandle,
+) -> Result<(), LibraryError> {
+    let meta = match &version {
+        Some(v) => {
+            let db = borrow_db_checked();
+            let install = db
+                .applications
+                .get_install(&game_id, v)
+                .ok_or_else(|| LibraryError::MetaNotFound(game_id.clone()))?;
+            DownloadableMetadata::new(
+                game_id.clone(),
+                install.version_id.clone(),
+                install.target_platform.clone(),
+                DownloadType::Game,
+            )
+        }
+        None => match get_current_meta(&game_id) {
+            Some(data) => data,
+            None => return Err(LibraryError::MetaNotFound(game_id)),
+        },
     };
+
+    // A mod's install_dir is the PARENT game's directory, so uninstall_game_logic
+    // would remove_dir_all() it and wipe the base game. Mods must go through
+    // uninstall_mod, which removes only the mod's own overlay files.
+    if meta.download_type == DownloadType::Mod {
+        warn!("refusing to uninstall mod {game_id} as a game; use uninstall_mod");
+        return Err(LibraryError::IsMod(game_id));
+    }
+
     uninstall_game_logic(meta, &app_handle);
 
     Ok(())
+}
+
+/// The parent game's install directory. A mod overlays into it, and every mod's
+/// ledger lives under `<install dir>/.mods/`. Both mod commands anchor on this
+/// rather than the mod's own status, so mod state stays tied to the parent.
+fn parent_install_dir(parent_game_id: &str) -> Result<PathBuf, LibraryError> {
+    let db = borrow_db_checked();
+    match db.applications.game_statuses.get(parent_game_id) {
+        Some(GameDownloadStatus::Installed { install_dir, .. }) => Ok(PathBuf::from(install_dir)),
+        _ => Err(LibraryError::MetaNotFound(parent_game_id.to_string())),
+    }
+}
+
+/// Files claimed by OTHER installed mods of the same parent. Under
+/// last-installed-wins overlay, a file one mod overwrote may still be needed by
+/// another mod, so uninstall must not remove a file another `.moddata` claims.
+fn other_mod_files(mods_dir: &Path, exclude_mod_id: &str) -> HashSet<String> {
+    let mut claimed = HashSet::new();
+    let exclude_file = format!("{exclude_mod_id}.moddata");
+    let Ok(entries) = std::fs::read_dir(mods_dir) else {
+        return claimed;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.ends_with(".moddata") || name == exclude_file {
+            continue;
+        }
+        if let Ok(m) = ModData::read(&entry.path()) {
+            for f in m.get_installed_files() {
+                claimed.insert(f);
+            }
+        }
+    }
+    claimed
+}
+
+/// Clear a mod's install state after its files are removed: mark it Remote, drop
+/// its installed version, and refresh the UI.
+fn finish_mod_uninstall(mod_game_id: &str, app_handle: &AppHandle) {
+    let mut db = borrow_db_mut_checked();
+    transition_from_db(&db, mod_game_id, StatusKind::Remote);
+    db.applications
+        .transient_statuses
+        .retain(|k, _| k.id != mod_game_id);
+    db.applications.installed_game_version.remove(mod_game_id);
+    db.applications
+        .game_statuses
+        .insert(mod_game_id.to_string(), GameDownloadStatus::Remote {});
+    push_game_update(
+        app_handle,
+        &mod_game_id.to_string(),
+        None,
+        GameStatusManager::fetch_state(&mod_game_id.to_string(), &db),
+    );
+    drop(db);
+    app_emit!(app_handle, "update_library", ());
+}
+
+/// Uninstall a mod: remove exactly the files it wrote into the parent's install
+/// dir (skipping any still claimed by another mod), delete its ledger, and reset
+/// its status. The base game is never touched.
+#[tauri::command]
+pub fn uninstall_mod(
+    mod_game_id: String,
+    parent_game_id: String,
+    app_handle: AppHandle,
+) -> Result<(), LibraryError> {
+    let parent_dir = parent_install_dir(&parent_game_id)?;
+    let mods_dir = parent_dir.join(MODS_DIR);
+    let meta_path = moddata_path(&parent_dir, &mod_game_id);
+
+    let moddata = match ModData::read(&meta_path) {
+        Ok(m) => m,
+        Err(_) => {
+            // No ledger — nothing to remove from disk. Still clear any lingering
+            // status so the UI doesn't show it as installed.
+            finish_mod_uninstall(&mod_game_id, &app_handle);
+            return Ok(());
+        }
+    };
+
+    let claimed_by_others = other_mod_files(&mods_dir, &mod_game_id);
+
+    // Files were overlaid into the ledger's base_path (install_dir/modRoot), so
+    // remove them relative to that — not the raw install dir. This also cleans
+    // up installs made before modRoot existed, whose base_path is the root.
+    let overlay_dir = &moddata.base_path;
+    for rel in moddata.get_installed_files() {
+        if claimed_by_others.contains(&rel) {
+            continue;
+        }
+        let path = match path_guard::join_within(overlay_dir, Path::new(&rel)) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("skipping unsafe mod file path {rel:?}: {e}");
+                continue;
+            }
+        };
+        if path.exists()
+            && let Err(e) = std::fs::remove_file(&path)
+        {
+            warn!("failed to remove mod file {}: {e}", path.display());
+        }
+    }
+
+    if let Err(e) = std::fs::remove_file(&meta_path) {
+        warn!("failed to remove mod ledger {}: {e}", meta_path.display());
+    }
+
+    finish_mod_uninstall(&mod_game_id, &app_handle);
+    Ok(())
+}
+
+/// A single installed mod, as surfaced to the client UI.
+#[derive(Serialize, Encode, Decode)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledMod {
+    pub game_id: String,
+    pub version: String,
+    pub file_count: usize,
+}
+
+/// List the mods currently installed onto a base game, read from the `.moddata`
+/// ledgers under the parent's install dir (the source of truth for what is on
+/// disk).
+#[tauri::command]
+pub fn list_installed_mods(parent_game_id: String) -> Result<Vec<InstalledMod>, LibraryError> {
+    let parent_dir = parent_install_dir(&parent_game_id)?;
+    let mods_dir = parent_dir.join(MODS_DIR);
+    info!(
+        "list_installed_mods: scanning {} for parent {parent_game_id}",
+        mods_dir.display()
+    );
+
+    let mut mods = Vec::new();
+    let entries = match std::fs::read_dir(&mods_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            // No .mods dir yet usually means no mods installed.
+            info!(
+                "list_installed_mods: cannot read {} ({e}) — reporting 0 mods",
+                mods_dir.display()
+            );
+            return Ok(mods);
+        }
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.to_string_lossy().ends_with(".moddata") {
+            continue;
+        }
+        match ModData::read(&entry.path()) {
+            Ok(m) => mods.push(InstalledMod {
+                game_id: m.game_id.clone(),
+                version: m.game_version.clone(),
+                file_count: m.get_installed_files().len(),
+            }),
+            Err(e) => warn!(
+                "list_installed_mods: failed to read {} ({e})",
+                entry.path().display()
+            ),
+        }
+    }
+    info!(
+        "list_installed_mods: found {} mod(s) for parent {parent_game_id}",
+        mods.len()
+    );
+    Ok(mods)
 }
 
 #[tauri::command]
@@ -423,6 +674,39 @@ pub async fn fetch_game_version_options(
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<Vec<VersionDownloadOption>, RemoteAccessError> {
     fetch_game_version_options_logic(game_id, state).await
+}
+
+/// A mod available for a base game, as listed by the server's
+/// `/client/game/{id}/mods` endpoint.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModListing {
+    pub id: String,
+    pub m_name: String,
+    pub m_short_description: String,
+    pub m_icon_object_id: String,
+}
+
+/// List the mods available for a base game. Fetched via a command (not a raw
+/// `server://` fetch) because the `/client/*` endpoints require the JWT client
+/// auth header that `generate_authorization_header` adds — a browser fetch
+/// through the server protocol arrives unauthenticated and 403s.
+#[tauri::command]
+pub async fn fetch_game_mods(game_id: String) -> Result<Vec<ModListing>, RemoteAccessError> {
+    let client = DROP_CLIENT_ASYNC.clone();
+    let url = generate_url(&["/api/v1/client/game", &game_id, "mods"], &[])?;
+    let response = client
+        .get(url)
+        .header("Authorization", generate_authorization_header())
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Err(RemoteAccessError::InvalidResponse(response.json().await?));
+    }
+
+    let data: Vec<ModListing> = response.json().await?;
+    Ok(data)
 }
 
 /// Configures the Steam emulator (GBE/Goldberg) for an installed game.

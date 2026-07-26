@@ -279,6 +279,7 @@ pub fn reconcile_on_startup(db: &mut Database) -> ReconcileReport {
                 .game_statuses
                 .insert(game_id.clone(), GameDownloadStatus::Remote {});
             db.applications.installed_game_version.remove(&game_id);
+            db.applications.remove_install(&game_id, &version_id);
             report.missing_dir.push(game_id);
             continue;
         }
@@ -305,6 +306,11 @@ pub fn reconcile_on_startup(db: &mut Database) -> ReconcileReport {
                 "[game-status] reconcile: {game_id} has install dir but no .dropdata, \
                  demoting {prev:?} -> PartiallyInstalled"
             );
+            if let Some(rec) = db.applications.get_install_mut(&game_id, &version_id) {
+                rec.install_type = InstalledGameType::PartiallyInstalled {
+                    configuration: Default::default(),
+                };
+            }
             db.applications.game_statuses.insert(
                 game_id.clone(),
                 GameDownloadStatus::Installed {

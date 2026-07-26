@@ -6,6 +6,7 @@ use serde_with::SerializeDisplay;
 pub enum LibraryError {
     MetaNotFound(String),
     VersionNotFound(String),
+    IsMod(String),
 }
 impl Display for LibraryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -21,6 +22,11 @@ impl Display for LibraryError {
                 LibraryError::VersionNotFound(game_id) => {
                     format!(
                         "Could not locate any installed version  for game id {game_id} in the database"
+                    )
+                }
+                LibraryError::IsMod(id) => {
+                    format!(
+                        "Game ID {id} is a mod. Remove it from the base game's Mods list instead."
                     )
                 }
             }

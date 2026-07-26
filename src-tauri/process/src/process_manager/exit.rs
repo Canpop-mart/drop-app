@@ -66,6 +66,10 @@ impl ProcessManager<'_> {
         let elapsed = process.start.elapsed();
         // Capture the kill flag before `process` is partially moved below.
         let manually_killed = process.manually_killed;
+        // The exact version that was launched — used to clear the right
+        // transient status and report the right version, since the running
+        // version may not be the game's current install (multi-version).
+        let meta = process.meta.clone();
         let exit_kind = describe_exit(&result, manually_killed);
         info!(
             "[EXIT] game {game_id} exited after {}s — {exit_kind}",
@@ -94,15 +98,6 @@ impl ProcessManager<'_> {
 
         // ── Status + DB cleanup ────────────────────────────────────────────
         let mut db_handle = borrow_db_mut_checked();
-        let Some(meta) = db_handle
-            .applications
-            .installed_game_version
-            .get(&game_id)
-            .cloned()
-        else {
-            warn!("[EXIT] no installed version for {game_id}; skipping status cleanup");
-            return Ok(());
-        };
 
         // Route the Running -> Installed transition through the central
         // state machine so it is logged and validated. `from` is read from

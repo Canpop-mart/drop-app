@@ -20,7 +20,7 @@
         {{
           tab === "coop"
             ? "Put friends on a private virtual LAN so LAN / co-op games discover each other across the internet. No port-forwarding needed."
-            : "Run a multiworld randomizer together. Drop collects everyone's settings and hands out the connect address."
+            : "Set up a multiworld together."
         }}
       </p>
 
@@ -287,6 +287,7 @@
 <script setup lang="ts">
 import { UserGroupIcon } from "@heroicons/vue/24/outline";
 import { useCoopRoom } from "~/composables/coop-room";
+import { useDisplayName } from "~/composables/use-display-name";
 
 const {
   room,
@@ -334,6 +335,9 @@ async function doLeave() {
 }
 
 onMounted(() => {
+  // Flip an old hostname label to the account name (or a custom one) so it's
+  // correct in both co-op and Archipelago before anyone sees it.
+  useDisplayName().ensure();
   loadStatus();
   if (room.value) {
     pollMembers();

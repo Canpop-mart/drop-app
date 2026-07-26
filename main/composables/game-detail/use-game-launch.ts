@@ -69,6 +69,11 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
   // being reported. Cleared by the page's existing process-exit watcher.
   const incognitoActive = ref(false);
 
+  // Version the next launch should target, remembered across the launch-options
+  // modal (which re-enters via launchIndex). undefined → the game's current
+  // install (unchanged single-version behaviour).
+  const pendingLaunchVersion = ref<string | undefined>(undefined);
+
   function notifyLaunchFailure(action: "run" | "stop", err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
     createModal(
@@ -82,13 +87,16 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
     );
   }
 
-  async function launch() {
+  async function launch(version?: string) {
+    // Remember the target version so the launch-options modal path (which
+    // re-enters via launchIndex) still launches it.
+    pendingLaunchVersion.value = version;
     // SetupRequired installs launch straight into their (single) setup step.
     if (
       status.value.type === "Installed" &&
       status.value.install_type.type === InstalledType.SetupRequired
     ) {
-      await launchIndex(0);
+      await launchIndex(0, version);
       return;
     }
     try {
@@ -97,7 +105,7 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
         { id: game.id },
       );
       if (fetchedLaunchOptions.length === 1) {
-        await launchIndex(0);
+        await launchIndex(0, version);
         return;
       }
       launchOptions.value = fetchedLaunchOptions;
@@ -123,17 +131,22 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
     }
   }
 
-  async function launchIndex(index: number) {
+  async function launchIndex(index: number, version?: string) {
     if (launchInFlight.value) return;
     launchInFlight.value = true;
     launchOptions.value = undefined;
     const useIncognito = incognitoNext.value;
     incognitoNext.value = false;
+    // Explicit arg wins; otherwise the version `launch()` stashed before the
+    // launch-options modal. undefined → the game's current install.
+    const useVersion = version ?? pendingLaunchVersion.value;
+    pendingLaunchVersion.value = undefined;
     try {
       const result = await invoke<LaunchResult>("launch_game", {
         id: game.id,
         index,
         incognito: useIncognito,
+        version: useVersion,
       });
       if (result.result === "InstallRequired") {
         dependencyRequiredModal.value = {
@@ -173,8 +186,9 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
     }
   }
 
-  async function uninstall() {
-    await invoke("uninstall_game", { gameId: game.id });
+  async function uninstall(version?: string) {
+    // undefined → the game's current install; set → that specific version.
+    await invoke("uninstall_game", { gameId: game.id, version });
   }
 
   async function resumeDownload() {

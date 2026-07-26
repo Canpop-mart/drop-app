@@ -15,6 +15,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 
 export interface ApSessionInfo {
   sessionId: string;
@@ -65,6 +66,13 @@ export function useArchipelago() {
   const sessionEnded = useState("apSessionEnded", () => false);
   const codeCopied = useState("apCodeCopied", () => false);
   const connectCopied = useState("apConnectCopied", () => false);
+
+  // WebHost integration (the separate container that owns YAML generation and
+  // room hosting). Null/empty until loadConfig runs, or when the operator hasn't
+  // configured a WebHost URL — the panel hides the link + search in that case.
+  const webHostUrl = useState<string | null>("apWebHostUrl", () => null);
+  const supportedGames = useState<string[]>("apSupportedGames", () => []);
+  const configLoaded = useState("apConfigLoaded", () => false);
 
   const rawCode = computed(
     () => detail.value?.shortCode ?? session.value?.shortCode ?? "",
@@ -303,6 +311,45 @@ export function useArchipelago() {
     sessionEnded.value = false;
   }
 
+  /**
+   * Load the WebHost URL + supported-games list once. Cheap (the server caches
+   * the games scrape), and config rarely changes within a run, so we skip the
+   * call after the first success.
+   */
+  async function loadConfig() {
+    if (configLoaded.value) return;
+    try {
+      const cfg = await invoke<{
+        webHostUrl: string | null;
+        games: string[];
+      }>("ap_web_host");
+      webHostUrl.value = cfg.webHostUrl ?? null;
+      supportedGames.value = Array.isArray(cfg.games) ? cfg.games : [];
+      configLoaded.value = true;
+    } catch (e) {
+      console.error("ap_web_host failed", e);
+    }
+  }
+
+  /** The WebHost options (YAML generator) page for a game, or null if unusable. */
+  function gameOptionsUrl(game: string): string | null {
+    const base = webHostUrl.value;
+    const g = game.trim();
+    if (!base || !g) return null;
+    return `${base}/games/${encodeURIComponent(g)}/player-options`;
+  }
+
+  /** Open the WebHost home (its own game list + search) in the system browser. */
+  async function openWebHost() {
+    if (webHostUrl.value) await openExternal(webHostUrl.value);
+  }
+
+  /** Open a game's options page directly in the system browser. */
+  async function openGameOptions(game: string) {
+    const url = gameOptionsUrl(game);
+    if (url) await openExternal(url);
+  }
+
   return {
     session,
     detail,
@@ -312,8 +359,13 @@ export function useArchipelago() {
     sessionEnded,
     codeCopied,
     connectCopied,
+    webHostUrl,
+    supportedGames,
     rawCode,
     displayCode,
+    loadConfig,
+    openWebHost,
+    openGameOptions,
     refresh,
     startPolling,
     stopPolling,

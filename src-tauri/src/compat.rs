@@ -197,7 +197,7 @@ pub async fn start_compat_test(
             // Compat-test launches are never incognito — the whole point of
             // the test is to record a result against the game, which means
             // the session + presence side effects are the desired behaviour.
-            process_manager_lock.launch_process(game_id_clone, index, false)
+            process_manager_lock.launch_process(game_id_clone, index, false, None)
         })
         .await
         .map_err(|e| CompatTestError::LaunchFailed(format!("join error: {e}")))?
