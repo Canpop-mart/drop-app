@@ -24,7 +24,7 @@ use remote::{
     cache::{cache_object, cache_object_db, get_cached_object},
     error::{DropServerError, RemoteAccessError},
     offline,
-    requests::generate_url,
+    requests::{generate_url, remote_request, RemoteRequest},
     utils::DROP_CLIENT_ASYNC,
 };
 use serde::{Deserialize, Serialize};
@@ -315,31 +315,22 @@ pub async fn fetch_game_version_options_logic(
     game_id: String,
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<Vec<VersionDownloadOption>, RemoteAccessError> {
-    let client = DROP_CLIENT_ASYNC.clone();
-
     let previous_id = borrow_db_checked()
         .applications
         .installed_game_version
         .get(&game_id)
         .map(|v| v.version.clone());
 
-    let response = generate_url(
+    let url = generate_url(
         &["/api/v1/client/game", &game_id, "versions"],
-        &[("previous", &previous_id.unwrap_or(String::new()))],
+        &[("previous", &previous_id.unwrap_or_default())],
     )?;
-    let response = client
-        .get(response)
-        .header("Authorization", generate_authorization_header())
-        .send()
-        .await?;
-
-    if response.status() != 200 {
-        let err = response.json().await?;
-        warn!("{err:?}");
-        return Err(RemoteAccessError::InvalidResponse(err));
-    }
-
-    let data: Vec<VersionDownloadOption> = response.json().await?;
+    // Route through the retrying helper. A cold size computation on the server
+    // can exceed the client's 15s timeout on the first hit, but the server
+    // caches the result, so an automatic retry lands on the warm path. This used
+    // to be a single no-retry request, which is why installs needed manual
+    // re-clicks to eventually succeed.
+    let data: Vec<VersionDownloadOption> = remote_request(RemoteRequest::get(url)).await?;
 
     // Collect unique platforms from the response, then check validity
     // with locks held briefly, then filter without locks.
