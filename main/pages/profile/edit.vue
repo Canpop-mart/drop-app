@@ -145,42 +145,114 @@
         </p>
       </div>
 
-      <!-- Profile theme -->
+      <!-- Profile theme — an accent that threads through the whole profile.
+           Presets + a custom colour, with a live preview of the result. -->
+      <div class="mb-8" :style="previewVars">
+        <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
+          Accent colour
+        </p>
+        <div class="flex flex-wrap items-center gap-3">
+          <button
+            v-for="p in presetList"
+            :key="p.id"
+            type="button"
+            class="size-9 rounded-full transition-transform hover:scale-110"
+            :class="
+              selectedTheme === p.id
+                ? 'ring-2 ring-white ring-offset-2 ring-offset-zinc-950'
+                : ''
+            "
+            :style="{ background: p.accent }"
+            :title="p.label"
+            @click="selectPreset(p.id)"
+          />
+          <label
+            class="relative block size-9 cursor-pointer overflow-hidden rounded-full ring-1 ring-zinc-600"
+            :class="
+              isCustom
+                ? 'ring-2 ring-white ring-offset-2 ring-offset-zinc-950'
+                : ''
+            "
+            :style="{
+              background: isCustom
+                ? customColor
+                : 'conic-gradient(from 0deg, #ef4444, #f59e0b, #22c55e, #06b6d4, #3b82f6, #a855f7, #ef4444)',
+            }"
+            title="Custom colour"
+          >
+            <input
+              v-model="customColor"
+              type="color"
+              class="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              @input="onColorInput"
+            />
+          </label>
+          <input
+            v-if="isCustom"
+            :value="customColor"
+            maxlength="7"
+            spellcheck="false"
+            class="w-24 rounded-md border border-zinc-700 bg-zinc-800/50 px-2 py-1.5 font-mono text-xs text-zinc-100 focus:border-blue-500 focus:outline-none"
+            @input="onHexInput"
+          />
+        </div>
+
+        <!-- Live preview -->
+        <div class="mt-3 overflow-hidden rounded-lg ring-1 ring-zinc-700/40">
+          <div class="h-10" :style="{ background: 'var(--profile-banner)' }" />
+          <div class="flex items-center gap-2 bg-zinc-900 px-3 py-2">
+            <span class="text-sm font-semibold text-[color:var(--accent)]">
+              Accent preview
+            </span>
+            <span
+              class="ml-auto rounded-md px-2.5 py-1 text-xs font-semibold"
+              :style="{
+                background: 'var(--accent)',
+                color: 'var(--accent-contrast)',
+              }"
+            >
+              Button
+            </span>
+          </div>
+        </div>
+
+        <p class="text-xs text-zinc-500 mt-2">
+          Threads through your whole profile — name, stats, shelves and buttons,
+          plus the banner when you haven't uploaded one.
+        </p>
+      </div>
+
+      <!-- Content editors — favourites + showcase live on their own pages. -->
       <div class="mb-8">
         <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
-          Profile theme
+          Profile content
         </p>
-        <div class="grid grid-cols-3 sm:grid-cols-6 gap-3">
-          <button
-            v-for="theme in profileThemes"
-            :key="theme.id"
-            class="flex flex-col items-center gap-2 p-3 rounded-xl border-2 transition-all"
-            :class="
-              selectedTheme === theme.id
-                ? 'border-blue-500 bg-zinc-800/80'
-                : 'border-transparent bg-zinc-800/30 hover:border-zinc-600'
-            "
-            @click="selectedTheme = theme.id"
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <NuxtLink
+            to="/profile/favorites"
+            class="flex items-center gap-3 rounded-xl bg-zinc-800/40 p-4 ring-1 ring-zinc-700/50 transition-colors hover:bg-zinc-800"
           >
-            <div
-              class="w-full h-7 rounded-md"
-              :style="{
-                background: `linear-gradient(135deg, ${theme.from}, ${theme.to})`,
-              }"
-            />
-            <span
-              class="text-[10px] font-medium"
-              :class="
-                selectedTheme === theme.id ? 'text-blue-400' : 'text-zinc-500'
-              "
-            >
-              {{ theme.label }}
-            </span>
-          </button>
+            <StarIcon class="size-5 shrink-0 text-zinc-400" />
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-zinc-100">Favourite games</p>
+              <p class="text-xs text-zinc-500">Pin and reorder your top games</p>
+            </div>
+            <ChevronRightIcon class="ml-auto size-4 shrink-0 text-zinc-600" />
+          </NuxtLink>
+          <NuxtLink
+            to="/profile/showcase"
+            class="flex items-center gap-3 rounded-xl bg-zinc-800/40 p-4 ring-1 ring-zinc-700/50 transition-colors hover:bg-zinc-800"
+          >
+            <Squares2X2Icon class="size-5 shrink-0 text-zinc-400" />
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-zinc-100">Showcase</p>
+              <p class="text-xs text-zinc-500">
+                Feature games, achievements or a note
+              </p>
+            </div>
+            <ChevronRightIcon class="ml-auto size-4 shrink-0 text-zinc-600" />
+          </NuxtLink>
         </div>
-        <p class="text-xs text-zinc-500 mt-2">
-          Sets the banner fallback colour when you haven't uploaded one.
-        </p>
       </div>
 
       <!-- Save / cancel -->
@@ -212,13 +284,24 @@
 </template>
 
 <script setup lang="ts">
-import { PhotoIcon, UserIcon } from "@heroicons/vue/24/solid";
+import {
+  PhotoIcon,
+  UserIcon,
+  StarIcon,
+  Squares2X2Icon,
+  ChevronRightIcon,
+} from "@heroicons/vue/24/solid";
 import {
   useServerApi,
   type UserProfile,
 } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
 import ProfilePicturePicker from "~/components/ProfilePicturePicker.vue";
+import {
+  PROFILE_THEME_PRESETS,
+  resolveAccentHex,
+  useProfileTheme,
+} from "~/composables/use-profile-theme";
 
 useHead({ title: "Edit profile" });
 
@@ -244,14 +327,29 @@ const saving = ref(false);
 const saveError = ref<string | null>(null);
 const saveOk = ref(false);
 
-const profileThemes = [
-  { id: "default", label: "Blue", from: "#3b82f6", to: "#1e3a8a" },
-  { id: "ocean", label: "Ocean", from: "#0ea5e9", to: "#1e3a8a" },
-  { id: "sunset", label: "Sunset", from: "#f97316", to: "#7c2d12" },
-  { id: "forest", label: "Forest", from: "#22c55e", to: "#14532d" },
-  { id: "purple", label: "Purple", from: "#a855f7", to: "#581c87" },
-  { id: "rose", label: "Rose", from: "#f43f5e", to: "#881337" },
-] as const;
+const presetList = Object.entries(PROFILE_THEME_PRESETS).map(([id, p]) => ({
+  id,
+  label: p.label,
+  accent: p.accent,
+}));
+
+// Accent state — `selectedTheme` holds either a preset key or a #hex string.
+const customColor = ref("#3b82f6");
+const isCustom = computed(() => /^#[0-9a-f]{6}$/i.test(selectedTheme.value));
+const { vars: previewVars } = useProfileTheme(() => selectedTheme.value);
+
+function selectPreset(id: string) {
+  selectedTheme.value = id;
+}
+function onColorInput() {
+  selectedTheme.value = customColor.value.toLowerCase();
+}
+function onHexInput(e: Event) {
+  let v = (e.target as HTMLInputElement).value.trim();
+  if (v && !v.startsWith("#")) v = `#${v}`;
+  customColor.value = v;
+  if (/^#[0-9a-f]{6}$/i.test(v)) selectedTheme.value = v.toLowerCase();
+}
 
 const hasChanges = computed(
   () =>
@@ -335,6 +433,7 @@ onMounted(async () => {
     displayName.value = me.displayName || "";
     bio.value = me.bio || "";
     selectedTheme.value = me.profileTheme || "default";
+    customColor.value = resolveAccentHex(me.profileTheme);
     initial.value = {
       displayName: displayName.value,
       bio: bio.value,

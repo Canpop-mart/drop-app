@@ -24,7 +24,7 @@
       @configure="configureModalOpen = true"
       @set-account-name="config.applyProfileName()"
       @open-install-folder="openInstallFolder"
-      @uninstall="launchCtl.uninstall()"
+      @uninstall="gameUninstallOpen = true"
       @install-runtime="installRuntime"
       @reset-achievements="resetConfirmOpen = true"
       @remove-from-library="removeConfirmOpen = true"
@@ -231,12 +231,46 @@
                     : undefined
                 "
               >
+                <!-- Compare achievements with another player who owns this
+                     game (Steam-style side-by-side). Lives in the section
+                     header so the compare UI sits on one tidy row. -->
+                <template #actions>
+                  <div
+                    v-if="
+                      friendsExcludingMe.length > 0 &&
+                      stats.achievements.value.length > 0
+                    "
+                    class="flex items-center gap-2 text-xs"
+                  >
+                    <label class="text-zinc-400">Compare</label>
+                    <select
+                      :value="compareUserId ?? ''"
+                      class="rounded-md bg-zinc-950 px-2 py-1 text-zinc-200 outline outline-1 outline-zinc-700 focus:outline-blue-500"
+                      @change="
+                        selectCompareUser(
+                          ($event.target as HTMLSelectElement).value || null,
+                        )
+                      "
+                    >
+                      <option value="">No one</option>
+                      <option
+                        v-for="p in friendsExcludingMe"
+                        :key="p.userId"
+                        :value="p.userId"
+                      >
+                        {{ p.displayName }}
+                      </option>
+                    </select>
+                  </div>
+                </template>
                 <GameDetailAchievements
                   :achievements="stats.achievements.value"
                   :loading="stats.achievementsLoading.value"
                   :unlocked-count="stats.achievementsUnlocked.value"
                   :rom-hash-result="stats.romHashResult.value"
                   :firsts-map="gameFirstsMap"
+                  :compare="compareData"
+                  :you-avatar-object-id="myAvatarObjectId"
                 />
               </CollapsibleSection>
             </div>
@@ -629,6 +663,53 @@
     </div>
   </Transition>
 
+  <!-- Game uninstall confirmation. Destructive: permanently deletes every
+       installed file, so it must never fire on a stray click. -->
+  <Transition
+    enter-active-class="ease-out duration-200"
+    enter-from-class="opacity-0"
+    enter-to-class="opacity-100"
+    leave-active-class="ease-in duration-150"
+    leave-from-class="opacity-100"
+    leave-to-class="opacity-0"
+  >
+    <div
+      v-if="gameUninstallOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      @click.self="gameUninstallOpen = false"
+    >
+      <div
+        class="w-full max-w-sm rounded-xl bg-zinc-900 border border-zinc-700 shadow-2xl"
+      >
+        <div class="px-6 py-5">
+          <h3 class="text-base font-semibold font-display text-zinc-100">
+            Uninstall {{ game.mName }}?
+          </h3>
+          <p class="mt-2 text-sm text-zinc-400">
+            This permanently deletes all of
+            <span class="text-zinc-200 font-medium">{{ game.mName }}</span>'s
+            installed files from your device. It can't be undone. You would have
+            to download the game again to play it.
+          </p>
+        </div>
+        <div class="flex justify-end gap-3 border-t border-zinc-700 px-6 py-4">
+          <button
+            @click="gameUninstallOpen = false"
+            class="rounded-md px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            @click="confirmUninstallGame"
+            class="rounded-md px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 transition-colors"
+          >
+            Uninstall
+          </button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+
   <!-- Cloud save conflict resolution. -->
   <SaveConflictDialog
     v-model="saveConflictOpen"
@@ -709,6 +790,9 @@ const availableMods = ref<AvailableMod[]>([]);
 const modInstall = useModInstall(id);
 const installedModsCtl = useInstalledMods(id);
 const modToUninstall = ref<string | null>(null);
+// Guards the destructive game uninstall behind a confirmation dialog — it
+// deletes every installed file, so a stray click must never trigger it.
+const gameUninstallOpen = ref(false);
 
 function isModInstalled(modId: string): boolean {
   return installedModsCtl.installedMods.value.some((m) => m.gameId === modId);
@@ -731,6 +815,11 @@ async function loadAvailableMods() {
     console.warn("[library/[id]] failed to load available mods:", e);
     availableMods.value = [];
   }
+}
+
+function confirmUninstallGame() {
+  gameUninstallOpen.value = false;
+  launchCtl.uninstall();
 }
 
 async function confirmUninstallMod() {
@@ -915,6 +1004,9 @@ const gameFirstsMap = computed(() => {
 // leaderboard (which DOES include the caller) keeps the full list.
 const myUserId = ref<string | null>(null);
 
+// The caller's own avatar, used as the "You" side of the achievement compare.
+const myAvatarObjectId = ref<string | null>(null);
+
 // Same list with the caller filtered out — drives the Friends Played
 // header chip. Empty until `myUserId` resolves, at which point the
 // computed re-runs and the chip count drops by one if needed.
@@ -922,6 +1014,61 @@ const friendsExcludingMe = computed(() =>
   myUserId.value
     ? gamePlayers.value.filter((p) => p.userId !== myUserId.value)
     : gamePlayers.value,
+);
+
+// Achievement comparison: pick another player who owns this game for a
+// Steam-style side-by-side. Their per-achievement set comes from the per-user
+// endpoint (same shape + computation as ours), reduced to the ids they've
+// unlocked so <GameDetailAchievements> can mark each row for both of us.
+const compareUserId = ref<string | null>(null);
+const compareData = ref<{
+  name: string;
+  unlockedIds: string[];
+  unlockedCount: number;
+  avatarObjectId: string | null;
+} | null>(null);
+
+async function selectCompareUser(userId: string | null) {
+  compareUserId.value = userId;
+  compareData.value = null;
+  if (!userId) return;
+  const entry = gamePlayers.value.find((p) => p.userId === userId);
+  const name = entry?.displayName ?? "Player";
+  const avatarObjectId = entry?.avatarObjectId ?? null;
+  try {
+    const resp = await fetch(
+      serverUrl(`api/v1/user/${userId}/achievements/${game.id}`),
+    );
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const list = (await resp.json()) as Array<{
+      id: string;
+      unlocked: boolean;
+    }>;
+    // Guard against a fast re-pick: only apply if this is still the choice.
+    if (compareUserId.value !== userId) return;
+    const unlockedIds = list.filter((a) => a.unlocked).map((a) => a.id);
+    compareData.value = {
+      name,
+      unlockedIds,
+      unlockedCount: unlockedIds.length,
+      avatarObjectId,
+    };
+  } catch (e) {
+    console.warn("[compare] failed to load achievements:", e);
+    if (compareUserId.value === userId) compareData.value = null;
+  }
+}
+
+// Deep-link: /library/{id}?compare={userId} (e.g. from a profile's "Compare"
+// button) auto-selects that player once the game's player list has loaded.
+watch(
+  friendsExcludingMe,
+  (players) => {
+    const target = route.query.compare;
+    if (typeof target !== "string" || !target || compareUserId.value) return;
+    if (players.some((p) => p.userId === target)) selectCompareUser(target);
+  },
+  { immediate: true },
 );
 
 onMounted(() => {
@@ -937,7 +1084,10 @@ onMounted(() => {
   // (the friends chip just won't strip the caller from its count).
   api.profile
     .me()
-    .then((me) => (myUserId.value = me.id))
+    .then((me) => {
+      myUserId.value = me.id;
+      myAvatarObjectId.value = me.profilePictureObjectId ?? null;
+    })
     .catch(() => (myUserId.value = null));
 
   // Mods: always load the available list (drives the tab's visibility); load

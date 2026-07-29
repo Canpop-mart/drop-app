@@ -370,7 +370,7 @@ export interface UserActivity {
 
 export interface ShowcaseItem {
   id: string;
-  type: "FavoriteGame" | "Achievement" | "Review" | "GameStats" | "Custom";
+  type: "FavoriteGame" | "Achievement" | "GameStats" | "Custom";
   gameId: string | null;
   itemId: string | null;
   title: string;
@@ -398,6 +398,77 @@ export interface ShowcaseItem {
 
 export interface UserShowcase {
   items: ShowcaseItem[];
+}
+
+export interface FavoriteEntry {
+  id: string;
+  userId: string;
+  gameId: string;
+  position: number;
+  game: {
+    id: string;
+    mName: string;
+    mCoverObjectId: string | null;
+    mIconObjectId: string | null;
+  } | null;
+}
+
+export interface FavoriteSearchRow {
+  id: string;
+  mName: string;
+  mCoverObjectId: string | null;
+  mIconObjectId: string | null;
+  isFavorite: boolean;
+}
+
+export interface WrappedTopGame {
+  id: string;
+  mName: string;
+  mCoverObjectId: string | null;
+  seconds: number;
+  players?: number;
+}
+
+export interface PersonalWrapped {
+  window: string;
+  displayName: string;
+  totalSeconds: number;
+  sessionCount: number;
+  longestSessionSeconds: number;
+  avgSessionSeconds: number;
+  achievementsUnlocked: number;
+  points: number;
+  rarest: {
+    title: string;
+    globalPercent: number;
+    gameName: string | null;
+  } | null;
+  topGames: WrappedTopGame[];
+  topGame: (WrappedTopGame & { pctOfTotal: number }) | null;
+  topTags: { name: string; seconds: number }[];
+}
+
+export interface CommunityWrapped {
+  window: string;
+  totalSeconds: number;
+  sessionCount: number;
+  playerCount: number;
+  achievementsUnlocked: number;
+  topGames: WrappedTopGame[];
+  topGame: WrappedTopGame | null;
+  topPlayer: {
+    userId: string;
+    displayName: string;
+    avatarObjectId: string | null;
+    seconds: number;
+  } | null;
+  rarest: {
+    title: string;
+    globalPercent: number;
+    userDisplayName: string | null;
+    gameName: string | null;
+  } | null;
+  newPlayers: number;
 }
 
 // ── Cloud-save types ────────────────────────────────────────────────────────
@@ -577,6 +648,10 @@ export function useServerApi() {
       weeklyRecap: () =>
         apiFetch<WeeklyRecapSlide[]>("api/v1/community/weekly-recap"),
 
+      /** Community "Wrapped" stats for a window (all|year|month|week). */
+      wrapped: (window: string) =>
+        apiFetch<CommunityWrapped>(`api/v1/community/wrapped?window=${window}`),
+
       /**
        * "Spin to pick" — server-side roulette over the caller's library
        * with a social-discovery fallback. Returns one game (or null) so
@@ -710,6 +785,38 @@ export function useServerApi() {
 
       /** Get the current user's own profile. */
       me: () => apiFetch<UserProfile>("api/v1/user"),
+
+      /** Favourite games — add/remove/reorder wrap the existing endpoints. */
+      favorites: {
+        list: () => apiFetch<FavoriteEntry[]>("api/v1/user/favorites/list"),
+        forUser: (id: string) =>
+          apiFetch<FavoriteEntry[]>(`api/v1/user/${id}/favorites`),
+        add: (gameId: string) =>
+          apiFetch<FavoriteEntry>("api/v1/user/favorites/add", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ gameId }),
+          }),
+        remove: (gameId: string) =>
+          apiFetch<Record<string, never>>(`api/v1/user/favorites/${gameId}`, {
+            method: "DELETE",
+          }),
+        search: (q: string) =>
+          apiFetch<FavoriteSearchRow[]>(
+            `api/v1/user/favorites/search?q=${encodeURIComponent(q)}`,
+          ),
+        /** Atomic replace + reindex — one call handles add/remove/reorder. */
+        reorder: (gameIds: string[]) =>
+          apiFetch<{ count: number }>("api/v1/user/favorites", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ gameIds }),
+          }),
+      },
+
+      /** Personal "Wrapped" stats for a window (all|year|month|week). */
+      wrapped: (id: string, window: string) =>
+        apiFetch<PersonalWrapped>(`api/v1/user/${id}/wrapped?window=${window}`),
     },
 
     playtime: {

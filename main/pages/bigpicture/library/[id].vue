@@ -526,19 +526,20 @@
               />
             </div>
             <div class="flex-1 min-w-0">
-              <p class="text-sm font-medium text-zinc-200">
-                {{ achievement.title }}
-              </p>
+              <div class="flex items-center gap-1 min-w-0">
+                <p class="text-sm font-medium text-zinc-200 truncate">
+                  {{ achievement.title }}
+                </p>
+                <!-- Server-first marker — small gold trophy after the title. -->
+                <GameAchievementFirstBadge
+                  v-if="gameFirstsMap[achievement.id]"
+                  :first="gameFirstsMap[achievement.id]"
+                  class="shrink-0"
+                />
+              </div>
               <p class="text-sm text-zinc-500 truncate">
                 {{ achievement.description }}
               </p>
-              <!-- Server-first badge — only renders when this achievement
-                   was first-unlocked on this server by a known user. -->
-              <GameAchievementFirstBadge
-                v-if="gameFirstsMap[achievement.id]"
-                :first="gameFirstsMap[achievement.id]"
-                class="mt-1"
-              />
               <!-- Rarity bar -->
               <div v-if="achievement.rarity != null" class="flex items-center gap-2 mt-1.5">
                 <div class="flex-1 h-1 bg-zinc-800 rounded-full overflow-hidden">

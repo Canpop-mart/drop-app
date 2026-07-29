@@ -5,13 +5,15 @@
     <!-- Header — always visible, click toggles. Whole row is the
          affordance (not just the chevron) so the click target is
          comfortably large. -->
-    <button
-      type="button"
-      class="w-full flex items-center justify-between gap-3 px-6 py-4 text-left hover:bg-zinc-800/30 transition-colors"
-      :aria-expanded="open"
-      @click="open = !open"
+    <div
+      class="w-full flex items-center gap-3 px-6 py-4 hover:bg-zinc-800/30 transition-colors"
     >
-      <div class="flex items-center gap-3 min-w-0">
+      <button
+        type="button"
+        class="flex min-w-0 flex-1 items-center gap-3 text-left"
+        :aria-expanded="open"
+        @click="open = !open"
+      >
         <!-- Optional left-side icon slot — useful for typographic
              accents (trophy, gallery, etc.) without forcing every
              header to use one. -->
@@ -27,12 +29,25 @@
         >
           {{ badge }}
         </span>
+      </button>
+      <!-- Optional header controls (e.g. a compare picker). Stop click
+           propagation so interacting with them doesn't toggle the section. -->
+      <div v-if="$slots.actions" class="shrink-0" @click.stop>
+        <slot name="actions" />
       </div>
-      <ChevronDownIcon
-        class="size-4 text-zinc-400 transition-transform shrink-0"
-        :class="{ 'rotate-180': open }"
-      />
-    </button>
+      <button
+        type="button"
+        class="shrink-0"
+        :aria-label="`Toggle ${title}`"
+        :aria-expanded="open"
+        @click="open = !open"
+      >
+        <ChevronDownIcon
+          class="size-4 text-zinc-400 transition-transform"
+          :class="{ 'rotate-180': open }"
+        />
+      </button>
+    </div>
 
     <!-- Body — wrapped in a transition so expand/collapse has motion.
          We toggle with v-show rather than v-if so the child component

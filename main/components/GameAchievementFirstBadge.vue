@@ -1,17 +1,18 @@
 <template>
-  <!-- A purely presentational subtitle: "First on this server · X · 3d ago".
-       Pair with the gold ring around the achievement icon, which is applied
-       by the parent (we only need the parent to read `first` from the
-       firsts map and conditionally swap classes on the <img>). -->
+  <!-- Icon-only "first on this server" marker: a small gold trophy that
+       sits inline next to the achievement title. Who + when live in the
+       tooltip so the row stays uncluttered on servers where one person is
+       first on everything. Pairs with the gold ring the parent puts on the
+       achievement icon. -->
   <span
     v-if="first"
-    class="inline-flex items-center gap-1 text-[11px] font-medium text-yellow-400/90"
-    :title="fullTimestamp"
+    class="inline-flex shrink-0 items-center text-yellow-400/90"
+    :title="`First on this server · ${first.displayName} · ${relativeTime} · ${fullTimestamp}`"
   >
-    <TrophyIcon class="size-3 shrink-0" />
-    First on this server
-    <span class="text-yellow-200/80">· {{ first.displayName }}</span>
-    <span class="text-zinc-500">· {{ relativeTime }}</span>
+    <TrophyIcon class="size-3.5" />
+    <span class="sr-only"
+      >First on this server · {{ first.displayName }}</span
+    >
   </span>
 </template>
 
