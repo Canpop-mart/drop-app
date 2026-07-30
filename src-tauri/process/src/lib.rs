@@ -36,6 +36,7 @@ mod parser;
 pub mod prefix_prep;
 pub mod process_handlers;
 pub mod process_manager;
+pub mod protonfixes_sync;
 
 pub struct ProcessManagerWrapper(OnceLock<Mutex<ProcessManager<'static>>>);
 impl ProcessManagerWrapper {

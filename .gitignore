@@ -53,3 +53,6 @@ DEBUG.md
 .env
 .env.*
 !.env.example
+# Python bytecode (protonfixes are shipped as source, embedded via include_dir)
+__pycache__/
+*.pyc

@@ -229,6 +229,18 @@ fn prepare_onlinefix(
     pfx_dir: &Path,
     proton_path: &str,
 ) -> Vec<(String, String)> {
+    // Coexistence with the protonfixes port (localfixes/default.py). When the
+    // environment opts into DROP_FIX_ONLINEFIX=python, that fix owns this recipe
+    // and the Rust path defers (empty env, no side effects). Default
+    // (unset/"rust") = Rust owns it — today's behaviour, byte-for-byte. The var
+    // is inherited by the umu child, so the .py reads the same value.
+    if std::env::var("DROP_FIX_ONLINEFIX").as_deref() == Ok("python") {
+        log::info!(
+            "[PrefixPrep/B] OnlineFix owned by protonfixes (DROP_FIX_ONLINEFIX=python) — Rust recipe deferring"
+        );
+        return Vec::new();
+    }
+
     let exe_dir = match Path::new(exe_path).parent() {
         Some(d) => d.to_path_buf(),
         None => {

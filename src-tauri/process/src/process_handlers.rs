@@ -155,8 +155,17 @@ impl ProcessHandler for UMUNativeLauncher {
         let pfx_dir = pfx_dir.join(meta.id.clone());
         create_dir_all(&pfx_dir)?;
 
+        let store_prefix = game_version
+            .launches
+            .iter()
+            .find(|v| v.platform == meta.target_platform)
+            .and_then(|v| v.umu_store_override.as_deref())
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("STORE={s} "))
+            .unwrap_or_default();
+
         Ok(format!(
-            "GAMEID={game_id} UMU_NO_PROTON=1 WINEPREFIX={} {umu:?} {launch}",
+            "{store_prefix}GAMEID={game_id} UMU_NO_PROTON=1 WINEPREFIX={} {umu:?} {launch}",
             pfx_dir.to_string_lossy(),
             umu = UMU_LAUNCHER_EXECUTABLE
                 .as_ref()
@@ -201,6 +210,11 @@ impl ProcessHandler for UMUCompatLauncher {
         current_dir: &str,
         database: &Database,
     ) -> Result<String, ProcessError> {
+        // Ensure Drop's bundled protonfixes are present in the user's localfixes
+        // dir before umu runs (idempotent; a no-op after the first launch and on
+        // non-Linux). Best-effort — never blocks a launch.
+        crate::protonfixes_sync::ensure_synced();
+
         let umu_id_override = game_version
             .launches
             .iter()
@@ -217,6 +231,18 @@ impl ProcessHandler for UMUCompatLauncher {
         let pfx_dir = DATA_ROOT_DIR.join("pfx");
         let pfx_dir = pfx_dir.join(meta.id.clone());
         create_dir_all(&pfx_dir)?;
+
+        // umu STORE for protonfixes matching (e.g. "steam"); omitted when unset
+        // so non-Steam games are untouched. Resolved from the same launch row
+        // as GAMEID.
+        let store_prefix = game_version
+            .launches
+            .iter()
+            .find(|v| v.platform == meta.target_platform)
+            .and_then(|v| v.umu_store_override.as_deref())
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("STORE={s} "))
+            .unwrap_or_default();
 
         // Resolve Proton in priority order: per-game override → global default
         // → GE-Proton (umu auto-downloads on first use).
@@ -305,7 +331,7 @@ impl ProcessHandler for UMUCompatLauncher {
         }
 
         let result = format!(
-            "{prep_env_prefix}GAMEID={game_id} {} WINEPREFIX={} {umu:?} {launch}",
+            "{prep_env_prefix}{store_prefix}GAMEID={game_id} {} WINEPREFIX={} {umu:?} {launch}",
             proton_env,
             pfx_dir.to_string_lossy(),
             umu = umu_exe,

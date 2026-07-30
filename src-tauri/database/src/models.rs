@@ -280,6 +280,12 @@ pub mod data {
             pub platform: Platform,
             pub umu_id_override: Option<String>,
 
+            /// umu STORE for protonfixes matching (e.g. "steam"). The server
+            /// sends `umuStoreOverride`; serde-default keeps old encrypted DBs
+            /// loadable (mirrors `disc_paths`).
+            #[serde(default)]
+            pub umu_store_override: Option<String>,
+
             pub emulator: Option<LaunchConfigurationEmulator>,
 
             /// Ordered disc image paths for multi-disc games (relative to game
