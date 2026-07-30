@@ -120,6 +120,27 @@ impl ProcessManager<'_> {
             *install_type = InstalledGameType::Installed;
         }
 
+        // Push the now-persistent status to the UI. Removing the transient above
+        // only mutates the DB; the frontend's cached status ref is driven solely
+        // by the `update_game/{id}` event (see `useGame` in game.ts), so without
+        // this emit the UI stays stuck on the transient `Running` after every
+        // exit — hiding every Installed-gated action (Configure, Install
+        // runtimes, Uninstall, Open folder) until an app restart. Mirrors
+        // `library.rs::push_game_update`; the DB lock is still held here, matching
+        // the other emits below.
+        let post_exit_status = GameStatusManager::fetch_state(&game_id, &db_handle);
+        let post_exit_version = db_handle
+            .applications
+            .game_versions
+            .get(&meta.version)
+            .cloned();
+        push_game_update(
+            &self.app_handle,
+            &game_id,
+            post_exit_version,
+            post_exit_status,
+        );
+
         // ── Suspicious-exit detection ──────────────────────────────────────
         // A fast exit or a non-zero code (that the user did not trigger)
         // signals the game failed to launch — surface it to the UI.

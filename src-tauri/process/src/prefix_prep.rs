@@ -203,6 +203,61 @@ pub fn install_redists_into_prefix(
     Err("Installing runtimes is only supported on Linux (Proton).".to_string())
 }
 
+/// Auto-provision the baseline runtime redists into `pfx_dir` on a game's FIRST
+/// launch, then never again. Most Windows games need the MSVC 2015-2022 runtime
+/// (imported by a sibling `UnityPlayer.dll` / `GameAssembly.dll`, not the launch
+/// exe) and fail with a "VC++ 2015-2022" error on a clean prefix; installing it
+/// automatically means the user never has to click the manual "Install runtimes"
+/// button per game.
+///
+/// Idempotent via a per-prefix marker, so it costs ~1 minute exactly once per
+/// prefix and nothing on later launches. Best-effort: any failure (e.g. no
+/// network) is logged and the launch continues — the manual action stays
+/// available. Callers run this BEFORE OnlineFix staging so winetricks' prefix
+/// initialisation can't clobber the DLLs / `user.reg` edits that staging writes
+/// (and, as a bonus, it means `user.reg` exists in time for the PID fix on a
+/// brand-new prefix instead of being deferred to the next launch).
+#[cfg(target_os = "linux")]
+pub fn ensure_baseline_redists(game_id: &str, pfx_dir: &Path, proton_path: &str, umu_exe: &str) {
+    // Bump this suffix if VERBS changes, so existing prefixes re-provision on
+    // their next launch.
+    const MARKER: &str = ".drop-redists-v1";
+    // The near-universal baseline: MSVC 2015-2022 + the D3D shader compiler.
+    // Deliberately lean (no vcrun2013/2010, DirectX or .NET) to keep the one-time
+    // first-launch install to ~1 minute; those remain a manual per-game action.
+    const VERBS: &[&str] = &["vcrun2022", "d3dcompiler_47"];
+
+    let marker = pfx_dir.join(MARKER);
+    if marker.exists() {
+        return;
+    }
+
+    match install_redists_into_prefix(game_id, pfx_dir, proton_path, umu_exe, VERBS, "Visual C++") {
+        Ok(()) => match std::fs::write(&marker, VERBS.join(" ")) {
+            Ok(()) => log::info!("[Redist] baseline runtimes provisioned for {game_id} (first launch)"),
+            Err(e) => log::warn!(
+                "[Redist] baseline install succeeded but writing marker {marker:?} failed: {e} \
+                 — it will re-run next launch"
+            ),
+        },
+        Err(e) => log::warn!(
+            "[Redist] baseline auto-install failed for {game_id} (launch continues; \
+             the manual \"Install runtimes\" button remains): {e}"
+        ),
+    }
+}
+
+/// Non-Linux stub.
+#[cfg(not(target_os = "linux"))]
+pub fn ensure_baseline_redists(
+    game_id: &str,
+    pfx_dir: &std::path::Path,
+    proton_path: &str,
+    umu_exe: &str,
+) {
+    let _ = (game_id, pfx_dir, proton_path, umu_exe);
+}
+
 // ───────────────────────────── OnlineFix ────────────────────────────────────
 
 /// Stage everything an OnlineFix payload needs and return the canonical

@@ -314,6 +314,20 @@ impl ProcessHandler for UMUCompatLauncher {
         let prep_env = if exe_path.is_empty() {
             Vec::new()
         } else {
+            // First launch only: auto-provision the baseline runtime redists
+            // (VC++ 2015-2022 + D3D compiler) so games that need the MSVC runtime
+            // work without the user clicking "Install runtimes". Idempotent
+            // (per-prefix marker) and non-fatal. Runs BEFORE OnlineFix staging so
+            // winetricks' prefix init can't clobber the DLLs / user.reg edits that
+            // staging writes.
+            if let Some(umu) = UMU_LAUNCHER_EXECUTABLE.as_ref() {
+                crate::prefix_prep::ensure_baseline_redists(
+                    &meta.id,
+                    &pfx_dir,
+                    &proton_path,
+                    umu.to_string_lossy().as_ref(),
+                );
+            }
             crate::prefix_prep::prepare_prefix(current_dir, &exe_path, &pfx_dir, &proton_path)
         };
 
