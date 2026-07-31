@@ -239,12 +239,15 @@
           />
         </LibraryRow>
 
-        <!-- Consoles — emulated games grouped by system (toggle in settings).
-             Each card opens a console-themed page. -->
+        <!-- Consoles — emulated games grouped by system (toggle in settings),
+             followed in the SAME row by the installed emulator hosts (RetroArch
+             etc.) that back them. Console cards open a console-themed page;
+             emulator cards open a management view (open folder, add a core,
+             uninstall). Hidden when there are neither. -->
         <LibraryRow
-          v-if="consoleRows.length > 0"
+          v-if="consoleRows.length > 0 || emulatorHosts.length > 0"
           title="Consoles"
-          :count="consoleRows.length"
+          :count="consoleRows.length + emulatorHosts.length"
         >
           <LibraryConsoleCard
             v-for="row in consoleRows"
@@ -258,16 +261,6 @@
                 .filter((c): c is string => !!c)
             "
           />
-        </LibraryRow>
-
-        <!-- Emulators — the installed emulator hosts (RetroArch etc.) that back
-             the console rows. Each card opens a management view where you can
-             open its folder, add a core, or uninstall it. Hidden when none. -->
-        <LibraryRow
-          v-if="emulatorHosts.length > 0"
-          title="Emulators"
-          :count="emulatorHosts.length"
-        >
           <LibraryEmulatorCard
             v-for="host in emulatorHosts"
             :key="host.id"
