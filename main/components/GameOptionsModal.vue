@@ -97,16 +97,39 @@ import type { GameVersion } from "~/types";
 const appState = useAppState();
 
 const open = defineModel<boolean>();
-const props = defineProps<{ gameId: string }>();
+// `emulated` is supplied by the parent, which detects it robustly (console
+// library membership OR a real emulator launch). The version alone is not
+// enough: a ROM imported by a disk scan is Installed but has no cached
+// GameVersion yet (game_versions is only filled on an online library sync), so
+// `version` is undefined for it even though it is an emulated game.
+const props = defineProps<{ gameId: string; emulated?: boolean }>();
 const game = await useGame(props.gameId);
 
+// A game whose GameVersion is not cached yet (see above) has no stored
+// configuration to edit, so fall back to the backend's default UserConfiguration
+// (mirrors `UserConfiguration::default()` in database/src/models.rs). Without
+// this fallback the `version.value!` dereference threw during this component's
+// async setup, and under the page's <Suspense> that quietly dropped the whole
+// modal, so clicking "Configure" opened nothing.
+const DEFAULT_USER_CONFIGURATION: GameVersion["userConfiguration"] = {
+  launchTemplate: "{}",
+  overrideProtonPath: "",
+  enableUpdates: false,
+  controllerType: null,
+  qualityPreset: null,
+  widescreen: "Standard",
+  fullscreen: null,
+  mangohud: null,
+  crtShader: false,
+};
+
 const configuration: Ref<GameVersion["userConfiguration"]> = ref(
-  game.version.value!.userConfiguration,
+  game.version.value?.userConfiguration ?? { ...DEFAULT_USER_CONFIGURATION },
 );
 
 const hasWindows = !!(
-  game.version.value!.setups.find((v) => v.platform === "Windows") ??
-  game.version.value!.launches.find((v) => v.platform === "Windows")
+  game.version.value?.setups?.find((v) => v.platform === "Windows") ??
+  game.version.value?.launches?.find((v) => v.platform === "Windows")
 );
 
 const protonEnabled = !!(
@@ -117,12 +140,16 @@ const protonEnabled = !!(
 // first for them, so the default `currentTabIndex = 0` opens straight to it when
 // you hit Configure on a ROM.
 //
-// Require a real emulator reference (a truthy `gameId`) rather than just
-// `emulator != null`: a PC game's launch can carry an empty/placeholder
-// `emulator` object that `!= null` wrongly treats as emulated (this showed the
-// tab on native games like Vampire Survivors).
+// Prefer the parent's `emulated` flag, which holds even when `version` is
+// missing (a scanned ROM). Fall back to the version's launches for any caller
+// that does not pass it. Require a real emulator reference (a truthy `gameId`)
+// rather than just `emulator != null`: a PC game's launch can carry an
+// empty/placeholder `emulator` object that `!= null` wrongly treats as emulated
+// (this showed the tab on native games like Vampire Survivors).
 const isEmulatedGame = computed(
-  () => game.version.value?.launches?.some((l) => !!l.emulator?.gameId) ?? false,
+  () =>
+    props.emulated ||
+    (game.version.value?.launches?.some((l) => !!l.emulator?.gameId) ?? false),
 );
 const installDir = computed(() => {
   const s = game.status.value;
