@@ -1,5 +1,10 @@
 name: Clippy check
-on: push
+# Run once per release (matching publish.yml) plus on-demand, rather than on
+# every push — a commit-per-push clippy run was clogging the Actions tab.
+on:
+  workflow_dispatch: {}
+  release:
+    types: [published]
 
 jobs:
   clippy_check:
