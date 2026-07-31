@@ -56,6 +56,7 @@ mod collections;
 mod compat;
 mod download_manager;
 mod downloads;
+mod emulators;
 mod games;
 mod process;
 mod remote;
@@ -69,6 +70,7 @@ use client::*;
 use compat::*;
 use download_manager::*;
 use downloads::*;
+use emulators::*;
 use games::*;
 use process::*;
 use remote::*;
@@ -326,6 +328,8 @@ pub fn run() {
             update_game_configuration,
             configure_game_emulator,
             open_game_install_dir,
+            list_installed_emulators,
+            open_emulator_cores_dir,
             get_install_size,
             list_game_saves,
             delete_game_save,

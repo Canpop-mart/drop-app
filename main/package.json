@@ -1,7 +1,7 @@
 {
   "name": "view",
   "private": true,
-  "version": "5.6.0-deck2",
+  "version": "5.6.0-deck3",
   "type": "module",
   "scripts": {
     "build": "nuxt generate",
