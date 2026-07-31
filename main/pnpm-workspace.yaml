@@ -23,10 +23,19 @@ overrides:
   # root overrides do NOT reach it. Scoped to the vulnerable range and capped
   # below the next major to avoid breaking version jumps. The single tar line
   # below supersedes the earlier 7.5.3 / 7.5.4 / 7.5.7 bumps.
-  shell-quote@<1.8.4: ">=1.8.4" # alert #130 critical
+  shell-quote@<1.9.0: ">=1.9.0 <2" # 2026-07: high (was #130 <1.8.4)
   esbuild@<0.28.1: ">=0.28.1" # alerts #134 high, #133 low
   vite@>=7.0.0 <7.3.5: ">=7.3.5 <8" # alerts #137 high, #139 medium
-  tar@>=7.0.0 <7.5.16: ">=7.5.16" # alert #140 medium
+  tar@>=7.0.0 <7.5.21: ">=7.5.21 <8" # 2026-07: critical/high/medium (was #140 <7.5.16)
   launch-editor@<2.14.1: ">=2.14.1" # alert #138 medium
-  js-yaml@>=4.0.0 <4.2.0: ">=4.2.0" # alert #136 medium
+  js-yaml@>=4.0.0 <4.3.0: ">=4.3.0 <5" # 2026-07: high (was #136 <4.2.0)
   "@babel/core@<7.29.6": ">=7.29.6 <8" # alert #135 low
+  # Dependabot 2026-07 security bumps. Kept in sync with the root
+  # pnpm-workspace.yaml.
+  brace-expansion@>=1.0.0 <1.1.16: ">=1.1.16 <2" # 2026-07: high
+  brace-expansion@>=2.0.0 <2.1.2: ">=2.1.2 <3" # 2026-07: high
+  brace-expansion@>=5.0.0 <5.0.8: ">=5.0.8 <6" # 2026-07: high
+  postcss@<8.5.18: ">=8.5.18 <9" # 2026-07: high
+  immutable@>=5.0.0 <5.1.8: ">=5.1.8 <6" # 2026-07: high
+  svgo@>=4.0.0 <4.0.2: ">=4.0.2 <5" # 2026-07: high (patch within v4)
+  dompurify@>=3.0.0 <3.4.12: ">=3.4.12 <4" # 2026-07: low
