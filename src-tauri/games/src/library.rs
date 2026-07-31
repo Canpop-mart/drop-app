@@ -355,14 +355,23 @@ pub fn push_game_update(
     version: Option<GameVersion>,
     status: GameStatusWithTransient,
 ) {
+    // A disk-scanned game has no cached GameVersion (that map is only filled by a
+    // download or an online library sync), so `version` is legitimately None for
+    // it. We MUST still emit the status update: otherwise such a game stays stuck
+    // on its transient `Running` in the UI after it exits, hiding every
+    // Installed-gated action (Configure, Install runtimes, Uninstall) until an app
+    // restart. The frontend keeps its existing version when the payload's is null
+    // (see `useGame` in game.ts), so a version-less status emit is safe.
     if let Some(GameDownloadStatus::Installed {
         install_type: InstalledGameType::Installed | InstalledGameType::SetupRequired,
         ..
     }) = &status.0
         && version.is_none()
     {
-        warn!("push_game_update called for installed game {} without version information, skipping", game_id);
-        return;
+        warn!(
+            "push_game_update: installed game {} has no cached version; emitting a status-only update",
+            game_id
+        );
     }
 
     app_emit!(
