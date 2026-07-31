@@ -103,16 +103,26 @@ impl ProcessManager<'_> {
 
         *effective_cwd = Some(emulator_install_dir.clone());
 
+        // Resolve the emulator's version from what is actually INSTALLED, not the
+        // version the ROM was linked against. Re-versioning the emulator (e.g.
+        // adding a core) makes a new version and orphans the pinned version_id,
+        // which would otherwise dangle the ROM. Fall back to the pin only if the
+        // installed version isn't cached yet.
         let emulator_game_version = db_lock
             .applications
             .game_versions
-            .get(emulator.version_id)
+            .get(emulator_metadata.version.as_str())
+            .or_else(|| db_lock.applications.game_versions.get(emulator.version_id))
             .ok_or(err.clone())?;
 
+        // Prefer the pinned launch config; if its launch_id isn't in this
+        // (possibly newer) version, fall back to the first so a re-versioned
+        // emulator still launches instead of dangling.
         let emulator_launch_config = emulator_game_version
             .launches
             .iter()
             .find(|v| v.launch_id == emulator.launch_id)
+            .or_else(|| emulator_game_version.launches.first())
             .ok_or(err)?;
 
         let mut exe_command = ParsedCommand::parse(emulator_launch_config.command.clone())?;
