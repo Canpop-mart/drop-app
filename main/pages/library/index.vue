@@ -260,6 +260,25 @@
           />
         </LibraryRow>
 
+        <!-- Emulators — the installed emulator hosts (RetroArch etc.) that back
+             the console rows. Each card opens a management view where you can
+             open its folder, add a core, or uninstall it. Hidden when none. -->
+        <LibraryRow
+          v-if="emulatorHosts.length > 0"
+          title="Emulators"
+          :count="emulatorHosts.length"
+        >
+          <LibraryEmulatorCard
+            v-for="host in emulatorHosts"
+            :key="host.id"
+            :id="host.id"
+            :name="host.name"
+            :icon-object-id="host.iconObjectId"
+            :retroarch="host.retroarch"
+            :core-count="host.cores.length"
+          />
+        </LibraryRow>
+
         <!-- All games — Steam-style view switcher + sort over the full grid. -->
         <section>
           <div class="mb-4 flex flex-wrap items-center gap-3">
@@ -567,7 +586,12 @@ import LibraryGrid from "~/components/LibraryGrid.vue";
 import LibraryShelf from "~/components/LibraryShelf.vue";
 import LibraryCollectionCard from "~/components/LibraryCollectionCard.vue";
 import LibraryConsoleCard from "~/components/LibraryConsoleCard.vue";
+import LibraryEmulatorCard from "~/components/LibraryEmulatorCard.vue";
 import LibraryRow from "~/components/LibraryRow.vue";
+import {
+  listInstalledEmulators,
+  type EmulatorHost,
+} from "~/composables/emulators";
 
 interface LibraryEntry {
   game: Game;
@@ -592,6 +616,9 @@ const consoleSections = useConsoleSections();
 const entries = ref<LibraryEntry[]>([]);
 // Console groupings for emulated games — only populated when the toggle is on.
 const consoleGroups = ref<ConsoleGroup[]>([]);
+// Installed emulator hosts (RetroArch etc.). Independent of the console toggle:
+// you should always be able to find the emulator backing your ROMs.
+const emulatorHosts = ref<EmulatorHost[]>([]);
 const recentPlaytime = ref<RecentPlaytimeEntry[]>([]);
 const loading = ref(true);
 const searchInput = ref("");
@@ -969,6 +996,17 @@ async function loadConsoles() {
   }
 }
 
+// Installed emulator hosts for the Emulators section. Soft-fails: the section
+// just doesn't appear if the command can't answer.
+async function loadEmulators() {
+  try {
+    emulatorHosts.value = await listInstalledEmulators();
+  } catch (e) {
+    console.warn("[library] emulator hosts fetch failed:", e);
+    emulatorHosts.value = [];
+  }
+}
+
 // React to the toggle being flipped on the settings page while we're mounted.
 watch(
   () => consoleSections.enabled.value,
@@ -979,6 +1017,7 @@ onMounted(() => {
   load();
   loadRecentPlaytime();
   loadConsoles();
+  loadEmulators();
   fetchShelves().catch((e) =>
     console.warn("[library] shelves fetch failed:", e),
   );
