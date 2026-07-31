@@ -244,6 +244,23 @@ pub fn resolve_core_for_rom(emu_root: &Path, rom_path: &str) -> Option<PathBuf> 
         entry_for_ext(&rom_ext)?.cores
     };
 
+    // Expanded N64 hacks (e.g. Smash Remix +EXTRA) exceed the 64 MB cartridge
+    // limit, and mupen64plus_next refuses them ("failed to load ROM"). ParaLLEl
+    // N64 loads oversized ROMs, so promote it ahead of mupen for large N64 files.
+    const N64_MAX_CART_BYTES: u64 = 64 * 1024 * 1024;
+    let candidates: Vec<&str> = if matches!(rom_ext.as_str(), "n64" | "z64" | "v64")
+        && fs::metadata(rom).map(|m| m.len() > N64_MAX_CART_BYTES).unwrap_or(false)
+    {
+        info!(
+            "[RETROARCH] N64 ROM exceeds 64 MB — preferring parallel_n64 (mupen64plus_next rejects oversized ROMs)"
+        );
+        std::iter::once("parallel_n64")
+            .chain(candidates.iter().copied().filter(|c| *c != "parallel_n64"))
+            .collect()
+    } else {
+        candidates.to_vec()
+    };
+
     let cores_dir = emu_root.join("cores");
     if !cores_dir.is_dir() {
         warn!("[RETROARCH] cores/ directory not found in {}", emu_root.display());
