@@ -480,7 +480,7 @@ pub fn uninstall_game(
             DownloadableMetadata::new(
                 game_id.clone(),
                 install.version_id.clone(),
-                install.target_platform.clone(),
+                install.target_platform,
                 DownloadType::Game,
             )
         }

@@ -42,7 +42,7 @@ async fn enqueue_game_impl(
         let db = borrow_db_checked();
 
         // Already downloading or queued — don't double-queue.
-        if db.applications.transient_statuses.get(&meta).is_some() {
+        if db.applications.transient_statuses.contains_key(&meta) {
             return Ok(());
         }
 
@@ -166,7 +166,7 @@ pub async fn download_mod(
         let db = borrow_db_checked();
 
         // Already downloading or queued — don't double-queue.
-        if db.applications.transient_statuses.get(&meta).is_some() {
+        if db.applications.transient_statuses.contains_key(&meta) {
             return Ok(());
         }
 
