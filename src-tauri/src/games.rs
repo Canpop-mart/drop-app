@@ -6,7 +6,7 @@ use bitcode::{Decode, Encode};
 use database::{
     DownloadType, DownloadableMetadata, GameDownloadStatus, borrow_db_checked,
     borrow_db_mut_checked,
-    models::data::{InstalledGameType, UserConfiguration}, platform::Platform,
+    models::data::{GameVersion, InstalledGameType, UserConfiguration}, platform::Platform,
 };
 use games::{
     collections::collection::Collection,
@@ -796,28 +796,46 @@ pub fn update_game_configuration(
     options: UserConfiguration,
 ) -> Result<(), LibraryError> {
     let mut handle = borrow_db_mut_checked();
-    let installed_version = handle
+    let version = handle
         .applications
         .installed_game_version
         .get(&game_id)
-        .ok_or(LibraryError::MetaNotFound(game_id))?;
+        .ok_or_else(|| LibraryError::MetaNotFound(game_id.clone()))?
+        .version
+        .clone();
 
-    let _id = installed_version.id.clone();
-    let version = installed_version.version.clone();
-
-    let mut existing_configuration = handle
+    // A game imported by a disk scan has an `installed_game_version` but no
+    // cached `GameVersion` yet (that map is only filled by a download or an
+    // online library sync), so there is nothing to update — a plain `get` here
+    // used to fail the save with `MetaNotFound`, which is why scanned ROMs were
+    // locked out of the quality / CRT / aspect settings. Synthesize a minimal
+    // entry from the installed metadata instead: emulated games launch through
+    // the emulator (not these launches/setups), so the empty vecs are inert, and
+    // an online library sync later replaces this with the full server version.
+    let mut configuration = handle
         .applications
         .game_versions
         .get(&version)
-        .ok_or(LibraryError::MetaNotFound(version.clone()))?
-        .clone();
+        .cloned()
+        .unwrap_or_else(|| GameVersion {
+            game_id: game_id.clone(),
+            version_id: version.clone(),
+            display_name: None,
+            version_path: String::new(),
+            only_setup: false,
+            version_index: 0,
+            delta: false,
+            user_configuration: UserConfiguration::default(),
+            launches: Vec::new(),
+            setups: Vec::new(),
+        });
 
-    existing_configuration.user_configuration = options;
+    configuration.user_configuration = options;
 
     handle
         .applications
         .game_versions
-        .insert(version.to_string(), existing_configuration);
+        .insert(version, configuration);
 
     Ok(())
 }

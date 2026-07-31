@@ -441,6 +441,7 @@
     "
     v-model="configureModalOpen"
     :game-id="game.id"
+    :emulated="isEmulated"
   />
 
   <DependencyRequiredModal
