@@ -98,11 +98,12 @@
           class="shrink-0 w-36 rounded-lg bg-zinc-900/50 p-3 ring-1 ring-yellow-500/25"
         >
           <img
-            v-if="f.achievementIconUrl"
+            v-if="f.achievementIconUrl && !iconErrors[f.achievementId]"
             :src="f.achievementIconUrl"
             class="size-10 rounded ring-2 ring-yellow-500/60 mb-2"
             referrerpolicy="no-referrer"
             :alt="f.achievementName"
+            @error="iconErrors[f.achievementId] = true"
           />
           <div
             v-else
@@ -244,6 +245,10 @@ const firstsLoading = ref(props.firsts === undefined);
 
 const activity = ref<CommunityActivityItem[]>([]);
 const activityLoading = ref(true);
+
+// Icon error tracking — swap to the trophy fallback when a first-to-unlock
+// icon URL 404s (Goldberg cracks store a local, non-resolvable icon path).
+const iconErrors = reactive<Record<string, boolean>>({});
 
 watch(
   () => props.players,
