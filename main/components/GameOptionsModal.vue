@@ -132,8 +132,19 @@ const hasWindows = !!(
   game.version.value?.launches?.find((v) => v.platform === "Windows")
 );
 
-const protonEnabled = !!(
-  appState.value!.umuState !== "NotNeeded" && hasWindows
+// `appState` can still be null at the instant this modal's async setup runs (it
+// is filled by the app's boot sequence). The old `appState.value!` dereference
+// threw in that window, and because this is an async-setup component that
+// rejection was swallowed by the page's <Suspense>, silently dropping the whole
+// modal — so "Configure" opened nothing on *every* game in release builds. (Dev
+// happened to have appState ready by then, which is why it only reproduced in
+// the built app.) Guard it, and keep it a computed so the Proton options appear
+// once state settles rather than being captured as `false` forever.
+const protonEnabled = computed(
+  () =>
+    !!appState.value &&
+    appState.value.umuState !== "NotNeeded" &&
+    hasWindows,
 );
 
 // Emulated games get a "Video & Controls" tab (RetroArch presets). It's listed
