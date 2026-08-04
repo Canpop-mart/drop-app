@@ -910,11 +910,11 @@ function formatPlaytime(totalSeconds: number): string {
   return `${minutes} min`;
 }
 
-async function load() {
-  loading.value = true;
+async function load(hardRefresh = false, silent = false) {
+  if (!silent) loading.value = true;
   try {
     const lib = await invoke<FetchLibraryResponse>("fetch_library", {
-      hardRefresh: false,
+      hardRefresh,
     });
     const allGames: Game[] = [
       ...lib.library,
@@ -958,9 +958,11 @@ async function load() {
     entries.value = built;
   } catch (e) {
     console.warn("[library] fetch failed:", e);
-    entries.value = [];
+    // On a silent background revalidation, keep the already-rendered grid
+    // rather than blanking it if the refresh fails.
+    if (!silent) entries.value = [];
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 
@@ -1007,12 +1009,23 @@ watch(
 );
 
 onMounted(() => {
-  load();
+  // Show the cached library instantly, then silently revalidate against the
+  // server. Without the revalidation, fetch_library keeps returning its cached
+  // snapshot and games added elsewhere (notably from the store) never appear
+  // until each one is opened individually.
+  load().then(() => load(true, true));
   loadRecentPlaytime();
   loadConsoles();
   loadEmulators();
   fetchShelves().catch((e) =>
     console.warn("[library] shelves fetch failed:", e),
   );
+});
+
+// If the page is kept alive, navigating back to it (e.g. from the store) does
+// not re-run onMounted — revalidate here too, silently, so games added while we
+// were away appear without a manual refresh.
+onActivated(() => {
+  load(true, true);
 });
 </script>
