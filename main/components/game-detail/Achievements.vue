@@ -155,13 +155,14 @@
         class="flex items-center gap-3 py-2 px-2 rounded-lg transition-colors hover:bg-zinc-700/30"
       >
         <img
-          v-if="ach.iconUrl"
+          v-if="ach.iconUrl && !iconErrors[ach.id]"
           :src="ach.iconUrl"
           :class="[
             'size-9 rounded shrink-0',
             ach.unlocked ? '' : 'grayscale opacity-50',
             firsts[ach.id] ? 'ring-2 ring-yellow-500/70' : '',
           ]"
+          @error="iconErrors[ach.id] = true"
         />
         <div
           v-else
@@ -268,6 +269,10 @@ const props = defineProps<{
   youName?: string;
   youAvatarObjectId?: string | null;
 }>();
+
+// Icon error tracking — swap to the trophy fallback when a URL 404s (e.g.
+// Goldberg stores a crack-local icon path that doesn't resolve on the web).
+const iconErrors = reactive<Record<string, boolean>>({});
 
 const youLabel = computed(() => props.youName ?? "You");
 
