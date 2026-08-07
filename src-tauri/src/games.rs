@@ -255,21 +255,31 @@ pub async fn fetch_game_logic(
         }
     };
 
-    let mut db_handle = borrow_db_mut_checked();
-
-    db_handle
-        .applications
-        .game_statuses
-        .entry(id.clone())
-        .or_insert(GameDownloadStatus::Remote {});
-
-    let status = GameStatusManager::fetch_state(&id, &db_handle);
-
-    drop(db_handle);
+    // Reading a game's status must not rewrite the whole DB. The write guard's
+    // Drop re-encrypts and serializes the ENTIRE database to disk, so taking it
+    // here — once per game — is what turned loading an 82-game library into 82
+    // full-DB writes. The status row almost always already exists (fetch_library
+    // seeds every library game as Remote), so take a read lock to check and only
+    // fall back to a write lock to create a genuinely missing one.
+    let status = {
+        let db_handle = borrow_db_checked();
+        if db_handle.applications.game_statuses.contains_key(&id) {
+            GameStatusManager::fetch_state(&id, &db_handle)
+        } else {
+            drop(db_handle);
+            let mut db_handle = borrow_db_mut_checked();
+            db_handle
+                .applications
+                .game_statuses
+                .entry(id.clone())
+                .or_insert(GameDownloadStatus::Remote {});
+            GameStatusManager::fetch_state(&id, &db_handle)
+        }
+    };
 
     let data = FetchGameStruct::new(game.clone(), status, version);
 
-    cache_object(&id, &game)?;
+    cache_object(&format!("game/{}", id), &game)?;
 
     Ok(data)
 }
@@ -386,7 +396,7 @@ pub async fn fetch_game_logic_offline(
     };
 
     let status = GameStatusManager::fetch_state(&id, &db_handle);
-    let game = get_cached_object::<Game>(&id)?;
+    let game = get_cached_object::<Game>(&format!("game/{}", id))?;
 
     drop(db_handle);
 
@@ -1344,12 +1354,10 @@ pub fn restore_pc_cloud_save(
     // (older or hand-uploaded) rows untouched so restore still does the right thing.
     let basename = remote::save_sync::scan::strip_pc_prefix(filename.as_str());
 
-    // The game metadata cache is populated under two different keys depending
-    // on which page the user opened first:
-    //   - `fetch_library_logic` writes `game/{id}` (library bulk-fetch).
-    //   - `fetch_game_logic` writes `&id` (no prefix) on the per-game page.
-    // Try both before giving up so users who landed straight on a deep link
-    // can still restore.
+    // Game metadata is cached under `game/{id}` — fetch_library_logic and
+    // fetch_game_logic both write that key now. The bare-`{id}` read is a
+    // fallback for caches written by an older build (before the key was
+    // unified) and becomes a no-op once those age out.
     let game_name = remote::cache::get_cached_object::<games::library::Game>(&format!(
         "game/{game_id}"
     ))

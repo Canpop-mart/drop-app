@@ -565,7 +565,7 @@ import {
 } from "@heroicons/vue/24/outline";
 import { Menu, MenuButton, MenuItems, MenuItem } from "@headlessui/vue";
 import { invoke } from "@tauri-apps/api/core";
-import { useGame } from "~/composables/game";
+import { parseStatus } from "~/composables/game";
 import { useShelves } from "~/composables/shelves";
 import {
   useServerApi,
@@ -573,7 +573,7 @@ import {
   type ConsoleGroup,
 } from "~/composables/use-server-api";
 import { useConsoleSections } from "~/composables/console-sections";
-import type { Game, GameStatus } from "~/types";
+import type { Game, GameStatus, RawGameStatus } from "~/types";
 import { InstalledType } from "~/types";
 import LibraryGrid from "~/components/LibraryGrid.vue";
 import LibraryShelf from "~/components/LibraryShelf.vue";
@@ -926,34 +926,37 @@ async function load(hardRefresh = false, silent = false) {
       ...lib.missing,
     ].filter((g, i, a) => a.findIndex((x) => x.id === g.id) === i);
 
-    const built: LibraryEntry[] = [];
-    const batchSize = 5;
-    for (let i = 0; i < allGames.length; i += batchSize) {
-      const batch = allGames.slice(i, i + batchSize);
-      const results = await Promise.all(
-        batch.map((g) => useGame(g.id).catch(() => null)),
-      );
-      for (let j = 0; j < batch.length; j++) {
-        const r = results[j];
-        const game = batch[j];
-        if (!r) {
-          built.push({
-            game,
-            status: null,
-            installed: false,
-            updateAvailable: false,
-          });
-          continue;
-        }
-        const status = r.status.value;
-        const installed =
-          status.type === "Installed" &&
-          status.install_type.type === InstalledType.Installed;
-        const updateAvailable =
-          status.type === "Installed" ? status.update_available : false;
-        built.push({ game, status, installed, updateAvailable });
+    // One IPC call for every game's status, instead of a useGame() per game.
+    // Each useGame() ran fetch_game, which took a DB write guard whose Drop
+    // re-encrypts and rewrites the ENTIRE database to disk — 82 games meant 82
+    // full-DB writes and a minutes-long load. fetch_game_statuses reads them all
+    // under a single read lock.
+    const statusPairs = await invoke<Array<[string, RawGameStatus]>>(
+      "fetch_game_statuses",
+      { ids: allGames.map((g) => g.id) },
+    );
+    const statusById = new Map<string, GameStatus>();
+    for (const [gameId, raw] of statusPairs) {
+      try {
+        statusById.set(gameId, parseStatus(raw));
+      } catch {
+        // No status row yet (a game seeded as [null, null]) — leave it unset;
+        // treated as not-installed below, same as a per-game fetch that failed.
       }
     }
+
+    const built: LibraryEntry[] = allGames.map((game) => {
+      const status = statusById.get(game.id) ?? null;
+      if (!status) {
+        return { game, status: null, installed: false, updateAvailable: false };
+      }
+      const installed =
+        status.type === "Installed" &&
+        status.install_type.type === InstalledType.Installed;
+      const updateAvailable =
+        status.type === "Installed" ? status.update_available : false;
+      return { game, status, installed, updateAvailable };
+    });
     built.sort((a, b) => a.game.mName.localeCompare(b.game.mName));
     entries.value = built;
   } catch (e) {
@@ -1020,12 +1023,5 @@ onMounted(() => {
   fetchShelves().catch((e) =>
     console.warn("[library] shelves fetch failed:", e),
   );
-});
-
-// If the page is kept alive, navigating back to it (e.g. from the store) does
-// not re-run onMounted — revalidate here too, silently, so games added while we
-// were away appear without a manual refresh.
-onActivated(() => {
-  load(true, true);
 });
 </script>
