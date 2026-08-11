@@ -15,6 +15,7 @@ pub mod requests;
 pub mod save_sync;
 pub mod server_proto;
 pub mod streaming_sessions;
+pub mod switchemu;
 pub mod utils;
 pub mod web_upload;
 

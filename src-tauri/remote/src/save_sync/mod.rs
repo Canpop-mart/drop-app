@@ -52,9 +52,9 @@ pub use manifest::{
     load_manifest, manifest_path, save_manifest, update_manifest_after_sync,
 };
 pub use scan::{
-    delete_local_emu_save_for_tombstone, delete_local_pc_save_for_tombstone,
-    find_pc_save_destination, md5_file, scan_emu_saves, scan_pc_saves,
-    write_downloaded_pc_save, write_downloaded_save,
+    SWITCH_SAVE_PREFIX, decode_switch_relpath, delete_local_emu_save_for_tombstone,
+    delete_local_pc_save_for_tombstone, find_pc_save_destination, md5_file, scan_emu_saves,
+    scan_pc_saves, write_downloaded_pc_save, write_downloaded_save,
 };
 
 // ── Manifest types (persisted to disk between sessions) ────────────────

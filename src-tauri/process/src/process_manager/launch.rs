@@ -522,6 +522,7 @@ impl ProcessManager<'_> {
             is_script,
             working_dir: command_working_dir,
             emulator_info,
+            retroarch_ra,
         } = spawn_plan;
 
         // Pre-launch cloud-save sync (blocking, timeout-bounded). Returns a
@@ -581,6 +582,7 @@ impl ProcessManager<'_> {
             launch_process_handle,
             emulator_info,
             save_snapshot,
+            retroarch_ra,
             incognito,
         );
         Ok(())
@@ -601,6 +603,7 @@ impl ProcessManager<'_> {
         launch_process_handle: Arc<SharedChild>,
         emulator_info: Option<remote::goldberg::EmulatorInfo>,
         save_snapshot: Option<crate::process_manager::SaveSyncSnapshot>,
+        retroarch_ra: Option<crate::process_manager::RetroArchRaSession>,
         incognito: bool,
     ) {
         let game_id = meta.id.clone();
@@ -708,6 +711,7 @@ impl ProcessManager<'_> {
                 playtime_heartbeat_cancel,
                 achievement_poll_cancel: Some(achievement_cancel),
                 save_snapshot,
+                retroarch_ra,
             },
         );
 
@@ -834,6 +838,8 @@ pub(crate) struct SpawnPlan {
     pub is_script: bool,
     pub working_dir: String,
     pub emulator_info: Option<remote::goldberg::EmulatorInfo>,
+    /// Present when this is a RetroArch launch with RA credentials injected.
+    pub retroarch_ra: Option<crate::process_manager::RetroArchRaSession>,
 }
 
 impl ProcessManager<'_> {
@@ -951,7 +957,7 @@ impl ProcessManager<'_> {
         }
 
         // RetroArch config injection for emulator launches.
-        if let Some(emu_dir) = effective_cwd {
+        let retroarch_ra = effective_cwd.as_ref().and_then(|emu_dir| {
             self.configure_retroarch(
                 &mut command,
                 game_id,
@@ -959,7 +965,14 @@ impl ProcessManager<'_> {
                 user_configuration,
                 emulator_rom_path,
                 is_script,
-            );
+            )
+        });
+
+        // Switch-emulator config injection. Same slot, same best-effort
+        // contract: a Switch emulator is never also RetroArch, so exactly one
+        // of these two does any work.
+        if let Some(emu_dir) = effective_cwd.as_ref() {
+            self.configure_switch_emu(game_id, emu_dir);
         }
 
         Ok(SpawnPlan {
@@ -970,12 +983,17 @@ impl ProcessManager<'_> {
             is_script,
             working_dir: working_dir_owned,
             emulator_info,
+            retroarch_ra,
         })
     }
 
     /// Configure RetroArch for an emulator launch: fetch RA credentials
     /// (tight timeout — nice-to-have), patch `retroarch.cfg`, and inject
     /// `--appendconfig` so the AppImage actually reads our config.
+    ///
+    /// Returns the RA session details when this really is RetroArch and
+    /// credentials were injected, so the exit path can check whether
+    /// RetroAchievements rejected them.
     fn configure_retroarch(
         &self,
         command: &mut Command,
@@ -984,7 +1002,11 @@ impl ProcessManager<'_> {
         user_configuration: &database::models::data::UserConfiguration,
         emulator_rom_path: Option<&str>,
         is_script: bool,
-    ) {
+    ) -> Option<crate::process_manager::RetroArchRaSession> {
+        // Taken before anything else so it can never be later than the log
+        // this launch is about to write. The exit path uses it to ignore logs
+        // from earlier sessions.
+        let launched_at = std::time::SystemTime::now();
         let _ = self.app_handle.emit("launch_trace", serde_json::json!({
             "step": "7_retroarch_config_start", "game_id": game_id, "emu_dir": emu_dir,
         }));
@@ -1035,6 +1057,50 @@ impl ProcessManager<'_> {
             // — critical for diagnosing "audio but no video" in Gamescope.
             command.arg("--verbose");
         }
+
+        // Only worth watching for an RA rejection when we actually handed
+        // RetroArch a token to be rejected.
+        match (retroarch_info.is_some(), ra_creds) {
+            (true, Some(creds)) => Some(crate::process_manager::RetroArchRaSession {
+                emu_root: std::path::PathBuf::from(emu_dir),
+                connect_token: creds.connect_token,
+                launched_at,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Configure a yuzu-family Switch emulator (Eden, yuzu, Citron, Sudachi,
+    /// Suyu) for this launch: force portable mode and rewrite the player-1
+    /// input bindings for whatever pad is connected right now.
+    ///
+    /// Re-resolving the pad every launch is the point — SDL renumbers ports as
+    /// devices come and go, so a binding written once goes stale silently.
+    ///
+    /// Best-effort throughout: it returns nothing, swallows every failure into
+    /// the launch trace, and can never block or fail a launch. Directories
+    /// that hold no Switch emulator (the overwhelmingly common case) fall out
+    /// on the first directory read.
+    fn configure_switch_emu(&self, game_id: &str, emu_dir: &str) {
+        let pad = crate::gamepad::resolve_primary_pad();
+        let outcome = remote::switchemu::configure_switch_emu_for_game(emu_dir, pad.as_ref());
+
+        if matches!(
+            outcome,
+            remote::switchemu::SwitchEmuOutcome::NotSwitchEmulator
+        ) {
+            return;
+        }
+
+        let _ = self.app_handle.emit(
+            "launch_trace",
+            serde_json::json!({
+                "step": "7b_switchemu_config",
+                "game_id": game_id,
+                "emu_dir": emu_dir,
+                "result": outcome,
+            }),
+        );
     }
 }
 
