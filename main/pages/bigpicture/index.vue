@@ -150,7 +150,7 @@
                 style="width: 2.5vw; height: 2.5vw; border-radius: 50%; background-color: rgba(255,255,255,0.08)"
                 :ref="(el: any) => registerTile(el, { onSelect: () => router.push('/bigpicture/library') })"
               >
-                <img v-if="userProfilePicUrl" :src="userProfilePicUrl" class="w-full h-full object-cover rounded-full" />
+                <img v-if="userProfilePicUrl" :src="userProfilePicUrl ?? undefined" class="w-full h-full object-cover rounded-full" />
                 <svg v-else style="width: 1.2vw; height: 1.2vw" fill="#aaa" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
               </div>
             </div>
