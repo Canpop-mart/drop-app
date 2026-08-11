@@ -147,38 +147,63 @@ pub fn apply_core_quality_options(overrides: &mut HashMap<&str, String>, quality
     overrides.insert("mupen64plus-aspect", quoted(n64_aspect));
 
     // Dolphin — anti-aliasing + EFB access.
+    //
+    // `dolphin_anti_aliasing` takes a bare index, not the label: the core's
+    // option table is values "0".."6" against labels None / 2x MSAA / 4x MSAA /
+    // 8x MSAA / 2x SSAA / 4x SSAA / 8x SSAA. Drop used to write the labels,
+    // which the core rejects, so every preset silently ran with no AA. Ultra
+    // stops at 8x MSAA rather than climbing into SSAA — supersampling renders
+    // the whole frame at 2-8x and would tank the frame rate on a Deck-class GPU
+    // on top of the EFB-scale increase the preset already applies.
     let (dolphin_aa, dolphin_efb_copy) = match quality {
-        QualityPreset::Low => ("None", "disabled"),
-        QualityPreset::Medium => ("2x MSAA", "enabled"),
-        QualityPreset::High => ("4x MSAA", "enabled"),
-        QualityPreset::Ultra => ("8x MSAA", "enabled"),
+        QualityPreset::Low => ("0", "disabled"),    // None
+        QualityPreset::Medium => ("1", "enabled"),  // 2x MSAA
+        QualityPreset::High => ("2", "enabled"),    // 4x MSAA
+        QualityPreset::Ultra => ("3", "enabled"),   // 8x MSAA
     };
     overrides.insert("dolphin_anti_aliasing", quoted(dolphin_aa));
     overrides.insert("dolphin_efb_access_enable", quoted(dolphin_efb_copy));
+
+    // Dolphin renderer — hygiene, not a fix. "Hardware" is the option's only
+    // legal value (the core ships a single-entry value list), so this just
+    // pins the key to it and puts it in the file the core actually reads.
+    // Drop used to write it into retroarch.cfg, where it sat unread. Note this
+    // is the rasteriser, not the graphics API — the API is retroarch.cfg's
+    // video_driver.
+    overrides.insert("dolphin_renderer", "\"Hardware\"".into());
 
     // Additional Dolphin (GameCube / Wii) image-quality knobs — Wii in
     // particular needs more than just EFB scale to look right at modern
     // resolutions:
     //   * anisotropic filtering — keeps oblique-angle textures sharp at
     //     higher internal resolutions; scales with the preset.
-    //   * force_texture_filtering — smooths nearest-neighbour textures
-    //     (skipped on Low to preserve original-look perf).
+    //   * forced texture filtering — smooths nearest-neighbour textures
+    //     (skipped on Low to preserve original-look perf). It is tri-state
+    //     (Default / Nearest / Linear), not the boolean we used to write.
     //   * progressive scan — Wii outputs 480p; forcing it on avoids
     //     interlace artifacts that PAL/JP titles ship with by default.
+    //
+    // The first two used to be written as `dolphin_anisotropic_filtering` and
+    // `dolphin_force_texture_filtering`. Neither key exists in the core — they
+    // have been silent no-ops for their whole life. The real keys are below,
+    // with the numeric values the core expects (confirmed by reading the
+    // option table out of the shipped dolphin_libretro.dll: max_anisotropy is
+    // values "0".."4" against labels 1x (Off) / 2x / 4x / 8x / 16x, and
+    // force_texture_filtering_mode is "0".."2" against Default / Nearest
+    // (Sharp) / Linear (Smooth)). A value the core doesn't recognise is
+    // dropped in favour of the core default rather than reported, which is
+    // why the old keys failed silently.
     let dolphin_aniso = match quality {
-        QualityPreset::Low => "1x",
-        QualityPreset::Medium => "2x",
-        QualityPreset::High => "4x",
-        QualityPreset::Ultra => "16x",
+        QualityPreset::Low => "0",    // 1x (off)
+        QualityPreset::Medium => "1", // 2x
+        QualityPreset::High => "2",   // 4x
+        QualityPreset::Ultra => "4",  // 16x
     };
-    overrides.insert("dolphin_anisotropic_filtering", quoted(dolphin_aniso));
+    overrides.insert("dolphin_max_anisotropy", quoted(dolphin_aniso));
     overrides.insert(
-        "dolphin_force_texture_filtering",
-        quoted(if matches!(quality, QualityPreset::Low) {
-            "disabled"
-        } else {
-            "enabled"
-        }),
+        "dolphin_force_texture_filtering_mode",
+        // 0 = Default (leave the game's own filtering alone), 2 = Linear.
+        quoted(if matches!(quality, QualityPreset::Low) { "0" } else { "2" }),
     );
     overrides.insert("dolphin_progressive_scan", "\"enabled\"".into());
 
