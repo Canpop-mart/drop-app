@@ -179,8 +179,11 @@ pub async fn ra_login_and_save(username: String, password: String) -> Result<Str
         error: Option<String>,
     }
 
+    // RA's Connect API requires a user agent identifying the client; the
+    // server side of Drop already sends one.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
+        .user_agent(concat!("Drop/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
 
@@ -213,6 +216,9 @@ pub async fn ra_login_and_save(username: String, password: String) -> Result<Str
         let mut db = borrow_db_mut_checked();
         db.settings.ra_username = username.trim().to_string();
         db.settings.ra_token = token;
+        // This token is brand new, so whatever expired before is history —
+        // RetroArch gets credentials injected again from the next launch.
+        db.settings.ra_expired_token = String::new();
     }
 
     Ok(username.trim().to_string())
@@ -225,6 +231,9 @@ pub fn ra_clear_credentials() {
     let mut db = borrow_db_mut_checked();
     db.settings.ra_username = String::new();
     db.settings.ra_token = String::new();
+    // Nothing local left to be expired. If the server-linked account is also
+    // stale, the next launch's exit check will say so again.
+    db.settings.ra_expired_token = String::new();
 }
 
 /// Describes how the app was packaged, affecting update behavior.

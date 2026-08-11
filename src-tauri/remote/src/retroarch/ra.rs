@@ -5,6 +5,10 @@
 //! * **Connect credentials** — fetched from local settings or the Drop server
 //!   and injected into `retroarch.cfg` so RetroArch authenticates with
 //!   RetroAchievements without a manual login. See [`fetch_ra_credentials`].
+//! * **Credential expiry** — Connect tokens are password-derived, last about
+//!   45 to 60 days and cannot be refreshed. RetroArch never tells Drop it was
+//!   rejected, so expiry is read back out of RetroArch's own log after the
+//!   session. See [`detect_ra_login_failure`].
 //! * **ROM-hash verification** — RA identifies a game by an MD5-ish hash of
 //!   the ROM. Drop computes the local ROM's hash with the bundled `RAHasher`
 //!   CLI and compares it against the server's known-good hashes so the UI can
@@ -16,7 +20,9 @@
 
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::requests::{generate_url, remote_request, RemoteRequest};
 
@@ -40,18 +46,36 @@ pub struct RACredentials {
 /// server fetch is logged and swallowed — RA auto-login is nice-to-have, not
 /// a launch blocker.
 pub async fn fetch_ra_credentials() -> Option<RACredentials> {
-    // 1. Local settings first.
-    {
+    // 1. Local settings first. The read guard is released before
+    // `heal_expired_state` runs — it takes the write lock, and the DB lock is
+    // not reentrant.
+    let local = {
         let db = database::borrow_db_checked();
-        if !db.settings.ra_username.is_empty() && !db.settings.ra_token.is_empty() {
-            info!(
-                "[RETROARCH] Using locally-configured RA credentials for {}",
-                db.settings.ra_username
-            );
-            return Some(RACredentials {
+        (!db.settings.ra_username.is_empty() && !db.settings.ra_token.is_empty()).then(|| {
+            RACredentials {
                 username: db.settings.ra_username.clone(),
                 connect_token: db.settings.ra_token.clone(),
-            });
+            }
+        })
+    };
+    let mut local_expired = false;
+    if let Some(creds) = local {
+        // A local token that has already been rejected is worth less than
+        // whatever the server holds, so fall through rather than hand back a
+        // token we know RetroArch will refuse.
+        if is_expired_token(&creds.connect_token) {
+            local_expired = true;
+            warn!(
+                "[RETROARCH] Local RA token for {} has expired — trying the server-linked account",
+                creds.username
+            );
+        } else {
+            info!(
+                "[RETROARCH] Using locally-configured RA credentials for {}",
+                creds.username
+            );
+            heal_expired_state(&creds.connect_token);
+            return Some(creds);
         }
     }
 
@@ -75,6 +99,15 @@ pub async fn fetch_ra_credentials() -> Option<RACredentials> {
     match remote_request::<RACreds, _>(RemoteRequest::get(url)).await {
         Ok(creds) if !creds.connect_token.is_empty() => {
             info!("[RETROARCH] Got RA credentials for user {}", creds.username);
+            // A token the server hands back that isn't the one we recorded as
+            // dead means the user re-linked on the web — the expiry state is
+            // stale, so drop it and start injecting again. Not so if we got
+            // here because the LOCAL token expired: that record has to stand,
+            // or the next launch would reach for the dead local token first
+            // and fail all over again.
+            if !local_expired {
+                heal_expired_state(&creds.connect_token);
+            }
             Some(RACredentials {
                 username: creds.username,
                 connect_token: creds.connect_token,
@@ -88,6 +121,166 @@ pub async fn fetch_ra_credentials() -> Option<RACredentials> {
             debug!("[RETROARCH] Failed to fetch RA credentials: {e}");
             None
         }
+    }
+}
+
+// ── Credential expiry ────────────────────────────────────────────────────
+//
+// RA's Connect token is derived from the password, lives ~45-60 days and has
+// no refresh endpoint. When it dies, RetroArch keeps running (achievements
+// just never unlock) and blanks the dead token in its own config on exit,
+// which used to be pointless because Drop wrote the same dead token back on
+// the next launch. The only place the rejection is ever stated is RetroArch's
+// log, so that is where we read it from.
+
+/// Substrings rcheevos logs when RetroAchievements rejects the credentials.
+///
+/// `Login failed:` is the direct rejection (the Deck's log carries
+/// "Invalid user/token combination" as its reason). `Load failed (-28)` is the
+/// follow-on: the game's achievement set can't load because the session was
+/// never authenticated. Either one on its own is enough.
+const RA_LOGIN_FAILURE_MARKERS: &[&str] = &[
+    "[RCHEEVOS] Login failed:",
+    "Load failed (-28): Login required",
+];
+
+/// How much of a RetroArch log to read before giving up. Drop turns on
+/// verbose file logging, so a long session's log can reach hundreds of MB —
+/// the login result is written during content load, well inside this bound.
+const MAX_LOG_SCAN_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Scans the newest `emu_root/logs/retroarch__*.log` for an RA login
+/// rejection, returning the offending log line.
+///
+/// `launched_at` is the wall clock at which the session that just ended was
+/// started; any log older than that belongs to a previous session and is
+/// ignored. Without that bound a rejection logged weeks ago would be
+/// attributed to whatever token is current, which permanently latches the
+/// expiry flag: the session that would clear it never writes a log of its own
+/// when RetroArch is script-wrapped (no `--appendconfig`, so Drop's `log_dir`
+/// never reaches it).
+///
+/// Called on the RetroArch exit path. `None` means either "no rejection" or
+/// "no log from this session to read" — both are treated as "credentials
+/// still fine", because guessing expiry would lock a working account out of
+/// auto-login.
+pub fn detect_ra_login_failure(emu_root: &Path, launched_at: SystemTime) -> Option<String> {
+    let log_path = newest_retroarch_log(emu_root, launched_at)?;
+
+    let file = match std::fs::File::open(&log_path) {
+        Ok(f) => f,
+        Err(e) => {
+            debug!("[RA-AUTH] Could not open {}: {e}", log_path.display());
+            return None;
+        }
+    };
+
+    // Scanned as bytes, not `lines()`: RetroArch writes the content path
+    // during load, ahead of the RCHEEVOS result, so a ROM filename in
+    // Shift-JIS or Latin-1 would abort a UTF-8 line iterator before it ever
+    // reached the answer. Lossy-decoding each line keeps the markers (pure
+    // ASCII) findable whatever the rest of the line holds.
+    let mut reader = BufReader::new(file.take(MAX_LOG_SCAN_BYTES));
+    let mut raw = Vec::new();
+    loop {
+        raw.clear();
+        match reader.read_until(b'\n', &mut raw) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(e) => {
+                debug!("[RA-AUTH] Read error scanning {}: {e}", log_path.display());
+                break;
+            }
+        }
+        let line = String::from_utf8_lossy(&raw);
+        if RA_LOGIN_FAILURE_MARKERS.iter().any(|m| line.contains(m)) {
+            let line = line.trim().to_string();
+            info!(
+                "[RA-AUTH] RetroAchievements login rejection found in {}: {line}",
+                log_path.display()
+            );
+            return Some(line);
+        }
+    }
+
+    debug!("[RA-AUTH] No RA login failure in {}", log_path.display());
+    None
+}
+
+/// Most recently modified `retroarch__*.log` under `emu_root/logs/` that was
+/// touched at or after `launched_at`.
+///
+/// `log_to_file_timestamp` gives one file per launch, so the newest file is
+/// the session that just ended — but only if that session wrote one at all.
+/// Drop's `log_dir` only reaches RetroArch when `--appendconfig` was injected
+/// (or the AppImage-home copy applied), so a script-wrapped plain install
+/// leaves the directory untouched. Rejecting everything older than the launch
+/// makes that case yield `None` instead of re-reading some earlier session's
+/// rejection and pinning it on the current token.
+fn newest_retroarch_log(emu_root: &Path, launched_at: SystemTime) -> Option<PathBuf> {
+    let logs_dir = emu_root.join("logs");
+    let entries = match std::fs::read_dir(&logs_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            debug!("[RA-AUTH] No RetroArch log dir at {}: {e}", logs_dir.display());
+            return None;
+        }
+    };
+
+    let newest = entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            name.starts_with("retroarch__") && name.ends_with(".log")
+        })
+        .filter_map(|entry| {
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            (modified >= launched_at).then(|| (modified, entry.path()))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path);
+
+    if newest.is_none() {
+        debug!(
+            "[RA-AUTH] No RetroArch log in {} written by this session — \
+             not reading older logs",
+            logs_dir.display()
+        );
+    }
+    newest
+}
+
+/// Whether `token` is the exact Connect token RetroArch already rejected.
+pub fn is_expired_token(token: &str) -> bool {
+    let db = database::borrow_db_checked();
+    !db.settings.ra_expired_token.is_empty() && db.settings.ra_expired_token == token
+}
+
+/// Records `token` as rejected so the next launch stops injecting it and the
+/// settings UI can ask for a fresh sign-in.
+pub fn mark_credentials_expired(token: &str) {
+    let mut db = database::borrow_db_mut_checked();
+    db.settings.ra_expired_token = token.to_string();
+}
+
+/// Clears the expired-credentials state.
+///
+/// The settings commands clear the field directly instead of calling this —
+/// they already hold the write guard, and the DB lock is not reentrant.
+fn clear_expired_credentials() {
+    let mut db = database::borrow_db_mut_checked();
+    db.settings.ra_expired_token = String::new();
+}
+
+/// Clears the expired state if `token` is a different token to the dead one.
+fn heal_expired_state(token: &str) {
+    let stale = {
+        let db = database::borrow_db_checked();
+        !db.settings.ra_expired_token.is_empty() && db.settings.ra_expired_token != token
+    };
+    if stale {
+        info!("[RA-AUTH] Fresh RetroAchievements token — clearing expired state");
+        clear_expired_credentials();
     }
 }
 
@@ -277,5 +470,152 @@ pub async fn check_rom_hash(emu_root: &Path, game_id: &str, rom_path: &str) -> R
     RomHashStatus::Mismatch {
         rom_hash,
         expected_hashes: hash_data.hashes,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detect_ra_login_failure;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
+
+    /// Two lines lifted from a real Deck log, one per marker.
+    const REJECTED_LOG: &str = "\
+[INFO] [RCHEEVOS]: Load started
+[INFO] [RCHEEVOS] Login failed: Invalid user/token combination.
+[INFO] [RCHEEVOS]: Load failed (-28): Login required
+";
+    const HEALTHY_LOG: &str = "\
+[INFO] [RCHEEVOS]: Load started
+[INFO] [RCHEEVOS]: Login succeeded
+[INFO] [RCHEEVOS]: Load done
+";
+
+    /// Creates an isolated `<tmp>/<name>/logs` tree. The caller removes it.
+    fn emu_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("drop-ra-test-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        root
+    }
+
+    fn write_log(root: &Path, file: &str, body: &str) {
+        std::fs::write(root.join("logs").join(file), body).unwrap();
+    }
+
+    /// Windows file times move in ~15ms steps while `SystemTime::now` is
+    /// precise, so every ordering assertion in these tests is spaced out
+    /// rather than trusting two back-to-back operations to differ.
+    fn settle() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    /// The launch instant for a session whose logs are written next.
+    fn launched_now() -> SystemTime {
+        let now = SystemTime::now();
+        settle();
+        now
+    }
+
+    #[test]
+    fn rejection_is_detected() {
+        let root = emu_root("rejection");
+        let launched = launched_now();
+        write_log(&root, "retroarch__2026_08_11__09_26_25.log", REJECTED_LOG);
+        let found =
+            detect_ra_login_failure(&root, launched).expect("rejection should be detected");
+        assert!(found.contains("Invalid user/token combination"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The second marker alone is enough — a session can fail to load the
+    /// achievement set without the login line ever being written.
+    #[test]
+    fn load_failed_marker_alone_is_enough() {
+        let root = emu_root("load-failed");
+        let launched = launched_now();
+        write_log(
+            &root,
+            "retroarch__2026_08_11__09_26_25.log",
+            "[INFO] [RCHEEVOS]: Load failed (-28): Login required\n",
+        );
+        assert!(detect_ra_login_failure(&root, launched).is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn healthy_log_reports_nothing() {
+        let root = emu_root("healthy");
+        let launched = launched_now();
+        write_log(&root, "retroarch__2026_08_11__09_26_25.log", HEALTHY_LOG);
+        assert_eq!(detect_ra_login_failure(&root, launched), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Only the newest log counts. Yesterday's rejection must not keep the
+    /// account flagged after the user has re-linked and played again — that
+    /// would be the same "can never recover" trap in a new place.
+    #[test]
+    fn only_the_newest_log_is_read() {
+        let root = emu_root("newest");
+        let launched = launched_now();
+        write_log(&root, "retroarch__2026_08_10__09_00_00.log", REJECTED_LOG);
+        settle();
+        write_log(&root, "retroarch__2026_08_11__09_26_25.log", HEALTHY_LOG);
+        assert_eq!(detect_ra_login_failure(&root, launched), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A non-UTF-8 ROM filename earlier in the log must not stop the scan
+    /// before the RCHEEVOS lines, which are written later.
+    #[test]
+    fn non_utf8_line_does_not_end_the_scan() {
+        let root = emu_root("non-utf8");
+        let launched = launched_now();
+        // Shift-JIS bytes for a ROM name, invalid as UTF-8.
+        let mut body = b"[INFO] Loading content: \x83h\x83\x89\x83S\x83\x93.iso\n".to_vec();
+        body.extend_from_slice(REJECTED_LOG.as_bytes());
+        std::fs::write(
+            root.join("logs").join("retroarch__2026_08_11__09_26_25.log"),
+            &body,
+        )
+        .unwrap();
+        let found = detect_ra_login_failure(&root, launched)
+            .expect("rejection after a non-UTF-8 line should still be found");
+        assert!(found.contains("Invalid user/token combination"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The latch guard: a rejection from an earlier session must not be
+    /// attributed to the token this session used. A script-wrapped RetroArch
+    /// never gets Drop's `log_dir`, so the session that should clear the flag
+    /// writes no log at all and only the old rejection is left on disk.
+    #[test]
+    fn log_older_than_the_launch_is_ignored() {
+        let root = emu_root("stale");
+        write_log(&root, "retroarch__2026_07_01__09_00_00.log", REJECTED_LOG);
+        settle();
+        // Launch happens after the only log on disk was written.
+        assert_eq!(detect_ra_login_failure(&root, SystemTime::now()), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_log_dir_is_not_a_failure() {
+        let root = std::env::temp_dir().join("drop-ra-test-does-not-exist");
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(detect_ra_login_failure(&root, SystemTime::UNIX_EPOCH), None);
+    }
+
+    /// Files RetroArch didn't write are ignored, even when newer.
+    #[test]
+    fn unrelated_files_are_ignored() {
+        let root = emu_root("unrelated");
+        let launched = launched_now();
+        write_log(&root, "retroarch__2026_08_11__09_26_25.log", REJECTED_LOG);
+        settle();
+        write_log(&root, "notes.txt", HEALTHY_LOG);
+        assert!(detect_ra_login_failure(&root, launched).is_some());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

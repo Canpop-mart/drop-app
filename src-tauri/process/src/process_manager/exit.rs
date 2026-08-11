@@ -79,6 +79,12 @@ impl ProcessManager<'_> {
         // Notify listeners (streaming auto-stop) that the process is gone.
         let _ = self.app_handle.emit("game_process_exited", &game_id);
 
+        // RetroAchievements expiry check. Runs before the DB write below —
+        // it takes the write lock itself, and the lock is not reentrant.
+        if let Some(ra) = &process.retroarch_ra {
+            check_ra_credentials(&self.app_handle, ra);
+        }
+
         // Stop the periodic playtime heartbeat and achievement polling.
         process.playtime_heartbeat_cancel.notify_one();
         if let Some(cancel) = &process.achievement_poll_cancel {
@@ -179,6 +185,38 @@ impl ProcessManager<'_> {
         push_game_update(&self.app_handle, &game_id, version_data, status);
         Ok(())
     }
+}
+
+/// Read RetroArch's log for a RetroAchievements login rejection and, if the
+/// token was refused, record it and tell the frontend.
+///
+/// RA's Connect token expires after roughly 45 to 60 days and cannot be
+/// refreshed. RetroArch reports the rejection only in its own log — the game
+/// still runs, achievements just never unlock — so this is the only moment
+/// Drop can notice. Recording the dead token stops the next launch injecting
+/// it again, which is what previously made expiry unrecoverable by hand.
+///
+/// Only a log this session wrote counts, hence `ra.launched_at`: a rejection
+/// left behind by an earlier session would otherwise be re-read on every exit
+/// and re-pinned to whatever token is current, which no re-link could clear.
+fn check_ra_credentials(
+    app_handle: &tauri::AppHandle,
+    ra: &crate::process_manager::RetroArchRaSession,
+) {
+    let Some(line) = remote::retroarch::detect_ra_login_failure(&ra.emu_root, ra.launched_at)
+    else {
+        return;
+    };
+
+    warn!(
+        "[EXIT] RetroAchievements rejected the Connect token — it has expired \
+         and cannot be refreshed. RetroArch said: {line}"
+    );
+    remote::retroarch::mark_credentials_expired(&ra.connect_token);
+    let _ = app_handle.emit(
+        "ra_credentials_expired",
+        serde_json::json!({ "reason": line }),
+    );
 }
 
 /// Human-readable one-liner describing how a process ended, used in logs and
