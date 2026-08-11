@@ -119,6 +119,9 @@ export function setupHooks() {
     },
   );
 
+  // `stream-host-error` is handled in plugins/streaming-host-errors.client.ts,
+  // not here: the poller that raises it runs whether or not a page is mounted.
+
   // This is for errors that (we think) aren't our fault
   useListen<string>("launch_external_error", (event) => {
     createModal(

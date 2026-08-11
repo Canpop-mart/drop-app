@@ -94,8 +94,9 @@ const ALLOWED_SETTINGS_KEYS: &[&str] = &[
     "maxDownloadThreads",
     "forceOffline",
     "globalMangohud",
-    "sunshineUsername",
-    "sunshinePassword",
+    // sunshineUsername/sunshinePassword are deliberately absent: the client
+    // generates that password itself and Sunshine hashes it into its own
+    // credentials file. A frontend patch would only ever desync the two.
     "raUsername",
     "raToken",
     "cloudSavesEnabled",
@@ -105,6 +106,10 @@ const ALLOWED_SETTINGS_KEYS: &[&str] = &[
     "streamingResolution",
     "streamingHdr",
     "streamingAutoResolution",
+    "streamingDisplay",
+    "streamingAdapter",
+    "streamingAudioSink",
+    "streamingVirtualSink",
 ];
 
 /// Max length accepted for free-form string settings. Prevents a rogue

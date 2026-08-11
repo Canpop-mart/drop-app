@@ -114,18 +114,15 @@ const navigation = computed(() => [
         },
       ]
     : []),
-  // Streaming is gated behind dev mode until the Sunshine/Moonlight flow is
-  // hardened for end users — see /settings/developer.
-  ...(devMode.enabled.value
-    ? [
-        {
-          label: "Streaming",
-          route: "/settings/streaming",
-          prefix: "/settings/streaming",
-          icon: SignalIcon,
-        },
-      ]
-    : []),
+  // Not dev-gated: this page holds the only setup UI for remote play, and the
+  // Play-on-another-device buttons are visible to everyone, so hiding it left
+  // people able to start a stream they could never set up.
+  {
+    label: "Remote Play",
+    route: "/settings/streaming",
+    prefix: "/settings/streaming",
+    icon: SignalIcon,
+  },
   {
     label: "Account",
     route: "/settings/account",

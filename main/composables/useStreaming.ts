@@ -3,12 +3,15 @@ import { devLog } from "./dev-mode";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
+/** Mirrors `SunshineStatus` in src-tauri/src/streaming.rs (serde camelCase). */
 export interface SunshineStatusResult {
   installed: boolean;
+  /** Installed and complete. False with `installed` true means damaged files. */
+  healthy: boolean;
   running: boolean;
-  version: string | null;
-  web_ui_url: string | null;
-  paired_clients: number;
+  binaryPath: string | null;
+  webUiPort: number;
+  version: string;
 }
 
 export interface StreamingSession {
@@ -28,6 +31,13 @@ export interface StreamingSession {
   hostLocalIp: string | null;
   hostExternalIp: string | null;
   hasPairingPin: boolean;
+  /**
+   * Why the host gave up, in words to show the person who pressed Play. Set
+   * only on a `Stopped` session that failed, and those stay in the list for two
+   * minutes so the requesting device can read this instead of waiting out its
+   * own timeout. Null on a healthy session or a stop the user asked for.
+   */
+  error: string | null;
   createdAt: string;
   lastHeartbeat: string;
 }
@@ -41,6 +51,8 @@ export interface StreamingConnectionInfo {
   hostLocalIp: string | null;
   hostExternalIp: string | null;
   pairingPin: string | null;
+  /** See `StreamingSession.error`. */
+  error: string | null;
 }
 
 // ── Composable ─────────────────────────────────────────────────────────────
@@ -83,17 +95,27 @@ export function useStreaming() {
     }
   }
 
-  async function startSunshine(
-    adminUsername: string,
-    adminPassword: string,
-  ): Promise<string> {
+  /** Wipe a damaged install and lay Sunshine down again. */
+  async function repairSunshine(): Promise<string> {
     loading.value = true;
     error.value = null;
     try {
-      const webUiUrl = await invoke<string>("start_sunshine", {
-        adminUsername,
-        adminPassword,
-      });
+      const path = await invoke<string>("repair_sunshine");
+      await checkSunshine();
+      return path;
+    } catch (e) {
+      error.value = String(e);
+      throw e;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function startSunshine(): Promise<string> {
+    loading.value = true;
+    error.value = null;
+    try {
+      const webUiUrl = await invoke<string>("start_sunshine");
       await checkSunshine();
       return webUiUrl;
     } catch (e) {
@@ -118,19 +140,14 @@ export function useStreaming() {
     }
   }
 
-  async function sendPin(
-    pin: string,
-    clientName?: string,
-    username?: string,
-    password?: string,
-  ): Promise<void> {
+  // Sunshine's admin credentials live in one place only: Drop generates them
+  // and the Rust side reads them from settings. Nothing passes them in.
+  async function sendPin(pin: string, clientName?: string): Promise<void> {
     error.value = null;
     try {
       await invoke("sunshine_send_pin", {
         pin,
         clientName: clientName ?? "Drop Client",
-        username: username ?? "sunshine",
-        password: password ?? "sunshine",
       });
     } catch (e) {
       error.value = String(e);
@@ -142,8 +159,6 @@ export function useStreaming() {
     gameId: string,
     gameName: string,
     launchCommand: string,
-    username?: string,
-    password?: string,
   ): Promise<void> {
     error.value = null;
     try {
@@ -151,8 +166,6 @@ export function useStreaming() {
         gameId,
         gameName,
         launchCommand,
-        username: username ?? "sunshine",
-        password: password ?? "sunshine",
       });
     } catch (e) {
       error.value = String(e);
@@ -277,6 +290,7 @@ export function useStreaming() {
     // Local Sunshine
     checkSunshine,
     installSunshine,
+    repairSunshine,
     startSunshine,
     stopSunshine,
     sendPin,

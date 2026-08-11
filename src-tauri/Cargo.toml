@@ -140,7 +140,20 @@ tauri-build = { version = "2.6", features = [] }
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
 
 [target."cfg(windows)".dependencies]
-winapi = { version = "0.3", features = ["wingdi", "winuser"] }
+# Host device enumeration for streaming: QueryDisplayConfig + SetupAPI (display
+# identity) and WASAPI/MMDevice (audio endpoints). Replaces the old winapi
+# dependency, which only ever backed the primary-display-only resolution switch.
+windows = { version = "0.62", features = [
+  "Win32_Devices_DeviceAndDriverInstallation",
+  "Win32_Devices_Display",
+  "Win32_Devices_FunctionDiscovery",
+  "Win32_Media_Audio",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Registry",
+  "Win32_System_Variant",
+  "Win32_UI_Shell_PropertiesSystem",
+] }
 
 [profile.release]
 lto = true

@@ -21,6 +21,7 @@ export const WIZARD_STEPS = [
   "platform",
   "saves",
   "retroachievements",
+  "streaming",
   "navigation",
   "warnings",
   "done",

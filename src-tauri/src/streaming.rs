@@ -9,8 +9,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use database::{borrow_db_checked, GameDownloadStatus};
+use database::{borrow_db_checked, borrow_db_mut_checked, GameDownloadStatus};
 use log::{info, warn};
 use rand::Rng;
 use remote::streaming_sessions;
@@ -32,77 +33,6 @@ const SUNSHINE_ARCHIVE: &str = "sunshine.rb"; // macOS uses Homebrew
 const SUNSHINE_BASE_PORT: u16 = 47989;
 /// Web UI / API port = base + 1.
 const SUNSHINE_WEB_PORT: u16 = 47990;
-
-// ── Display resolution management (Windows only) ─────────────────────
-
-/// Saved original display resolution for restoration after streaming ends.
-#[cfg(target_os = "windows")]
-struct SavedResolution {
-    width: u32,
-    height: u32,
-}
-
-#[cfg(target_os = "windows")]
-static SAVED_RESOLUTION: std::sync::LazyLock<Mutex<Option<SavedResolution>>> =
-    std::sync::LazyLock::new(|| Mutex::new(None));
-
-/// Change the primary display resolution (Windows only).
-/// Returns the previous resolution so it can be restored later.
-#[cfg(target_os = "windows")]
-fn set_display_resolution(width: u32, height: u32) -> Result<(u32, u32), String> {
-    use winapi::um::wingdi::{
-        DEVMODEW, DM_PELSWIDTH, DM_PELSHEIGHT,
-    };
-    use winapi::um::winuser::{
-        EnumDisplaySettingsW, ChangeDisplaySettingsW,
-        CDS_FULLSCREEN, DISP_CHANGE_SUCCESSFUL, ENUM_CURRENT_SETTINGS,
-    };
-
-    unsafe {
-        // Get current resolution
-        let mut current: DEVMODEW = std::mem::zeroed();
-        current.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
-        if EnumDisplaySettingsW(std::ptr::null(), ENUM_CURRENT_SETTINGS, &mut current) == 0 {
-            return Err("Failed to get current display settings".to_string());
-        }
-        let old_width = current.dmPelsWidth;
-        let old_height = current.dmPelsHeight;
-
-        if old_width == width && old_height == height {
-            info!("[DISPLAY] Resolution already {}x{}, no change needed", width, height);
-            return Ok((old_width, old_height));
-        }
-
-        // Set new resolution
-        let mut new_mode = current;
-        new_mode.dmPelsWidth = width;
-        new_mode.dmPelsHeight = height;
-        new_mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
-
-        let result = ChangeDisplaySettingsW(&mut new_mode, CDS_FULLSCREEN);
-        if result == DISP_CHANGE_SUCCESSFUL {
-            info!("[DISPLAY] Changed resolution from {}x{} to {}x{}", old_width, old_height, width, height);
-            Ok((old_width, old_height))
-        } else {
-            Err(format!("ChangeDisplaySettingsW failed with code {}", result))
-        }
-    }
-}
-
-/// Restore the display resolution to what it was before streaming started.
-#[cfg(target_os = "windows")]
-async fn restore_display_resolution() {
-    let saved = {
-        let mut guard = SAVED_RESOLUTION.lock().await;
-        guard.take()
-    };
-    if let Some(res) = saved {
-        match set_display_resolution(res.width, res.height) {
-            Ok(_) => info!("[DISPLAY] Restored resolution to {}x{}", res.width, res.height),
-            Err(e) => warn!("[DISPLAY] Failed to restore resolution: {e}"),
-        }
-    }
-}
 
 // ── Tool management ───────────────────────────────────────────────────
 
@@ -127,18 +57,71 @@ fn sunshine_config_dir() -> PathBuf {
         .join("sunshine-config")
 }
 
+/// Paths — relative to whichever directory Sunshine's binary lives in — that a
+/// working install must have. The Windows portable zip ships the web UI and the
+/// helper tools as siblings of the exe, so an extract that flattens the archive
+/// leaves `sunshine.exe` sitting there looking installed while every one of
+/// these is gone. `true` marks a directory.
+#[cfg(target_os = "windows")]
+const SUNSHINE_REQUIRED_PATHS: &[(&str, bool)] = &[
+    ("sunshine.exe", false),
+    ("assets/web/index.html", false),
+    ("assets/web/assets/css/sunshine.css", false),
+    ("assets/shaders/directx", true),
+    ("tools/dxgi-info.exe", false),
+];
+#[cfg(target_os = "linux")]
+const SUNSHINE_REQUIRED_PATHS: &[(&str, bool)] = &[("sunshine.AppImage", false)];
+#[cfg(target_os = "macos")]
+const SUNSHINE_REQUIRED_PATHS: &[(&str, bool)] = &[("sunshine", false)];
+
+/// Shown whenever a download succeeded but left an install that can't serve a
+/// stream. Points at Repair because that is the only thing that fixes it.
+const SUNSHINE_UNPACK_FAILED: &str =
+    "Sunshine downloaded but did not unpack correctly. Try Repair.";
+
+/// Required paths missing under `root`, in declaration order. Empty = healthy.
+fn missing_sunshine_files(root: &Path) -> Vec<&'static str> {
+    SUNSHINE_REQUIRED_PATHS
+        .iter()
+        .filter(|(rel, is_dir)| {
+            let path = root.join(rel);
+            if *is_dir { !path.is_dir() } else { !path.is_file() }
+        })
+        .map(|(rel, _)| *rel)
+        .collect()
+}
+
+/// The directory Sunshine has to run from. `SUNSHINE_ASSETS_DIR` defaults to
+/// the *relative* string "assets", so a Sunshine launched with Drop's working
+/// directory looks for its web UI under Drop instead of next to itself.
+/// `None` for a bare name resolved off PATH — there is no directory to use.
+fn sunshine_working_dir(binary: &Path) -> Option<PathBuf> {
+    binary
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+}
+
 /// Find the Sunshine binary — check Drop's tools dir, then PATH.
 fn find_sunshine() -> Option<PathBuf> {
-    // Check Drop's bundled tools directory
     #[cfg(target_os = "windows")]
-    let bundled = sunshine_dir().join("sunshine.exe");
+    let exe_name = "sunshine.exe";
     #[cfg(target_os = "linux")]
-    let bundled = sunshine_dir().join("sunshine.AppImage");
+    let exe_name = "sunshine.AppImage";
     #[cfg(target_os = "macos")]
-    let bundled = sunshine_dir().join("sunshine");
+    let exe_name = "sunshine";
 
-    if bundled.exists() {
-        return Some(bundled);
+    // Flat is the layout Drop extracts to. The nested one is what an install
+    // that kept the archive's own `Sunshine/` wrapper looks like — the same
+    // fallback `install_moonlight` does after its extract.
+    for bundled in [
+        sunshine_dir().join(exe_name),
+        sunshine_dir().join("Sunshine").join(exe_name),
+    ] {
+        if bundled.exists() {
+            return Some(bundled);
+        }
     }
 
     // Check PATH
@@ -163,15 +146,296 @@ fn find_sunshine() -> Option<PathBuf> {
     None
 }
 
+/// What one look at the filesystem says about Sunshine. Shared by
+/// `sunshine_status` and the post-extract verification so the two can never
+/// disagree about what is on disk.
+struct SunshineProbe {
+    binary: Option<PathBuf>,
+    /// Required paths missing next to that binary. Always empty when Sunshine
+    /// came off PATH or a system location: Drop didn't unpack that one, so its
+    /// layout isn't Drop's to judge.
+    missing: Vec<&'static str>,
+}
+
+impl SunshineProbe {
+    fn installed(&self) -> bool {
+        self.binary.is_some()
+    }
+
+    /// Installed *and* complete enough to actually serve a stream.
+    fn healthy(&self) -> bool {
+        self.binary.is_some() && self.missing.is_empty()
+    }
+}
+
+fn probe_sunshine_install() -> SunshineProbe {
+    let binary = find_sunshine();
+    let install_dir = sunshine_dir();
+    let missing = match binary.as_deref() {
+        Some(path) if path.starts_with(&install_dir) => {
+            missing_sunshine_files(path.parent().unwrap_or(install_dir.as_path()))
+        }
+        _ => Vec::new(),
+    };
+    SunshineProbe { binary, missing }
+}
+
 /// Check if Sunshine is installed and return its path.
 #[tauri::command]
 pub fn check_sunshine() -> Option<String> {
     find_sunshine().map(|p| p.to_string_lossy().to_string())
 }
 
+// ── Archive extraction ────────────────────────────────────────────────
+
+/// Normalise a zip entry name to forward slashes and reject anything that
+/// could write outside the destination: `..`, a rooted path, or a drive
+/// letter. `None` also covers entries with no usable name left.
+///
+/// The colon rule has to apply to *every* component, not just the first. A
+/// drive letter buried mid-path (`Sunshine/C:/Windows/evil.dll`) is five
+/// ordinary components as far as `Path` is concerned, so it sails past
+/// `enclosed_name`, and then `strip_wrapper` promotes the `C:` to the front and
+/// makes the result absolute. Rejecting the colon outright also kills NTFS
+/// alternate data streams (`index.html:evil.exe`), which are never legitimate
+/// in an archive Drop unpacks.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn sanitise_zip_entry(raw: &str) -> Option<String> {
+    let name = raw.replace('\\', "/");
+    if name.starts_with('/') {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    for part in name.split('/') {
+        match part {
+            "" | "." => continue,
+            ".." => return None,
+            _ if part.contains(':') => return None,
+            _ => parts.push(part),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// The single top-level directory every entry shares, if there is one.
+///
+/// Sunshine's portable zip wraps its whole tree in `Sunshine/`, so writing the
+/// names verbatim would nest to `sunshine/Sunshine/sunshine.exe`. Stripping is
+/// only safe when *every* entry sits under the same root, and only when at
+/// least one entry actually lives inside it — otherwise a flat single-file
+/// archive would have its one file stripped away to nothing.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn shared_wrapper_dir(names: &[String]) -> Option<String> {
+    let candidate = names.first()?.split('/').next()?.to_string();
+    let prefix = format!("{candidate}/");
+    let mut has_nested = false;
+    for name in names {
+        if *name == candidate {
+            continue;
+        }
+        match name.strip_prefix(&prefix) {
+            Some(rest) if !rest.is_empty() => has_nested = true,
+            _ => return None,
+        }
+    }
+    has_nested.then_some(candidate)
+}
+
+/// Drop the wrapper component from a sanitised entry name. `None` when nothing
+/// is left, i.e. the wrapper's own directory entry.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn strip_wrapper(name: &str, wrapper: Option<&str>) -> Option<String> {
+    match wrapper {
+        Some(w) if name == w => None,
+        Some(w) => name.strip_prefix(&format!("{w}/")).map(str::to_string),
+        None => Some(name.to_string()),
+    }
+}
+
+/// Extract a zip into `dest`, stripping the archive's wrapper directory when
+/// it has one. Unsafe entries are dropped rather than written.
+#[cfg(target_os = "windows")]
+fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), String> {
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| format!("Failed to open archive: {e}"))?;
+
+    // Two passes: the wrapper can only be identified once every name is known.
+    let mut entries = Vec::with_capacity(archive.len());
+    for i in 0..archive.len() {
+        let file = archive
+            .by_index(i)
+            .map_err(|e| format!("Archive error: {e}"))?;
+        // `enclosed_name` is zip's own traversal guard; when it refuses, fall
+        // back to the raw name so our sanitiser gets its own shot at rejecting.
+        let raw = file
+            .enclosed_name()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| file.name().to_string());
+        entries.push((i, file.is_dir(), sanitise_zip_entry(&raw)));
+    }
+
+    let names: Vec<String> = entries.iter().filter_map(|(_, _, n)| n.clone()).collect();
+    let wrapper = shared_wrapper_dir(&names);
+    if let Some(w) = &wrapper {
+        info!("[SUNSHINE] Archive is wrapped in '{w}/' — stripping that one component");
+    }
+
+    for (index, is_dir, name) in entries {
+        let Some(name) = name else {
+            warn!("[SUNSHINE] Skipped archive entry #{index}: unsafe path");
+            continue;
+        };
+        let Some(rel) = strip_wrapper(&name, wrapper.as_deref()) else {
+            continue;
+        };
+        let out_path = dest.join(&rel);
+        // Last line of defence, checked on the path that is actually written
+        // rather than on the name the sanitiser saw. `Path::join` silently
+        // replaces the whole buffer when what it is given turns out to be
+        // absolute, so anything that ends up outside `dest` is dropped here no
+        // matter which earlier guard let it through.
+        if !out_path.starts_with(dest) {
+            warn!("[SUNSHINE] Skipped archive entry #{index}: '{rel}' escapes the install directory");
+            continue;
+        }
+
+        if is_dir {
+            std::fs::create_dir_all(&out_path)
+                .map_err(|e| format!("Failed to create {}: {e}", out_path.display()))?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+        }
+        let mut file = archive
+            .by_index(index)
+            .map_err(|e| format!("Archive error: {e}"))?;
+        let mut out_file = std::fs::File::create(&out_path)
+            .map_err(|e| format!("Failed to create {}: {e}", out_path.display()))?;
+        std::io::copy(&mut file, &mut out_file)
+            .map_err(|e| format!("Failed to extract {rel}: {e}"))?;
+    }
+
+    Ok(())
+}
+
+/// A Sunshine running out of Drop's own install directory, if there is one.
+///
+/// `stop_sunshine` only ends a process Drop is currently holding a handle to,
+/// so it misses the two states where something else still owns files here: a
+/// Sunshine adopted from an earlier Drop run (left alive on purpose), and one
+/// orphaned by a Drop restart. Wiping under either deletes the assets, leaves
+/// the locked exe behind, and the extract then dies on a raw "Access is denied".
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn sunshine_running_from_install_dir() -> Option<String> {
+    if !sunshine_port_open() {
+        return None;
+    }
+    let install_dir = sunshine_dir();
+    running_sunshine_binaries()
+        .into_iter()
+        .find(|path| Path::new(path).starts_with(&install_dir))
+}
+
+/// Remove a previous install so a fresh extract can't inherit its debris —
+/// except `config/`, which is where a Sunshine left to its own defaults would
+/// put the cacert.pem/cakey.pem that every Moonlight pairing depends on. Drop
+/// pins those into `sunshine-config/credentials/` instead (see
+/// `generate_sunshine_conf`), so this skip is belt and braces rather than the
+/// thing keeping pairings alive.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn wipe_sunshine_install(install_dir: &Path) -> Result<(), String> {
+    if !install_dir.exists() {
+        return Ok(());
+    }
+    let entries = std::fs::read_dir(install_dir)
+        .map_err(|e| format!("Failed to read {}: {e}", install_dir.display()))?;
+    for entry in entries.flatten() {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("config")
+        {
+            continue;
+        }
+        let path = entry.path();
+        let removed = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if let Err(e) = removed {
+            // Usually a file still open by a running Sunshine. Whether that
+            // actually mattered is what the post-extract probe decides.
+            warn!("[SUNSHINE] Couldn't remove {}: {e}", path.display());
+        }
+    }
+    Ok(())
+}
+
+/// Confirm an install actually landed. The old extractor happily reported
+/// success while writing a directory that could never serve a stream, so a
+/// download is only "installed" once the files are on disk.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn verify_sunshine_install(install_dir: &Path) -> Result<(), String> {
+    let missing = missing_sunshine_files(install_dir);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    warn!(
+        "[SUNSHINE] Install at {} is missing: {}",
+        install_dir.display(),
+        missing.join(", ")
+    );
+    Err(SUNSHINE_UNPACK_FAILED.to_string())
+}
+
 /// Download and install Sunshine to Drop's tools directory.
 #[tauri::command]
 pub async fn install_sunshine() -> Result<String, String> {
+    let path = download_and_install_sunshine().await?;
+    configure_firewall_once().await;
+    Ok(path)
+}
+
+/// Open the firewall as part of setup, at most once per PC.
+///
+/// This is where the UAC prompt belongs: the user just asked to install remote
+/// play, so a prompt is expected and answering it once is the end of it. A
+/// declined prompt is not fatal to the install — `sunshine_configure_firewall`
+/// retries it, and `fulfill_stream_request` says so in plain words if a stream
+/// is attempted while the firewall is still shut.
+async fn configure_firewall_once() {
+    if borrow_db_checked().settings.streaming_firewall_configured {
+        return;
+    }
+    match tokio::task::spawn_blocking(ensure_sunshine_firewall).await {
+        Ok(Ok(())) => info!("[SUNSHINE] Windows Firewall opened for remote play"),
+        Ok(Err(e)) => warn!("[SUNSHINE] Firewall not configured: {e}"),
+        Err(e) => warn!("[SUNSHINE] Firewall task failed: {e}"),
+    }
+}
+
+/// Wipe and reinstall Sunshine.
+///
+/// Same work as `install_sunshine`; it exists as its own command so the UI can
+/// offer it when Sunshine is present but broken — which is the state every
+/// install left by the old flattening extractor is in.
+#[tauri::command]
+pub async fn repair_sunshine() -> Result<String, String> {
+    info!("[SUNSHINE] Repair requested");
+    // Our own child would hold the exe open. A Sunshine Drop didn't spawn is
+    // left strictly alone: `stop_sunshine` only touches what Drop spawned.
+    let _ = stop_sunshine().await;
+    let path = download_and_install_sunshine().await?;
+    configure_firewall_once().await;
+    Ok(path)
+}
+
+async fn download_and_install_sunshine() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         return Err("On macOS, install Sunshine via Homebrew: brew install sunshine".to_string());
@@ -185,8 +449,15 @@ pub async fn install_sunshine() -> Result<String, String> {
         );
 
         let install_dir = sunshine_dir();
-        std::fs::create_dir_all(&install_dir)
-            .map_err(|e| format!("Failed to create sunshine dir: {e}"))?;
+
+        // Nothing below can succeed while a live Sunshine holds files in here,
+        // and the wipe would strip its assets out from under it. Say so before
+        // spending a download on it.
+        if let Some(path) = sunshine_running_from_install_dir() {
+            return Err(format!(
+                "Sunshine is still running from {path}. Close it, then try again."
+            ));
+        }
 
         info!("[SUNSHINE] Downloading from {}", download_url);
 
@@ -201,34 +472,17 @@ pub async fn install_sunshine() -> Result<String, String> {
         let bytes = response.bytes().await.map_err(|e| format!("Download failed: {e}"))?;
         info!("[SUNSHINE] Downloaded {} bytes", bytes.len());
 
+        // Only now that the replacement is in hand. Wiping any earlier means a
+        // dropped connection or a GitHub outage turns a working install into no
+        // install at all, with nothing to roll back to.
+        wipe_sunshine_install(&install_dir)?;
+        std::fs::create_dir_all(&install_dir)
+            .map_err(|e| format!("Failed to create sunshine dir: {e}"))?;
+
         #[cfg(target_os = "windows")]
         {
-            // Extract portable zip
-            let cursor = std::io::Cursor::new(bytes);
-            let mut archive = zip::ZipArchive::new(cursor)
-                .map_err(|e| format!("Failed to open archive: {e}"))?;
-
-            for i in 0..archive.len() {
-                let mut file = archive.by_index(i)
-                    .map_err(|e| format!("Archive error: {e}"))?;
-                let name = file.name().to_string();
-                if name.ends_with('/') {
-                    let dir = install_dir.join(&name);
-                    let _ = std::fs::create_dir_all(&dir);
-                    continue;
-                }
-                // Strip leading directory if present (e.g. "Sunshine/sunshine.exe" → "sunshine.exe")
-                let out_name = name.rsplit('/').next().unwrap_or(&name);
-                let out_path = install_dir.join(out_name);
-                if let Some(parent) = out_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let mut out_file = std::fs::File::create(&out_path)
-                    .map_err(|e| format!("Failed to create file: {e}"))?;
-                std::io::copy(&mut file, &mut out_file)
-                    .map_err(|e| format!("Failed to extract: {e}"))?;
-            }
-
+            extract_zip(&bytes, &install_dir)?;
+            verify_sunshine_install(&install_dir)?;
             let exe = install_dir.join("sunshine.exe");
             info!("[SUNSHINE] Installed to {}", exe.display());
             Ok(exe.to_string_lossy().to_string())
@@ -245,6 +499,7 @@ pub async fn install_sunshine() -> Result<String, String> {
             std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| format!("Failed to set permissions: {e}"))?;
 
+            verify_sunshine_install(&install_dir)?;
             info!("[SUNSHINE] Installed to {}", out_path.display());
             Ok(out_path.to_string_lossy().to_string())
         }
@@ -339,19 +594,38 @@ fn parse_stream_resolution(s: &str) -> Option<(u32, u32)> {
     Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
 }
 
+/// What `launch_moonlight` should ask the host for.
+struct StreamResolution {
+    /// The `--resolution` Moonlight requests, or `None` to omit the flag and let
+    /// Moonlight pick its own default.
+    request: Option<(u32, u32)>,
+    /// Whether the *host's* display mode may be changed to match.
+    ///
+    /// Drives Moonlight's `--game-optimization`, which is the only thing that
+    /// makes Sunshine act on `dd_resolution_option`. Kept false whenever the
+    /// user has not explicitly picked a fixed resolution, so the desktop is left
+    /// alone by default.
+    change_host_mode: bool,
+}
+
 /// Resolve the resolution Moonlight should request (`--resolution`).
 ///
 /// With `streaming_auto_resolution` on (the default), use the client's current
 /// display size — passed from the frontend as `client_resolution` (e.g.
 /// `"1920x1080"`) so docking the Deck to a TV "just works" without touching a
-/// setting. With it off, use the manual `streaming_resolution`. Returns `None`
-/// to omit `--resolution` entirely (let Moonlight pick its own default).
+/// setting. With it off, use the manual `streaming_resolution`.
+///
+/// Auto-resolution deliberately does *not* set `change_host_mode`: the host
+/// keeps rendering at its native mode and the client scales, because forcing the
+/// host down to a handheld's panel size would just upscale and look soft. Only
+/// the manual setting, which the user picked on purpose, is allowed to move the
+/// host's mode.
 ///
 /// Note: the client size is passed as data from the webview rather than read via
 /// a `WebviewWindow` here — Drop's frontend is a *child webview*, not a
 /// `WebviewWindow`, so injecting one into the command fails ("current webview is
 /// not a webviewwindow").
-fn resolve_stream_resolution(client_resolution: Option<&str>) -> Option<(u32, u32)> {
+fn resolve_stream_resolution(client_resolution: Option<&str>) -> StreamResolution {
     let (auto, manual) = {
         let db = borrow_db_checked();
         (
@@ -365,58 +639,384 @@ fn resolve_stream_resolution(client_resolution: Option<&str>) -> Option<(u32, u3
                 "[MOONLIGHT] Auto-resolution: streaming at the client's current display ({}x{})",
                 res.0, res.1
             );
-            return Some(res);
+            return StreamResolution {
+                request: Some(res),
+                change_host_mode: false,
+            };
         }
         warn!(
             "[MOONLIGHT] Auto-resolution is on but no usable client display size was provided; \
              falling back to the manual streaming_resolution setting"
         );
     }
-    parse_stream_resolution(&manual)
+    let request = parse_stream_resolution(&manual);
+    StreamResolution {
+        // "Don't change my resolution" parses to None, and that is exactly the
+        // case where the host must be left alone. Neither does the auto
+        // fallback: the user never picked that value for the host, it is just
+        // the last resort for what to ask the client for.
+        change_host_mode: !auto && request.is_some(),
+        request,
+    }
 }
 
-/// Open Sunshine's inbound ports in Windows Firewall (best-effort).
+// ── Windows Firewall ──────────────────────────────────────────────────
+
+/// The two inbound rules remote play needs, and the names Drop owns.
+///
+/// GameStream uses TCP 47984 (HTTPS) / 47989 (HTTP) / 47990 (web UI) / 48010
+/// (RTSP) and UDP 47998-48000 (video/control/audio) + 48002 (mic).
+#[cfg(target_os = "windows")]
+const SUNSHINE_FIREWALL_RULES: &[(&str, &str, &str)] = &[
+    ("Drop Sunshine (TCP)", "TCP", "47984-48010"),
+    ("Drop Sunshine (UDP)", "UDP", "47998-48010"),
+];
+
+/// Told to the user when other devices cannot reach this PC.
+pub const STREAM_ERROR_FIREWALL: &str =
+    "Other devices cannot reach this PC until Windows Firewall allows remote play.";
+
+/// Cached answer to "can anything reach Sunshine from outside this PC?".
+/// 0 = not asked yet, 1 = allowed, 2 = blocked. Querying costs a `netsh` and a
+/// PowerShell round trip, and the answer only changes when Drop itself adds the
+/// rules — which resets this.
+#[cfg(target_os = "windows")]
+static FIREWALL_STATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Open Sunshine's inbound ports in Windows Firewall, elevating if needed.
 ///
 /// Drop runs the *portable* Sunshine as a child process, which — unlike the
 /// Sunshine installer — never registers firewall rules. Without them Windows
 /// silently drops inbound GameStream traffic, so Moonlight on another device
 /// fails with "failed to connect to <host>:47989" even though Sunshine is
-/// running locally. Adding the rules needs elevation; if Drop isn't elevated
-/// this no-ops and logs a hint (allow Sunshine manually, or run Drop as admin).
+/// running locally.
+///
+/// `netsh advfirewall firewall add rule` needs elevation, so the unelevated
+/// attempt is tried first (it succeeds outright when Drop is already running as
+/// administrator) and only a nonzero exit escalates to a UAC prompt. Same
+/// mechanism as `add_defender_exclusions`: one elevated PowerShell doing all of
+/// the work, base64-encoded so nothing has to survive two rounds of quoting.
+///
+/// Sunshine ships `scripts/add-firewall-rule.bat`, which was the other option.
+/// It is not used: it adds *program* rules named "Sunshine", which collide with
+/// a separate Sunshine install's own rules, it appends a duplicate pair every
+/// time it runs, it derives the exe path from `%~dp0\..` (wrong on installs the
+/// old extractor flattened), and run through ShellExecuteW "runas" it reports
+/// nothing back — no way to tell a declined UAC prompt from a success.
 #[cfg(target_os = "windows")]
-fn ensure_sunshine_firewall() {
-    // GameStream uses TCP 47984 (HTTPS) / 47989 (HTTP) / 47990 (web UI) /
-    // 48010 (RTSP) and UDP 47998-48000 (video/control/audio) + 48002 (mic).
-    for (name, proto, ports) in [
-        ("Drop Sunshine (TCP)", "TCP", "47984-48010"),
-        ("Drop Sunshine (UDP)", "UDP", "47998-48010"),
-    ] {
-        // Drop any stale rule of the same name first so repeated starts stay idempotent.
-        let _ = Command::new("netsh")
-            .args(["advfirewall", "firewall", "delete", "rule"])
-            .arg(format!("name={name}"))
-            .output();
-        let result = Command::new("netsh")
-            .args(["advfirewall", "firewall", "add", "rule"])
-            .arg(format!("name={name}"))
-            .args(["dir=in", "action=allow"])
-            .arg(format!("protocol={proto}"))
-            .arg(format!("localport={ports}"))
-            .args(["enable=yes", "profile=any"])
-            .output();
-        match result {
-            Ok(o) if o.status.success() => info!("[SUNSHINE] Firewall rule '{name}' added"),
-            Ok(_) => warn!(
-                "[SUNSHINE] Couldn't add firewall rule '{name}' — run Drop as administrator \
-                 (or allow Sunshine through Windows Firewall) so other devices can connect"
-            ),
-            Err(e) => warn!("[SUNSHINE] netsh failed for '{name}': {e}"),
+pub fn ensure_sunshine_firewall() -> Result<(), String> {
+    // `any` short-circuits, so a first rule that needs elevation skips straight
+    // to the elevated pass — which redoes both anyway.
+    let unelevated_failed = SUNSHINE_FIREWALL_RULES.iter().any(|(name, proto, ports)| {
+        // Drop any stale rule of the same name first so repeated runs stay
+        // idempotent instead of stacking duplicates.
+        let _ = netsh(&["advfirewall", "firewall", "delete", "rule", &format!("name={name}")]);
+        let added = netsh(&[
+            "advfirewall",
+            "firewall",
+            "add",
+            "rule",
+            &format!("name={name}"),
+            "dir=in",
+            "action=allow",
+            &format!("protocol={proto}"),
+            &format!("localport={ports}"),
+            "enable=yes",
+            "profile=any",
+        ]);
+        match added {
+            Ok(true) => {
+                info!("[SUNSHINE] Firewall rule '{name}' added");
+                false
+            }
+            Ok(false) => true,
+            Err(e) => {
+                warn!("[SUNSHINE] netsh failed for '{name}': {e}");
+                true
+            }
+        }
+    });
+
+    if unelevated_failed {
+        info!("[SUNSHINE] Firewall rules need administrator rights — asking for elevation");
+        add_firewall_rules_elevated()?;
+    }
+
+    // Ask the firewall rather than trusting the exit codes: this is the one
+    // place that can promise "set up", and a wrong yes here is what put the
+    // user back to a Deck that connects to nothing.
+    FIREWALL_STATE.store(0, Ordering::Relaxed);
+    if !firewall_allows_sunshine() {
+        return Err("Windows Firewall still isn't allowing remote play.".to_string());
+    }
+    borrow_db_mut_checked().settings.streaming_firewall_configured = true;
+    Ok(())
+}
+
+/// Run one netsh command, hidden. `Ok(true)` when it exited zero.
+#[cfg(target_os = "windows")]
+fn netsh(args: &[&str]) -> Result<bool, String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    Command::new("netsh")
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|o| o.status.success())
+        .map_err(|e| e.to_string())
+}
+
+/// Add both rules from a single elevated PowerShell. The UAC prompt IS the
+/// consent, and declining it makes `Start-Process` throw, so the outer shell
+/// exits nonzero and the user gets told rather than silently left unreachable.
+#[cfg(target_os = "windows")]
+fn add_firewall_rules_elevated() -> Result<(), String> {
+    let inner = SUNSHINE_FIREWALL_RULES
+        .iter()
+        .map(|(name, proto, ports)| {
+            format!(
+                "netsh advfirewall firewall delete rule name='{name}' | Out-Null; \
+                 netsh advfirewall firewall add rule name='{name}' dir=in action=allow \
+                 protocol={proto} localport={ports} enable=yes profile=any | Out-Null"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    let encoded = {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let utf16: Vec<u8> = inner.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+        STANDARD.encode(utf16)
+    };
+    let outer = format!(
+        "Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden \
+         -ArgumentList '-NoProfile','-EncodedCommand','{encoded}'"
+    );
+
+    let status = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &outer])
+        .status()
+        .map_err(|e| format!("Failed to start elevated PowerShell: {e}"))?;
+    if !status.success() {
+        return Err(
+            "Windows Firewall wasn't opened for remote play. The administrator prompt may have \
+             been declined."
+                .to_string(),
+        );
+    }
+    info!("[SUNSHINE] Firewall rules added with elevation");
+    Ok(())
+}
+
+/// Can anything reach Sunshine from outside this PC?
+///
+/// Checked before a stream so a device on the other side of a closed firewall
+/// is told why instead of waiting out a 60s timeout. Three questions, cheapest
+/// first, and any one "yes" is enough:
+///
+/// 1. Are Drop's own rules there? Literal strings Drop wrote, so a localized
+///    Windows cannot fool the match.
+/// 2. Is the firewall even switched on? `Get-NetFirewallProfile` returns
+///    booleans rather than translated words.
+/// 3. Did somebody else already let Sunshine through?
+///
+/// Question 3 is the one that stops this refusing a setup that works. Drop's
+/// rule names are far from the usual way inbound traffic gets permitted: the
+/// Windows first-run "Allow sunshine.exe on private networks?" dialog, the
+/// Sunshine installer's own rules and any hand-made rule all leave something
+/// Drop did not name, and on that evidence alone the first two questions say
+/// "blocked" for a PC that has been streaming happily for months.
+///
+/// Anything it can't determine still counts as allowed. Blocking a stream that
+/// would have worked is worse than the timeout this exists to avoid.
+#[cfg(target_os = "windows")]
+fn firewall_allows_sunshine() -> bool {
+    match FIREWALL_STATE.load(Ordering::Relaxed) {
+        1 => return true,
+        2 => return false,
+        _ => {}
+    }
+
+    let allowed = drop_firewall_rules_present().unwrap_or(true)
+        || !any_firewall_profile_enabled()
+        || other_rule_allows_sunshine().unwrap_or(true);
+    FIREWALL_STATE.store(if allowed { 1 } else { 2 }, Ordering::Relaxed);
+    allowed
+}
+
+/// Is there an inbound allow rule for Sunshine that Drop did not write?
+///
+/// `Some(false)` is the only answer that refuses a stream, so this errs towards
+/// `None` (unknown, which the caller reads as allowed) whenever the firewall
+/// cannot be asked properly.
+///
+/// PowerShell rather than `netsh advfirewall show rule`: netsh prints
+/// translated field names and one flat block of text, while the cmdlets return
+/// typed fields. Two questions, both scoped so Windows does the filtering:
+///
+/// * an enabled inbound allow rule naming this exact `sunshine.exe`, which is
+///   what the first-run dialog leaves behind, and
+/// * an enabled inbound allow rule that explicitly opens the GameStream port.
+///
+/// A program rule reports `LocalPort = Any`, which is no evidence about
+/// Sunshine at all, so only a rule naming the port itself counts for the second
+/// question. Otherwise every browser on the machine would answer it.
+#[cfg(target_os = "windows")]
+fn other_rule_allows_sunshine() -> Option<bool> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    /// `@EXE@` and `@PORT@` are substituted below. The whole thing goes to
+    /// PowerShell as a single `-Command` argument, so no shell ever sees it and
+    /// the only quoting that matters is PowerShell's own.
+    const QUERY: &str = concat!(
+        "$ErrorActionPreference='Stop'; $answer='unknown'; $exe='@EXE@'; $port=@PORT@; ",
+        "try { ",
+        "$hit = @(Get-NetFirewallApplicationFilter -Program $exe -ErrorAction SilentlyContinue ",
+        "| Get-NetFirewallRule -ErrorAction SilentlyContinue ",
+        "| Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Allow' }).Count; ",
+        "if ($hit -eq 0) { ",
+        "$hit = @(Get-NetFirewallPortFilter | Where-Object { $m=$false; ",
+        "foreach ($v in @($_.LocalPort)) { ",
+        "if ($v -match '^\\d+$' -and [int]$v -eq $port) { $m=$true } ",
+        "elseif ($v -match '^(\\d+)-(\\d+)$' -and [int]$Matches[1] -le $port -and $port -le [int]$Matches[2]) { $m=$true } ",
+        "}; $m } ",
+        "| Get-NetFirewallRule -ErrorAction SilentlyContinue ",
+        "| Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Allow' }).Count ",
+        "}; ",
+        "if ($hit -gt 0) { $answer='allowed' } else { $answer='blocked' } ",
+        "} catch { $answer='unknown' }; $answer",
+    );
+
+    // No binary means nothing to ask about, and `host_can_serve` has already
+    // refused for a better reason by the time this could matter.
+    let exe = find_sunshine()?;
+    let script = QUERY
+        .replace("@EXE@", &exe.to_string_lossy().replace('\'', "''"))
+        .replace("@PORT@", &SUNSHINE_BASE_PORT.to_string());
+
+    let out = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    match String::from_utf8_lossy(&out.stdout).trim() {
+        "allowed" => {
+            info!("[SUNSHINE] Inbound traffic is already allowed by a rule Drop didn't write");
+            Some(true)
+        }
+        "blocked" => Some(false),
+        other => {
+            warn!("[SUNSHINE] Could not tell whether the firewall allows remote play: {other}");
+            None
         }
     }
 }
 
+/// `Some(true)` when both of Drop's rules exist, `None` when netsh couldn't be
+/// asked. `show rule` needs no elevation; it exits zero either way and says
+/// "No rules match the specified criteria" when there is nothing, so the rule
+/// name in the output is the signal.
+#[cfg(target_os = "windows")]
+fn drop_firewall_rules_present() -> Option<bool> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let mut all_present = true;
+    for (name, _, _) in SUNSHINE_FIREWALL_RULES {
+        let out = Command::new("netsh")
+            .args(["advfirewall", "firewall", "show", "rule"])
+            .arg(format!("name={name}"))
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .ok()?;
+        if !String::from_utf8_lossy(&out.stdout).contains(name) {
+            all_present = false;
+        }
+    }
+    Some(all_present)
+}
+
+/// Is Windows Firewall switched on for any profile? Unknown counts as on.
+#[cfg(target_os = "windows")]
+fn any_firewall_profile_enabled() -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let out = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-NetFirewallProfile).Enabled -contains $true",
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+    match out {
+        Ok(o) => !String::from_utf8_lossy(&o.stdout)
+            .trim()
+            .eq_ignore_ascii_case("false"),
+        Err(_) => true,
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
-fn ensure_sunshine_firewall() {}
+pub fn ensure_sunshine_firewall() -> Result<(), String> {
+    // Nothing to open: Linux and macOS hosts don't get a firewall Drop can
+    // reason about, and pretending otherwise would put a dead button in the UI.
+    borrow_db_mut_checked().settings.streaming_firewall_configured = true;
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn firewall_allows_sunshine() -> bool {
+    true
+}
+
+/// Open Windows Firewall for remote play, prompting for administrator rights.
+///
+/// Run once as part of setup rather than on every stream — the old code shelled
+/// netsh unelevated at every single start and only logged the failure, which is
+/// why the user's log is full of it. The UI calls this to retry after a declined
+/// prompt.
+#[tauri::command]
+pub async fn sunshine_configure_firewall() -> Result<(), String> {
+    tokio::task::spawn_blocking(ensure_sunshine_firewall)
+        .await
+        .map_err(|e| format!("Firewall task failed: {e}"))?
+}
+
+/// What the settings page needs to show about the firewall.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FirewallStatus {
+    /// False on platforms where Drop has no firewall to configure.
+    pub supported: bool,
+    /// Drop has successfully added the rules at some point on this PC.
+    pub configured: bool,
+    /// Nothing is standing between another device and Sunshine right now.
+    pub allowed: bool,
+}
+
+/// Whether remote play can be reached from other devices.
+///
+/// Always asks Windows again rather than reading the cached answer. This is the
+/// call behind a status row somebody is looking at, and a user who fixed the
+/// firewall outside Drop would otherwise be told it is still shut until Drop
+/// restarts.
+#[tauri::command]
+pub async fn sunshine_firewall_status() -> FirewallStatus {
+    #[cfg(target_os = "windows")]
+    FIREWALL_STATE.store(0, Ordering::Relaxed);
+    let configured = borrow_db_checked().settings.streaming_firewall_configured;
+    let allowed = tokio::task::spawn_blocking(firewall_allows_sunshine)
+        .await
+        .unwrap_or(true);
+    FirewallStatus {
+        supported: cfg!(target_os = "windows"),
+        configured,
+        allowed,
+    }
+}
 
 /// Wait until Sunshine's HTTP port is actually accepting connections.
 ///
@@ -426,26 +1026,211 @@ fn ensure_sunshine_firewall() {}
 /// Returns `true` once the port answers, `false` if it never does within the
 /// timeout.
 async fn wait_for_sunshine_ready() -> bool {
-    use std::net::{SocketAddr, TcpStream};
-    use std::time::Duration;
-    let addr = SocketAddr::from(([127, 0, 0, 1], SUNSHINE_BASE_PORT));
     for _ in 0..20 {
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok() {
+        if sunshine_port_open() {
             info!("[SUNSHINE] HTTP port {SUNSHINE_BASE_PORT} ready");
             return true;
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
     warn!("[SUNSHINE] HTTP port {SUNSHINE_BASE_PORT} not ready after ~10s");
     false
 }
 
+/// Is anything at all listening on Sunshine's HTTP port? Says nothing about
+/// *whose* Sunshine it is — only one process can hold the GameStream ports.
+fn sunshine_port_open() -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    let addr = SocketAddr::from(([127, 0, 0, 1], SUNSHINE_BASE_PORT));
+    TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
+}
+
+/// Append `key = value` to a sunshine.conf fragment, skipping empty values.
+///
+/// Sunshine treats a present-but-empty key as an explicit "" rather than as
+/// absent, and an empty `output_name` or `audio_sink` fails to match any
+/// device — worse than never writing the key at all, because the automatic
+/// selection Sunshine would otherwise do never runs.
+fn push_conf_setting(out: &mut String, key: &str, value: &str) {
+    let value = value.trim();
+    if value.is_empty() {
+        return;
+    }
+    out.push_str(key);
+    out.push_str(" = ");
+    out.push_str(value);
+    out.push('\n');
+}
+
+/// The display/adapter half of the generated conf.
+///
+/// `output_name` on its own is the wrong-monitor fix — Sunshine's own help for
+/// it reads "Manually specify a display device id to use for capture. If unset,
+/// the primary display is captured." No `dd_*` key is needed to make the choice
+/// stick.
+///
+/// The `dd_*` keys are only here for host-side resolution switching, and they
+/// are deliberately kept to the settings that cannot strand the desktop:
+///
+/// * `ensure_active` turns the chosen display on if it is off and otherwise
+///   leaves the layout alone. `ensure_only_display` would deactivate every other
+///   monitor, and since the revert only runs on a clean Sunshine shutdown that
+///   can leave the user staring at one screen with no way back but Win+P.
+/// * `dd_resolution_option = auto` lets Sunshine match the host mode to what the
+///   client asked for. It is inert unless the client sends the game-optimization
+///   flag, which `launch_moonlight` sets only when the user has actually chosen
+///   a fixed resolution — so a default install still never has its desktop
+///   touched.
+/// * `dd_config_revert_on_disconnect = enabled` starts the revert the moment the
+///   client drops. Sunshine's shipped default defers it to "app close or last
+///   session termination", which for Drop means it may never run at all.
+///
+/// The `dd_*` family only exists in Sunshine's Windows build, so `windows_host`
+/// keeps them out of a Linux host's config rather than leaving keys there that
+/// nothing reads.
+fn display_conf_block(display: &str, adapter: &str, windows_host: bool) -> String {
+    let mut out = String::new();
+    push_conf_setting(&mut out, "output_name", display);
+    push_conf_setting(&mut out, "adapter_name", adapter);
+    if windows_host {
+        push_conf_setting(
+            &mut out,
+            "dd_configuration_option",
+            if display.trim().is_empty() {
+                // Nothing to switch on, and `disabled` would make the resolution
+                // option below inert even when the user has asked for it.
+                "verify_only"
+            } else {
+                "ensure_active"
+            },
+        );
+        push_conf_setting(&mut out, "dd_resolution_option", "auto");
+        push_conf_setting(&mut out, "dd_config_revert_on_disconnect", "enabled");
+    }
+    out
+}
+
+/// The audio half of the generated conf.
+///
+/// `virtual_sink` is the fix for sound coming out of the host's speakers
+/// instead of the client. Sunshine's default capture is a WASAPI loopback of
+/// the current default endpoint, which does not mute the host — the PC keeps
+/// playing the game audio into whatever room it is in. Pointing `virtual_sink`
+/// at a virtual device makes Sunshine switch the default render endpoint to it
+/// for the duration of the stream and restore the real one afterwards, so the
+/// host goes quiet and the audio follows the client.
+fn audio_conf_block(audio_sink: &str, virtual_sink: &str, windows_host: bool) -> String {
+    let mut out = String::new();
+    push_conf_setting(&mut out, "audio_sink", audio_sink);
+    push_conf_setting(&mut out, "virtual_sink", virtual_sink);
+    if windows_host {
+        // Lets Sunshine install Steam's Streaming Speakers driver if it is
+        // missing, which is what supplies the virtual sink in the first place.
+        // Windows-only in Sunshine.
+        push_conf_setting(&mut out, "install_steam_audio_drivers", "enabled");
+    }
+    out
+}
+
+/// The `virtual_sink` value to write: whatever the user pinned, or Steam's
+/// virtual sink if one is installed.
+///
+/// Auto-detection reads the endpoint's real name rather than assuming one.
+/// Steam registers it with an output-form prefix — `Speakers (Steam Streaming
+/// Speakers)` on the machine this was built against — and Sunshine matches the
+/// name literally, so the short form would be a silent no-op.
+fn resolve_virtual_sink(configured: &str) -> String {
+    if !configured.trim().is_empty() {
+        return configured.trim().to_string();
+    }
+    match crate::host_devices::find_steam_virtual_sink() {
+        Some(name) => {
+            info!("[SUNSHINE] Using auto-detected virtual audio sink '{name}'");
+            name
+        }
+        None => {
+            info!(
+                "[SUNSHINE] No Steam virtual audio sink found — leaving virtual_sink unset, so \
+                 host speakers will keep playing during a stream"
+            );
+            String::new()
+        }
+    }
+}
+
+/// List the displays this PC could stream, for the settings picker.
+///
+/// Runs off the main thread: it shells out to `dxgi-info.exe` and walks
+/// SetupAPI, which together take long enough to stutter the UI.
+#[tauri::command]
+pub async fn sunshine_list_displays() -> Result<Vec<crate::host_devices::DisplayEntry>, String> {
+    let tool = sunshine_dir().join("tools").join("dxgi-info.exe");
+    // Older installs were extracted flat, before Stage 1 started stripping the
+    // archive's `Sunshine/` wrapper, so the tool can still sit in the root.
+    let tool = if tool.exists() {
+        tool
+    } else {
+        sunshine_dir().join("dxgi-info.exe")
+    };
+    let displays = tokio::task::spawn_blocking(move || crate::host_devices::list_displays(&tool))
+        .await
+        .map_err(|e| format!("Display enumeration task failed: {e}"))??;
+    info!("[DISPLAY] Found {} capturable display(s)", displays.len());
+    Ok(displays)
+}
+
+/// List this PC's audio outputs, for the settings picker.
+#[tauri::command]
+pub async fn sunshine_list_audio_sinks() -> Result<Vec<crate::host_devices::AudioSinkEntry>, String>
+{
+    let sinks = tokio::task::spawn_blocking(crate::host_devices::list_audio_sinks)
+        .await
+        .map_err(|e| format!("Audio enumeration task failed: {e}"))??;
+    info!("[AUDIO] Found {} render endpoint(s)", sinks.len());
+    Ok(sinks)
+}
+
+/// Has the user pinned any of the host capture settings that only reach
+/// Sunshine through Drop's generated conf?
+fn host_device_settings_chosen() -> bool {
+    let db = borrow_db_checked();
+    [
+        &db.settings.streaming_display,
+        &db.settings.streaming_adapter,
+        &db.settings.streaming_audio_sink,
+        &db.settings.streaming_virtual_sink,
+    ]
+    .iter()
+    .any(|v| !v.trim().is_empty())
+}
+
+/// Is a Sunshine that Drop did not start holding the GameStream ports?
+///
+/// Only one process can bind them, so when the port answers and Drop has no
+/// child of its own, everything below is running on somebody else's config file.
+/// Drop only ever writes the capture display and audio routing into the conf it
+/// generates for its *own* child, so in that state the pickers save happily and
+/// change nothing. The settings pages ask for this so they can say so instead of
+/// flashing "Saved." over a no-op.
+#[tauri::command]
+pub async fn sunshine_is_foreign() -> bool {
+    {
+        let mut guard = SUNSHINE_PROCESS.lock().await;
+        let ours_alive = guard
+            .as_mut()
+            .is_some_and(|child| child.try_wait().is_ok_and(|status| status.is_none()));
+        if ours_alive {
+            return false;
+        }
+    }
+    // A 300ms blocking connect, so keep it off the async worker.
+    tokio::task::spawn_blocking(sunshine_port_open)
+        .await
+        .unwrap_or(false)
+}
+
 /// Generate sunshine.conf with Drop-specific settings.
-fn generate_sunshine_conf(
-    config_dir: &Path,
-    _admin_username: &str,
-    _admin_password: &str,
-) -> Result<PathBuf, String> {
+fn generate_sunshine_conf(config_dir: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(config_dir)
         .map_err(|e| format!("Failed to create config dir: {e}"))?;
 
@@ -453,6 +1238,30 @@ fn generate_sunshine_conf(
     let apps_path = config_dir.join("apps.json");
     let credentials_path = config_dir.join("credentials.json");
     let state_path = config_dir.join("state.json");
+
+    // The CA keypair every Moonlight pairing is signed against. Sunshine's
+    // defaults for these are *relative*, so where they land depends on the
+    // working directory Sunshine happens to be started from — which for Drop is
+    // the install directory that Repair wipes. Pin them next to the rest of the
+    // config so a reinstall can't un-pair every device the user owns.
+    let cert_dir = config_dir.join("credentials");
+    std::fs::create_dir_all(&cert_dir)
+        .map_err(|e| format!("Failed to create credentials dir: {e}"))?;
+    let pkey_path = cert_dir.join("cakey.pem");
+    let cert_path = cert_dir.join("cacert.pem");
+
+    let (display, adapter, audio_sink, configured_virtual_sink) = {
+        let db = borrow_db_checked();
+        (
+            db.settings.streaming_display.clone(),
+            db.settings.streaming_adapter.clone(),
+            db.settings.streaming_audio_sink.clone(),
+            db.settings.streaming_virtual_sink.clone(),
+        )
+    };
+    let virtual_sink = resolve_virtual_sink(&configured_virtual_sink);
+    let display_block = display_conf_block(&display, &adapter, cfg!(windows));
+    let audio_block = audio_conf_block(&audio_sink, &virtual_sink, cfg!(windows));
 
     let conf = format!(
         r#"# Drop-managed Sunshine configuration
@@ -467,6 +1276,8 @@ origin_web_ui_allowed = lan
 file_state = {state}
 credentials_file = {creds}
 file_apps = {apps}
+pkey = {pkey}
+cert = {cert}
 
 # Display
 fps = [30, 60, 120]
@@ -481,7 +1292,9 @@ resolutions = [
   2560x1440,
   3840x2160
 ]
-
+{display_block}
+# Audio
+{audio_block}
 # Streaming defaults
 channels = 1
 fec_percentage = 20
@@ -509,6 +1322,10 @@ min_log_level = 2
         state = state_path.to_string_lossy().replace('\\', "/"),
         creds = credentials_path.to_string_lossy().replace('\\', "/"),
         apps = apps_path.to_string_lossy().replace('\\', "/"),
+        pkey = pkey_path.to_string_lossy().replace('\\', "/"),
+        cert = cert_path.to_string_lossy().replace('\\', "/"),
+        display_block = display_block,
+        audio_block = audio_block,
     );
 
     std::fs::write(&conf_path, conf)
@@ -525,6 +1342,81 @@ min_log_level = 2
 
     info!("[SUNSHINE] Generated config at {}", conf_path.display());
     Ok(conf_path)
+}
+
+// ── Credentials ───────────────────────────────────────────────────────
+
+/// The admin credentials for Drop's Sunshine, minting a password on first use.
+///
+/// Nothing but Drop ever signs in to this instance, so the password is
+/// generated rather than asked for. It is persisted the first time so the same
+/// one is reused for every later start — regenerating it would invalidate the
+/// credentials file Sunshine already wrote.
+fn sunshine_credentials() -> (String, String) {
+    {
+        let db = borrow_db_checked();
+        if !db.settings.sunshine_password.is_empty()
+            && !db.settings.sunshine_username.trim().is_empty()
+        {
+            return (
+                db.settings.sunshine_username.clone(),
+                db.settings.sunshine_password.clone(),
+            );
+        }
+    }
+
+    use rand::distr::{Alphanumeric, SampleString};
+    let password = Alphanumeric.sample_string(&mut rand::rng(), 32);
+
+    let mut db = borrow_db_mut_checked();
+    if db.settings.sunshine_username.trim().is_empty() {
+        db.settings.sunshine_username = "sunshine".to_string();
+    }
+    db.settings.sunshine_password = password.clone();
+    info!("[SUNSHINE] Generated a new admin password for the local Sunshine");
+    (db.settings.sunshine_username.clone(), password)
+}
+
+/// Have Sunshine write its own credentials file.
+///
+/// Sunshine stores the password as uppercase hex of SHA-256(password + salt)
+/// with the digest bytes reversed. Reimplementing that is a great way to lock
+/// Drop out of its own web UI, so shell out and let Sunshine do it. The conf
+/// path must come FIRST: `config::parse` runs before Sunshine dispatches the
+/// command, and that is what makes it honour our `credentials_file` instead of
+/// writing one next to the exe.
+fn ensure_sunshine_credentials(
+    binary: &Path,
+    conf_path: &Path,
+    username: &str,
+    password: &str,
+) -> Result<(), String> {
+    let creds_path = sunshine_config_dir().join("credentials.json");
+
+    let mut cmd = Command::new(binary);
+    cmd.arg(conf_path).arg("--creds").arg(username).arg(password);
+    if let Some(dir) = sunshine_working_dir(binary) {
+        cmd.current_dir(dir);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run Sunshine --creds: {e}"))?;
+
+    if !output.status.success() {
+        warn!(
+            "[SUNSHINE] --creds exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    if !creds_path.exists() {
+        return Err(format!(
+            "Sunshine could not save its login details to {}. Remote play cannot sign in.",
+            creds_path.display()
+        ));
+    }
+    info!("[SUNSHINE] Credentials written to {}", creds_path.display());
+    Ok(())
 }
 
 /// Register a game in Sunshine's apps.json so it can be launched by Moonlight.
@@ -601,6 +1493,83 @@ pub fn unregister_game_app(game_name: &str) -> Result<(), String> {
 static SUNSHINE_PROCESS: std::sync::LazyLock<Mutex<Option<std::process::Child>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
 
+/// Set when Drop is using a Sunshine it did not start. Drop must never kill a
+/// process it didn't spawn, so every teardown path checks this first.
+static SUNSHINE_ADOPTED: AtomicBool = AtomicBool::new(false);
+
+// ── Why the host can't serve a stream ─────────────────────────────────
+//
+// Every one of these ends up on the *other* device — the Deck someone just
+// pressed Play on — so they are written for that person, name this PC, and say
+// what to do next. They are also what `stream-host-error` shows on the host.
+
+/// Another install owns the GameStream ports and won't take Drop's login.
+/// Nothing Drop can safely do from here: it did not start that process, so the
+/// only way out is a person closing it. Names the host, like the others: read on
+/// a Deck in another room, "this PC" is whichever one you last thought about.
+fn stream_error_port_busy() -> String {
+    format!(
+        "Another copy of Sunshine is already running on {}. Close it, then try again.",
+        host_name()
+    )
+}
+
+/// Sunshine is missing, or unpacked badly enough that it can't serve.
+fn stream_error_not_set_up() -> String {
+    format!(
+        "Remote play is not set up on {} yet. Open Drop on that PC and run remote play setup.",
+        host_name()
+    )
+}
+
+/// Sunshine is up but won't accept Drop's admin login. The instruction has to
+/// match a control that exists: it is the "Reset remote play sign-in" button in
+/// the troubleshooting section of Settings > Remote play, on the host.
+fn stream_error_credentials() -> String {
+    format!(
+        "Drop could not sign in to remote play on {}. Open Drop on that PC, go to Settings, \
+         Remote play, and choose \"Reset remote play sign-in\".",
+        host_name()
+    )
+}
+
+/// The game itself refused to start on the host.
+fn stream_error_launch_failed(game_name: &str) -> String {
+    format!("{game_name} would not start on {}.", host_name())
+}
+
+/// This PC's name as the rest of Drop shows it: the user's own device label
+/// when they set one, the hostname otherwise.
+fn host_name() -> String {
+    remote::save_sync::machine_name()
+}
+
+/// A host-side refusal, in the vocabulary above. Kept as a type rather than a
+/// string so the reason survives the trip out of `spawn_sunshine` without
+/// anyone having to pattern-match on prose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HostFailure {
+    NotSetUp,
+    PortBusy,
+    Credentials,
+    LaunchFailed(String),
+    /// Something that has no user-facing shorthand. The string is already
+    /// written for the user.
+    Other(String),
+}
+
+impl HostFailure {
+    fn message(&self) -> String {
+        match self {
+            HostFailure::NotSetUp => stream_error_not_set_up(),
+            HostFailure::PortBusy => stream_error_port_busy(),
+            HostFailure::Credentials => stream_error_credentials(),
+            HostFailure::LaunchFailed(game) => stream_error_launch_failed(game),
+            HostFailure::Other(msg) => msg.clone(),
+        }
+    }
+}
+
 /// Tracks active host-side streaming sessions with cancellation signals.
 /// Sending `true` on the watch channel signals the heartbeat loop to stop.
 static ACTIVE_HOST_SESSIONS: std::sync::LazyLock<Mutex<HashMap<String, watch::Sender<bool>>>> =
@@ -611,6 +1580,9 @@ static ACTIVE_HOST_SESSIONS: std::sync::LazyLock<Mutex<HashMap<String, watch::Se
 #[serde(rename_all = "camelCase")]
 pub struct SunshineStatus {
     pub installed: bool,
+    /// Installed *and* complete. False here with `installed` true means the
+    /// files are damaged and only a repair will fix it.
+    pub healthy: bool,
     pub running: bool,
     pub binary_path: Option<String>,
     pub web_ui_port: u16,
@@ -621,9 +1593,15 @@ pub struct SunshineStatus {
 #[tauri::command]
 pub async fn sunshine_status() -> SunshineStatus {
     info!("[SUNSHINE] sunshine_status() called");
-    let binary_path = find_sunshine();
-    let installed = binary_path.is_some();
-    info!("[SUNSHINE] installed={}, path={:?}", installed, binary_path.as_ref().map(|p| p.display().to_string()));
+    let probe = probe_sunshine_install();
+    let installed = probe.installed();
+    let healthy = probe.healthy();
+    let binary_path = probe.binary.clone();
+    info!(
+        "[SUNSHINE] installed={installed}, healthy={healthy}, path={:?}, missing={:?}",
+        binary_path.as_ref().map(|p| p.display().to_string()),
+        probe.missing
+    );
 
     let running = {
         let mut guard = SUNSHINE_PROCESS.lock().await;
@@ -645,6 +1623,10 @@ pub async fn sunshine_status() -> SunshineStatus {
                     false
                 }
             }
+        } else if SUNSHINE_ADOPTED.load(Ordering::Relaxed) && sunshine_port_open() {
+            // Not Drop's child, but Drop is using it.
+            info!("[SUNSHINE] Using an adopted Sunshine started outside Drop");
+            true
         } else {
             info!("[SUNSHINE] No managed Sunshine process");
             false
@@ -653,68 +1635,224 @@ pub async fn sunshine_status() -> SunshineStatus {
 
     let status = SunshineStatus {
         installed,
+        healthy,
         running,
         binary_path: binary_path.map(|p| p.to_string_lossy().to_string()),
         web_ui_port: SUNSHINE_WEB_PORT,
         version: SUNSHINE_VERSION.to_string(),
     };
-    info!("[SUNSHINE] Returning status: installed={}, running={}", status.installed, status.running);
+    info!(
+        "[SUNSHINE] Returning status: installed={}, healthy={}, running={}",
+        status.installed, status.healthy, status.running
+    );
     status
 }
 
-/// Start the Sunshine process with Drop's config.
-/// Returns the web UI URL.
-#[tauri::command]
-pub async fn start_sunshine(
-    admin_username: String,
-    admin_password: String,
-) -> Result<String, String> {
-    let binary = find_sunshine()
-        .ok_or("Sunshine is not installed. Install it first.")?;
+/// Forward a child's stdout/stderr into Drop's log.
+///
+/// Both pipes have to be *drained*, not merely captured: with `Stdio::piped()`
+/// and nobody reading, Sunshine blocks the moment the ~64KB pipe buffer fills,
+/// which it does during startup — that is why binding the HTTP port used to
+/// take three attempts. Discarding to null would unblock it too, but these
+/// lines are the only diagnosis anyone gets when a stream won't start.
+fn forward_child_output(child: &mut std::process::Child) {
+    use std::io::{BufRead, BufReader};
 
-    // Check if already running
-    {
-        let mut guard = SUNSHINE_PROCESS.lock().await;
-        if let Some(ref mut child) = *guard {
-            if child.try_wait().is_ok_and(|s| s.is_none()) {
-                return Ok(format!("https://localhost:{}", SUNSHINE_WEB_PORT));
+    if let Some(stdout) = child.stdout.take() {
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                info!("[SUNSHINE-OUT] {line}");
             }
-            *guard = None;
+        });
+    }
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                warn!("[SUNSHINE-ERR] {line}");
+            }
+        });
+    }
+}
+
+/// Poll a child until it exits, up to `timeout`. `true` if it exited.
+///
+/// Yields between polls rather than blocking the worker: this sits on the path
+/// that ends a stream, and Sunshine's display teardown is worth waiting seconds
+/// for.
+#[cfg(not(unix))]
+async fn wait_for_child_exit(
+    child: &mut std::process::Child,
+    timeout: std::time::Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            // Can't tell, so don't stall the caller waiting for an answer.
+            Err(_) => return false,
+            Ok(None) => {}
         }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+/// Best-effort: which sunshine binaries are running right now. Only used for
+/// the log line that says whose Sunshine answered.
+fn running_sunshine_binaries() -> Vec<String> {
+    let mut system = sysinfo::System::new();
+    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    let mut paths: Vec<String> = system
+        .processes()
+        .values()
+        .filter(|p| {
+            p.name()
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("sunshine")
+        })
+        .filter_map(|p| p.exe().map(|e| e.display().to_string()))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Start Sunshine as Drop's own child: config, credentials, spawn.
+///
+/// The firewall is not touched here. It used to be, on every single start, and
+/// every one of those attempts failed unelevated — see `ensure_sunshine_firewall`,
+/// which is now a setup step.
+async fn spawn_sunshine(username: &str, password: &str) -> Result<(), HostFailure> {
+    let probe = probe_sunshine_install();
+    if !probe.healthy() {
+        warn!(
+            "[SUNSHINE] Cannot start: installed={}, missing={:?}",
+            probe.installed(),
+            probe.missing
+        );
+        return Err(HostFailure::NotSetUp);
+    }
+    let binary = probe.binary.ok_or(HostFailure::NotSetUp)?;
+    let conf_path =
+        generate_sunshine_conf(&sunshine_config_dir()).map_err(HostFailure::Other)?;
+    ensure_sunshine_credentials(&binary, &conf_path, username, password)
+        .map_err(|e| {
+            warn!("[SUNSHINE] {e}");
+            HostFailure::Credentials
+        })?;
+
+    info!(
+        "[SUNSHINE] Starting: {} {}",
+        binary.display(),
+        conf_path.display()
+    );
+    let mut cmd = Command::new(&binary);
+    cmd.arg(conf_path.to_string_lossy().as_ref())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(dir) = sunshine_working_dir(&binary) {
+        cmd.current_dir(dir);
     }
 
-    // Generate config
-    let config_dir = sunshine_config_dir();
-    let conf_path = generate_sunshine_conf(&config_dir, &admin_username, &admin_password)?;
-
-    info!("[SUNSHINE] Starting: {} {}", binary.display(), conf_path.display());
-
-    let child = Command::new(&binary)
-        .arg(conf_path.to_string_lossy().as_ref())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+    let mut child = cmd
         .spawn()
-        .map_err(|e| format!("Failed to start Sunshine: {e}"))?;
-
-    let pid = child.id();
-    info!("[SUNSHINE] Started with PID {}", pid);
+        .map_err(|e| HostFailure::Other(format!("Sunshine would not start on {}: {e}", host_name())))?;
+    info!("[SUNSHINE] Started with PID {}", child.id());
+    forward_child_output(&mut child);
 
     {
         let mut guard = SUNSHINE_PROCESS.lock().await;
         *guard = Some(child);
     }
+    SUNSHINE_ADOPTED.store(false, Ordering::Relaxed);
+    Ok(())
+}
 
-    // Open the firewall so other devices can reach this host, and wait until
-    // Sunshine is actually listening before reporting success.
-    ensure_sunshine_firewall();
+/// Make sure a Sunshine that Drop can talk to is running, and record who owns
+/// it.
+///
+/// Only one process can hold the GameStream ports, so a port that already
+/// answers means somebody else's Sunshine is up — Drop's from an earlier run,
+/// or a separate install entirely. Killing it is off the table (Drop didn't
+/// start it), so the only question is whether Drop can sign in to it.
+async fn ensure_sunshine_running(username: &str, password: &str) -> Result<(), HostFailure> {
+    // Our own child, still alive? Nothing to do.
+    {
+        let mut guard = SUNSHINE_PROCESS.lock().await;
+        let alive = guard
+            .as_mut()
+            .is_some_and(|child| child.try_wait().is_ok_and(|status| status.is_none()));
+        if alive {
+            return Ok(());
+        }
+        *guard = None;
+    }
+    SUNSHINE_ADOPTED.store(false, Ordering::Relaxed);
+
+    if !sunshine_port_open() {
+        return spawn_sunshine(username, password).await;
+    }
+
+    let running = running_sunshine_binaries();
+    for path in &running {
+        info!("[SUNSHINE] Sunshine already running from {path}");
+    }
+    match sunshine_api_request(reqwest::Method::GET, "/apps", None, username, password).await {
+        Ok(_) => {
+            SUNSHINE_ADOPTED.store(true, Ordering::Relaxed);
+            info!("[SUNSHINE] Adopted the Sunshine already running on this PC — Drop will not stop it");
+            // An adopted Sunshine reads its own config file, so Drop's generated
+            // conf is never involved and none of the host device settings are in
+            // effect. Say so loudly; the settings pages warn about the same thing
+            // via `sunshine_is_foreign`.
+            if host_device_settings_chosen() {
+                warn!(
+                    "[SUNSHINE] The capture display and audio settings are NOT in effect: this \
+                     Sunshine was started outside Drop and is using its own configuration"
+                );
+            }
+            Ok(())
+        }
+        Err(e) => {
+            warn!("[SUNSHINE] Cannot sign in to the Sunshine holding port {SUNSHINE_BASE_PORT}: {e}");
+            // Whose Sunshine is it? One from Drop's own install dir — an
+            // orphan of an earlier run — means the password on disk and the
+            // one in settings have drifted apart, which the user fixes by
+            // resetting the credentials. Any other path is a separate install
+            // that Drop must not touch at all.
+            let install_dir = sunshine_dir();
+            if running.iter().any(|p| Path::new(p).starts_with(&install_dir)) {
+                Err(HostFailure::Credentials)
+            } else {
+                Err(HostFailure::PortBusy)
+            }
+        }
+    }
+}
+
+/// Start Sunshine with Drop's config, or adopt one that is already running.
+/// Returns the web UI URL.
+#[tauri::command]
+pub async fn start_sunshine() -> Result<String, String> {
+    let (username, password) = sunshine_credentials();
+    ensure_sunshine_running(&username, &password)
+        .await
+        .map_err(|f| f.message())?;
     wait_for_sunshine_ready().await;
-
     Ok(format!("https://localhost:{}", SUNSHINE_WEB_PORT))
 }
 
 /// Stop the running Sunshine process.
 #[tauri::command]
 pub async fn stop_sunshine() -> Result<(), String> {
+    if SUNSHINE_ADOPTED.swap(false, Ordering::Relaxed) {
+        info!("[SUNSHINE] Leaving the adopted Sunshine running — Drop didn't start it");
+        return Ok(());
+    }
+
     let mut guard = SUNSHINE_PROCESS.lock().await;
     if let Some(mut child) = guard.take() {
         info!("[SUNSHINE] Stopping process (PID {})", child.id());
@@ -732,9 +1870,32 @@ pub async fn stop_sunshine() -> Result<(), String> {
             }
         }
 
+        // Windows has no SIGTERM, and `Child::kill` is TerminateProcess: the
+        // process dies where it stands, so Sunshine never runs the teardown that
+        // puts the user's display configuration back. `taskkill` without `/F`
+        // asks politely first (WM_CLOSE to the process' windows), which is the
+        // closest equivalent, and the hard kill stays as the fallback.
         #[cfg(not(unix))]
         {
-            let _ = child.kill();
+            let pid = child.id();
+            let mut ask = Command::new("taskkill");
+            ask.args(["/PID", &pid.to_string(), "/T"]);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                ask.creation_flags(CREATE_NO_WINDOW);
+            }
+            // taskkill refuses politely ("can only be terminated forcefully")
+            // when the target has no window to close, so there is nothing to
+            // wait for in that case.
+            let asked = ask.output().map(|o| o.status.success()).unwrap_or(false);
+            let exited = asked
+                && wait_for_child_exit(&mut child, std::time::Duration::from_secs(5)).await;
+            if !exited {
+                warn!("[SUNSHINE] PID {pid} didn't close on request, terminating it");
+                let _ = child.kill();
+            }
         }
 
         let _ = child.wait();
@@ -782,14 +1943,19 @@ async fn sunshine_api_request(
         .map_err(|e| format!("Failed to parse Sunshine response: {e}"))
 }
 
+/// Did a `sunshine_api_request` error come back as a rejected login?
+///
+/// The error is already flattened to a string by the time callers see it, and
+/// only the status line is reliable — Sunshine's body for a 401 is a bare HTML
+/// page in some builds and JSON in others.
+fn is_auth_failure(error: &str) -> bool {
+    error.contains("401") || error.to_ascii_lowercase().contains("unauthorized")
+}
+
 /// Send a PIN to Sunshine for Moonlight pairing.
 #[tauri::command]
-pub async fn sunshine_send_pin(
-    pin: String,
-    client_name: String,
-    username: String,
-    password: String,
-) -> Result<bool, String> {
+pub async fn sunshine_send_pin(pin: String, client_name: String) -> Result<bool, String> {
+    let (username, password) = sunshine_credentials();
     let body = serde_json::json!({
         "pin": pin,
         "name": client_name,
@@ -809,10 +1975,8 @@ pub async fn sunshine_send_pin(
 
 /// List apps registered in Sunshine.
 #[tauri::command]
-pub async fn sunshine_list_apps(
-    username: String,
-    password: String,
-) -> Result<serde_json::Value, String> {
+pub async fn sunshine_list_apps() -> Result<serde_json::Value, String> {
+    let (username, password) = sunshine_credentials();
     sunshine_api_request(
         reqwest::Method::GET,
         "/apps",
@@ -829,9 +1993,8 @@ pub async fn sunshine_register_game(
     game_id: String,
     game_name: String,
     launch_command: Option<String>,
-    username: String,
-    password: String,
 ) -> Result<(), String> {
+    let (username, password) = sunshine_credentials();
     // Update apps.json on disk
     register_game_app(&game_id, &game_name, launch_command.as_deref(), None)?;
 
@@ -853,19 +2016,149 @@ pub async fn sunshine_register_game(
     Ok(())
 }
 
-/// Get list of connected/paired Moonlight clients.
+/// A Moonlight device that has paired with this PC.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SunshinePairedClient {
+    /// Sunshine's own id for the pairing, and what `sunshine_unpair_client`
+    /// takes.
+    pub uuid: String,
+    /// The name the device gave when it paired. Sunshine allows this to be
+    /// blank, so a placeholder stands in rather than an empty row.
+    pub name: String,
+}
+
+/// The paired devices, ready to render.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SunshineClientList {
+    pub count: usize,
+    pub clients: Vec<SunshinePairedClient>,
+}
+
+/// List the Moonlight devices paired with this PC.
+///
+/// Sunshine answers `{ "status": true, "named_certs": [{ "name", "uuid", ... }] }`
+/// (verified against the web UI bundled in this install: `api/clients/list`).
+/// The raw shape isn't much use to a UI, so it comes back flattened, and a
+/// missing `named_certs` — which is what Sunshine sends when nothing is paired —
+/// is an empty list rather than an error.
 #[tauri::command]
-pub async fn sunshine_list_clients(
-    username: String,
-    password: String,
-) -> Result<serde_json::Value, String> {
-    sunshine_api_request(
+pub async fn sunshine_list_clients() -> Result<SunshineClientList, String> {
+    let (username, password) = sunshine_credentials();
+    let raw = sunshine_api_request(
         reqwest::Method::GET,
         "/clients/list",
         None,
         &username,
         &password,
-    ).await
+    )
+    .await?;
+
+    let clients = parse_paired_clients(&raw);
+    info!("[SUNSHINE] {} paired client(s)", clients.len());
+    Ok(SunshineClientList {
+        count: clients.len(),
+        clients,
+    })
+}
+
+/// Pull the paired devices out of Sunshine's `/clients/list` response.
+fn parse_paired_clients(raw: &serde_json::Value) -> Vec<SunshinePairedClient> {
+    raw.get("named_certs")
+        .and_then(|c| c.as_array())
+        .map(|certs| {
+            certs
+                .iter()
+                .filter_map(|cert| {
+                    let uuid = cert.get("uuid")?.as_str()?.trim();
+                    if uuid.is_empty() {
+                        // Nothing can be unpaired without one, so it would only
+                        // ever be a row that does nothing.
+                        return None;
+                    }
+                    let name = cert
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .map(str::trim)
+                        .filter(|n| !n.is_empty())
+                        .unwrap_or("Unnamed device");
+                    Some(SunshinePairedClient {
+                        uuid: uuid.to_string(),
+                        name: name.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Unpair one Moonlight device.
+///
+/// `POST /api/clients/unpair` with `{ "uuid": ... }`, the same call the bundled
+/// Sunshine web UI makes from its own client list. The device has to pair again
+/// with a fresh PIN afterwards.
+#[tauri::command]
+pub async fn sunshine_unpair_client(uuid: String) -> Result<(), String> {
+    if uuid.trim().is_empty() {
+        return Err("No device was selected to unpair.".to_string());
+    }
+    let (username, password) = sunshine_credentials();
+    let result = sunshine_api_request(
+        reqwest::Method::POST,
+        "/clients/unpair",
+        Some(serde_json::json!({ "uuid": uuid })),
+        &username,
+        &password,
+    )
+    .await?;
+
+    // Sunshine answers 200 with `status: false` when it didn't recognise the
+    // uuid, so the HTTP status alone would report a success that never happened.
+    if result.get("status").and_then(|s| s.as_bool()) == Some(false) {
+        return Err("Sunshine did not unpair that device.".to_string());
+    }
+    info!("[SUNSHINE] Unpaired client {uuid}");
+    Ok(())
+}
+
+/// Forget Sunshine's admin password so the next start mints a new one.
+///
+/// The way out of `stream_error_credentials`: Drop generates the password and
+/// Sunshine stores a hash of it, so once those two drift apart — a half-finished
+/// install, a credentials file restored from elsewhere — every API call 401s
+/// forever and no amount of retrying helps.
+///
+/// Reached from the "Reset remote play sign-in" button in the troubleshooting
+/// section of Settings > Remote play, which is the action that message names.
+#[tauri::command]
+pub async fn sunshine_reset_credentials() -> Result<(), String> {
+    // Stopping Sunshine takes every stream this PC is hosting down with it, and
+    // the person clicking the button cannot see the other rooms. Now that this
+    // has a button in Settings, refusing is the only safe answer.
+    {
+        let held = ACTIVE_HOST_SESSIONS.lock().await.len();
+        if held == 1 {
+            return Err(
+                "A device is streaming from this PC right now. Stop that stream first."
+                    .to_string(),
+            );
+        }
+        if held > 1 {
+            return Err(format!(
+                "{held} devices are streaming from this PC right now. Stop those streams first."
+            ));
+        }
+    }
+    // Sunshine writes the new credentials file on its next start, and it only
+    // reads that file at startup, so the running one has to go first.
+    let _ = stop_sunshine().await;
+    {
+        let mut db = borrow_db_mut_checked();
+        db.settings.sunshine_password = String::new();
+    }
+    info!("[SUNSHINE] Admin password cleared — a new one is generated on the next start");
+    Ok(())
 }
 
 // ── Server-side streaming session management ────────────────────────
@@ -926,32 +2219,52 @@ pub async fn streaming_stop_session(session_id: String) -> Result<(), String> {
         })
 }
 
-/// Stop all host-side streaming sessions (cancels heartbeat loops, stops server sessions, kills Sunshine).
+/// Let go of Sunshine if nothing else is streaming.
+///
+/// Takes the locked session map so the check and the shutdown can't race a
+/// session that registers in between. Callers must have already removed their
+/// own entry: whoever empties the map is the last holder and owns the teardown.
+/// Goes through `stop_sunshine`, which leaves an adopted foreign Sunshine alone.
+async fn stop_sunshine_if_last_holder(
+    sessions: tokio::sync::MutexGuard<'_, HashMap<String, watch::Sender<bool>>>,
+) {
+    if !sessions.is_empty() {
+        return;
+    }
+    drop(sessions); // Release the lock before stopping Sunshine.
+    info!("[STREAMING] No more active sessions, stopping Sunshine");
+    let _ = stop_sunshine().await;
+}
+
+/// Stop the streaming sessions *this PC is hosting* and release Sunshine.
+///
+/// Only ever touches sessions in `ACTIVE_HOST_SESSIONS`, which is this host's
+/// own map. The server's session list is not the right input here: everyone in
+/// the household shares a user, so "stop everything the server knows about"
+/// reaches across and kills somebody else's live stream.
+///
+/// When this host holds nothing, Sunshine is left running. An empty map means
+/// Drop is not the reason it is up — an adopted install, or a leftover from
+/// before a Drop restart that may well be mid-stream.
 #[tauri::command]
 pub async fn stop_all_host_sessions() -> Result<u32, String> {
     let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
     let count = sessions.len() as u32;
+    if count == 0 {
+        info!("[STREAMING] No host sessions on this PC — leaving Sunshine alone");
+        return Ok(0);
+    }
     info!("[STREAMING] Stopping {} active host session(s)", count);
     for (sid, tx) in sessions.drain() {
         info!("[STREAMING] Cancelling host session {}", sid);
+        // The heartbeat loop stops the server session and kills the game; it
+        // finds its entry already gone and skips its own teardown, which this
+        // call is doing instead.
         let _ = tx.send(true);
     }
-    // Restore display resolution (Windows only)
-    #[cfg(target_os = "windows")]
-    {
-        restore_display_resolution().await;
-    }
-
-    // Also stop Sunshine if running
-    {
-        let mut guard = SUNSHINE_PROCESS.lock().await;
-        if let Some(ref mut child) = *guard {
-            info!("[STREAMING] Killing Sunshine process");
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        *guard = None;
-    }
+    // Sunshine reverts any display change it made when the session ends, so
+    // there is nothing for Drop to restore here.
+    stop_sunshine_if_last_holder(sessions).await;
     Ok(count)
 }
 
@@ -1340,7 +2653,7 @@ pub async fn launch_moonlight(
 
     // Launch Moonlight in stream mode.
     // Always stream "Desktop" because Drop launches the game independently
-    // (via fulfill_stream_request step 9).  Sunshine's per-app entries would
+    // (via fulfill_stream_request step 7).  Sunshine's per-app entries would
     // try to launch the game a second time, causing conflicts.  The game is
     // already running on the PC desktop — Moonlight just captures the screen.
     // Apply the user's quality preset (fps + bitrate) and resolution, read from
@@ -1357,17 +2670,19 @@ pub async fn launch_moonlight(
     let fps_str = qfps.to_string();
     let bitrate_str = qbitrate.to_string();
     info!(
-        "[MOONLIGHT] Starting stream to {} (Desktop capture, {} @ {}fps, {}kbps, hdr={})...",
+        "[MOONLIGHT] Starting stream to {} (Desktop capture, {} @ {}fps, {}kbps, hdr={}, host mode change={})...",
         address,
         resolution
+            .request
             .map(|(w, h)| format!("{w}x{h}"))
             .unwrap_or_else(|| "native".to_string()),
         qfps,
         qbitrate,
-        hdr
+        hdr,
+        resolution.change_host_mode
     );
     let mut args: Vec<String> = vec!["stream".to_string()];
-    if let Some((w, h)) = resolution {
+    if let Some((w, h)) = resolution.request {
         args.push("--resolution".to_string());
         args.push(format!("{w}x{h}"));
     }
@@ -1378,6 +2693,23 @@ pub async fn launch_moonlight(
     if hdr {
         args.push("--hdr".to_string());
     }
+    // "Optimize game settings" is what puts sops=1 in the launch request, and
+    // Sunshine ignores dd_resolution_option without it — it even logs
+    // "Sunshine is configured to change resolution automatically, but the
+    // "Optimize game settings" is not set in the client! Resolution will not be
+    // changed." Moonlight otherwise inherits whatever the user last left in
+    // their own profile, so state it either way rather than letting the host's
+    // behaviour hinge on a checkbox Drop cannot see. Both spellings are real:
+    // moonlight-qt's addToggleOption registers "--x" and "--no-x" as a pair
+    // (verified against the v6.1.0 source install_moonlight downloads).
+    args.push(
+        if resolution.change_host_mode {
+            "--game-optimization"
+        } else {
+            "--no-game-optimization"
+        }
+        .to_string(),
+    );
     args.push(address.clone());
     args.push("Desktop".to_string());
     let mut cmd = moonlight_command(&moonlight_str);
@@ -1662,33 +2994,119 @@ pub fn spawn_stream_request_poller() {
     });
 }
 
+/// Tell the desktop UI why a stream request could not be served.
+///
+/// The requesting device only ever sees the session end, and the host had no
+/// voice at all on this path: `start_sunshine` surfaces its errors as a command
+/// result, but a pushed request has nobody to return to. Refusing to host is
+/// often the right call; refusing without saying so leaves the user with a Deck
+/// that gives up for no visible reason.
+async fn emit_stream_host_error(session_id: &str, game_id: &str, reason: &str) {
+    use remote::utils::DROP_APP_HANDLE;
+    use tauri::Emitter;
+
+    let lock = DROP_APP_HANDLE.lock().await;
+    if let Some(app) = &*lock {
+        let _ = app.emit(
+            "stream-host-error",
+            serde_json::json!({
+                "sessionId": session_id,
+                "gameId": game_id,
+                "reason": reason,
+            }),
+        );
+    }
+}
+
+/// Give up on a stream request, out loud.
+///
+/// Both halves matter. `stream-host-error` tells whoever is sitting at this PC,
+/// and stopping the session *with the reason attached* is what reaches the
+/// device that pressed Play: it sees Stopped on its next poll, with words, in
+/// seconds. Leaving the session open instead means the requester waits out its
+/// own 60s timeout and blames the network, and the server's stale sweep does
+/// not clear the row for five minutes.
+async fn fail_stream(session_id: &str, game_id: &str, reason: &str) {
+    warn!("[STREAM-FULFILL] Session {session_id} cannot be served: {reason}");
+    emit_stream_host_error(session_id, game_id, reason).await;
+    if let Err(e) =
+        streaming_sessions::stop_streaming_session_with_error(session_id, Some(reason)).await
+    {
+        warn!("[STREAM-FULFILL] Could not stop session {session_id} after failing it: {e}");
+    }
+}
+
+/// Hand Sunshine back after a stream that never got as far as the heartbeat
+/// loop, which is what normally owns this. Drops this request's own reservation
+/// first: it is in the map from before Sunshine was started, so leaving it there
+/// would make the last-holder check see a holder that no longer exists.
+///
+/// Any *other* live session keeps Sunshine up, which is the whole point of going
+/// through the last-holder check rather than calling `stop_sunshine` directly.
+async fn release_reservation(session_id: &str) {
+    let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
+    sessions.remove(session_id);
+    stop_sunshine_if_last_holder(sessions).await;
+}
+
+/// Can this PC host a stream at all? Checked before the request is accepted so
+/// a hopeless one is refused in seconds rather than after a Sunshine start.
+///
+/// Neither question applies to a Sunshine that is already up. Drop will try to
+/// adopt that one, which needs nothing from Drop's own copy of the files, and
+/// whoever installed it registered their own firewall rules — Drop's rule names
+/// say nothing about those.
+fn host_can_serve() -> Result<(), HostFailure> {
+    if sunshine_port_open() {
+        return Ok(());
+    }
+    let probe = probe_sunshine_install();
+    if !probe.healthy() {
+        warn!(
+            "[STREAM-FULFILL] Sunshine is not usable here: installed={}, missing={:?}",
+            probe.installed(),
+            probe.missing
+        );
+        return Err(HostFailure::NotSetUp);
+    }
+    if !firewall_allows_sunshine() {
+        return Err(HostFailure::Other(STREAM_ERROR_FIREWALL.to_string()));
+    }
+    Ok(())
+}
+
 /// Fulfill a stream request: accept it, start Sunshine, launch the game.
 /// `game_config` is the requesting client's per-game configuration (widescreen,
 /// quality preset, etc.) — applied as an override on the host so the Deck's
 /// settings take effect during streaming.
+///
+/// Every way out of here that isn't a running stream calls `fail_stream`. The
+/// requesting device has no other source of truth about this PC.
 async fn fulfill_stream_request(
     session_id: String,
     game_id: String,
-    _game_name: String,
+    game_name: String,
     game_config: Option<database::models::data::UserConfiguration>,
 ) {
     info!("[STREAM-FULFILL] Fulfilling stream request {} for game {}", session_id, game_id);
 
-    // 1. Read Sunshine credentials from settings
-    let (sun_user, sun_pass) = {
-        let db = borrow_db_checked();
-        let user = if db.settings.sunshine_username.is_empty() {
-            "sunshine".to_string()
-        } else {
-            db.settings.sunshine_username.clone()
-        };
-        let pass = if db.settings.sunshine_password.is_empty() {
-            "sunshine".to_string()
-        } else {
-            db.settings.sunshine_password.clone()
-        };
-        (user, pass)
-    };
+    // 0. Refuse before accepting if this PC plainly cannot serve. The checks
+    //    block (a socket connect, a PATH probe, netsh), so keep them off the
+    //    async worker. An unknown answer means carry on: better to try and fail
+    //    than to refuse a stream that would have worked.
+    match tokio::task::spawn_blocking(host_can_serve).await {
+        Ok(Ok(())) => {}
+        Ok(Err(failure)) => {
+            fail_stream(&session_id, &game_id, &failure.message()).await;
+            return;
+        }
+        Err(e) => {
+            warn!("[STREAM-FULFILL] Host readiness check failed to run: {e}");
+        }
+    }
+
+    // 1. Sunshine's admin credentials — generated and persisted on first use.
+    let (sun_user, sun_pass) = sunshine_credentials();
 
     // 2. Generate a pairing PIN
     let pin = format!("{:04}", rand::rng().random_range(0u16..10000));
@@ -1706,56 +3124,45 @@ async fn fulfill_stream_request(
     // 3. Accept the request on the server
     if let Err(e) = streaming_sessions::accept_stream_request(&session_id, Some(&pin), local_ip.as_deref()).await {
         warn!("[STREAM-FULFILL] Failed to accept request: {e}");
+        // A failed accept usually means the request was already cancelled or
+        // another device took it. The stop is then a no-op — it only matches a
+        // session this client hosts — so a session that became somebody else's
+        // is left alone.
+        fail_stream(
+            &session_id,
+            &game_id,
+            &format!("{} could not pick up the stream request.", host_name()),
+        )
+        .await;
         return;
     }
 
-    // 4. Make sure Sunshine is running
+    // 4. Take a place in the active map BEFORE touching Sunshine, and hold it
+    //    until the heartbeat loop takes over at step 8.
+    //
+    //    `stop_sunshine_if_last_holder` reads this map to decide whether anyone
+    //    still needs Sunshine, and everything between here and step 8 takes
+    //    real time: up to 10s waiting for the port, then a game launch that can
+    //    run to tens of seconds. Registering only at the end left that whole
+    //    stretch invisible, so a session ending in the middle of it — a Deck
+    //    that quit ten seconds ago and whose heartbeat loop has just noticed —
+    //    saw an empty map and stopped the Sunshine this request was mid-handover
+    //    to, leaving it Ready with nothing listening. The reservation carries
+    //    the cancel channel that loop later uses, so `stop_all_host_sessions`
+    //    can still reach this session while it is being set up.
+    let (cancel_tx, cancel_rx) = watch::channel(false);
     {
-        let mut guard = SUNSHINE_PROCESS.lock().await;
-        let needs_start = match *guard {
-            Some(ref mut child) => child.try_wait().map_or(true, |s| s.is_some()),
-            None => true,
-        };
-        if needs_start {
-            *guard = None;
-            drop(guard);
+        let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
+        sessions.insert(session_id.clone(), cancel_tx);
+    }
 
-            let config_dir = sunshine_config_dir();
-            match generate_sunshine_conf(&config_dir, &sun_user, &sun_pass) {
-                Ok(conf_path) => {
-                    let binary = match find_sunshine() {
-                        Some(b) => b,
-                        None => {
-                            warn!("[STREAM-FULFILL] Sunshine not installed, cannot fulfill request");
-                            return;
-                        }
-                    };
-                    info!("[STREAM-FULFILL] Starting Sunshine: {} {}", binary.display(), conf_path.display());
-                    match Command::new(&binary)
-                        .arg(conf_path.to_string_lossy().as_ref())
-                        .stdout(std::process::Stdio::piped())
-                        .stderr(std::process::Stdio::piped())
-                        .spawn()
-                    {
-                        Ok(child) => {
-                            info!("[STREAM-FULFILL] Sunshine started with PID {}", child.id());
-                            let mut guard = SUNSHINE_PROCESS.lock().await;
-                            *guard = Some(child);
-                        }
-                        Err(e) => {
-                            warn!("[STREAM-FULFILL] Failed to start Sunshine: {e}");
-                            return;
-                        }
-                    }
-                    // Open the firewall so the client can reach this host.
-                    ensure_sunshine_firewall();
-                }
-                Err(e) => {
-                    warn!("[STREAM-FULFILL] Failed to generate Sunshine config: {e}");
-                    return;
-                }
-            }
-        }
+    //    Now make sure Sunshine is running: Drop's own, or one already up that
+    //    Drop can sign in to. If neither, the session is dead on arrival, so
+    //    stop it rather than leave the client waiting on a host that can't serve.
+    if let Err(failure) = ensure_sunshine_running(&sun_user, &sun_pass).await {
+        fail_stream(&session_id, &game_id, &failure.message()).await;
+        release_reservation(&session_id).await;
+        return;
     }
 
     // Whether we just started Sunshine or it was already running, make sure it
@@ -1769,7 +3176,13 @@ async fn fulfill_stream_request(
             "[STREAM-FULFILL] Sunshine never started listening on port {SUNSHINE_BASE_PORT}; \
              aborting session {session_id} instead of telling the client to connect"
         );
-        let _ = streaming_sessions::stop_streaming_session(&session_id).await;
+        fail_stream(
+            &session_id,
+            &game_id,
+            &format!("Remote play did not finish starting up on {}.", host_name()),
+        )
+        .await;
+        release_reservation(&session_id).await;
         return;
     }
 
@@ -1783,57 +3196,36 @@ async fn fulfill_stream_request(
         &sun_user,
         &sun_pass,
     ).await {
+        // A rejected login is fatal — an unpaired Moonlight has nothing to
+        // connect with, and every later API call would fail the same way.
+        // Anything else (a Sunshine build with no /pin, a client that is
+        // already paired) is not worth cancelling a stream over.
+        if is_auth_failure(&e) {
+            fail_stream(&session_id, &game_id, &stream_error_credentials()).await;
+            release_reservation(&session_id).await;
+            return;
+        }
         warn!("[STREAM-FULFILL] Failed to send PIN to Sunshine (may not need pairing): {e}");
     }
 
     // 6. Mark the session as Ready
     if let Err(e) = streaming_sessions::mark_session_ready(&session_id, Some(&pin)).await {
         warn!("[STREAM-FULFILL] Failed to mark session ready: {e}");
+        fail_stream(
+            &session_id,
+            &game_id,
+            &format!(
+                "Remote play is running on {}, but Drop could not hand the stream over.",
+                host_name()
+            ),
+        )
+        .await;
+        release_reservation(&session_id).await;
         return;
     }
     info!("[STREAM-FULFILL] Session {} marked Ready", session_id);
 
-    // 7. Switch the host display to the configured streaming resolution
-    //    (Windows only). When auto-resolution is on, leave the host display
-    //    ALONE — the client streams at its own display size and Sunshine scales
-    //    to it, so forcing the host down (e.g. to 1280x800) would just upscale
-    //    and look soft. Only switch when the user picked a fixed resolution and
-    //    it isn't "native".
-    #[cfg(target_os = "windows")]
-    {
-        let (auto, res) = {
-            let db = borrow_db_checked();
-            (
-                db.settings.streaming_auto_resolution,
-                db.settings.streaming_resolution.clone(),
-            )
-        };
-        if auto {
-            info!(
-                "[STREAM-FULFILL] Auto-resolution is on — leaving the host display unchanged \
-                 so Sunshine scales to whatever the client requests"
-            );
-        } else {
-            match parse_stream_resolution(&res) {
-                Some((w, h)) => match set_display_resolution(w, h) {
-                    Ok((old_w, old_h)) => {
-                        let mut guard = SAVED_RESOLUTION.lock().await;
-                        *guard = Some(SavedResolution { width: old_w, height: old_h });
-                        info!(
-                            "[STREAM-FULFILL] Saved original resolution {}x{}, switched to {}x{}",
-                            old_w, old_h, w, h
-                        );
-                    }
-                    Err(e) => warn!("[STREAM-FULFILL] Failed to set streaming resolution: {e}"),
-                },
-                None => info!(
-                    "[STREAM-FULFILL] streaming_resolution is 'native' — leaving host display unchanged"
-                ),
-            }
-        }
-    }
-
-    // 8. Launch the game (on a blocking thread — launch_game uses block_on internally)
+    // 7. Launch the game (on a blocking thread — launch_game uses block_on internally)
     //    Use launch_game_streaming so save sync conflicts are auto-resolved
     //    (the conflict dialog would appear on the host PC, unreachable from the Deck).
     //    Also pass the game_config override so the Deck's quality/widescreen settings
@@ -1843,22 +3235,40 @@ async fn fulfill_stream_request(
         use crate::process::launch_game_streaming;
         let gid = game_id.clone();
         let cfg = game_config;
-        match tokio::task::spawn_blocking(move || launch_game_streaming(gid, 0, cfg)).await {
-            Ok(Ok(_)) => info!("[STREAM-FULFILL] Game launched successfully"),
-            Ok(Err(e)) => warn!("[STREAM-FULFILL] Failed to launch game: {e:?}"),
-            Err(e) => warn!("[STREAM-FULFILL] Launch task panicked: {e}"),
+        // A stream with no game in it is not a stream. The heartbeat loop below
+        // would tear the session down anyway on its first "is the game running"
+        // check, five seconds later and without a word about why.
+        let launch_failed = match tokio::task::spawn_blocking(move || launch_game_streaming(gid, 0, cfg)).await {
+            Ok(Ok(_)) => {
+                info!("[STREAM-FULFILL] Game launched successfully");
+                false
+            }
+            Ok(Err(e)) => {
+                warn!("[STREAM-FULFILL] Failed to launch game: {e:?}");
+                true
+            }
+            Err(e) => {
+                warn!("[STREAM-FULFILL] Launch task panicked: {e}");
+                true
+            }
+        };
+        if launch_failed {
+            fail_stream(
+                &session_id,
+                &game_id,
+                &HostFailure::LaunchFailed(game_name).message(),
+            )
+            .await;
+            release_reservation(&session_id).await;
+            return;
         }
     }
 
-    // 9. Start heartbeating in background. This loop is the host-side lifecycle
+    // 8. Start heartbeating in background. This loop is the host-side lifecycle
     //    owner: it keeps the session alive, and tears everything down — INCLUDING
     //    killing the game on this PC — when the stream ends, whichever side ends it.
-    let (cancel_tx, cancel_rx) = watch::channel(false);
-    {
-        let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
-        sessions.insert(session_id.clone(), cancel_tx);
-    }
-
+    //    It takes over the reservation made at step 4 rather than registering
+    //    afresh, so there is no window where this session is absent from the map.
     let sid = session_id.clone();
     let hb_game_id = game_id.clone();
     tokio::spawn(async move {
@@ -1922,21 +3332,358 @@ async fn fulfill_stream_request(
             }
         }
 
-        // Clean up from the active sessions map
+        // Clean up from the active sessions map, then hand Sunshine back if
+        // this was the last session holding it.
         let mut sessions = ACTIVE_HOST_SESSIONS.lock().await;
         sessions.remove(&sid);
-
-        // Restore display resolution (Windows only)
-        #[cfg(target_os = "windows")]
-        {
-            restore_display_resolution().await;
-        }
-
-        // Stop Sunshine if no more active sessions
-        if sessions.is_empty() {
-            drop(sessions); // Release lock before stopping Sunshine
-            info!("[STREAM-FULFILL] No more active sessions, stopping Sunshine");
-            let _ = stop_sunshine().await;
-        }
+        stop_sunshine_if_last_holder(sessions).await;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    // ── Wrapper detection ─────────────────────────────────────────────
+
+    #[test]
+    fn wrapped_archive_strips_one_component() {
+        // What Sunshine-Windows-AMD64-portable.zip actually looks like.
+        let entries = names(&[
+            "Sunshine",
+            "Sunshine/sunshine.exe",
+            "Sunshine/assets/web/index.html",
+            "Sunshine/tools/dxgi-info.exe",
+        ]);
+        assert_eq!(shared_wrapper_dir(&entries).as_deref(), Some("Sunshine"));
+        assert_eq!(strip_wrapper("Sunshine", Some("Sunshine")), None);
+        assert_eq!(
+            strip_wrapper("Sunshine/assets/web/index.html", Some("Sunshine")).as_deref(),
+            Some("assets/web/index.html")
+        );
+    }
+
+    #[test]
+    fn unwrapped_archive_keeps_its_names() {
+        let entries = names(&["sunshine.exe", "assets/web/index.html", "tools/dxgi-info.exe"]);
+        assert_eq!(shared_wrapper_dir(&entries), None);
+        assert_eq!(
+            strip_wrapper("assets/web/index.html", None).as_deref(),
+            Some("assets/web/index.html")
+        );
+    }
+
+    #[test]
+    fn mixed_roots_are_left_alone() {
+        let entries = names(&["Sunshine/sunshine.exe", "README.txt"]);
+        assert_eq!(shared_wrapper_dir(&entries), None);
+    }
+
+    #[test]
+    fn single_file_archive_is_not_stripped_to_nothing() {
+        // "sunshine.exe" is shared by every entry, but stripping it would
+        // leave the archive with no files at all.
+        assert_eq!(shared_wrapper_dir(&names(&["sunshine.exe"])), None);
+    }
+
+    #[test]
+    fn empty_archive_has_no_wrapper() {
+        assert_eq!(shared_wrapper_dir(&[]), None);
+    }
+
+    // ── Zip-slip rejection ────────────────────────────────────────────
+
+    #[test]
+    fn traversal_entries_are_rejected() {
+        assert_eq!(sanitise_zip_entry("../evil.exe"), None);
+        assert_eq!(sanitise_zip_entry("Sunshine/../../evil.exe"), None);
+        assert_eq!(sanitise_zip_entry(r"Sunshine\..\evil.exe"), None);
+    }
+
+    #[test]
+    fn rooted_and_drive_qualified_entries_are_rejected() {
+        assert_eq!(sanitise_zip_entry("/etc/passwd"), None);
+        assert_eq!(sanitise_zip_entry("C:/Windows/System32/evil.dll"), None);
+        assert_eq!(sanitise_zip_entry(r"\Windows\evil.dll"), None);
+    }
+
+    /// The escape the pre-strip drive-letter check missed. `enclosed_name`
+    /// reads `C:` in the middle of a path as an ordinary component, so this
+    /// entry looked safe right up until `strip_wrapper` moved the drive letter
+    /// to the front and made the whole thing absolute.
+    #[test]
+    fn a_drive_letter_behind_the_wrapper_is_rejected() {
+        assert_eq!(sanitise_zip_entry("Sunshine/C:/Windows/Temp/evil.dll"), None);
+        assert_eq!(sanitise_zip_entry("Sunshine/assets/D:/evil.dll"), None);
+    }
+
+    /// A colon anywhere else opens an NTFS alternate data stream rather than a
+    /// file. Contained, but never something an archive should get to do.
+    #[test]
+    fn alternate_data_streams_are_rejected() {
+        assert_eq!(sanitise_zip_entry("assets/index.html:evil.exe"), None);
+    }
+
+    /// Whatever the name looked like, the path written has to be under `dest`.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_join_guard_catches_an_absolute_name() {
+        let dest = Path::new(r"C:\drop\tools\sunshine");
+        assert!(!dest.join("C:/Windows/Temp/evil.dll").starts_with(dest));
+        assert!(dest.join("assets/web/index.html").starts_with(dest));
+    }
+
+    #[test]
+    fn empty_entries_are_rejected() {
+        assert_eq!(sanitise_zip_entry(""), None);
+        assert_eq!(sanitise_zip_entry("./"), None);
+    }
+
+    #[test]
+    fn backslashes_and_redundant_separators_are_normalised() {
+        assert_eq!(
+            sanitise_zip_entry(r"Sunshine\assets\web\index.html").as_deref(),
+            Some("Sunshine/assets/web/index.html")
+        );
+        assert_eq!(
+            sanitise_zip_entry("Sunshine//assets/./web/").as_deref(),
+            Some("Sunshine/assets/web")
+        );
+    }
+
+    // ── sunshine.conf lines ───────────────────────────────────────────
+
+    #[test]
+    fn a_setting_with_no_value_is_left_out_entirely() {
+        let mut out = String::new();
+        push_conf_setting(&mut out, "output_name", "");
+        push_conf_setting(&mut out, "adapter_name", "   ");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_setting_with_a_value_is_written_and_trimmed() {
+        let mut out = String::new();
+        push_conf_setting(&mut out, "audio_sink", "  Speakers (Realtek USB Audio) ");
+        assert_eq!(out, "audio_sink = Speakers (Realtek USB Audio)\n");
+    }
+
+    #[test]
+    fn a_chosen_display_is_activated_without_switching_the_others_off() {
+        let block = display_conf_block(
+            "{326cc288-6d34-54f5-8c7d-5cb7fa9e2a49}",
+            "NVIDIA GeForce RTX 4070 Ti SUPER",
+            true,
+        );
+        assert_eq!(
+            block,
+            "output_name = {326cc288-6d34-54f5-8c7d-5cb7fa9e2a49}\n\
+             adapter_name = NVIDIA GeForce RTX 4070 Ti SUPER\n\
+             dd_configuration_option = ensure_active\n\
+             dd_resolution_option = auto\n\
+             dd_config_revert_on_disconnect = enabled\n"
+        );
+        // ensure_only_display deactivates every other monitor, and the revert
+        // that would bring them back is not guaranteed to run. Never emit it.
+        assert!(!block.contains("ensure_only_display"));
+    }
+
+    #[test]
+    fn no_chosen_display_leaves_the_desktop_layout_alone() {
+        let block = display_conf_block("", "", true);
+        assert!(!block.contains("output_name"));
+        assert!(!block.contains("adapter_name"));
+        // verify_only never changes anything, but still lets Sunshine own the
+        // resolution switch when the client asks for one.
+        assert!(block.contains("dd_configuration_option = verify_only\n"));
+        assert!(block.contains("dd_resolution_option = auto\n"));
+    }
+
+    #[test]
+    fn the_display_revert_is_always_asked_for_on_windows() {
+        // Sunshine's shipped default defers the revert to app close, which a
+        // killed Sunshine never reaches.
+        for display in ["", "{326cc288-6d34-54f5-8c7d-5cb7fa9e2a49}"] {
+            assert!(
+                display_conf_block(display, "", true)
+                    .contains("dd_config_revert_on_disconnect = enabled\n"),
+                "revert key missing for display {display:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_linux_host_gets_no_windows_only_keys() {
+        let display = display_conf_block("0", "/dev/dri/renderD128", false);
+        assert_eq!(
+            display,
+            "output_name = 0\nadapter_name = /dev/dri/renderD128\n"
+        );
+        assert!(audio_conf_block("", "", false).is_empty());
+    }
+
+    #[test]
+    fn audio_keys_appear_only_when_a_device_was_chosen() {
+        let empty = audio_conf_block("", "", true);
+        assert_eq!(empty, "install_steam_audio_drivers = enabled\n");
+
+        let full = audio_conf_block(
+            "Headphones (Realtek USB Audio)",
+            "Speakers (Steam Streaming Speakers)",
+            true,
+        );
+        assert_eq!(
+            full,
+            "audio_sink = Headphones (Realtek USB Audio)\n\
+             virtual_sink = Speakers (Steam Streaming Speakers)\n\
+             install_steam_audio_drivers = enabled\n"
+        );
+    }
+
+    // ── Health probe ──────────────────────────────────────────────────
+
+    fn lay_down_required(root: &Path) {
+        for (rel, is_dir) in SUNSHINE_REQUIRED_PATHS {
+            let path = root.join(rel);
+            if *is_dir {
+                std::fs::create_dir_all(&path).unwrap();
+            } else {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, b"x").unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn health_probe_passes_on_a_complete_install() {
+        let dir = tempfile::tempdir().unwrap();
+        lay_down_required(dir.path());
+        assert!(missing_sunshine_files(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn health_probe_flags_an_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            missing_sunshine_files(dir.path()).len(),
+            SUNSHINE_REQUIRED_PATHS.len()
+        );
+    }
+
+    /// The flattened extract this stage exists to fix: the exe is there and
+    /// every support file it needs is not.
+    #[test]
+    fn health_probe_flags_a_flattened_install() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(SUNSHINE_REQUIRED_PATHS[0].0), b"x").unwrap();
+        let missing = missing_sunshine_files(dir.path());
+        assert!(!missing.contains(&SUNSHINE_REQUIRED_PATHS[0].0));
+        assert_eq!(missing.len(), SUNSHINE_REQUIRED_PATHS.len() - 1);
+    }
+
+    #[test]
+    fn health_probe_wants_a_directory_where_a_directory_is_required() {
+        let Some((rel, _)) = SUNSHINE_REQUIRED_PATHS.iter().find(|(_, is_dir)| *is_dir) else {
+            return; // no directory requirements on this platform
+        };
+        let dir = tempfile::tempdir().unwrap();
+        lay_down_required(dir.path());
+        let path = dir.path().join(rel);
+        std::fs::remove_dir_all(&path).unwrap();
+        std::fs::write(&path, b"not a directory").unwrap();
+        assert!(missing_sunshine_files(dir.path()).contains(rel));
+    }
+
+    #[test]
+    fn working_dir_is_the_binarys_own_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("sunshine.exe");
+        assert_eq!(sunshine_working_dir(&exe).as_deref(), Some(dir.path()));
+        // A bare name off PATH has no directory to run from.
+        assert_eq!(sunshine_working_dir(Path::new("sunshine.exe")), None);
+    }
+
+    #[test]
+    fn wipe_keeps_config_and_removes_everything_else() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("config")).unwrap();
+        std::fs::write(dir.path().join("config/cacert.pem"), b"cert").unwrap();
+        std::fs::create_dir_all(dir.path().join("assets/web")).unwrap();
+        std::fs::write(dir.path().join("assets/web/index.html"), b"page").unwrap();
+        std::fs::write(dir.path().join("sunshine.exe"), b"exe").unwrap();
+
+        wipe_sunshine_install(dir.path()).unwrap();
+
+        assert!(dir.path().join("config/cacert.pem").is_file());
+        assert!(!dir.path().join("assets").exists());
+        assert!(!dir.path().join("sunshine.exe").exists());
+    }
+
+    // ── Paired clients ────────────────────────────────────────────────
+
+    #[test]
+    fn paired_clients_are_flattened_to_name_and_uuid() {
+        let raw = serde_json::json!({
+            "status": true,
+            "named_certs": [
+                { "name": "Steam Deck", "uuid": "abc-123", "cert": "..." },
+                { "name": "Living Room TV", "uuid": "def-456" },
+            ]
+        });
+        let clients = parse_paired_clients(&raw);
+        assert_eq!(clients.len(), 2);
+        assert_eq!(clients[0].name, "Steam Deck");
+        assert_eq!(clients[0].uuid, "abc-123");
+        assert_eq!(clients[1].uuid, "def-456");
+    }
+
+    #[test]
+    fn a_client_that_paired_without_a_name_still_renders() {
+        let raw = serde_json::json!({
+            "status": true,
+            "named_certs": [{ "name": "   ", "uuid": "abc-123" }]
+        });
+        assert_eq!(parse_paired_clients(&raw)[0].name, "Unnamed device");
+    }
+
+    #[test]
+    fn a_client_with_no_uuid_is_dropped() {
+        // Nothing could be unpaired from that row, so it would only ever be a
+        // button that does nothing.
+        let raw = serde_json::json!({
+            "status": true,
+            "named_certs": [{ "name": "Ghost" }, { "name": "Deck", "uuid": "" }]
+        });
+        assert!(parse_paired_clients(&raw).is_empty());
+    }
+
+    #[test]
+    fn no_pairings_is_an_empty_list_not_an_error() {
+        // What Sunshine actually answers when nothing has ever paired.
+        assert!(parse_paired_clients(&serde_json::json!({ "status": true })).is_empty());
+    }
+
+    // ── Sunshine API error classification ─────────────────────────────
+
+    #[test]
+    fn a_rejected_login_is_recognised() {
+        assert!(is_auth_failure(
+            "Sunshine API error: 401 Unauthorized - <html>Unauthorized</html>"
+        ));
+        assert!(is_auth_failure("Sunshine API error: 401 - "));
+    }
+
+    #[test]
+    fn other_api_errors_are_not_credential_failures() {
+        // A missing endpoint or a refused connection must not send the user off
+        // resetting credentials that were fine.
+        assert!(!is_auth_failure("Sunshine API error: 404 Not Found - "));
+        assert!(!is_auth_failure(
+            "Sunshine API request failed: error sending request for url"
+        ));
+    }
 }

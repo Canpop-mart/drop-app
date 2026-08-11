@@ -2,9 +2,9 @@
   <div class="space-y-4">
     <div class="flex items-center justify-between">
       <div>
-        <h3 class="text-base font-semibold text-zinc-100">Remote Play</h3>
+        <h3 class="text-base font-semibold text-zinc-100">This PC</h3>
         <p class="text-sm text-zinc-400">
-          Stream games to other devices using Sunshine + Moonlight.
+          Games on this PC can be played from another device on your network.
         </p>
       </div>
       <div
@@ -13,7 +13,7 @@
         :class="
           status.running
             ? 'bg-green-500/20 text-green-300'
-            : status.installed
+            : status.healthy
               ? 'bg-zinc-700/50 text-zinc-400'
               : 'bg-zinc-800 text-zinc-500'
         "
@@ -23,29 +23,28 @@
           :class="
             status.running
               ? 'bg-green-400'
-              : status.installed
+              : status.healthy
                 ? 'bg-zinc-500'
                 : 'bg-zinc-600'
           "
         />
-        {{
-          status.running
-            ? "Running"
-            : status.installed
-              ? "Stopped"
-              : "Not Installed"
-        }}
+        {{ statusLabel }}
       </div>
     </div>
 
-    <!-- Not installed -->
+    <!-- Not installed, or installed but damaged. A flattened extract leaves
+         sunshine.exe in place with none of its support files, which used to
+         show up as a fully working install with no way to fix it. -->
     <div
-      v-if="status && !status.installed"
+      v-if="status && !status.healthy"
       class="rounded-lg border border-zinc-700/50 bg-zinc-800/50 p-4"
     >
       <p class="text-sm text-zinc-300 mb-3">
-        Sunshine is an open-source game streaming server that lets you play
-        your games on any device running Moonlight.
+        {{
+          status.installed
+            ? "Some remote play files are missing or damaged. Set it up again to replace them."
+            : "Drop downloads what it needs the first time you set this up. It takes about a minute."
+        }}
       </p>
       <button
         class="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-40"
@@ -53,31 +52,15 @@
         @click="doInstall"
       >
         <ArrowDownTrayIcon class="size-4" />
-        {{ loading ? "Installing..." : "Install Sunshine" }}
+        {{ installButtonLabel }}
       </button>
     </div>
 
     <!-- Installed — controls -->
     <div
-      v-else-if="status && status.installed"
+      v-else-if="status && status.healthy"
       class="rounded-lg border border-zinc-700/50 bg-zinc-800/50 p-4 space-y-4"
     >
-      <!-- Admin credentials for starting -->
-      <div v-if="!status.running" class="flex items-center gap-2">
-        <input
-          v-model="adminUsername"
-          type="text"
-          placeholder="Admin username"
-          class="flex-1 rounded-md border border-zinc-600 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none font-mono"
-        />
-        <input
-          v-model="adminPassword"
-          type="password"
-          placeholder="Admin password"
-          class="flex-1 rounded-md border border-zinc-600 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none font-mono"
-        />
-      </div>
-
       <div class="flex items-center gap-3">
         <button
           v-if="!status.running"
@@ -86,7 +69,7 @@
           @click="doStart"
         >
           <PlayIcon class="size-4" />
-          {{ loading ? "Starting..." : "Start Sunshine" }}
+          {{ loading ? "Turning on..." : "Turn on remote play" }}
         </button>
         <button
           v-else
@@ -95,27 +78,23 @@
           @click="doStop"
         >
           <StopIcon class="size-4" />
-          {{ loading ? "Stopping..." : "Stop Sunshine" }}
+          {{ loading ? "Turning off..." : "Turn off remote play" }}
         </button>
-
-        <span v-if="status.version" class="text-xs text-zinc-500">
-          v{{ status.version }}
-        </span>
       </div>
 
-      <!-- Pairing -->
+      <!-- Pairing. The PIN is shown by the OTHER device when it asks to
+           connect; this field is where it gets typed in. -->
       <div v-if="status.running" class="space-y-3">
-        <div class="text-sm text-zinc-300">
-          <span class="font-medium">Paired clients:</span>
-          {{ status.paired_clients }}
-        </div>
-
+        <p class="text-xs text-zinc-400">
+          The first time another device connects it shows a four-digit code.
+          Type that code here to let it in.
+        </p>
         <div class="flex items-center gap-2">
           <input
             v-model="pairingPin"
             type="text"
             maxlength="4"
-            placeholder="PIN"
+            placeholder="Code"
             class="w-20 rounded-md border border-zinc-600 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
           />
           <button
@@ -123,13 +102,9 @@
             :disabled="pairingPin.length < 4"
             @click="doPair"
           >
-            Pair Device
+            Pair device
           </button>
         </div>
-        <p class="text-xs text-zinc-500">
-          Open Moonlight on your remote device, connect to this PC, and enter
-          the PIN shown here.
-        </p>
       </div>
     </div>
 
@@ -149,7 +124,7 @@
       <div
         class="size-4 border-2 border-zinc-600 border-t-zinc-300 rounded-full animate-spin"
       />
-      Checking Sunshine status...
+      Checking remote play...
     </div>
   </div>
 </template>
@@ -168,14 +143,28 @@ const {
   error,
   checkSunshine,
   installSunshine,
+  repairSunshine,
   startSunshine,
   stopSunshine,
   sendPin,
 } = useStreaming();
 
+const emit = defineEmits<{ (e: "changed"): void }>();
+
 const pairingPin = ref("");
-const adminUsername = ref("sunshine");
-const adminPassword = ref("");
+
+const statusLabel = computed(() => {
+  if (!status.value) return "";
+  if (status.value.running) return "Ready";
+  if (!status.value.installed) return "Not set up";
+  return status.value.healthy ? "Off" : "Needs repair";
+});
+
+const installButtonLabel = computed(() => {
+  const damaged = status.value?.installed === true;
+  if (loading.value) return damaged ? "Repairing..." : "Setting up...";
+  return damaged ? "Repair remote play" : "Set up remote play";
+});
 
 onMounted(() => {
   checkSunshine();
@@ -183,7 +172,13 @@ onMounted(() => {
 
 async function doInstall() {
   try {
-    await installSunshine();
+    // A damaged install needs the wipe-and-replace path; a missing one doesn't.
+    if (status.value?.installed) {
+      await repairSunshine();
+    } else {
+      await installSunshine();
+    }
+    emit("changed");
   } catch {
     // error is already set in composable
   }
@@ -191,7 +186,8 @@ async function doInstall() {
 
 async function doStart() {
   try {
-    await startSunshine(adminUsername.value, adminPassword.value);
+    await startSunshine();
+    emit("changed");
   } catch {
     // error is already set
   }
@@ -200,6 +196,7 @@ async function doStart() {
 async function doStop() {
   try {
     await stopSunshine();
+    emit("changed");
   } catch {
     // error is already set
   }
@@ -207,10 +204,11 @@ async function doStop() {
 
 async function doPair() {
   try {
-    await sendPin(pairingPin.value, "Drop Client", adminUsername.value, adminPassword.value);
+    await sendPin(pairingPin.value, "Drop Client");
     pairingPin.value = "";
     // Refresh status to update paired client count
     await checkSunshine();
+    emit("changed");
   } catch {
     // error is already set
   }
