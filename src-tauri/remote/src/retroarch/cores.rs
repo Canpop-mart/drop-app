@@ -146,6 +146,28 @@ pub fn rom_uses_dolphin_core(rom_path: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// True when the ROM will *actually* be loaded by Dolphin, `.iso` included.
+///
+/// [`rom_uses_dolphin_core`] answers from the extension alone and deliberately
+/// says `false` for `.iso`, but `resolve_core_for_rom` sniffs the disc header
+/// and does hand a GameCube/Wii `.iso` to Dolphin. Any caller that has to match
+/// the core that will really run — the CRT-shader video-driver workaround, for
+/// one — must repeat that sniff, otherwise a GC/Wii `.iso` silently skips the
+/// Dolphin-specific setup and lands on the frontend's default driver.
+///
+/// Reads the first 32 bytes of the file for `.iso`; every other extension is
+/// answered from the table without touching the disk.
+pub fn rom_runs_on_dolphin(rom_path: &str) -> bool {
+    let Some(ext) = rom_ext(rom_path) else { return false };
+    if ext == "iso" {
+        return matches!(
+            detect_iso_disc_type(Path::new(rom_path)),
+            IsoDiscType::GameCube | IsoDiscType::Wii
+        );
+    }
+    rom_uses_dolphin_core(rom_path)
+}
+
 /// True when the ROM resolves to a core that renders at high internal
 /// resolution / native 3D, where slang CRT shaders break video output.
 ///
@@ -298,4 +320,41 @@ pub fn resolve_core_for_rom(emu_root: &Path, rom_path: &str) -> Option<PathBuf> 
         cores_dir.display()
     );
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dolphin_only_extensions_run_on_dolphin() {
+        assert!(rom_runs_on_dolphin("/roms/zelda.rvz"));
+        assert!(rom_runs_on_dolphin("/roms/mario.wbfs"));
+        // Extension matching is case-insensitive.
+        assert!(rom_runs_on_dolphin("/roms/MARIO.WBFS"));
+    }
+
+    #[test]
+    fn other_platforms_do_not_run_on_dolphin() {
+        assert!(!rom_runs_on_dolphin("/roms/goldeneye.n64"));
+        // .chd lists dolphin only as a last-resort candidate behind four PS1/
+        // PS2 cores, so it must not count as a Dolphin ROM.
+        assert!(!rom_runs_on_dolphin("/roms/tekken.chd"));
+        assert!(!rom_runs_on_dolphin("/roms/no-extension"));
+    }
+
+    #[test]
+    fn unreadable_iso_is_not_dolphin() {
+        // The disc sniff can't open the file, so it reports Other — which is
+        // the right default, .iso being a PS2 disc far more often than a Wii one.
+        assert!(!rom_runs_on_dolphin("/roms/does-not-exist.iso"));
+    }
+
+    #[test]
+    fn extension_only_test_still_skips_iso() {
+        // rom_uses_dolphin_core stays the cheap, disk-free variant that
+        // rom_runs_on_dolphin delegates to for every non-.iso extension.
+        assert!(!rom_uses_dolphin_core("/roms/anything.iso"));
+        assert!(rom_uses_dolphin_core("/roms/melee.gcm"));
+    }
 }

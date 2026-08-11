@@ -58,6 +58,17 @@ pub use ra::{
 /// into. The cloud-save system looks for `<emulator_install>/drop-saves/<id>/`.
 const DROP_SAVES_DIR: &str = "drop-saves";
 
+/// Keys older Drop versions wrote into `retroarch.cfg` that never belonged in
+/// that file, deleted on every patch alongside [`controllers::STALE_INPUT_KEYS`].
+///
+/// `dolphin_renderer` is a libretro **core** option: Dolphin reads it from
+/// `retroarch-core-options.cfg` and has never looked at `retroarch.cfg`, so the
+/// line we used to write there did nothing but sit in the file looking like it
+/// worked. It is written to the right file now (see
+/// [`presets::apply_core_quality_options`]); this clears the orphan out of
+/// installs that already have one.
+const STALE_MISPLACED_KEYS: &[&str] = &["dolphin_renderer"];
+
 /// Result of configuring RetroArch for a game launch.
 #[derive(Debug, Clone)]
 pub struct RetroArchInfo {
@@ -115,8 +126,9 @@ pub fn configure_retroarch_for_game(
     let saves_base = emu_root.join(DROP_SAVES_DIR).join(game_id);
     let savefile_dir = saves_base.join("saves");
     let savestate_dir = saves_base.join("states");
+    let logs_dir = emu_root.join("logs");
 
-    for dir in [&savefile_dir, &savestate_dir, &system_dir] {
+    for dir in [&savefile_dir, &savestate_dir, &system_dir, &logs_dir] {
         if let Err(e) = fs::create_dir_all(dir) {
             warn!("[RETROARCH] Failed to create dir {}: {e}", dir.display());
         }
@@ -136,7 +148,7 @@ pub fn configure_retroarch_for_game(
 
     apply_path_overrides(&mut overrides, &cores_dir, &system_dir, &assets_dir, &emu_root);
     apply_save_overrides(&mut overrides, &savefile_dir, &savestate_dir, &saves_base);
-    apply_baseline_overrides(&mut overrides, &remaps_dir, &core_opts_file);
+    apply_baseline_overrides(&mut overrides, &remaps_dir, &core_opts_file, &logs_dir);
     apply_video_input_overrides(&mut overrides);
 
     // Emulated controller device type, scoped to the ROM's platform.
@@ -158,6 +170,15 @@ pub fn configure_retroarch_for_game(
     log_diagnostic_overrides(&overrides);
 
     // ── Write the main config (used by --appendconfig) ───────────────────
+    // Both write sites share one deletion list. A key dropped from only one of
+    // them leaves the AppImage portable $HOME stale, and on the Deck that copy
+    // is the BASE config rather than an overlay.
+    let stale_keys: Vec<&str> = controllers::STALE_INPUT_KEYS
+        .iter()
+        .chain(STALE_MISPLACED_KEYS)
+        .copied()
+        .collect();
+
     let cfg_path = emu_root.join("retroarch.cfg");
     info!("[RETROARCH] Writing retroarch.cfg ({} keys) to {}", overrides.len(), cfg_path.display());
     // Treat a primary-cfg write failure as a hard abort: previously this was
@@ -166,11 +187,7 @@ pub fn configure_retroarch_for_game(
     // then freezes mysteriously" pattern. Returning None aborts the RA
     // configuration; the caller falls back to launching against the raw
     // RetroArch install instead of pretending our patches landed.
-    if let Err(e) = cfg::patch_retroarch_cfg_with_deletions(
-        &cfg_path,
-        &overrides,
-        controllers::STALE_INPUT_KEYS,
-    ) {
+    if let Err(e) = cfg::patch_retroarch_cfg_with_deletions(&cfg_path, &overrides, &stale_keys) {
         error!(
             "[RETROARCH] Failed to write retroarch.cfg ({e}) — aborting RA configuration to avoid launching against stale settings"
         );
@@ -187,11 +204,9 @@ pub fn configure_retroarch_for_game(
             warn!("[RETROARCH] Failed to create AppImage config dir {}: {e}", ai_cfg_dir.display());
         } else {
             let ai_cfg_path = ai_cfg_dir.join("retroarch.cfg");
-            if let Err(e) = cfg::patch_retroarch_cfg_with_deletions(
-                &ai_cfg_path,
-                &overrides,
-                controllers::STALE_INPUT_KEYS,
-            ) {
+            if let Err(e) =
+                cfg::patch_retroarch_cfg_with_deletions(&ai_cfg_path, &overrides, &stale_keys)
+            {
                 warn!(
                     "[RETROARCH] Failed to write AppImage config copy at {} ({e}) — primary config was written, continuing",
                     ai_cfg_path.display()
@@ -284,6 +299,7 @@ fn apply_baseline_overrides(
     overrides: &mut HashMap<&str, String>,
     remaps_dir: &Path,
     core_opts_file: &Path,
+    logs_dir: &Path,
 ) {
     overrides.insert("input_autodetect_enable", "true".into());
     overrides.insert("pause_nonactive", "false".into());
@@ -300,25 +316,51 @@ fn apply_baseline_overrides(
     // would outrank our core_options_path after the first launch.
     overrides.insert("global_core_options", "true".into());
     overrides.insert("core_options_path", cfg::path_to_cfg(core_opts_file));
+
+    // Permanent file logging. RetroArch ships with log_to_file off and a
+    // malformed relative log_dir (":\logs"), so when an emulated game takes the
+    // whole session down there is *no* emulator-side evidence to look at —
+    // every launch-crash investigation so far has had nothing but Drop's own
+    // log. The verbose level is the point: driver init, shader compilation and
+    // core-option parsing all live below the default log level, and those are
+    // exactly the lines that matter. log_to_file_timestamp gives one file per
+    // launch instead of one ever-growing blob.
+    overrides.insert("log_to_file", "true".into());
+    overrides.insert("log_to_file_timestamp", "true".into());
+    overrides.insert("log_verbosity", "true".into());
+    overrides.insert("frontend_log_level", "0".into()); // 0 = DEBUG
+    overrides.insert("log_dir", cfg::path_to_cfg(logs_dir));
+}
+
+/// True when Drop is running inside Gamescope (Steam Deck Game Mode).
+///
+/// Probed from the environment because Drop is launched *by* Gamescope, not
+/// the other way round — there is no setting to read. Compiled out to a
+/// constant `false` off Linux, where nothing nests us in a Wayland compositor.
+fn in_gamescope() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var("GAMESCOPE_WAYLAND_DISPLAY").is_ok() || std::env::var("SteamGamepadUI").is_ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
 }
 
 /// Fullscreen video + input-driver settings, with a Gamescope/Steam-Deck
 /// special case (borderless fullscreen, forced Vulkan, SDL2 input).
 fn apply_video_input_overrides(overrides: &mut HashMap<&str, String>) {
-    #[cfg(target_os = "linux")]
-    let in_gamescope = std::env::var("GAMESCOPE_WAYLAND_DISPLAY").is_ok()
-        || std::env::var("SteamGamepadUI").is_ok();
-    #[cfg(not(target_os = "linux"))]
-    let in_gamescope = false;
-
-    if in_gamescope {
+    if in_gamescope() {
         // Gamescope composites everything as fullscreen. Borderless fullscreen
         // avoids exclusive-mode / resolution-switching failures in a nested
         // compositor. Vulkan is forced because the AppImage's bundled Mesa was
         // too old for RDNA2 auto-detection; SDL2 input auto-maps the Deck pad.
+        // Note this is *not* the last word on video_driver — apply_user_config
+        // runs later and overwrites it with glcore for Dolphin + CRT.
         overrides.insert("video_fullscreen", "true".into());
         overrides.insert("video_windowed_fullscreen", "true".into());
-        overrides.insert("video_driver", "vulkan".into());
+        overrides.insert("video_driver", "\"vulkan\"".into());
         overrides.insert("input_joypad_driver", "sdl2".into());
         info!("[RETROARCH] Gamescope detected — borderless fullscreen + vulkan + SDL2 input");
     } else {
@@ -432,13 +474,32 @@ fn apply_user_config(
         *crt_shader_path = shaders::apply_crt_shader(overrides, emu_root, high_res_3d);
         info!("[RETROARCH] CRT shader enabled, path: {crt_shader_path:?}");
 
-        // Dolphin's libretro HW backend follows RetroArch's video driver; on
-        // Vulkan/D3D11 it renders into a context the slang shader can't see,
-        // giving a black screen. glcore lets the shader wrap Dolphin's output.
-        if rom_path.map(cores::rom_uses_dolphin_core).unwrap_or(false) {
+        // Dolphin's libretro HW backend renders into whatever context the
+        // RetroArch video driver created, and the shader has to be able to
+        // sample that context. Every other driver is ruled out:
+        //   * D3D11 — RetroArch's compiled-in default on Windows — hands the
+        //     shader a context it can't read, giving a black screen,
+        //   * the legacy "gl" driver crashes RetroArch outright with this core,
+        //   * vulkan is fine for slang presets in general but not for Dolphin's
+        //     HW output here.
+        // glcore is the only driver where CRT + Dolphin works on every
+        // platform, so it is written unconditionally. Deleting this line does
+        // not "let RetroArch decide" — it falls back to D3D11 and black-screens.
+        //
+        // Known cost, deliberately not addressed here: on the Deck this GL path
+        // runs through Wine -> Mesa radeonsi and can fault the AMD driver badly
+        // enough to reset the GPU and take the whole gamescope session with it.
+        // Routing GL through Zink is the fix for that and is being validated
+        // separately — don't fold it in here.
+        //
+        // `rom_runs_on_dolphin` (not `rom_uses_dolphin_core`) so a GameCube/Wii
+        // .iso, which the disc sniff sends to Dolphin, gets the same treatment.
+        if rom_path.map(cores::rom_runs_on_dolphin).unwrap_or(false) {
             overrides.insert("video_driver", "\"glcore\"".into());
-            overrides.insert("dolphin_renderer", "\"Hardware\"".into());
-            info!("[RETROARCH] Forcing video_driver=glcore + dolphin_renderer=Hardware for CRT-shader compat");
+            info!(
+                "[RETROARCH] Forcing video_driver=glcore for Dolphin CRT-shader compat (gamescope={})",
+                in_gamescope()
+            );
         }
     } else {
         shaders::disable_crt_shader(overrides, emu_root);
@@ -531,6 +592,10 @@ fn log_diagnostic_overrides(overrides: &HashMap<&str, String>) {
         "auto_shaders_enable",
         "video_fullscreen",
         "video_driver",
+        // So Drop's own log says where RetroArch's log went — without this the
+        // first step of any crash post-mortem is guessing the path.
+        "log_to_file",
+        "log_dir",
     ];
     for dk in DIAGNOSTIC_KEYS {
         if let Some(val) = overrides.get(dk) {

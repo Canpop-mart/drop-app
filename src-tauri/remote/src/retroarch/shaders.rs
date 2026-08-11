@@ -133,12 +133,50 @@ fn remove_auto_shader_presets(emu_root: &Path) {
     }
 }
 
+/// Expresses `target` relative to `base`, using `/` separators.
+///
+/// Preset paths must be written relative to the preset file, never as host
+/// absolute paths. Drop's emulators are frequently the **Windows** RetroArch
+/// running under Proton, and a Linux absolute path like `/home/deck/...` is
+/// not absolute to a Windows build: RetroArch appends it to the preset's own
+/// directory, producing `X:\...\shaders\presets\home\deck\...` — which then
+/// also blew past MAX_PATH and got truncated mid-word. The preset failed to
+/// load and the CRT filter silently never applied (verified on a Steam Deck
+/// 2026-08-11). Relative paths are RetroArch's own idiom anyway: the stock
+/// `crt-lottes.slangp` refers to its stage as `shaders/crt-lottes.slang`.
+///
+/// Returns `None` when the two paths share no common prefix (nothing sensible
+/// to write), leaving the caller to fall back to the absolute form.
+fn relative_preset_path(base: &Path, target: &Path) -> Option<String> {
+    let base_parts: Vec<_> = base.components().collect();
+    let target_parts: Vec<_> = target.components().collect();
+
+    let common = base_parts
+        .iter()
+        .zip(target_parts.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    if common == 0 {
+        return None;
+    }
+
+    let mut parts: Vec<String> = vec!["..".to_owned(); base_parts.len() - common];
+    parts.extend(
+        target_parts[common..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+    );
+
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
 /// Writes the global auto-shader preset referencing `shader_preset_path`.
 ///
 /// Written to `<emu_root>/shaders/presets/global.{slangp,glslp}`. For the
-/// bundled shader, self-contained absolute-path presets are written (no
-/// `#reference` needed); for system shaders the modern `#reference` directive
-/// is used with the bundled shader as the other-format fallback.
+/// bundled shader, self-contained presets are written (no `#reference`
+/// needed); for system shaders the modern `#reference` directive is used with
+/// the bundled shader as the other-format fallback. Every path is written
+/// relative to the presets dir — see [`relative_preset_path`].
 fn write_auto_shader_preset(emu_root: &Path, shader_preset_path: &Path) {
     let presets_dir = emu_root.join("shaders").join("presets");
     if let Err(e) = fs::create_dir_all(&presets_dir) {
@@ -146,13 +184,21 @@ fn write_auto_shader_preset(emu_root: &Path, shader_preset_path: &Path) {
         return;
     }
 
+    // Absolute is only a last resort: it is what broke under Proton, but a
+    // path with no common prefix (a shader outside the emulator dir) has no
+    // relative form to write.
+    let as_preset_path = |target: &Path| {
+        relative_preset_path(&presets_dir, target)
+            .unwrap_or_else(|| target.to_string_lossy().replace('\\', "/"))
+    };
+
     let is_slang = shader_preset_path.extension().and_then(|e| e.to_str()) == Some("slangp");
-    let preset_path_str = shader_preset_path.to_string_lossy().replace('\\', "/");
+    let preset_path_str = as_preset_path(shader_preset_path);
     let reference_content = format!("#reference \"{preset_path_str}\"\n");
 
     let bundled_dir = emu_root.join("shaders").join("drop-crt");
-    let slang_abs = bundled_dir.join("drop-crt.slang").to_string_lossy().replace('\\', "/");
-    let glsl_abs = bundled_dir.join("drop-crt.glsl").to_string_lossy().replace('\\', "/");
+    let slang_abs = as_preset_path(&bundled_dir.join("drop-crt.slang"));
+    let glsl_abs = as_preset_path(&bundled_dir.join("drop-crt.glsl"));
 
     let slangp_absolute = format!(
         "shaders = \"1\"\n\
@@ -203,20 +249,23 @@ fn write_preset(path: &Path, content: &str, kind: &str) {
 ///
 /// For low-res 2D consoles `crt-easymode` wins (strong scanlines at native
 /// res). For high-res 3D cores it produces black output, so resolution-
-/// tolerant math-based shaders (`crt-lottes`, `crt-royale-fast`) are preferred.
+/// tolerant math-based shaders (`crt-lottes`, `fakelottes`) are preferred.
+///
+/// The high-res list is single-pass-first on purpose. The cores that reach it
+/// (Dolphin, PCSX2, PPSSPP, N64) are already the most GPU-bound thing Drop
+/// runs, and the royale family is a multi-pass chain — putting it in the
+/// fallback path meant a missing `crt-lottes` could quietly cost more frame
+/// time than the game itself. If nothing here is on disk the bundled one-pass
+/// `drop-crt` is the floor, which is a better answer than a heavy preset.
 fn find_best_crt_shader(emu_root: &Path, prefer_high_res_capable: bool) -> Option<PathBuf> {
     let preferred: &[&str] = if prefer_high_res_capable {
         &[
             "crt-lottes.slangp",
-            "crt-royale-fast.slangp",
-            "crt-geom-flat.slangp",
+            "fakelottes.slangp",
             "crt-geom.slangp",
-            "crt-royale.slangp",
             "crt-lottes.glslp",
-            "crt-royale-fast.glslp",
-            "crt-geom-flat.glslp",
+            "fakelottes.glslp",
             "crt-geom.glslp",
-            "crt-royale.glslp",
         ]
     } else {
         &[
@@ -246,8 +295,15 @@ fn find_best_crt_shader(emu_root: &Path, prefer_high_res_capable: bool) -> Optio
     find_crt_shader_in_dirs(&shader_dirs, preferred)
 }
 
-/// Returns the first matching CRT shader preset across `dirs`, preferring the
-/// names in `preferred` before falling back to any `.slangp`/`.glslp`.
+/// Returns the first preset from `preferred` found across `dirs`, or `None`.
+///
+/// Only the named presets count. There used to be a wildcard fallback that
+/// took the first `.slangp`/`.glslp` `read_dir` happened to yield, which is
+/// filesystem order — not name order, not pass count. In a fully populated
+/// `shaders_slang/crt` that could hand back an arbitrary mega-bezel chain on
+/// exactly the high-res cores the named list is trying to keep light. The
+/// caller already falls back to the bundled one-pass shader, so an unknown
+/// preset is never the better answer.
 fn find_crt_shader_in_dirs(dirs: &[PathBuf], preferred: &[&str]) -> Option<PathBuf> {
     for dir in dirs {
         if !dir.is_dir() {
@@ -257,14 +313,6 @@ fn find_crt_shader_in_dirs(dirs: &[PathBuf], preferred: &[&str]) -> Option<PathB
             let path = dir.join(preset);
             if path.is_file() {
                 return Some(path);
-            }
-        }
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.extension().is_some_and(|e| e == "slangp" || e == "glslp") {
-                    return Some(p);
-                }
             }
         }
     }
@@ -473,5 +521,55 @@ fn write_bundled_crt_shader(emu_root: &Path) -> Option<PathBuf> {
         Some(glsl_preset)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relative_preset_path;
+    use std::path::Path;
+
+    /// The real Steam Deck layout that produced the broken
+    /// `X:\...\shaders\presets\home\deck\...` reference.
+    #[test]
+    fn system_preset_resolves_relative_to_presets_dir() {
+        let presets = Path::new("/games/emu/shaders/presets");
+        let target = Path::new("/games/emu/shaders/shaders_slang/crt/crt-lottes.slangp");
+        assert_eq!(
+            relative_preset_path(presets, target).as_deref(),
+            Some("../shaders_slang/crt/crt-lottes.slangp")
+        );
+    }
+
+    #[test]
+    fn bundled_shader_resolves_relative() {
+        let presets = Path::new("/games/emu/shaders/presets");
+        let target = Path::new("/games/emu/shaders/drop-crt/drop-crt.slang");
+        assert_eq!(
+            relative_preset_path(presets, target).as_deref(),
+            Some("../drop-crt/drop-crt.slang")
+        );
+    }
+
+    /// Shaders found outside `<emu_root>/shaders` still get a usable path.
+    #[test]
+    fn walks_up_past_the_shaders_dir() {
+        let presets = Path::new("/games/emu/shaders/presets");
+        let target = Path::new("/games/emu/squashfs-root/usr/share/x/crt-lottes.slangp");
+        assert_eq!(
+            relative_preset_path(presets, target).as_deref(),
+            Some("../../squashfs-root/usr/share/x/crt-lottes.slangp")
+        );
+    }
+
+    #[test]
+    fn no_common_prefix_has_no_relative_form() {
+        assert_eq!(
+            relative_preset_path(
+                Path::new("/games/emu/shaders/presets"),
+                Path::new("relative/thing.slangp")
+            ),
+            None
+        );
     }
 }
