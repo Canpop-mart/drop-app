@@ -85,16 +85,13 @@
             />
             {{ prepStatus ?? "Launching..." }}
           </div>
-          <!-- Streaming is gated behind dev mode while the Sunshine/Moonlight
-               flow is hardened. The button polls the server every 15s for
-               available remote sessions, so hiding it also avoids the
-               background traffic for users who can't use the feature. -->
-          <StreamButton
-            v-if="devMode.enabled.value"
-            :game-id="game.id"
-            :game-name="game.mName"
-            :is-installed="status.type === 'Installed'"
-          />
+          <!-- No stream button here. The one that used to sit in this slot did
+               nothing at all: its "Stream from {host}" branch emitted an event
+               with no listener, and its "Stream" branch created a session on the
+               server without launching a game, Moonlight, or anything else, with
+               no way to stop it again. Requesting a stream needs a device to
+               request it from, and that picker only exists in Big Picture, which
+               is where remote play is driven from. -->
           <button
             v-if="status.type === 'Installed' && status.update_available"
             class="transition-transform duration-300 hover:scale-105 active:scale-95 inline-flex gap-x-2 items-center rounded-md bg-blue-600 px-6 font-semibold text-white shadow-xl backdrop-blur-sm hover:bg-blue-700 uppercase font-display"

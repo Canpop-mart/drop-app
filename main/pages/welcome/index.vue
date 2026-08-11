@@ -45,6 +45,7 @@
                since the saves wizard step itself is also gated. -->
           <li v-if="devMode.enabled.value">Cloud saves (Ludusavi)</li>
           <li>RetroAchievements for retro titles</li>
+          <li>Playing this PC's games on another device</li>
           <li>Controller navigation</li>
           <li>What common warnings and errors mean</li>
         </ul>

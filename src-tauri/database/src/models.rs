@@ -383,6 +383,40 @@ pub mod data {
             /// `streaming_resolution` is ignored. False uses the manual value.
             #[serde(default = "default_true")]
             pub streaming_auto_resolution: bool,
+            /// Which display this PC captures while hosting a stream, as
+            /// Sunshine's own display id (a GUID in braces, e.g.
+            /// `{326cc288-6d34-54f5-8c7d-5cb7fa9e2a49}`). Written to
+            /// `output_name`. The id is derived from the monitor's EDID and
+            /// device instance, so it survives reboots and replugs — unlike
+            /// `\\.\DISPLAYn`, which renumbers and would silently drift onto
+            /// the wrong monitor. Empty means "let Sunshine decide".
+            #[serde(default)]
+            pub streaming_display: String,
+            /// Which GPU Sunshine captures from, by name (e.g.
+            /// `NVIDIA GeForce RTX 4070 Ti SUPER`). Written to `adapter_name`.
+            /// Must be the adapter `streaming_display` hangs off. Empty means
+            /// "let Sunshine decide".
+            #[serde(default)]
+            pub streaming_adapter: String,
+            /// Which audio endpoint Sunshine captures, by exact endpoint name
+            /// (e.g. `Speakers (Realtek USB Audio)`). Written to `audio_sink`.
+            /// Empty means "let Sunshine decide".
+            #[serde(default)]
+            pub streaming_audio_sink: String,
+            /// Virtual audio device Sunshine makes the default render endpoint
+            /// for the duration of a stream, so host speakers go quiet and the
+            /// sound follows the client. Written to `virtual_sink`. Empty means
+            /// "auto-detect Steam's virtual sink", which is deliberately not a
+            /// hardcoded name: a PC without Steam must not get a dead device
+            /// written into its config.
+            #[serde(default)]
+            pub streaming_virtual_sink: String,
+            /// Set once Windows Firewall has been opened for remote play.
+            /// Adding the rules needs elevation, so it is a one-off setup step
+            /// with a UAC prompt rather than something to retry on every
+            /// stream — which is what it used to be, and it failed every time.
+            #[serde(default)]
+            pub streaming_firewall_configured: bool,
         }
 
         // Manual Debug impl: redact the Sunshine password so it never leaks
@@ -427,6 +461,14 @@ pub mod data {
                     .field("streaming_resolution", &self.streaming_resolution)
                     .field("streaming_hdr", &self.streaming_hdr)
                     .field("streaming_auto_resolution", &self.streaming_auto_resolution)
+                    .field("streaming_display", &self.streaming_display)
+                    .field("streaming_adapter", &self.streaming_adapter)
+                    .field("streaming_audio_sink", &self.streaming_audio_sink)
+                    .field("streaming_virtual_sink", &self.streaming_virtual_sink)
+                    .field(
+                        "streaming_firewall_configured",
+                        &self.streaming_firewall_configured,
+                    )
                     .finish()
             }
         }
@@ -466,6 +508,11 @@ pub mod data {
                     streaming_resolution: default_streaming_resolution(),
                     streaming_hdr: false,
                     streaming_auto_resolution: true,
+                    streaming_display: String::new(),
+                    streaming_adapter: String::new(),
+                    streaming_audio_sink: String::new(),
+                    streaming_virtual_sink: String::new(),
+                    streaming_firewall_configured: false,
                 }
             }
         }

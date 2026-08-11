@@ -58,6 +58,7 @@ mod download_manager;
 mod downloads;
 mod emulators;
 mod games;
+mod host_devices;
 mod process;
 mod remote;
 mod scheduler;
@@ -395,6 +396,7 @@ pub fn run() {
             // Streaming (Sunshine)
             check_sunshine,
             install_sunshine,
+            repair_sunshine,
             sunshine_status,
             start_sunshine,
             stop_sunshine,
@@ -402,6 +404,13 @@ pub fn run() {
             sunshine_list_apps,
             sunshine_register_game,
             sunshine_list_clients,
+            sunshine_unpair_client,
+            sunshine_reset_credentials,
+            sunshine_list_displays,
+            sunshine_list_audio_sinks,
+            sunshine_is_foreign,
+            sunshine_configure_firewall,
+            sunshine_firewall_status,
             // Streaming sessions (server-side, JWT auth)
             streaming_create_session,
             streaming_mark_ready,

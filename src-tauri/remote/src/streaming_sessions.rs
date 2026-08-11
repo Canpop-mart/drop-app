@@ -37,6 +37,17 @@ struct SessionIdBody {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct StopBody {
+    session_id: String,
+    /// Why the host gave up, in words for whoever pressed Play. Left out
+    /// entirely for a stop the user asked for — the server only overwrites a
+    /// stored reason when a new one arrives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct HeartbeatBody {
     session_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -103,6 +114,11 @@ pub struct StreamingSession {
     pub host_local_ip: Option<String>,
     pub host_external_ip: Option<String>,
     pub has_pairing_pin: bool,
+    /// Why the host gave up, when it did. Present on a `Stopped` session that
+    /// failed; `None` for a healthy session or a stop the user asked for.
+    /// `default` so a server that predates the field still deserializes.
+    #[serde(default)]
+    pub error: Option<String>,
     pub created_at: String,
     pub last_heartbeat: String,
 }
@@ -118,6 +134,9 @@ pub struct StreamingConnectionInfo {
     pub host_local_ip: Option<String>,
     pub host_external_ip: Option<String>,
     pub pairing_pin: Option<String>,
+    /// Set only on a session the host failed out of; see `StreamingSession`.
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 // ── API functions ───────────────────────────────────────────────────
@@ -158,9 +177,24 @@ pub async fn mark_session_ready(
 
 /// Stop a streaming session.
 pub async fn stop_streaming_session(session_id: &str) -> Result<(), RemoteAccessError> {
+    stop_streaming_session_with_error(session_id, None).await
+}
+
+/// Stop a streaming session and record why.
+///
+/// The reason travels with the session so the device that asked for the stream
+/// can say what went wrong. A host that fails silently leaves that device
+/// waiting out a timeout and then blaming the network.
+pub async fn stop_streaming_session_with_error(
+    session_id: &str,
+    error: Option<&str>,
+) -> Result<(), RemoteAccessError> {
     let url = generate_url(&["/api/v1/client/streaming/stop"], &[])?;
-    let body = SessionIdBody {
+    let body = StopBody {
         session_id: session_id.to_string(),
+        // The server caps this at 500 characters; a longer reason would fail
+        // validation and take the stop down with it.
+        error: error.map(|e| e.chars().take(500).collect()),
     };
 
     remote_request_ok(RemoteRequest::post(url, &body)).await?;

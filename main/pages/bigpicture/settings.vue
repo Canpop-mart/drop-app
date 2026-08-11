@@ -828,38 +828,16 @@
         class="space-y-5 max-w-xl"
       >
         <h3 class="text-lg font-semibold text-zinc-200 font-display">
-          Streaming (Sunshine)
+          Remote play
         </h3>
         <p class="text-sm text-zinc-400">
-          Configure Sunshine credentials used when starting a stream from a game page.
-          These are stored locally and used to start the Sunshine process.
+          Play the games on another PC from this device, over your home network.
+          Drop handles the setup, so there is nothing to enter here.
         </p>
-
-        <div class="bg-zinc-900/50 rounded-xl p-4 space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-zinc-400 mb-1">Admin Username</label>
-            <input
-              v-model="streamingUsername"
-              :ref="(el: any) => registerContent(el, {})"
-              type="text"
-              class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              placeholder="sunshine"
-              @change="saveStreamingCredentials"
-            />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-zinc-400 mb-1">Admin Password</label>
-            <input
-              v-model="streamingPassword"
-              :ref="(el: any) => registerContent(el, {})"
-              type="password"
-              class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              placeholder="Enter password"
-              @change="saveStreamingCredentials"
-            />
-          </div>
-          <p v-if="streamingSaved" class="text-xs text-green-400">Credentials saved.</p>
-        </div>
+        <!-- Product names stay in one place so a search still finds help. -->
+        <p class="text-xs text-zinc-500">
+          Under the hood this is Sunshine on the host PC and Moonlight here.
+        </p>
 
         <!-- Stream quality — client-side: what this device requests from
              Moonlight when it plays a game streamed from another PC. -->
@@ -943,7 +921,7 @@
             <p class="text-sm font-medium text-zinc-300">Stream resolution</p>
             <p class="text-xs text-zinc-500 mt-0.5">
               1280×800 suits the handheld screen; raise it when docked to a TV.
-              Set the same value on the host PC's Streaming settings.
+              Set the same value in the host PC's Remote play settings.
             </p>
           </div>
           <div class="grid grid-cols-2 gap-2">
@@ -958,6 +936,145 @@
             >
               <span class="block">{{ opt.label }}</span>
               <span class="block text-[10px] opacity-70 mt-0.5">{{ opt.detail }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- These only reach Sunshine through the config Drop writes for the
+             Sunshine it starts itself, so an instance started outside Drop
+             ignores all of them and the pickers below would silently do nothing. -->
+        <div
+          v-if="hostDevicesAvailable && sunshineIsForeign"
+          class="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-200"
+        >
+          Another copy of Sunshine is already running on this PC and Drop did not
+          start it. It uses its own configuration, so the settings below are not
+          in effect.
+        </div>
+
+        <!-- Host capture display. Only shown when this machine can enumerate
+             its own monitors, i.e. when it is the PC doing the hosting. -->
+        <div
+          v-if="hostDevicesAvailable"
+          class="bg-zinc-900/50 rounded-xl p-4 space-y-3"
+        >
+          <div>
+            <p class="text-sm font-medium text-zinc-300">Capture display</p>
+            <p class="text-xs text-zinc-500 mt-0.5">
+              The monitor other devices see when they stream from this PC. Drop
+              switches it on if it is off, and leaves your other monitors alone.
+            </p>
+          </div>
+          <div class="grid grid-cols-1 gap-2">
+            <button
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left"
+              :class="streamingDisplay === '' ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingDisplay('')"
+            >
+              <span class="block">Automatic</span>
+              <span class="block text-[10px] opacity-70 mt-0.5">let Sunshine choose</span>
+            </button>
+            <button
+              v-for="d in displays"
+              :key="d.deviceId"
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left"
+              :class="streamingDisplay === d.deviceId ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingDisplay(d.deviceId)"
+            >
+              <span class="block">{{ d.friendlyName }}</span>
+              <span class="block text-[10px] opacity-70 mt-0.5">
+                {{ displayDetail(d) }}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Host audio routing. The virtual device is what stops the sound
+             coming out of the PC's own speakers mid-stream. -->
+        <div
+          v-if="hostDevicesAvailable"
+          class="bg-zinc-900/50 rounded-xl p-4 space-y-3"
+        >
+          <div>
+            <p class="text-sm font-medium text-zinc-300">Silence this PC using</p>
+            <p class="text-xs text-zinc-500 mt-0.5">
+              Sound normally keeps playing out of this PC while you stream.
+              Routing it through a virtual device sends it to whatever you are
+              playing on instead.
+            </p>
+          </div>
+          <div class="grid grid-cols-1 gap-2">
+            <button
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left"
+              :class="streamingVirtualSink === '' ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingVirtualSink('')"
+            >
+              <span class="block">Automatic</span>
+              <span class="block text-[10px] opacity-70 mt-0.5">
+                find Steam's streaming speakers
+              </span>
+            </button>
+            <button
+              v-for="s in audioSinks"
+              :key="s.name"
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left"
+              :class="streamingVirtualSink === s.name ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingVirtualSink(s.name)"
+            >
+              <span class="block">{{ s.name }}</span>
+              <span v-if="sinkDetail(s)" class="block text-[10px] opacity-70 mt-0.5">
+                {{ sinkDetail(s) }}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Which device Sunshine records from. Left on Automatic unless the
+             PC has several outputs and the wrong one gets picked. -->
+        <div
+          v-if="hostDevicesAvailable"
+          class="bg-zinc-900/50 rounded-xl p-4 space-y-3"
+        >
+          <div>
+            <p class="text-sm font-medium text-zinc-300">Capture audio from</p>
+            <p class="text-xs text-zinc-500 mt-0.5">
+              Which output on this PC gets recorded into the stream.
+            </p>
+          </div>
+          <div class="grid grid-cols-1 gap-2">
+            <button
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left"
+              :class="streamingAudioSink === '' ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingAudioSink('')"
+            >
+              <span class="block">Automatic</span>
+              <span class="block text-[10px] opacity-70 mt-0.5">
+                current default device
+              </span>
+            </button>
+            <button
+              v-for="s in audioSinks"
+              :key="s.name"
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left"
+              :class="streamingAudioSink === s.name ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingAudioSink(s.name)"
+            >
+              <span class="block">{{ s.name }}</span>
+              <span v-if="sinkDetail(s)" class="block text-[10px] opacity-70 mt-0.5">
+                {{ sinkDetail(s) }}
+              </span>
             </button>
           </div>
         </div>
@@ -1261,7 +1378,7 @@ const sections = computed(() => {
     ...(dev.enabled.value
       ? [{ label: "Cloud Saves", value: "cloudsaves" }]
       : []),
-    { label: "Streaming", value: "streaming" },
+    { label: "Remote Play", value: "streaming" },
     { label: "Developer", value: "developer" },
     { label: "About", value: "about" },
   ];
@@ -1366,11 +1483,9 @@ async function unlinkRetroAchievements() {
   }
 }
 
-// ── Streaming credentials ──────────────────────────────────────────────────
-
-const streamingUsername = ref("sunshine");
-const streamingPassword = ref("");
-const streamingSaved = ref(false);
+// ── Streaming ──────────────────────────────────────────────────────────────
+// Sunshine's admin credentials are generated by the client and never typed in,
+// so there is nothing to edit here — only the stream settings below.
 
 // Client-side stream quality preset. Mirrors the StreamQuality enum in
 // src-tauri/src/streaming.rs — the value is read there at Moonlight launch.
@@ -1437,36 +1552,132 @@ async function setStreamingAutoResolution(value: boolean) {
   }
 }
 
+// ── Host capture devices ────────────────────────────────────────────────────
+// Only this PC's own monitors and audio outputs; the section stays hidden when
+// the machine cannot enumerate them (anything but Windows). `streamingDisplay`
+// holds Sunshine's display id, not \\.\DISPLAYn — that renumbers across reboots
+// and would quietly drift onto the wrong monitor.
+
+type HostDisplay = {
+  deviceId: string;
+  display: string;
+  adapter: string;
+  resolution: string;
+  friendlyName: string;
+  primary: boolean;
+};
+
+type HostAudioSink = {
+  name: string;
+  active: boolean;
+  default: boolean;
+  virtualSink: boolean;
+};
+
+const displays = ref<HostDisplay[]>([]);
+const audioSinks = ref<HostAudioSink[]>([]);
+const hostDevicesAvailable = ref(false);
+const streamingDisplay = ref<string>("");
+const streamingAudioSink = ref<string>("");
+const streamingVirtualSink = ref<string>("");
+const sunshineIsForeign = ref(false);
+
+function displayDetail(d: HostDisplay): string {
+  const bits: string[] = [];
+  if (d.resolution) bits.push(d.resolution);
+  if (d.adapter) bits.push(d.adapter);
+  if (d.primary) bits.push("main display");
+  return bits.join(" · ");
+}
+
+// Some machines report every endpoint as inactive, in which case the flag is
+// noise and tagging working speakers "not available" is worse than saying
+// nothing.
+const activeFlagIsMeaningful = computed(() =>
+  audioSinks.value.some((s) => s.active),
+);
+
+function sinkDetail(s: HostAudioSink): string {
+  if (s.default) return "current default";
+  if (!s.active && activeFlagIsMeaningful.value) return "not available right now";
+  return "";
+}
+
+async function setStreamingDisplay(deviceId: string) {
+  streamingDisplay.value = deviceId;
+  // Sunshine needs the GPU the chosen monitor hangs off; the wrong pairing
+  // makes capture fail outright, so the adapter always travels with it.
+  const chosen = displays.value.find((d) => d.deviceId === deviceId);
+  try {
+    await invoke("update_settings", {
+      newSettings: {
+        streamingDisplay: deviceId,
+        streamingAdapter: chosen?.adapter ?? "",
+      },
+    });
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save capture display:", e);
+  }
+}
+
+async function setStreamingAudioSink(name: string) {
+  streamingAudioSink.value = name;
+  try {
+    await invoke("update_settings", { newSettings: { streamingAudioSink: name } });
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save capture audio device:", e);
+  }
+}
+
+async function setStreamingVirtualSink(name: string) {
+  streamingVirtualSink.value = name;
+  try {
+    await invoke("update_settings", { newSettings: { streamingVirtualSink: name } });
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save virtual audio device:", e);
+  }
+}
+
+async function loadHostDevices() {
+  try {
+    displays.value = await invoke<HostDisplay[]>("sunshine_list_displays");
+    hostDevicesAvailable.value = true;
+  } catch (e) {
+    console.warn("[BPM:SETTINGS] Could not list host displays:", e);
+    return;
+  }
+  try {
+    audioSinks.value = await invoke<HostAudioSink[]>("sunshine_list_audio_sinks");
+  } catch (e) {
+    console.warn("[BPM:SETTINGS] Could not list host audio devices:", e);
+  }
+  try {
+    sunshineIsForeign.value = await invoke<boolean>("sunshine_is_foreign");
+  } catch (e) {
+    console.warn("[BPM:SETTINGS] Could not check for a foreign Sunshine:", e);
+  }
+}
+
 onMounted(async () => {
   try {
     const settings = await invoke<Record<string, any>>("fetch_settings");
-    if (settings.sunshineUsername) streamingUsername.value = settings.sunshineUsername;
-    if (settings.sunshinePassword) streamingPassword.value = settings.sunshinePassword;
     if (settings.streamingQuality) streamingQuality.value = settings.streamingQuality;
     if (settings.streamingResolution) streamingResolution.value = settings.streamingResolution;
     if (typeof settings.streamingHdr === "boolean")
       streamingHdr.value = settings.streamingHdr;
     if (typeof settings.streamingAutoResolution === "boolean")
       streamingAutoResolution.value = settings.streamingAutoResolution;
+    if (typeof settings.streamingDisplay === "string")
+      streamingDisplay.value = settings.streamingDisplay;
+    if (typeof settings.streamingAudioSink === "string")
+      streamingAudioSink.value = settings.streamingAudioSink;
+    if (typeof settings.streamingVirtualSink === "string")
+      streamingVirtualSink.value = settings.streamingVirtualSink;
   } catch {
     // Settings not available yet — keep defaults
   }
+  await loadHostDevices();
 });
-
-async function saveStreamingCredentials() {
-  try {
-    await invoke("update_settings", {
-      newSettings: {
-        sunshineUsername: streamingUsername.value,
-        sunshinePassword: streamingPassword.value,
-      },
-    });
-    streamingSaved.value = true;
-    setTimeout(() => { streamingSaved.value = false; }, 2000);
-  } catch (e) {
-    console.error("[BPM:SETTINGS] Failed to save streaming credentials:", e);
-  }
-}
 
 // ── Cloud saves ─────────────────────────────────────────────────────────────
 // Two settings live here: a master sync toggle and a friendly per-device

@@ -15,7 +15,8 @@
  * down in `dispose()`, which the page calls from `onUnmounted`.
  *
  * Per-game-detail composable: NOT a singleton — call from a component
- * `setup()`. Streaming/devices UI is dev-mode gated by the caller.
+ * `setup()`. The streaming/devices UI is shown to everyone; nothing here is
+ * dev-mode gated.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -118,10 +119,49 @@ export function useBpmGameStreaming(
     }
   }
 
+  /** Generic wording, used only when the host never said what went wrong. */
+  const NO_HOST_RESPONSE =
+    "No host responded to the stream request. Make sure Drop is running on your PC.";
+
+  /**
+   * Give up on the session we asked for and say why.
+   *
+   * The host writes its reason onto the session when it fails, and the server
+   * keeps a failed session listed for two minutes so we can read it. Anything
+   * we can't explain falls back to the timeout wording.
+   */
+  function failPendingRequest(reason?: string | null) {
+    pendingRequestSessionId.value = null;
+    isStreaming.value = false;
+    streamingPhase.value = null;
+    streamGuard = false;
+    onError(reason?.trim() ? reason : NO_HOST_RESPONSE);
+    if (streamPollInterval) clearInterval(streamPollInterval);
+    streamPollInterval = setInterval(pollRemoteSessions, 15_000);
+  }
+
   // ── Remote session polling ────────────────────────────────────────────
   async function pollRemoteSessions() {
     try {
       const sessions = await listRemoteSessions();
+
+      // A host that gave up leaves its reason on the session. Surface it as
+      // soon as we see it rather than making the user sit out the 60s timeout.
+      if (pendingRequestSessionId.value) {
+        const ours = sessions.find(
+          (s: any) => s.id === pendingRequestSessionId.value,
+        );
+        if (ours && ours.status === "Stopped" && ours.error) {
+          devLog(
+            "event",
+            "[BPM:STREAM] Host failed the request:",
+            ours.error,
+          );
+          failPendingRequest(ours.error);
+          return;
+        }
+      }
+
       const found =
         sessions.find(
           (s: any) =>
@@ -275,22 +315,22 @@ export function useBpmGameStreaming(
       if (streamPollInterval) clearInterval(streamPollInterval);
       streamPollInterval = setInterval(pollRemoteSessions, 3_000);
 
-      // Time out after 60s if no host responds.
-      setTimeout(() => {
-        if (pendingRequestSessionId.value === sessionId) {
-          console.warn(
-            "[BPM:STREAM] Stream request timed out — no host responded",
-          );
-          pendingRequestSessionId.value = null;
-          isStreaming.value = false;
-          streamingPhase.value = null;
-          streamGuard = false;
-          onError(
-            "No host responded to the stream request. Make sure Drop is running on your PC.",
-          );
-          if (streamPollInterval) clearInterval(streamPollInterval);
-          streamPollInterval = setInterval(pollRemoteSessions, 15_000);
+      // Time out after 60s if no host responds. One last look for a reason
+      // first — the poll may not have run since the host failed.
+      setTimeout(async () => {
+        if (pendingRequestSessionId.value !== sessionId) return;
+        console.warn(
+          "[BPM:STREAM] Stream request timed out — no host responded",
+        );
+        let reason: string | null = null;
+        try {
+          const sessions = await listRemoteSessions();
+          reason = sessions.find((s: any) => s.id === sessionId)?.error ?? null;
+        } catch {
+          // No reason available — the generic wording covers it.
         }
+        if (pendingRequestSessionId.value !== sessionId) return;
+        failPendingRequest(reason);
       }, 60_000);
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
@@ -338,22 +378,10 @@ export function useBpmGameStreaming(
         console.warn("[BPM:STREAM] Failed to stop host sessions:", e);
       }
 
-      // Also stop any active server-side sessions for this game (catches
-      // sessions from before the cancellation code was deployed).
-      try {
-        const sessions = await listRemoteSessions();
-        for (const s of sessions) {
-          if (s.status !== "Stopped") {
-            try {
-              await stopStreamingSession(s.id);
-            } catch {
-              // May fail if we're not the host — that's ok.
-            }
-          }
-        }
-      } catch (e) {
-        console.warn("[BPM:STREAM] Failed to clean up server sessions:", e);
-      }
+      // Only this client's own two sessions are stopped, above. Sweeping every
+      // session the account can see used to end other people's streams: the
+      // list is account-wide, so quitting here killed whatever someone else was
+      // playing on another device.
 
       try {
         await killMoonlight();
