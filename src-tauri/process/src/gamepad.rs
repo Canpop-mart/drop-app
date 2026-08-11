@@ -69,6 +69,97 @@ pub fn list_connected_gamepads() -> Vec<DetectedGamepad> {
         .collect()
 }
 
+/// Format a gilrs UUID as an SDL GUID string: 32 lower-case hex chars, bytes
+/// in order, no dashes.
+///
+/// gilrs builds its UUID in SDL's own GUID layout — its Linux backend has a
+/// unit test asserting `create_uuid(bus 3, vendor 045e, product 028e, version
+/// 2020) == "030000005e0400008e02000020200000"`, the well-known SDL GUID for a
+/// wired Xbox 360 pad (`gilrs-core-0.6.7/src/platform/linux/gamepad.rs`).
+///
+/// Bytes 2-3 are zeroed on the way out. In SDL that field is a CRC of the
+/// controller name, and the emulator clears it before matching
+/// (`GetGUID`, eden `src/input_common/drivers/sdl_driver.cpp:19-26`), so a
+/// GUID that keeps it would never match. gilrs already leaves it zero; doing
+/// it here makes that a guarantee rather than a coincidence.
+fn sdl_guid_string(uuid: [u8; 16]) -> String {
+    let mut bytes = uuid;
+    bytes[2] = 0;
+    bytes[3] = 0;
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Rebuild an SDL GUID from a pad's USB vendor/product ids.
+///
+/// Needed on Windows: gilrs's default backend is Windows Gaming Input, which
+/// returns a nil UUID for every device it recognises as a gamepad
+/// (`gilrs-core-0.6.7/src/platform/windows_wgi/gamepad.rs:554-556`) while
+/// still exposing `HardwareVendorId` / `HardwareProductId`. The layout is
+/// SDL's: bus (USB = 3), name CRC, vendor, pad, product, pad, version, pad —
+/// each a little-endian `u16`. Version is zero, which is also what SDL reports
+/// for most Windows entries in its own controller database.
+fn derived_sdl_guid(vendor: u16, product: u16) -> String {
+    let mut bytes = [0u8; 16];
+    bytes[0..2].copy_from_slice(&3u16.to_le_bytes()); // SDL_HARDWARE_BUS_USB
+    bytes[4..6].copy_from_slice(&vendor.to_le_bytes());
+    bytes[8..10].copy_from_slice(&product.to_le_bytes());
+    sdl_guid_string(bytes)
+}
+
+/// Identify the controller an emulator should be bound to this launch.
+///
+/// Picks the first connected pad. `port` is always 0: the emulator's port is
+/// the ordinal among joysticks sharing the *same* GUID, and the first pad with
+/// a given GUID is by definition the zeroth — a second identical pad is the
+/// one case this cannot resolve, and it guesses the first.
+///
+/// Returns `None` when nothing is connected, or when the pad exposes neither a
+/// UUID nor a vendor/product pair, since a binding without a real GUID matches
+/// no device and would only overwrite the user's working config with a dud.
+pub fn resolve_primary_pad() -> Option<remote::switchemu::PadIdentity> {
+    use remote::switchemu::{GuidSource, PadIdentity};
+
+    let Ok(gilrs) = Gilrs::new() else {
+        warn!("[GAMEPAD] Input backend unavailable — cannot resolve a pad for the emulator");
+        return None;
+    };
+
+    for (_id, gp) in gilrs.gamepads() {
+        if !gp.is_connected() {
+            continue;
+        }
+        let uuid = gp.uuid();
+        let (guid, guid_source) = if uuid != [0u8; 16] {
+            (sdl_guid_string(uuid), GuidSource::Observed)
+        } else if let (Some(vendor), Some(product)) = (gp.vendor_id(), gp.product_id()) {
+            (
+                derived_sdl_guid(vendor, product),
+                GuidSource::DerivedFromVidPid,
+            )
+        } else {
+            warn!(
+                "[GAMEPAD] '{}' exposes neither a UUID nor vendor/product ids — skipping",
+                gp.name()
+            );
+            continue;
+        };
+
+        info!(
+            "[GAMEPAD] Emulator pad: '{}' guid={guid} source={guid_source:?}",
+            gp.name()
+        );
+        return Some(PadIdentity {
+            guid,
+            port: 0,
+            name: gp.name().to_string(),
+            guid_source,
+        });
+    }
+
+    info!("[GAMEPAD] No controller connected");
+    None
+}
+
 // ── Dead zone ────────────────────────────────────────────────────────────────
 
 const STICK_DEAD_ZONE: f32 = 0.15;
@@ -418,4 +509,41 @@ fn poll_loop(app_handle: AppHandle) {
     }
 
     info!("[GAMEPAD] Polling thread exiting");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uuid_formats_as_an_sdl_guid() {
+        // gilrs's own Linux backend test vector: bus 3, vendor 045e,
+        // product 028e, version 2020 — a wired Xbox 360 pad.
+        let uuid = [
+            0x03, 0x00, 0x00, 0x00, 0x5e, 0x04, 0x00, 0x00, 0x8e, 0x02, 0x00, 0x00, 0x20, 0x20,
+            0x00, 0x00,
+        ];
+        assert_eq!(sdl_guid_string(uuid), "030000005e0400008e02000020200000");
+    }
+
+    #[test]
+    fn name_crc_bytes_are_cleared() {
+        let mut uuid = [0u8; 16];
+        uuid[0] = 0x03;
+        uuid[2] = 0xab; // SDL's controller-name CRC
+        uuid[3] = 0xcd;
+        uuid[4] = 0x5e;
+        uuid[5] = 0x04;
+        assert_eq!(sdl_guid_string(uuid), "030000005e0400000000000000000000");
+    }
+
+    #[test]
+    fn derived_guid_matches_the_sdl_layout() {
+        // Same pad, version zero — the shape SDL reports for most Windows
+        // entries in its controller database.
+        assert_eq!(
+            derived_sdl_guid(0x045e, 0x028e),
+            "030000005e0400008e02000000000000"
+        );
+    }
 }

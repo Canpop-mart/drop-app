@@ -47,55 +47,180 @@ pub fn md5_file(path: &Path) -> std::io::Result<String> {
     Ok(format!("{:x}", digest))
 }
 
-/// Scan RetroArch save directories for a game.
-/// Returns a list of local save files with their hashes.
+/// Directories under a yuzu-family emulator's portable root that hold save
+/// data worth syncing, relative to the emulator install root.
+///
+/// Everything lives under the portable `user/` directory (see
+/// `crate::switchemu::discovery`), and `nand/user/save` covers both the layout
+/// current builds write and the "future" `account/` + `device/` layout the
+/// save-data factory prefers when it already exists — which is why the whole
+/// subtree is taken rather than a specific path
+/// (eden `src/core/file_sys/savedata_factory.cpp:26-54,108-148`).
+///
+/// `nand/temp` is deliberately absent: the emulator deletes it when it builds
+/// the save-data factory, so anything in it is gone by the time a sync runs.
+const SWITCH_SAVE_ROOTS: &[&str] = &[
+    "user/nand/user/save",
+    "user/nand/system/save",
+    "user/sdmc",
+];
+
+/// Prefix that namespaces Switch saves and marks a filename as carrying an
+/// encoded *relative path* rather than a bare basename.
+///
+/// Switch saves are nested many levels deep under a title id and a user id,
+/// and their basenames collide constantly (every game has a `00` file). The
+/// path is therefore encoded into the filename, which is the only thing the
+/// server round-trips. `/` becomes `%2F` and `%` becomes `%25` so the encoding
+/// survives the server's `sanitize-filename` pass (which strips path
+/// separators) and decodes unambiguously — the same problem, and the same kind
+/// of fix, as [`PC_SAVE_PREFIX`].
+pub const SWITCH_SAVE_PREFIX: &str = "switch__";
+
+/// Depth limit for the recursive emulator save walk. The deepest real Switch
+/// save path is `user/nand/user/save/<space>/<user>/<title>/<game dirs…>`;
+/// this leaves generous room for a game's own nesting without letting a
+/// pathological tree (or a symlink loop) stall a launch.
+const EMU_SCAN_MAX_DEPTH: usize = 12;
+
+/// File-count ceiling for one emulator save scan. Every file gets MD5'd, so
+/// this is the real cost bound. A NAND dump can hold tens of thousands of
+/// files; hitting the ceiling logs and stops rather than hanging the launch.
+const EMU_SCAN_MAX_FILES: usize = 4000;
+
+/// Encode a relative path into a separator-free, reversible filename.
+fn encode_switch_relpath(rel: &Path) -> String {
+    let joined = rel.to_string_lossy().replace('\\', "/");
+    let escaped = joined.replace('%', "%25").replace('/', "%2F");
+    format!("{SWITCH_SAVE_PREFIX}{escaped}")
+}
+
+/// Reverse [`encode_switch_relpath`]. Returns `None` if `filename` is not a
+/// Switch save name, or if it decodes to something that escapes the emulator
+/// root (absolute, or containing `..`).
+pub fn decode_switch_relpath(filename: &str) -> Option<PathBuf> {
+    let body = filename.strip_prefix(SWITCH_SAVE_PREFIX)?;
+    // Decode %2F first, then %25, so a literal "%2F" in a real filename
+    // (encoded as "%252F") does not turn into a separator.
+    let decoded = body.replace("%2F", "/").replace("%25", "%");
+    let rel = PathBuf::from(&decoded);
+    if rel.is_absolute()
+        || rel
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::Prefix(_)))
+    {
+        warn!("[SAVE-SYNC] Refusing Switch save path that escapes the install: {decoded}");
+        return None;
+    }
+    Some(rel)
+}
+
+/// Recursively collect files under `dir`, appending to `out`.
+///
+/// `base` is what encoded filenames are made relative to; `budget` is the
+/// shared remaining file count across every root in one scan.
+fn walk_saves(
+    dir: &Path,
+    base: &Path,
+    save_type: &str,
+    encode_path: bool,
+    depth: usize,
+    budget: &mut usize,
+    out: &mut Vec<LocalSaveFile>,
+) {
+    if depth > EMU_SCAN_MAX_DEPTH || *budget == 0 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if *budget == 0 {
+            warn!(
+                "[SAVE-SYNC] Emulator save scan hit its {EMU_SCAN_MAX_FILES}-file ceiling; \
+                 stopping early"
+            );
+            return;
+        }
+        let path = entry.path();
+        // `file_type` does not follow symlinks, so a loop cannot be entered.
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_dir() {
+            walk_saves(&path, base, save_type, encode_path, depth + 1, budget, out);
+            continue;
+        }
+        if !ft.is_file() {
+            continue;
+        }
+
+        let filename = if encode_path {
+            match path.strip_prefix(base) {
+                Ok(rel) => encode_switch_relpath(rel),
+                Err(_) => continue,
+            }
+        } else {
+            path.file_name().unwrap_or_default().to_string_lossy().to_string()
+        };
+
+        let Ok(meta) = fs::metadata(&path) else { continue };
+        let modified_at = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let hash = match md5_file(&path) {
+            Ok(h) => h,
+            Err(e) => {
+                warn!("[SAVE-SYNC] Failed to hash {}: {}", path.display(), e);
+                continue;
+            }
+        };
+
+        *budget -= 1;
+        out.push(LocalSaveFile {
+            filename,
+            save_type: save_type.to_string(),
+            path,
+            data_hash: hash,
+            size: meta.len(),
+            modified_at,
+        });
+    }
+}
+
+/// Scan an emulator install for a game's save files.
+///
+/// Two sources:
+///
+/// * `drop-saves/<game_id>/{saves,states}` — where Drop points RetroArch. The
+///   walk recurses: some cores create a per-game subdirectory, and the old
+///   single-level `read_dir` skipped those entirely.
+/// * The Switch emulator NAND under the portable `user/` root. These names
+///   carry their full relative path (see [`SWITCH_SAVE_PREFIX`]) because a
+///   Switch save is identified by its title/user directory, not its basename.
+///
+/// Bounded by [`EMU_SCAN_MAX_DEPTH`] and [`EMU_SCAN_MAX_FILES`] so a large
+/// NAND tree cannot stall the launch that triggers it.
 pub fn scan_emu_saves(emu_root: &Path, game_id: &str) -> Vec<LocalSaveFile> {
     let saves_base = emu_root.join("drop-saves").join(game_id);
     let mut files = Vec::new();
+    let mut budget = EMU_SCAN_MAX_FILES;
 
     for (subdir, save_type) in &[("saves", "save"), ("states", "state")] {
         let dir = saves_base.join(subdir);
         if !dir.is_dir() {
             continue;
         }
-        if let Ok(entries) = fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
-                let filename = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                let meta = match fs::metadata(&path) {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
-                let modified_at = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let hash = match md5_file(&path) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        warn!("[SAVE-SYNC] Failed to hash {}: {}", path.display(), e);
-                        continue;
-                    }
-                };
-                files.push(LocalSaveFile {
-                    filename: filename.clone(),
-                    save_type: save_type.to_string(),
-                    path,
-                    data_hash: hash,
-                    size: meta.len(),
-                    modified_at,
-                });
-            }
+        walk_saves(&dir, &dir, save_type, false, 0, &mut budget, &mut files);
+    }
+
+    for root in SWITCH_SAVE_ROOTS {
+        let dir = emu_root.join(root);
+        if !dir.is_dir() {
+            continue;
         }
+        walk_saves(&dir, emu_root, "save", true, 0, &mut budget, &mut files);
     }
 
     files
@@ -109,6 +234,26 @@ pub fn write_downloaded_save(
     save_type: &str,
     data: &[u8],
 ) -> Result<PathBuf, String> {
+    // Switch saves carry their whole relative path in the filename and live in
+    // the emulator's NAND, not in Drop's per-game save directory.
+    if let Some(rel) = decode_switch_relpath(filename) {
+        let dest = emu_root.join(rel);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create save dir {}: {e}", parent.display()))?;
+        }
+        if dest.exists() {
+            let bak = dest.with_extension(format!(
+                "{}.bak",
+                dest.extension().unwrap_or_default().to_string_lossy()
+            ));
+            let _ = fs::copy(&dest, &bak);
+        }
+        fs::write(&dest, data)
+            .map_err(|e| format!("Failed to write Switch save {}: {e}", dest.display()))?;
+        return Ok(dest);
+    }
+
     let subdir = match save_type {
         "save" => "saves",
         "state" => "states",
@@ -146,9 +291,15 @@ pub fn delete_local_emu_save_for_tombstone(
     filename: &str,
 ) -> Result<Option<PathBuf>, String> {
     let saves_base = emu_root.join("drop-saves").join(game_id);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(rel) = decode_switch_relpath(filename) {
+        candidates.push(emu_root.join(rel));
+    }
     // The server tombstone doesn't tell us "save" vs "state"; try both.
     for subdir in &["saves", "states"] {
-        let candidate = saves_base.join(subdir).join(filename);
+        candidates.push(saves_base.join(subdir).join(filename));
+    }
+    for candidate in candidates {
         if candidate.is_file() {
             let bak = candidate.with_extension(format!(
                 "{}.bak",
@@ -853,4 +1004,85 @@ pub fn write_downloaded_pc_save(
     }
     fs::write(&fallback, data).map_err(|e| format!("Failed to write PC save fallback: {e}"))?;
     Ok(fallback)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmpdir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("drop-save-scan-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write(path: &Path, body: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn switch_relpath_round_trips() {
+        let rel = Path::new("user/nand/user/save/0000000000000000/abc/0100000000010000/data%1");
+        let encoded = encode_switch_relpath(rel);
+        assert!(!encoded.contains('/'), "encoded name still has a separator");
+        assert_eq!(decode_switch_relpath(&encoded).unwrap(), rel);
+    }
+
+    #[test]
+    fn switch_relpath_rejects_traversal() {
+        let escaping = format!("{SWITCH_SAVE_PREFIX}..%2F..%2Fetc%2Fpasswd");
+        assert!(decode_switch_relpath(&escaping).is_none());
+        // A plain RetroArch save name is not a Switch name.
+        assert!(decode_switch_relpath("Game Name.srm").is_none());
+    }
+
+    #[test]
+    fn emu_scan_recurses_into_subdirectories() {
+        let root = tmpdir("recurse");
+        write(&root.join("drop-saves/g1/saves/top.srm"), "a");
+        write(&root.join("drop-saves/g1/saves/nested/deep/inner.srm"), "b");
+        let found = scan_emu_saves(&root, "g1");
+        let names: Vec<&str> = found.iter().map(|f| f.filename.as_str()).collect();
+        assert!(names.contains(&"top.srm"), "{names:?}");
+        assert!(names.contains(&"inner.srm"), "{names:?}");
+    }
+
+    #[test]
+    fn switch_nand_saves_are_scanned_and_restorable() {
+        let root = tmpdir("switch");
+        let save = root.join(
+            "user/nand/user/save/0000000000000000/00000000000000000000000000000000/0100000000010000/data",
+        );
+        write(&save, "save bytes");
+
+        let found = scan_emu_saves(&root, "g1");
+        assert_eq!(found.len(), 1, "{found:?}");
+        let entry = &found[0];
+        assert!(entry.filename.starts_with(SWITCH_SAVE_PREFIX));
+        assert_eq!(entry.path, save);
+
+        // The encoded name must restore to exactly where it came from.
+        let dest =
+            write_downloaded_save(&root, "g1", &entry.filename, &entry.save_type, b"new bytes")
+                .unwrap();
+        assert_eq!(dest, save);
+        assert_eq!(fs::read_to_string(&save).unwrap(), "new bytes");
+    }
+
+    #[test]
+    fn emu_scan_is_bounded_by_depth() {
+        let root = tmpdir("depth");
+        let mut deep = root.join("drop-saves/g1/saves");
+        for _ in 0..(EMU_SCAN_MAX_DEPTH + 3) {
+            deep = deep.join("d");
+        }
+        write(&deep.join("too-deep.srm"), "x");
+        write(&root.join("drop-saves/g1/saves/shallow.srm"), "x");
+        let found = scan_emu_saves(&root, "g1");
+        let names: Vec<&str> = found.iter().map(|f| f.filename.as_str()).collect();
+        assert_eq!(names, vec!["shallow.srm"], "{names:?}");
+    }
 }

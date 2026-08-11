@@ -84,7 +84,14 @@ pub(crate) fn is_disk_full(e: &ApplicationDownloadError) -> bool {
 /// RetroArch saves live in `drop-saves/`. `remove_file` is a hard unlink (no
 /// Recycle Bin), so a wrong delete here is irreversible.
 const PROTECTED_DATA_DIRS: &[&str] = &[
-    "user",       // Eden / Yuzu / Ryujinx / Citron / Suyu / Sudachi portable data
+    "user",       // Eden / Yuzu / Citron / Suyu / Sudachi portable data
+    "portable",   // Ryujinx portable mode — Config.json (the controller bindings)
+                  // plus bis/user/save. Ryujinx does NOT use `user/`; missing this
+                  // meant every re-download, validation repair, resumed download or
+                  // second ROM installed against the same emulator hard-unlinked
+                  // the player's Switch saves and reset their controller layout.
+    "bis",        // Ryujinx internal storage when not in portable mode
+    "keys",       // Switch prod.keys/title.keys — user-supplied, never in a manifest
     "mlc01",      // Cemu NAND (saves + updates + DLC)
     "drop-saves",    // RetroArch per-game saves/states (Drop-managed)
     "drop-goldberg", // Goldberg/GBE per-AppID earned achievements + saves
