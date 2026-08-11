@@ -330,6 +330,17 @@ pub mod data {
             /// via Debug.
             #[serde(default)]
             pub ra_token: String,
+            /// The Connect token RetroArch reported as rejected, if any.
+            /// RA's Connect tokens are password-derived and expire after
+            /// roughly 45 to 60 days with no refresh endpoint, and RetroArch
+            /// blanks the dead token in its own config on exit — so without
+            /// this the client would re-inject the same dead token forever
+            /// and the user could never recover. Empty means "credentials are
+            /// believed good". Holding the token itself (rather than a bare
+            /// flag) is what lets the state self-heal: any *different* token,
+            /// from a relink here or on the web, is by definition fresh.
+            #[serde(default)]
+            pub ra_expired_token: String,
             /// Global on/off switch for cloud save sync. When false, the
             /// pre-launch sync check and post-exit upload are both skipped.
             /// Defaults to true so existing users keep their current behaviour.
@@ -395,6 +406,14 @@ pub mod data {
                             "<redacted>"
                         },
                     )
+                    .field(
+                        "ra_expired_token",
+                        &if self.ra_expired_token.is_empty() {
+                            "<unset>"
+                        } else {
+                            "<redacted>"
+                        },
+                    )
                     .field("cloud_saves_enabled", &self.cloud_saves_enabled)
                     .field("device_name", &self.device_name)
                     .field("display_name", &self.display_name)
@@ -433,6 +452,7 @@ pub mod data {
                     sunshine_password: String::new(),
                     ra_username: String::new(),
                     ra_token: String::new(),
+                    ra_expired_token: String::new(),
                     cloud_saves_enabled: default_true(),
                     device_name: None,
                     display_name: None,

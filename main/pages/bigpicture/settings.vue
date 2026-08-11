@@ -680,7 +680,7 @@
         </p>
 
         <div class="bg-zinc-900/50 rounded-xl p-4 space-y-4">
-          <div v-if="raLinked" class="flex items-start gap-3">
+          <div v-if="raLinked && !raExpired" class="flex items-start gap-3">
             <div class="flex-1">
               <p class="text-sm text-zinc-300">
                 Linked as
@@ -699,6 +699,22 @@
             </button>
           </div>
           <template v-else>
+            <!-- RA session tokens last about two months and cannot be
+                 renewed, so the only fix is signing in again. -->
+            <div
+              v-if="raExpired"
+              class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5"
+            >
+              <p class="text-sm text-amber-200">
+                Your RetroAchievements sign-in has expired
+              </p>
+              <!-- raUsername can be empty here: the dead token may have come
+                   from the account linked on the website, not this device. -->
+              <p class="text-xs text-amber-200/70 mt-1">
+                RetroAchievements stopped accepting it, so unlocks are no
+                longer being tracked. Sign in again to pick them back up.
+              </p>
+            </div>
             <div>
               <label class="block text-sm font-medium text-zinc-400 mb-1">Username</label>
               <input
@@ -728,6 +744,7 @@
               @click="linkRetroAchievements"
             >
               <span v-if="raStatus === 'linking'">Linking…</span>
+              <span v-else-if="raExpired">Sign in again</span>
               <span v-else>Link account</span>
             </button>
           </template>
@@ -1129,6 +1146,7 @@
 
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { platform } from "@tauri-apps/plugin-os";
 
 import { useGamepad } from "~/composables/gamepad";
@@ -1280,6 +1298,11 @@ const devCategoryMeta: Record<DevCategory, { label: string; description: string 
 const raUsername = ref("");
 const raPassword = ref("");
 const raLinked = ref(false);
+// RetroAchievements session tokens are derived from the password, last about
+// 45 to 60 days and have no refresh. The backend records the dead token when
+// RetroArch's log shows it was rejected; until the user signs in again Drop
+// stops injecting it, so this has to be said out loud here.
+const raExpired = ref(false);
 const raStatus = ref<"" | "linking" | "linked" | "error">("");
 const raError = ref("");
 
@@ -1292,9 +1315,19 @@ onMounted(async () => {
       // just rely on raUsername non-empty as "linked".
       raLinked.value = !!(settings.raToken && settings.raToken.length > 0);
     }
+    raExpired.value = !!settings.raExpiredToken;
   } catch {
     // Settings not available yet — keep defaults
   }
+});
+
+// Emitted by the RetroArch exit path the moment a rejection is found in the
+// log, so a session that just ended flips the panel without a restart.
+onMounted(async () => {
+  const unlisten = await listen("ra_credentials_expired", () => {
+    raExpired.value = true;
+  });
+  onUnmounted(unlisten);
 });
 
 async function linkRetroAchievements() {
@@ -1308,6 +1341,7 @@ async function linkRetroAchievements() {
     raUsername.value = user;
     raPassword.value = "";
     raLinked.value = true;
+    raExpired.value = false;
     raStatus.value = "linked";
     setTimeout(() => {
       if (raStatus.value === "linked") raStatus.value = "";
@@ -1324,6 +1358,7 @@ async function unlinkRetroAchievements() {
     raUsername.value = "";
     raPassword.value = "";
     raLinked.value = false;
+    raExpired.value = false;
     raStatus.value = "";
     raError.value = "";
   } catch (e) {
