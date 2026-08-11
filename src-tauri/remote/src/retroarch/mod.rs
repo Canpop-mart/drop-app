@@ -50,8 +50,8 @@ use std::path::{Path, PathBuf};
 // in the `process` crate and the root crate keep compiling without edits.
 pub use cores::{resolve_core_for_rom, EXTENSION_CORE_MAP};
 pub use ra::{
-    check_rom_hash, fetch_ra_credentials, hash_rom, RACredentials, RAHashEntry, RAHashesResponse,
-    RomHashStatus,
+    check_rom_hash, detect_ra_login_failure, fetch_ra_credentials, hash_rom,
+    mark_credentials_expired, RACredentials, RAHashEntry, RAHashesResponse, RomHashStatus,
 };
 
 /// Directory (relative to the RetroArch install root) that per-game saves go
@@ -157,7 +157,7 @@ pub fn configure_retroarch_for_game(
     }
 
     // RetroAchievements — enable cheevos + inject Connect credentials.
-    apply_cheevos_overrides(&mut overrides, ra_credentials);
+    let ra_token_expired = apply_cheevos_overrides(&mut overrides, ra_credentials);
 
     controllers::apply_hotkey_bindings(&mut overrides);
 
@@ -173,11 +173,18 @@ pub fn configure_retroarch_for_game(
     // Both write sites share one deletion list. A key dropped from only one of
     // them leaves the AppImage portable $HOME stale, and on the Deck that copy
     // is the BASE config rather than an overlay.
-    let stale_keys: Vec<&str> = controllers::STALE_INPUT_KEYS
+    let mut stale_keys: Vec<&str> = controllers::STALE_INPUT_KEYS
         .iter()
         .chain(STALE_MISPLACED_KEYS)
         .copied()
         .collect();
+
+    // Only delete the token when we've stopped injecting it. The deletion pass
+    // runs before the append pass, so a key that is in both lists survives as
+    // an override — listing it unconditionally would quietly do nothing.
+    if ra_token_expired {
+        stale_keys.push("cheevos_token");
+    }
 
     let cfg_path = emu_root.join("retroarch.cfg");
     info!("[RETROARCH] Writing retroarch.cfg ({} keys) to {}", overrides.len(), cfg_path.display());
@@ -409,15 +416,38 @@ fn apply_controller_device(overrides: &mut HashMap<&str, String>, rom_path: &str
 
 /// RetroAchievements config: cheevos on (non-hardcore), rich presence on, and
 /// Connect credentials injected when available.
-fn apply_cheevos_overrides(overrides: &mut HashMap<&str, String>, ra_credentials: Option<&RACredentials>) {
+///
+/// Returns true when injection was *suppressed* because the token has already
+/// been rejected once — the caller uses that to delete the dead `cheevos_token`
+/// from the cfg instead of writing it back.
+fn apply_cheevos_overrides(
+    overrides: &mut HashMap<&str, String>,
+    ra_credentials: Option<&RACredentials>,
+) -> bool {
     overrides.insert("cheevos_enable", "true".into());
     overrides.insert("cheevos_hardcore_mode_enable", "false".into());
     overrides.insert("cheevos_richpresence_enable", "true".into());
-    if let Some(creds) = ra_credentials {
-        overrides.insert("cheevos_username", format!("\"{}\"", creds.username));
-        overrides.insert("cheevos_token", format!("\"{}\"", creds.connect_token));
-        info!("[RETROARCH] Injecting RA credentials for user {}", creds.username);
+    let Some(creds) = ra_credentials else {
+        return false;
+    };
+
+    // RetroArch blanks a rejected token in its own config on exit. Writing it
+    // back here is what made expiry unrecoverable: the user could never sign
+    // in by hand because every launch restored the dead token, and RetroArch
+    // reports the failure nowhere the user would look.
+    if ra::is_expired_token(&creds.connect_token) {
+        warn!(
+            "[RETROARCH] RA token for {} was rejected — not injecting it again; \
+             RetroArch will ask for its own login until the account is re-linked",
+            creds.username
+        );
+        return true;
     }
+
+    overrides.insert("cheevos_username", format!("\"{}\"", creds.username));
+    overrides.insert("cheevos_token", format!("\"{}\"", creds.connect_token));
+    info!("[RETROARCH] Injecting RA credentials for user {}", creds.username);
+    false
 }
 
 /// Applies the per-game user config (controller layout, quality, aspect ratio,
@@ -516,13 +546,23 @@ fn write_core_options(
     let core_opts_path = emu_root.join("retroarch-core-options.cfg");
     let mut core_overrides: HashMap<&str, String> = HashMap::new();
 
+    // Both passes skip cores that aren't in cores/, so the key counts logged
+    // below describe options a core will really read rather than every key
+    // Drop knows about.
+    let installed = presets::InstalledCores::scan(emu_root);
+
     if let Some(quality) = &cfg.quality_preset {
-        presets::apply_core_quality_options(&mut core_overrides, quality);
+        presets::apply_core_quality_options(&mut core_overrides, quality, &installed);
         info!("[RETROARCH] Patching core options for {quality:?} quality — {} keys", core_overrides.len());
     }
-    presets::apply_core_widescreen_options(&mut core_overrides, &cfg.widescreen);
+    let before_widescreen = core_overrides.len();
+    presets::apply_core_widescreen_options(&mut core_overrides, &cfg.widescreen, &installed);
     if cfg.widescreen != AspectRatio::Standard {
-        info!("[RETROARCH] Patched core options for {:?}", cfg.widescreen);
+        info!(
+            "[RETROARCH] Patched core options for {:?} — {} keys",
+            cfg.widescreen,
+            core_overrides.len() - before_widescreen
+        );
     }
 
     if core_overrides.is_empty() {
