@@ -57,6 +57,161 @@ jobs:
       - name: install frontend dependencies
         run: pnpm install
 
+      # Pre-seed Tauri's NSIS toolchain cache (Windows only).
+      #
+      # WHY: tauri-bundler fetches its own NSIS toolchain from GitHub at bundle
+      # time, and that fetch is a SINGLE ureq GET with no retry — one dropped
+      # connection kills the whole build. That is exactly what happened to the
+      # v5.7.0 Windows leg: it died twice, ~25 minutes apart, 0.2s after
+      # "Downloading .../nsis-3.11.zip" with `failed to bundle project
+      # `io: Peer disconnected``, while the ubuntu leg of the same run published
+      # fine. The asset was never missing — the connection was just refused.
+      # Doing the download here, with retries, means the bundler finds the cache
+      # already populated and makes zero network calls for its toolchain.
+      #
+      # The bundler skips its download only if <cache>\NSIS exists AND every
+      # required file is present AND nsis_tauri_utils.dll hashes correctly;
+      # if ANY of those is false it deletes the directory and does the full cold
+      # download again. So a half-seeded cache is worse than none — hence this
+      # step verifies everything and fails loudly rather than limping on. This is
+      # the opposite of the umu-launcher / zerotier blocks further down, which
+      # are deliberately tolerant because they bundle optional extras; the NSIS
+      # toolchain is not optional, no NSIS means no installer.
+      #
+      # Cache location is dirs::cache_dir() (SHGetKnownFolderPath FOLDERID_
+      # LocalAppData), i.e. C:\Users\runneradmin\AppData\Local\tauri. It cannot
+      # be redirected by setting %LOCALAPPDATA%, and NSIS_PATH is a no-op on
+      # Windows, so seeding the real path is the only lever.
+      #
+      # No GITHUB_TOKEN on these downloads, on purpose. The 403 that bit the umu
+      # block was api.github.com's 60-req/hr anonymous limit; these are release
+      # ASSET downloads (github.com -> release-assets.githubusercontent.com),
+      # which are served from the CDN and aren't subject to that limit. Sending
+      # an Authorization header would either be dropped by curl on the cross-host
+      # redirect or rejected by the signed asset URL as a double auth mechanism,
+      # so it can only hurt.
+      - name: Pre-seed Tauri NSIS toolchain (windows only)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $toolsDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'tauri'
+          $nsisDir  = Join-Path $toolsDir 'NSIS'
+          $staging  = Join-Path $env:RUNNER_TEMP 'nsis-seed'
+
+          # Versions/hashes are the constants baked into tauri-bundler 2.9.1
+          # (@tauri-apps/cli 2.11.1). Bump these together with the CLI.
+          $nsisUrl     = 'https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip'
+          $nsisSha1    = 'EF7FF767E5CBD9EDD22ADD3A32C9B8F4500BB10D'
+          $utilsUrl    = 'https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll'
+          $utilsSha1   = '75197FEE3C6A814FE035788D1C34EAD39349B860'
+          # Third fetch of the same bundling step: tauri.conf.json uses
+          # webviewInstallMode.embedBootstrapper, which downloads this from
+          # go.microsoft.com (existence check only, no hash).
+          $webview2Url = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703'
+
+          function Fetch($url, $dest) {
+            Write-Host "Downloading $url"
+            curl.exe --fail --location --silent --show-error `
+              --retry 6 --retry-delay 5 --retry-all-errors `
+              --connect-timeout 30 --max-time 600 `
+              --output $dest -- $url
+            if ($LASTEXITCODE -ne 0) {
+              throw "Download FAILED after retries (curl exit $LASTEXITCODE): $url"
+            }
+            if (-not (Test-Path -LiteralPath $dest)) {
+              throw "Download reported success but produced no file: $dest"
+            }
+          }
+
+          function Assert-Sha1($path, $expected, $label) {
+            $actual = (Get-FileHash -Algorithm SHA1 -LiteralPath $path).Hash
+            if ($actual -ne $expected.ToUpper()) {
+              throw "$label SHA1 MISMATCH: got $actual, expected $expected"
+            }
+            Write-Host "$label SHA1 ok ($actual)"
+          }
+
+          # Start from a clean slate: a leftover NSIS\ or an intermediate
+          # nsis-3.11\ next to it makes the bundler's own rename() blow up.
+          foreach ($stale in @($nsisDir, (Join-Path $toolsDir 'nsis-3.11'), $staging)) {
+            if (Test-Path -LiteralPath $stale) { Remove-Item -Recurse -Force -LiteralPath $stale }
+          }
+          New-Item -ItemType Directory -Force -Path $toolsDir, $staging | Out-Null
+
+          $zip = Join-Path $staging 'nsis-3.11.zip'
+          Fetch $nsisUrl $zip
+          Assert-Sha1 $zip $nsisSha1 'nsis-3.11.zip'
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $staging)
+          $extracted = Join-Path $staging 'nsis-3.11'
+          if (-not (Test-Path -LiteralPath $extracted)) {
+            throw "Extraction produced no nsis-3.11 folder under $staging"
+          }
+          Move-Item -LiteralPath $extracted -Destination $nsisDir
+
+          # nsis_tauri_utils.dll is a SECOND, separate download the bundler does
+          # right after the zip - seed it too or the build just dies one line later.
+          $additional = Join-Path $nsisDir 'Plugins\x86-unicode\additional'
+          New-Item -ItemType Directory -Force -Path $additional | Out-Null
+          $dll = Join-Path $additional 'nsis_tauri_utils.dll'
+          Fetch $utilsUrl $dll
+          # The bundler re-verifies this hash on every warm run; a mismatch here
+          # means it would re-download the dll at bundle time.
+          Assert-Sha1 $dll $utilsSha1 'nsis_tauri_utils.dll'
+
+          # Every path tauri-bundler checks. Miss one and it wipes the whole
+          # directory and cold-downloads again - the failure we are fixing.
+          $required = @(
+            'makensis.exe',
+            'Bin/makensis.exe',
+            'Stubs/lzma-x86-unicode',
+            'Stubs/lzma_solid-x86-unicode',
+            'Plugins/x86-unicode/additional/nsis_tauri_utils.dll',
+            'Include/MUI2.nsh',
+            'Include/FileFunc.nsh',
+            'Include/x64.nsh',
+            'Include/nsDialogs.nsh',
+            'Include/WinMessages.nsh',
+            'Include/Win/COM.nsh',
+            'Include/Win/Propkey.nsh',
+            'Include/Win/RestartManager.nsh'
+          )
+          $missing = $required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $nsisDir $_)) }
+          if ($missing) {
+            throw "NSIS seed INCOMPLETE, tauri would wipe it and re-download. Missing: $($missing -join ', ')"
+          }
+          Write-Host "All $($required.Count) required NSIS files present"
+
+          # WebView2 bootstrapper: embedBootstrapper mode fetches this during the
+          # same bundling step, also unretried. Not a github.com URL so the mirror
+          # env vars would not cover it either.
+          $webview2 = Join-Path $toolsDir 'MicrosoftEdgeWebview2Setup.exe'
+          Fetch $webview2Url $webview2
+          $wvSize = (Get-Item -LiteralPath $webview2).Length
+          if ($wvSize -lt 500KB) {
+            throw "MicrosoftEdgeWebview2Setup.exe looks bogus ($wvSize bytes) - probably an error page, not the bootstrapper"
+          }
+          $head = [System.IO.File]::ReadAllBytes($webview2)[0..1]
+          if ($head[0] -ne 0x4D -or $head[1] -ne 0x5A) {
+            throw "MicrosoftEdgeWebview2Setup.exe is not a PE binary (no MZ header)"
+          }
+          Write-Host "WebView2 bootstrapper ok ($wvSize bytes)"
+
+          Remove-Item -Recurse -Force -LiteralPath $staging
+
+          # Leave a listing in the log so a future bundling failure is diagnosable.
+          $all = Get-ChildItem -Recurse -File -LiteralPath $nsisDir
+          Write-Host "--- seeded $nsisDir : $($all.Count) files, $([math]::Round(($all | Measure-Object Length -Sum).Sum / 1MB, 2)) MB ---"
+          Get-ChildItem -LiteralPath $toolsDir | Format-Table Mode, Length, Name | Out-String | Write-Host
+          Get-ChildItem -LiteralPath $nsisDir | Format-Table Mode, Length, Name | Out-String | Write-Host
+          foreach ($p in $required) {
+            $f = Get-Item -LiteralPath (Join-Path $nsisDir $p)
+            Write-Host ("  {0,10}  {1}" -f $f.Length, $p)
+          }
+
       - uses: tauri-apps/tauri-action@v0
         id: tauri-build
         env:
