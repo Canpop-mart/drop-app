@@ -1,5 +1,14 @@
 <template>
-  <section v-if="slides.length > 0" class="mb-8">
+  <!-- A failed recap fetch used to be indistinguishable from a week with
+       nothing worth recapping: both left `slides` empty and the whole card
+       silently disappeared. -->
+  <SectionError
+    v-if="failed && slides.length === 0"
+    class="mb-8"
+    detail="This week's recap didn't load."
+    @retry="emit('retry')"
+  />
+  <section v-else-if="slides.length > 0" class="mb-8">
     <div
       class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-900/40 via-zinc-900/60 to-blue-900/30 ring-1 ring-blue-500/20"
     >
@@ -101,15 +110,21 @@ import {
   SparklesIcon,
 } from "@heroicons/vue/24/solid";
 import type { WeeklyRecapSlide } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 
-const props = defineProps<{
-  slides: WeeklyRecapSlide[];
-}>();
+const props = withDefaults(
+  defineProps<{
+    slides: WeeklyRecapSlide[];
+    /** The parent's fetch failed, as opposed to genuinely having no slides. */
+    failed?: boolean;
+  }>(),
+  { failed: false },
+);
 
 const emit = defineEmits<{
   (e: "go-to-game", gameId: string): void;
   (e: "go-to-user", userId: string): void;
+  (e: "retry"): void;
 }>();
 
 const activeIndex = ref(0);
@@ -139,7 +154,7 @@ const slideIcon = computed(() => {
 });
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;

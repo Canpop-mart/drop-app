@@ -22,6 +22,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { platform } from "@tauri-apps/plugin-os";
 import { devLog } from "~/composables/dev-mode";
 import {
+  CONTROLLER_OPTIONS,
   mangohudLabel as mangohudLabelOf,
   nextMangohud,
 } from "~/composables/game-detail/emulator-options";
@@ -40,14 +41,15 @@ import type {
  */
 type BpmProtonOption = { label: string; path: string | null };
 
+/**
+ * Re-exported, not redeclared. This used to be a second copy of the same
+ * table, which is how the two surfaces drifted apart last time — and it is why
+ * the PlayStation layout existed in the backend but was offered by neither.
+ */
 export const BPM_CONTROLLER_OPTIONS: {
   label: string;
   value: ControllerType | null;
-}[] = [
-  { label: "Auto", value: null },
-  { label: "Xbox (A=South)", value: "Xbox" },
-  { label: "Nintendo (A=East)", value: "Nintendo" },
-];
+}[] = CONTROLLER_OPTIONS;
 
 export const BPM_QUALITY_OPTIONS: {
   label: string;

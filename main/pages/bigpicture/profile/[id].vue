@@ -246,7 +246,7 @@ import {
   SparklesIcon,
 } from "@heroicons/vue/24/outline";
 import { TrophyIcon } from "@heroicons/vue/24/solid";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import {
   useServerApi,
   type UserProfile,
@@ -262,7 +262,7 @@ import { useFocusNavigation } from "~/composables/focus-navigation";
 definePageMeta({ layout: "bigpicture" });
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 const THEME_MAP: Record<string, { from: string; to: string }> = {

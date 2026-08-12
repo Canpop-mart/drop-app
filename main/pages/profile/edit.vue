@@ -295,7 +295,7 @@ import {
   useServerApi,
   type UserProfile,
 } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import ProfilePicturePicker from "~/components/ProfilePicturePicker.vue";
 import {
   PROFILE_THEME_PRESETS,
@@ -359,7 +359,7 @@ const hasChanges = computed(
 );
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 function onAvatarSelected(newObjectId: string) {

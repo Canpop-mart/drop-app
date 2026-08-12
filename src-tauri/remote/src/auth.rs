@@ -163,6 +163,10 @@ pub async fn setup() -> (AppStatus, Option<User>) {
             Err(e) if e.is_retryable() => {
                 warn!("could not reach server during setup, going offline: {e}");
                 let user = get_cached_object::<User>("user").ok();
+                // Starting up offline is a transition too: without this the
+                // atomic in `utils` would read "online" and no later success
+                // would ever move the app back to SignedIn.
+                crate::utils::set_offline_flag(true);
                 return (AppStatus::Offline, user);
             }
             Err(_) => return (AppStatus::SignedInNeedsReauth, None),

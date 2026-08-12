@@ -97,7 +97,7 @@
 
 <script setup lang="ts">
 import { UserIcon } from "@heroicons/vue/24/solid";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import {
   formatPlaytime,
   formatLastPlayed,
@@ -140,6 +140,6 @@ const displayedAchievements = computed(() =>
 );
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 </script>

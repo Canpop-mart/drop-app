@@ -12,7 +12,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use database::{borrow_db_checked, borrow_db_mut_checked, GameDownloadStatus};
-use log::{info, warn};
+use log::{debug, info, warn};
 use rand::Rng;
 use remote::streaming_sessions;
 use serde::{Deserialize, Serialize};
@@ -539,6 +539,61 @@ pub struct SunshineAppsConfig {
     pub env: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub apps: Vec<SunshineApp>,
+}
+
+/// The app name every stream Drop starts asks Sunshine for.
+///
+/// `launch_moonlight` always streams the desktop and lets Drop launch the game
+/// itself, so this one entry is the only thing Moonlight ever needs to find.
+pub const DESKTOP_APP_NAME: &str = "Desktop";
+
+/// Guarantees `apps.json` contains Sunshine's desktop entry.
+///
+/// Sunshine ships a "Desktop" app in its stock apps.json, but Drop writes its
+/// own file over it and never put one back: a fresh install got an empty app
+/// list, and an existing file was left untouched. Moonlight then asked for
+/// "Desktop", Sunshine had no such app, and the stream died with "can't find
+/// Desktop" after every other part of the handshake had already succeeded.
+///
+/// Existing entries are preserved. Desktop is identified by name (Sunshine
+/// special-cases it) and a cmd-less app is what marks it as desktop capture.
+fn ensure_desktop_app_entry(apps_path: &Path) -> Result<(), String> {
+    let mut config = match std::fs::read_to_string(apps_path) {
+        Ok(existing) => serde_json::from_str::<SunshineAppsConfig>(&existing).unwrap_or_else(|e| {
+            // A malformed apps.json would otherwise leave the user with no
+            // desktop entry forever, and it is not something they can be
+            // expected to repair by hand.
+            warn!("[SUNSHINE] apps.json is not readable ({e}); rewriting it");
+            SunshineAppsConfig::default()
+        }),
+        Err(_) => SunshineAppsConfig::default(),
+    };
+
+    if config
+        .apps
+        .iter()
+        .any(|app| app.name.eq_ignore_ascii_case(DESKTOP_APP_NAME))
+    {
+        return Ok(());
+    }
+
+    config.apps.insert(
+        0,
+        SunshineApp {
+            name: DESKTOP_APP_NAME.to_string(),
+            cmd: None,
+            working_dir: None,
+            image_path: Some("desktop.png".to_string()),
+            auto_detach: false,
+            prep_cmd: Vec::new(),
+        },
+    );
+
+    let json = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize apps.json: {e}"))?;
+    std::fs::write(apps_path, json).map_err(|e| format!("Failed to write apps.json: {e}"))?;
+    info!("[SUNSHINE] Added the Desktop entry to apps.json");
+    Ok(())
 }
 
 /// Quality profiles for streaming, chosen on the client (the device running
@@ -1331,14 +1386,7 @@ min_log_level = 2
     std::fs::write(&conf_path, conf)
         .map_err(|e| format!("Failed to write sunshine.conf: {e}"))?;
 
-    // Create empty apps.json if it doesn't exist
-    if !apps_path.exists() {
-        let empty_apps = SunshineAppsConfig::default();
-        let json = serde_json::to_string_pretty(&empty_apps)
-            .map_err(|e| format!("Failed to serialize apps.json: {e}"))?;
-        std::fs::write(&apps_path, json)
-            .map_err(|e| format!("Failed to write apps.json: {e}"))?;
-    }
+    ensure_desktop_app_entry(&apps_path)?;
 
     info!("[SUNSHINE] Generated config at {}", conf_path.display());
     Ok(conf_path)
@@ -2837,6 +2885,51 @@ pub async fn request_remote_install(
         .map_err(|e| e.to_string())
 }
 
+/// Coalesces the bursts of `update_library` a multi-game download finishing
+/// produces into one POST.
+static INSTALLED_SYNC_QUEUED: AtomicBool = AtomicBool::new(false);
+
+/// Re-report the installed list every time one changes.
+///
+/// The server answers "does device X have this game?" from the last list X
+/// pushed, and that used to be pushed only five seconds after startup. So a PC
+/// left running for a week reported whatever it had at boot: a game uninstalled
+/// since then still offered "Play on X", which starts a Sunshine session for
+/// files that are gone, and a game installed since then never lost its
+/// pointless "Install on X".
+///
+/// `update_library` is emitted exactly where that list changes — an install
+/// completing (`on_game_complete`) and an uninstall finishing — so it is the
+/// hook, rather than a timer that would be wrong between ticks anyway.
+pub fn register_installed_sync(app: &tauri::AppHandle) {
+    use tauri::Listener as _;
+    app.listen("update_library", |_| queue_installed_sync());
+}
+
+fn queue_installed_sync() {
+    // A download batch emits one event per game. The payload is the whole list
+    // either way, so the first event wins and the rest ride along with it.
+    if INSTALLED_SYNC_QUEUED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tauri::async_runtime::spawn(async {
+        // Wait before reading the list so anything else finishing in the same
+        // moment is already in it.
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        INSTALLED_SYNC_QUEUED.store(false, Ordering::SeqCst);
+        {
+            // Nothing to sync to before login, and the request would 401.
+            let db = borrow_db_checked();
+            if db.auth.is_none() || db.base_url.is_empty() {
+                return;
+            }
+        }
+        if let Err(e) = sync_installed_games().await {
+            warn!("[STREAMING] Failed to sync installed games after a library change: {e}");
+        }
+    });
+}
+
 /// Sync this client's installed game IDs to the server.
 #[tauri::command]
 pub async fn sync_installed_games() -> Result<(), String> {
@@ -2877,20 +2970,37 @@ pub async fn streaming_request_stream(
     Ok(session_id)
 }
 
+/// How often the host looks for pushed requests while the server is answering.
+const STREAM_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Ceiling for the backoff. A server that is down stays down for minutes, not
+/// seconds, and this poller is the busiest thing Drop does: in two days of one
+/// user's log it accounted for 9,671 requests, 4,347 of which the server
+/// answered with a 5xx. Retrying a broken endpoint every ten seconds for two
+/// days helps nobody and drowns the log the next real bug has to be found in.
+const STREAM_POLL_MAX_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Background task that polls for incoming stream requests and auto-fulfills them.
-/// Spawned once on app startup. Runs every 10 seconds.
+/// Spawned once on app startup.
+///
+/// Polls every 10 seconds while the server is healthy, backs off to at most five
+/// minutes while it is not, and does not poll at all when remote play is turned
+/// off for this device.
 pub fn spawn_stream_request_poller() {
     tokio::spawn(async {
         info!("[STREAM-POLLER] Background stream request poller started");
         // Track session IDs we've already started processing to avoid duplicate spawns
         let mut processing: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut interval = STREAM_POLL_INTERVAL;
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            tokio::time::sleep(interval).await;
 
-            // Check if we have auth configured (skip if not logged in)
+            // Both re-read every tick, so signing in or flipping the Settings
+            // toggle takes effect without a restart.
             {
                 let db = borrow_db_checked();
-                if db.auth.is_none() {
+                if db.auth.is_none() || !db.settings.streaming_enabled {
+                    interval = STREAM_POLL_INTERVAL;
                     continue;
                 }
             }
@@ -2904,6 +3014,7 @@ pub fn spawn_stream_request_poller() {
 
             match streaming_sessions::poll_pending_requests().await {
                 Ok(requests) => {
+                    interval = STREAM_POLL_INTERVAL;
                     if !requests.is_empty() {
                         info!("[STREAM-POLLER] Found {} pending stream request(s)", requests.len());
                     }
@@ -2986,8 +3097,15 @@ pub fn spawn_stream_request_poller() {
                     }
                 }
                 Err(e) => {
-                    // Silently ignore poll errors (network issues, not logged in, etc.)
-                    let _ = e;
+                    // Poll failures are expected (offline, server restarting,
+                    // token not refreshed yet) so they stay at debug, but each
+                    // one doubles the wait: nothing here is worth hammering a
+                    // server that is already unhappy.
+                    interval = (interval * 2).min(STREAM_POLL_MAX_INTERVAL);
+                    debug!(
+                        "[STREAM-POLLER] Poll failed ({e}), next attempt in {}s",
+                        interval.as_secs()
+                    );
                 }
             }
         }
@@ -3232,16 +3350,27 @@ async fn fulfill_stream_request(
     //    are applied on the host.
     info!("[STREAM-FULFILL] Launching game {} (streaming mode)", game_id);
     {
-        use crate::process::launch_game_streaming;
+        use crate::process::{launch_game_streaming, LaunchResult};
         let gid = game_id.clone();
         let cfg = game_config;
         // A stream with no game in it is not a stream. The heartbeat loop below
         // would tear the session down anyway on its first "is the game running"
         // check, five seconds later and without a word about why.
         let launch_failed = match tokio::task::spawn_blocking(move || launch_game_streaming(gid, 0, cfg)).await {
-            Ok(Ok(_)) => {
+            Ok(Ok(LaunchResult::Success)) => {
                 info!("[STREAM-FULFILL] Game launched successfully");
                 false
+            }
+            // Nothing was spawned. `Ok(Ok(_))` used to swallow this as a
+            // success, so the receiver got a stream of an empty desktop and no
+            // reason for it — the host has the emulator missing, and only the
+            // host can install it.
+            Ok(Ok(LaunchResult::InstallRequired { name, game_id: dep, .. })) => {
+                warn!(
+                    "[STREAM-FULFILL] Host is missing {} — nothing was launched",
+                    name.unwrap_or(dep)
+                );
+                true
             }
             Ok(Err(e)) => {
                 warn!("[STREAM-FULFILL] Failed to launch game: {e:?}");
@@ -3685,5 +3814,62 @@ mod tests {
         assert!(!is_auth_failure(
             "Sunshine API request failed: error sending request for url"
         ));
+    }
+}
+
+#[cfg(test)]
+mod apps_json_tests {
+    use super::*;
+
+    fn read(path: &Path) -> SunshineAppsConfig {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn adds_desktop_when_the_file_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("apps.json");
+        ensure_desktop_app_entry(&p).unwrap();
+        let cfg = read(&p);
+        assert_eq!(cfg.apps.len(), 1);
+        assert_eq!(cfg.apps[0].name, "Desktop");
+        assert!(cfg.apps[0].cmd.is_none(), "desktop capture must have no cmd");
+    }
+
+    /// The user's real file: one game entry, no Desktop. Moonlight asked for
+    /// "Desktop" and Sunshine had nothing to give it.
+    #[test]
+    fn adds_desktop_without_dropping_existing_apps() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("apps.json");
+        std::fs::write(
+            &p,
+            r#"{"env":{},"apps":[{"name":"Psychonauts","cmd":"drop-launch","auto-detach":true}]}"#,
+        )
+        .unwrap();
+        ensure_desktop_app_entry(&p).unwrap();
+        let cfg = read(&p);
+        assert_eq!(cfg.apps.len(), 2);
+        assert_eq!(cfg.apps[0].name, "Desktop");
+        assert_eq!(cfg.apps[1].name, "Psychonauts");
+    }
+
+    #[test]
+    fn is_idempotent_and_case_insensitive() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("apps.json");
+        std::fs::write(&p, r#"{"env":{},"apps":[{"name":"desktop"}]}"#).unwrap();
+        ensure_desktop_app_entry(&p).unwrap();
+        ensure_desktop_app_entry(&p).unwrap();
+        assert_eq!(read(&p).apps.len(), 1, "must not duplicate Desktop");
+    }
+
+    #[test]
+    fn rewrites_a_corrupt_file_rather_than_leaving_it_broken() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("apps.json");
+        std::fs::write(&p, "{ not json").unwrap();
+        ensure_desktop_app_entry(&p).unwrap();
+        assert_eq!(read(&p).apps[0].name, "Desktop");
     }
 }

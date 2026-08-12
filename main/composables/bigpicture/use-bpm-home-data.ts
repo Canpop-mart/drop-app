@@ -20,6 +20,7 @@ import { devLog } from "~/composables/dev-mode";
 import { useGame, parseStatus } from "~/composables/game";
 import { useAppState } from "~/composables/app-state";
 import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import type { Game, GameStatus, RawGameStatus } from "~/types";
 
 export interface RecentGameEntry {
@@ -103,44 +104,60 @@ export function useBpmHomeData() {
       }
 
       const gamesToLoad = recentData.slice(0, 20);
-      const entries: RecentGameEntry[] = [];
 
-      for (const gameData of gamesToLoad) {
-        try {
-          const statusData: RawGameStatus = await invoke("fetch_game_status", {
-            id: gameData.gameId,
-          });
-          // The playtime/recent payload carries only id/name/cover, but the
-          // home page's tiles only ever read those three fields plus
-          // playtime/installed (cached on the entry below). Cast through
-          // `unknown` to make the partial-Game shape explicit — a fuller
-          // Game would require a second fetch per tile we don't need.
-          const game = {
-            id: gameData.gameId,
-            mName: gameData.gameName,
-            mCoverObjectId: gameData.coverObjectId,
-            mTaglineUrl: null,
-            mReleaseDate: null,
-            mPlatformId: null,
-            mSummary: null,
-            mBackgroundUrl: null,
-            mPublisher: null,
-            mGenre: null,
-          } as unknown as Game;
-
-          const status = parseStatus(statusData);
-          entries.push({
-            game,
-            status,
-            installed: status.type === "Installed",
-            playtimeSeconds: gameData.totalPlaytimeSeconds,
-          });
-        } catch (e) {
-          console.error(`Failed to load recent game ${gameData.gameId}:`, e);
+      // One IPC call for all 20 statuses. This used to be a serial
+      // `fetch_game_status` per game, so the home screen waited on 20 round
+      // trips before it could paint a single tile.
+      const statusById = new Map<string, GameStatus>();
+      try {
+        const pairs = await invoke<Array<[string, RawGameStatus]>>(
+          "fetch_game_statuses",
+          { ids: gamesToLoad.map((g) => g.gameId) },
+        );
+        for (const [gameId, raw] of pairs) {
+          try {
+            statusById.set(gameId, parseStatus(raw));
+          } catch {
+            // No status row yet — the tile falls back to Remote below.
+          }
         }
+      } catch (e) {
+        console.error("[BPM:HOME] Batch status fetch failed:", e);
       }
 
-      recentGames.value = entries;
+      // The playtime/recent payload carries only id/name/cover, but the home
+      // page's tiles only ever read those three fields plus playtime/installed
+      // (cached on the entry below). Cast through `unknown` to make the
+      // partial-Game shape explicit — a fuller Game would require a second
+      // fetch per tile we don't need.
+      recentGames.value = gamesToLoad.map((gameData) => {
+        const game = {
+          id: gameData.gameId,
+          mName: gameData.gameName,
+          mCoverObjectId: gameData.coverObjectId,
+          mTaglineUrl: null,
+          mReleaseDate: null,
+          mPlatformId: null,
+          mSummary: null,
+          mBackgroundUrl: null,
+          mPublisher: null,
+          mGenre: null,
+        } as unknown as Game;
+
+        const status =
+          statusById.get(gameData.gameId) ?? ({ type: "Remote" } as GameStatus);
+        return {
+          game,
+          status,
+          installed: status.type === "Installed",
+          playtimeSeconds: gameData.totalPlaytimeSeconds,
+        };
+      });
+
+      // The tiles have everything they need now; the download-queue names
+      // below are a garnish on a separate strip, so they fill in after the
+      // home screen has painted rather than holding the skeleton up.
+      loading.value = false;
 
       for (const item of queue) {
         if (!gameNames.value[item.meta.id]) {
@@ -149,7 +166,7 @@ export function useBpmHomeData() {
             gameNames.value[item.meta.id] = {
               name: gameFetch.game.mName,
               coverUrl: gameFetch.game.mCoverObjectId
-                ? serverUrl(`api/v1/object/${gameFetch.game.mCoverObjectId}`)
+                ? objectImageUrl(gameFetch.game.mCoverObjectId)
                 : undefined,
             };
           } catch {

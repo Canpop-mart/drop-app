@@ -54,17 +54,9 @@ import {
 import type { Component } from "vue";
 import type { NavigationItem } from "~/types";
 import { platform } from "@tauri-apps/plugin-os";
-import { invoke } from "@tauri-apps/api/core";
 import { UserIcon } from "@heroicons/vue/20/solid";
 
-const systemData = await invoke<{
-  clientId: string;
-  baseUrl: string;
-  dataDir: string;
-}>("fetch_system_data");
-
 const appState = useAppState();
-const devMode = useDevMode();
 
 // Make navigation reactive by wrapping in computed
 const navigation = computed(() => [
@@ -102,18 +94,12 @@ const navigation = computed(() => [
     prefix: "/settings/achievements",
     icon: TrophyIcon,
   },
-  // Cloud saves is dev-gated — it doesn't sync seamlessly enough for general
-  // use yet. Enable dev mode (/settings/developer) to access it.
-  ...(devMode.enabled.value
-    ? [
-        {
-          label: "Cloud Saves",
-          route: "/settings/cloudsaves",
-          prefix: "/settings/cloudsaves",
-          icon: CloudIcon,
-        },
-      ]
-    : []),
+  {
+    label: "Cloud Saves",
+    route: "/settings/cloudsaves",
+    prefix: "/settings/cloudsaves",
+    icon: CloudIcon,
+  },
   // Not dev-gated: this page holds the only setup UI for remote play, and the
   // Play-on-another-device buttons are visible to everyone, so hiding it left
   // people able to start a stream they could never set up.

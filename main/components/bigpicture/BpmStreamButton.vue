@@ -34,6 +34,7 @@
 
 <script setup lang="ts">
 import { SignalIcon } from "@heroicons/vue/20/solid";
+import { useRemoteSessions } from "~/composables/use-remote-sessions";
 import {
   useStreaming,
   type StreamingSession,
@@ -53,13 +54,25 @@ const emit = defineEmits<{
 const {
   sunshineStatus,
   checkSunshine,
-  listRemoteSessions,
   startStreamingSession,
   markSessionReady,
   registerGame,
 } = useStreaming();
 
-const availableSession = ref<StreamingSession | null>(null);
+// Shared with the page's own streaming composable: both used to run their own
+// 15s poll of the same endpoint on the same page.
+const { sessions, start } = useRemoteSessions();
+
+const availableSession = computed<StreamingSession | null>(
+  () =>
+    sessions.value.find(
+      (s) =>
+        s.game?.id === props.gameId &&
+        (s.status === "Ready" ||
+          s.status === "Starting" ||
+          s.status === "Streaming"),
+    ) ?? null,
+);
 const hosting = ref(false);
 const canHost = computed(
   () =>
@@ -69,27 +82,10 @@ const canHost = computed(
     !hosting.value,
 );
 
-let pollInterval: ReturnType<typeof setInterval> | null = null;
-
 onMounted(async () => {
   await checkSunshine();
-  await refreshSessions();
-  pollInterval = setInterval(refreshSessions, 15_000);
+  await start();
 });
-
-onUnmounted(() => {
-  if (pollInterval) clearInterval(pollInterval);
-});
-
-async function refreshSessions() {
-  const sessions = await listRemoteSessions();
-  availableSession.value =
-    sessions.find(
-      (s) =>
-        s.game?.id === props.gameId &&
-        (s.status === "Ready" || s.status === "Starting" || s.status === "Streaming"),
-    ) ?? null;
-}
 
 function connectToStream() {
   if (availableSession.value) {

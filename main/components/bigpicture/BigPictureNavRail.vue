@@ -56,11 +56,9 @@
 <script setup lang="ts">
 import {
   HomeIcon,
-  Square3Stack3DIcon,
   ShoppingBagIcon,
   ChatBubbleLeftRightIcon,
   MegaphoneIcon,
-  NewspaperIcon,
   Cog6ToothIcon,
   ArrowDownTrayIcon,
   ArrowsPointingInIcon,
@@ -78,9 +76,11 @@ const bigPicture = useBigPictureMode();
 const registerNav = useBpFocusableGroup("nav");
 const focusNav = useFocusNavigation();
 
-// Set group order: nav rail first, then content
+// Set group order for LB/RB cycling: nav rail, then the page, then the
+// persistent chrome (top-bar avatar, download strip). Chrome comes last so
+// it is never the default landing spot, but stays reachable.
 onMounted(() => {
-  focusNav.setGroupOrder(["nav", "content"]);
+  focusNav.setGroupOrder(["nav", "content", "chrome"]);
 });
 
 /**
@@ -100,12 +100,9 @@ async function selectNavItem(path: string) {
 }
 
 const navItems = [
+  // Home and Library used to be two entries pointing at two pages that showed
+  // the same games. They are one page now, so one entry.
   { route: "/bigpicture", icon: HomeIcon, label: "Home" },
-  {
-    route: "/bigpicture/library",
-    icon: Square3Stack3DIcon,
-    label: "Library",
-  },
   { route: "/bigpicture/store", icon: ShoppingBagIcon, label: "Store" },
   {
     route: "/bigpicture/community",
@@ -116,11 +113,6 @@ const navItems = [
     route: "/bigpicture/requests",
     icon: MegaphoneIcon,
     label: "Requests",
-  },
-  {
-    route: "/bigpicture/news",
-    icon: NewspaperIcon,
-    label: "News",
   },
   {
     route: "/bigpicture/downloads",
@@ -141,7 +133,12 @@ const navItems = [
 
 function isActive(navRoute: string): boolean {
   if (navRoute === "/bigpicture") {
-    return route.path === "/bigpicture";
+    // Home owns the game pages that still live under /bigpicture/library/,
+    // otherwise opening a game leaves no rail entry lit at all.
+    return (
+      route.path === "/bigpicture" ||
+      route.path.startsWith("/bigpicture/library")
+    );
   }
   return route.path.startsWith(navRoute);
 }

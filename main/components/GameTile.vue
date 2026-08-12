@@ -58,6 +58,18 @@
         ROM
       </div>
 
+      <!-- Cloud-save marker — bottom-left, out of the way of the ROM pill and
+           the update/installed stack. Presence only: the tile is not the place
+           to say how many files or when, and the answer to that is one click
+           away in the game's Cloud Saves panel. -->
+      <div
+        v-if="cloudSaved && !compact"
+        class="absolute bottom-2 left-2 z-10 rounded-full bg-zinc-950/70 p-1 backdrop-blur-sm"
+        title="This game's saves are backed up to your Drop server"
+      >
+        <CloudIcon class="size-3.5 text-cyan-300" />
+      </div>
+
       <!-- Badge stack — top-right. "Update" trumps the plain installed dot.
            In compact mode we drop these onto the thumb as a single dot
            since the row already shows status text. -->
@@ -175,10 +187,11 @@
  *                    higher-density list view for big libraries.
  *
  * Deliberately presentational: takes an already-resolved `coverUrl`
- * rather than an object ID, because callers resolve through two
- * different protocols — `useObject()` for native `object://` IDs, and
- * `serverUrl("api/v1/object/...")` for store metadata.
+ * rather than an object ID. Callers resolve it with `objectImageUrl()`,
+ * which keeps every tile on the cached, concurrency-capped `object://`
+ * pipeline.
  */
+import { CloudIcon } from "@heroicons/vue/24/solid";
 import BpmBoxArtOverlay from "~/components/bigpicture/BpmBoxArtOverlay.vue";
 
 const props = defineProps<{
@@ -199,6 +212,12 @@ const props = defineProps<{
   updateVariant?: "update" | "older-build";
   /** Show the teal "ROM" pill for emulated games. */
   rom?: boolean;
+  /**
+   * Show the cloud marker: this game has saves on the Drop server. The parent
+   * resolves it from one library-wide lookup (`useCloudSaveBadges`), never
+   * per tile.
+   */
+  cloudSaved?: boolean;
   /** Corner radius — `xl` (default) for the main grids, `lg` for denser ones. */
   rounded?: "lg" | "xl";
   /**

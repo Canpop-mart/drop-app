@@ -104,6 +104,75 @@ async fn send_with_retry<F>(
 where
     F: Fn() -> reqwest_middleware::RequestBuilder,
 {
+    send_with_retry_inner(
+        method,
+        url.as_str(),
+        max_attempts,
+        ServerErrorPolicy::AsError,
+        || {
+            // Fresh auth header every attempt — the JWT lives only 10s.
+            build_request().header("Authorization", generate_authorization_header())
+        },
+    )
+    .await
+}
+
+/// What a caller wants when every attempt came back 5xx.
+enum ServerErrorPolicy {
+    /// Collapse it to [`RemoteAccessError::ServerUnavailable`]. What the typed
+    /// helpers want: they only ever look at a 2xx body, so an exhausted 5xx is
+    /// indistinguishable from an outage to them.
+    AsError,
+    /// Hand back the last real response, status, headers and body intact.
+    ///
+    /// For the `server://` proxy. Collapsing a 5xx into an error there made
+    /// `proxy_failure_status` reply with an empty-bodied 502, so the drop
+    /// server's own error page never reached the iframe (a failed page render
+    /// looked byte-identical to an empty one) and every `apiFetch` message read
+    /// "502 Bad Gateway" no matter what the server actually said. Discarding an
+    /// upstream error body is a proxy failing at its one job.
+    PassThrough,
+}
+
+/// The same retry core *without* the per-attempt JWT.
+///
+/// Only for callers that already carry their own credentials. `server://`
+/// proxies the signed-in user's web token, and `reqwest`'s `.header()` appends
+/// rather than replaces, so minting a second `Authorization` header here would
+/// send the backend an ambiguous pair. Everything else should go through
+/// [`remote_request`] or the `make_authenticated_*` shims.
+///
+/// Because that proxy is the surface the user reads errors off, an exhausted 5xx
+/// is passed through rather than collapsed — see [`ServerErrorPolicy`].
+pub async fn send_with_retry_raw<F>(
+    method: &Method,
+    url: &str,
+    max_attempts: u32,
+    build_request: F,
+) -> Result<reqwest::Response, RemoteAccessError>
+where
+    F: Fn() -> reqwest_middleware::RequestBuilder,
+{
+    send_with_retry_inner(
+        method,
+        url,
+        max_attempts,
+        ServerErrorPolicy::PassThrough,
+        build_request,
+    )
+    .await
+}
+
+async fn send_with_retry_inner<F>(
+    method: &Method,
+    url: &str,
+    max_attempts: u32,
+    on_server_error: ServerErrorPolicy,
+    build_request: F,
+) -> Result<reqwest::Response, RemoteAccessError>
+where
+    F: Fn() -> reqwest_middleware::RequestBuilder,
+{
     let max_attempts = max_attempts.max(1);
     let mut last_err: Option<RemoteAccessError> = None;
 
@@ -118,10 +187,7 @@ where
             debug!("[REQ] {method} {url} (attempt 1/{max_attempts})");
         }
 
-        // Fresh auth header every attempt — the JWT lives only 10s.
-        let builder = build_request().header("Authorization", generate_authorization_header());
-
-        match builder.send().await {
+        match build_request().send().await {
             Ok(response) => {
                 let status = response.status();
                 if status.is_server_error() || status.as_u16() == 429 {
@@ -129,10 +195,20 @@ where
                     warn!(
                         "[REQ] {method} {url} returned {status} (attempt {attempt}/{max_attempts})"
                     );
-                    last_err = Some(RemoteAccessError::ServerUnavailable(format!(
-                        "HTTP {status}"
-                    )));
-                    continue;
+                    if attempt < max_attempts {
+                        last_err = Some(RemoteAccessError::ServerUnavailable(format!(
+                            "HTTP {status}"
+                        )));
+                        continue;
+                    }
+                    // Out of attempts. Either hand the caller the real response
+                    // or the classified error, depending on what it asked for.
+                    return match on_server_error {
+                        ServerErrorPolicy::PassThrough => Ok(response),
+                        ServerErrorPolicy::AsError => Err(
+                            RemoteAccessError::ServerUnavailable(format!("HTTP {status}")),
+                        ),
+                    };
                 }
                 // 2xx or a non-retryable 4xx — hand back to the caller, which
                 // decides how to interpret the status.

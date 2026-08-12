@@ -250,11 +250,13 @@ async fn check_and_report_local(
     let mut new_reports = Vec::new();
 
     for app_id in goldberg_app_ids {
-        info!("{TAG} Checking local files for AppID {app_id} (game {game_id})");
+        // Both of these fire on every poll of a running game, i.e. four times a
+        // minute per launch, and neither says anything until the count changes.
+        debug!("{TAG} Checking local files for AppID {app_id} (game {game_id})");
 
         // Use the unified reader that auto-selects based on emulator type
         let earned = goldberg::read_earned(app_id, emulator_info);
-        info!(
+        debug!(
             "{TAG} AppID {app_id}: {} earned achievements on disk, {} already known",
             earned.len(),
             known_unlocked_external_ids.len()
@@ -302,7 +304,7 @@ async fn check_and_report_local(
     }
 
     if new_reports.is_empty() {
-        info!("{TAG} No new local achievements for game {game_id}");
+        debug!("{TAG} No new local achievements for game {game_id}");
     }
     new_reports
 }
@@ -633,7 +635,7 @@ pub async fn poll_achievements(
             AchievementMode::RetroAchievements => {
                 first_poll = false;
 
-                info!("{TAG} Polling RA for game {game_id} (known unlocked: {})", known_unlocked.len());
+                debug!("{TAG} Polling RA for game {game_id} (known unlocked: {})", known_unlocked.len());
                 // Poll the server which checks RA API for new unlocks
                 let new_unlocks = poll_ra(&game_id).await;
 

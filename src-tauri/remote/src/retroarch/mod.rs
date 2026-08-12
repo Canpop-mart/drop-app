@@ -48,15 +48,12 @@ use std::path::{Path, PathBuf};
 
 // Re-export the public surface so existing `remote::retroarch::*` call sites
 // in the `process` crate and the root crate keep compiling without edits.
+pub use controllers::{detect_pad_family, PadFamily};
 pub use cores::{resolve_core_for_rom, EXTENSION_CORE_MAP};
 pub use ra::{
     check_rom_hash, detect_ra_login_failure, fetch_ra_credentials, hash_rom,
     mark_credentials_expired, RACredentials, RAHashEntry, RAHashesResponse, RomHashStatus,
 };
-
-/// Directory (relative to the RetroArch install root) that per-game saves go
-/// into. The cloud-save system looks for `<emulator_install>/drop-saves/<id>/`.
-const DROP_SAVES_DIR: &str = "drop-saves";
 
 /// Keys older Drop versions wrote into `retroarch.cfg` that never belonged in
 /// that file, deleted on every patch alongside [`controllers::STALE_INPUT_KEYS`].
@@ -85,19 +82,30 @@ pub struct RetroArchInfo {
 /// Detects whether the emulator at `emulator_install_dir` is RetroArch and,
 /// if so, writes/patches its config for a zero-config launch.
 ///
-/// `game_id` keys the per-game save directory. `ra_credentials`, when present,
-/// is injected so RetroArch logs into RetroAchievements automatically.
-/// `user_config` carries the per-game controller / quality / aspect-ratio /
-/// CRT choices. `rom_path` is used to scope BIOS warnings and pick a
-/// shader/controller-device appropriate to the ROM's platform.
+/// `user_id` + `game_id` key the per-game save directory — this is the writer
+/// half of [`crate::save_sync::emu_saves_root`], and it must agree with the
+/// scanner or RetroArch writes saves somewhere sync never looks. `None` is the
+/// signed-out layout. `ra_credentials`, when present, is injected so RetroArch
+/// logs into RetroAchievements automatically. `user_config` carries the
+/// per-game controller / quality / aspect-ratio / CRT choices. `rom_path` is
+/// used to scope BIOS warnings and pick a shader/controller-device appropriate
+/// to the ROM's platform.
+///
+/// `detected_pad` is the layout family of whatever pad is plugged in right now,
+/// resolved by the caller (which owns the input backend). It only decides
+/// anything when the user's per-game controller setting is "Auto"; an explicit
+/// choice always wins, so a misdetected pad stays correctable by hand.
 ///
 /// Returns `Some(RetroArchInfo)` if RetroArch was detected and configured, or
 /// `None` if this is not a RetroArch install.
+#[allow(clippy::too_many_arguments)]
 pub fn configure_retroarch_for_game(
     emulator_install_dir: &str,
+    user_id: Option<&str>,
     game_id: &str,
     ra_credentials: Option<&RACredentials>,
     user_config: Option<&UserConfiguration>,
+    detected_pad: PadFamily,
     rom_path: Option<&str>,
 ) -> Option<RetroArchInfo> {
     let emu_root = PathBuf::from(emulator_install_dir);
@@ -123,7 +131,21 @@ pub fn configure_retroarch_for_game(
     let cores_dir = emu_root.join("cores");
     let system_dir = emu_root.join("system");
     let assets_dir = emu_root.join("assets");
-    let saves_base = emu_root.join(DROP_SAVES_DIR).join(game_id);
+    // Mark this account's root the moment it exists, not only when the
+    // migration creates it. An account that first signs in after the migration
+    // has already finished would otherwise have an unmarked root, and the next
+    // layout sweep would read it as a stray game directory and file another
+    // person's saves under its own id.
+    if let Some(user_id) = user_id
+        && let Err(e) = crate::save_sync::ensure_user_root(&emu_root, user_id)
+    {
+        warn!("[RETROARCH] {e}");
+    }
+    // Not `emu_saves_root`: while the one-time move into the per-user layout
+    // is unfinished the saves are still in the legacy directory, and pointing
+    // RetroArch at the per-user path would boot the game from a blank save and
+    // write a second divergent copy of it.
+    let saves_base = crate::save_sync::resolve_emu_saves_root(&emu_root, user_id, game_id);
     let savefile_dir = saves_base.join("saves");
     let savestate_dir = saves_base.join("states");
     let logs_dir = emu_root.join("logs");
@@ -159,12 +181,36 @@ pub fn configure_retroarch_for_game(
     // RetroAchievements — enable cheevos + inject Connect credentials.
     let ra_token_expired = apply_cheevos_overrides(&mut overrides, ra_credentials);
 
-    controllers::apply_hotkey_bindings(&mut overrides);
+    // One family decides both the face buttons and the hotkey combos. An
+    // explicit per-game choice wins over detection; "Auto" takes the pad Drop
+    // can actually see. Resolved here rather than inside `apply_user_config`
+    // so the hotkeys, which are written first, cannot disagree with the face
+    // buttons written later.
+    let effective_pad = user_config
+        .and_then(|cfg| cfg.controller_type.as_ref())
+        .map(controllers::family_for_controller_type)
+        .unwrap_or(detected_pad);
+    controllers::apply_hotkey_bindings(&mut overrides, effective_pad);
 
     // ── Per-game user config ─────────────────────────────────────────────
     let mut crt_shader_path: Option<String> = None;
     if let Some(cfg) = user_config {
-        apply_user_config(cfg, &mut overrides, &emu_root, &remaps_dir, rom_path, &mut crt_shader_path);
+        apply_user_config(
+            cfg,
+            &mut overrides,
+            &emu_root,
+            &remaps_dir,
+            rom_path,
+            detected_pad,
+            &mut crt_shader_path,
+        );
+    } else {
+        // No per-game config at all (a ROM imported by a disk scan, before its
+        // GameVersion has been synced). Still write the detected pad's
+        // fallback — the alternative is the XInput table by default, which is
+        // exactly the bug.
+        controllers::cleanup_nintendo_remaps(&remaps_dir);
+        controllers::set_face_button_fallback(&mut overrides, detected_pad);
     }
 
     log_diagnostic_overrides(&overrides);
@@ -452,22 +498,24 @@ fn apply_cheevos_overrides(
 
 /// Applies the per-game user config (controller layout, quality, aspect ratio,
 /// CRT shader) into the `retroarch.cfg` overrides map.
+#[allow(clippy::too_many_arguments)]
 fn apply_user_config(
     cfg: &UserConfiguration,
     overrides: &mut HashMap<&str, String>,
     emu_root: &Path,
     remaps_dir: &Path,
     rom_path: Option<&str>,
+    detected_pad: PadFamily,
     crt_shader_path: &mut Option<String>,
 ) {
     // Controller layout.
     if let Some(controller) = &cfg.controller_type {
         controllers::apply_controller_mappings(overrides, controller, remaps_dir);
-        info!("[RETROARCH] Applied {controller:?} controller layout");
+        info!("[RETROARCH] Applied {controller:?} controller layout (user override)");
     } else {
-        // "Auto" — clean any stale remap files and set the XInput fallback.
+        // "Auto" — clean any stale remap files and bind the pad Drop detected.
         controllers::cleanup_nintendo_remaps(remaps_dir);
-        controllers::set_xinput_positional_fallback(overrides);
+        controllers::set_face_button_fallback(overrides, detected_pad);
     }
 
     // Quality preset (frontend half).

@@ -6,7 +6,7 @@ use futures_lite::StreamExt;
 use log::{debug, warn};
 use remote::{
     auth::{auth_initiate_logic, generate_authorization_header},
-    cache::{cache_object, get_cached_object},
+    cache::{cache_object, clear_cached_object, get_cached_object},
     error::RemoteAccessError,
     requests::generate_url,
     setup,
@@ -93,6 +93,15 @@ pub fn sign_out(app: AppHandle) {
     {
         let mut handle = borrow_db_mut_checked();
         handle.auth = None;
+    }
+
+    // Drop the cached account objects too. `auth = None` only stops new
+    // requests; the cached `user` object survives, and it is what save sync
+    // reads to decide whose saves these are. Leaving it behind means the next
+    // person to use this PC scopes their saves to the previous account before
+    // they have even signed in. Mirrors the post-handshake clear in `lib.rs`.
+    for key in ["user", "collections", "library"] {
+        let _ = clear_cached_object(key);
     }
 
     // Update app state

@@ -96,6 +96,7 @@ impl ProcessManager<'_> {
         // Consumes the per-process fields it needs (the process is already
         // out of the table, so moving them is safe).
         spawn_post_exit_sync(
+            self.app_handle.clone(),
             process.playtime_session_id,
             process.save_snapshot,
             &game_id,
@@ -245,6 +246,7 @@ fn describe_exit(result: &Result<ExitStatus, std::io::Error>, manually_killed: b
 /// task below retries reading it; moving the `Arc<Mutex>` itself (rather than
 /// snapshotting the `Option`) preserves that race resolution.
 fn spawn_post_exit_sync(
+    app_handle: tauri::AppHandle,
     session_slot: Arc<std::sync::Mutex<Option<String>>>,
     snapshot: Option<crate::process_manager::SaveSyncSnapshot>,
     game_id: &str,
@@ -290,29 +292,73 @@ fn spawn_post_exit_sync(
             }
 
         if let Some(snap) = snapshot {
-            upload_changed_saves_for(&snap).await;
+            upload_changed_saves_for(&app_handle, &snap).await;
         }
     });
 }
 
+/// The two conditions the post-exit upload needs, both of which are about not
+/// destroying something irreplaceable.
+///
+/// `cloud_saves_enabled` is a belt-and-braces re-check: the pre-launch path
+/// already produces no snapshot when the setting is off, so it only matters if
+/// the user toggled it off mid-session.
+///
+/// `synced_ok` is the one that prevents cross-device loss. The exit path
+/// uploads every file whose hash differs from `pre_hashes`, but when the
+/// pre-launch sync-check or download failed or timed out, `pre_hashes` is just
+/// "what happened to be on this disk" — not a baseline the cloud agreed to.
+/// Uploading against it pushes stale local bytes over whatever another machine
+/// wrote, so one slow connection here would eat a save made somewhere else.
+/// The session's changes stay on disk and the next successful sync surfaces
+/// them as a normal conflict instead.
+fn post_exit_upload_allowed(cloud_saves_enabled: bool, synced_ok: bool) -> bool {
+    cloud_saves_enabled && synced_ok
+}
+
 /// Upload whatever saves changed during the session, comparing against the
 /// pre-launch snapshot, then update the local manifest.
-async fn upload_changed_saves_for(snap: &crate::process_manager::SaveSyncSnapshot) {
-    // Belt-and-braces gate. The pre-launch path already short-circuits when
-    // cloud_saves_enabled=false (no snapshot is produced), so this branch is
-    // normally unreachable — but if a snapshot was created and the user
-    // toggled the setting off mid-session, we honour that here too.
-    if !database::borrow_db_checked().settings.cloud_saves_enabled {
-        info!(
-            "[SAVE-SYNC] cloud_saves_enabled=false — skipping post-exit upload for {}",
-            snap.game_id
-        );
+async fn upload_changed_saves_for(
+    app_handle: &tauri::AppHandle,
+    snap: &crate::process_manager::SaveSyncSnapshot,
+) {
+    use crate::process_manager::save_sync::{
+        PHASE_UPLOAD, backed_up_message, describe_failure, emit_sync_complete, emit_sync_error,
+        emit_upload_failures,
+    };
+
+    let enabled = database::borrow_db_checked().settings.cloud_saves_enabled;
+    if !post_exit_upload_allowed(enabled, snap.synced_ok) {
+        if !enabled {
+            info!(
+                "[SAVE-SYNC] cloud_saves_enabled=false — skipping post-exit upload for {}",
+                snap.game_id
+            );
+        } else {
+            // The one skip the user has to hear about: their session ended and
+            // nothing was backed up, for a reason that happened minutes ago at
+            // launch and left no trace on screen.
+            emit_sync_error(
+                app_handle,
+                &snap.game_id,
+                PHASE_UPLOAD,
+                "This session's saves were not backed up, because the sync before launch did \
+                 not finish. Your progress is still on this PC. Back it up from the game's \
+                 Cloud Saves panel.",
+                true,
+            );
+        }
         return;
     }
 
     let mut current_saves = Vec::new();
     if let Some(emu_root) = &snap.emu_root {
-        current_saves.extend(remote::save_sync::scan_emu_saves(emu_root, &snap.game_id));
+        current_saves.extend(remote::save_sync::scan_emu_saves(
+            emu_root,
+            Some(&snap.user_id),
+            &snap.game_id,
+            snap.switch_title_id.as_deref(),
+        ));
     }
     if let Some(name) = &snap.game_name {
         current_saves.extend(remote::save_sync::scan_pc_saves(
@@ -322,39 +368,91 @@ async fn upload_changed_saves_for(snap: &crate::process_manager::SaveSyncSnapsho
         ));
     }
 
+    // Ask what will fit before pushing it. The 413 the server would otherwise
+    // return arrives after the bytes have crossed the wire and after the only
+    // moment the user could have freed some room, and it lands as "this session
+    // was not backed up" with no warning that it was coming.
+    //
+    // Per file, not per batch: the server stores everything that fits and
+    // rejects only the rest, so refusing the whole session over one oversized
+    // save would leave progress on this disk that the server would have taken.
+    let changed = remote::save_sync::changed_files(&snap.pre_hashes, &current_saves);
+    let plan = remote::save_sync::preflight_quota(&snap.game_id, &changed).await;
+    if let Some(message) = &plan.message {
+        emit_sync_error(app_handle, &snap.game_id, PHASE_UPLOAD, message, false);
+    }
+    if plan.nothing_fits() {
+        return;
+    }
+    let skipped: std::collections::HashSet<String> = plan.skipped.iter().cloned().collect();
+    let uploadable: Vec<remote::save_sync::LocalSaveFile> = current_saves
+        .iter()
+        .filter(|f| !skipped.contains(&f.filename))
+        .cloned()
+        .collect();
+
     match remote::save_sync::upload_changed_saves(
         &snap.game_id,
         &snap.pre_hashes,
-        &current_saves,
+        &uploadable,
     )
     .await
     {
-        Ok((count, errors)) => {
-            if count > 0 {
-                info!("[SAVE-SYNC] Uploaded {count} saves for game {}", snap.game_id);
-            }
-            for err in &errors {
-                warn!("[SAVE-SYNC] Upload error: {err}");
-            }
-            // Persist the final synced state.
-            let mut manifest = remote::save_sync::load_manifest(&snap.game_id);
-            for file in &current_saves {
-                manifest.files.insert(
-                    file.filename.clone(),
-                    remote::save_sync::SyncFileEntry {
-                        save_type: file.save_type.clone(),
-                        synced_hash: file.data_hash.clone(),
-                        cloud_id: None,
-                        synced_at: chrono::Utc::now().to_rfc3339(),
-                    },
+        Ok((uploaded, failures)) => {
+            // The one moment in the whole feature that says "your progress is
+            // safe". It was an info! line in a log nobody reads.
+            if let Some(message) = backed_up_message(uploaded.len()) {
+                emit_sync_complete(
+                    app_handle,
+                    &snap.game_id,
+                    PHASE_UPLOAD,
+                    uploaded.len(),
+                    &message,
                 );
             }
-            manifest.last_synced_at = Some(chrono::Utc::now().to_rfc3339());
+            // Denominator is what we actually tried to push (the files that
+            // changed this session), not every save on disk — "2 of 200"
+            // reads like a disaster when 198 of them simply did not change.
+            emit_upload_failures(
+                app_handle,
+                &snap.game_id,
+                &failures,
+                uploaded.len() + failures.len(),
+                "after this session",
+            );
+            // Persist the final synced state via the shared recorder, which
+            // skips files that only appear in `failures` and stamps the rest
+            // with the cloud id the server just handed back.
+            let cloud_ids: std::collections::HashMap<String, String> =
+                uploaded.into_iter().collect();
+            // Quota-skipped files belong here for the same reason server
+            // rejections do: they are not in the cloud, and stamping them with
+            // this session's hash would stop every future session retrying them.
+            let mut unsynced: Vec<String> =
+                failures.iter().map(|f| f.filename.clone()).collect();
+            unsynced.extend(plan.skipped.iter().cloned());
+            let mut manifest =
+                remote::save_sync::load_manifest(&snap.user_id, &snap.game_id);
+            remote::save_sync::record_synced_files(
+                &mut manifest,
+                &current_saves,
+                &cloud_ids,
+                &unsynced,
+            );
             if let Err(e) = remote::save_sync::save_manifest(&manifest) {
                 warn!("[SAVE-SYNC] Failed to save manifest: {e}");
             }
         }
-        Err(e) => warn!("[SAVE-SYNC] Post-exit sync failed: {e}"),
+        Err(e) => {
+            let (message, retryable) = describe_failure(&e.to_string());
+            emit_sync_error(
+                app_handle,
+                &snap.game_id,
+                PHASE_UPLOAD,
+                &format!("This session's saves could not be backed up. {message}"),
+                retryable || e.is_retryable(),
+            );
+        }
     }
 }
 
@@ -411,5 +509,21 @@ pub(crate) async fn run_playtime_heartbeat_loop(session_id: String, cancel: Arc<
                 let _ = remote::playtime::heartbeat_playtime(&session_id).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::post_exit_upload_allowed;
+
+    /// A pre-launch sync that never completed leaves `pre_hashes` describing
+    /// this disk rather than the cloud, so uploading against it overwrites
+    /// another device's row. Losing this upload is recoverable; that is not.
+    #[test]
+    fn an_incomplete_pre_launch_sync_blocks_the_upload() {
+        assert!(post_exit_upload_allowed(true, true));
+        assert!(!post_exit_upload_allowed(true, false));
+        assert!(!post_exit_upload_allowed(false, true));
+        assert!(!post_exit_upload_allowed(false, false));
     }
 }

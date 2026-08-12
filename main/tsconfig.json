@@ -1,5 +1,10 @@
 {
   // https://nuxt.com/docs/guide/concepts/typescript
   "extends": "./.nuxt/tsconfig.json",
+  "compilerOptions": {
+    // `tests/` runs on the Node test runner, which resolves ESM by real path
+    // and so needs the `.ts` extension in its imports. Safe with noEmit.
+    "allowImportingTsExtensions": true
+  },
   "exclude": ["src-tauri/**/*"]
 }

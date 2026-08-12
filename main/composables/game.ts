@@ -24,6 +24,53 @@ const gameStatusRegistry: { [key: string]: Ref<GameStatus> } = {};
 // removed. Without this, a stale entry's listener would leak.
 const gameStatusUnlisteners: { [key: string]: UnlistenFn } = {};
 
+// Ids whose `update_game/{id}` subscription has been requested. `listen()` is
+// async, so the unlistener map alone can't dedupe two subscribe calls made in
+// the same tick — which is exactly what happens when a batch seed and a
+// `useGame()` race for the same id.
+const gameStatusSubscribed = new Set<string>();
+
+/**
+ * Keep a game's cached status (and version) ref live for the lifetime of its
+ * registry entry. Registered exactly once per game and only torn down by
+ * `evictGame`, so `invalidateGame` can reuse the refs freely.
+ */
+const subscribeGameStatus = (gameId: string) => {
+  if (gameStatusSubscribed.has(gameId)) return;
+  gameStatusSubscribed.add(gameId);
+
+  listen(`update_game/${gameId}`, (event) => {
+    const payload: {
+      status: RawGameStatus;
+      version?: GameVersion;
+    } = event.payload as any;
+    // The registry entry may have been invalidated between the event
+    // firing and this callback running; guard against a stale write.
+    if (gameStatusRegistry[gameId]) {
+      gameStatusRegistry[gameId].value = parseStatus(payload.status);
+    }
+    if (payload.version && gameRegistry[gameId]) {
+      gameRegistry[gameId].version.value = payload.version;
+    }
+  })
+    .then((unlisten) => {
+      // If the game was evicted while the listener was still being
+      // registered, unlisten immediately.
+      if (gameStatusSubscribed.has(gameId)) {
+        gameStatusUnlisteners[gameId] = unlisten;
+      } else {
+        unlisten();
+      }
+    })
+    .catch((e) => {
+      gameStatusSubscribed.delete(gameId);
+      console.error(
+        `[useGame] failed to register update_game listener for ${gameId}:`,
+        e,
+      );
+    });
+};
+
 /**
  * Refresh one game's cached data from the backend, **in place**.
  *
@@ -77,6 +124,7 @@ export const invalidateGame = async (gameId: string) => {
  * Used when a refresh is impossible (see `invalidateGame`'s catch).
  */
 const evictGame = (gameId: string) => {
+  gameStatusSubscribed.delete(gameId);
   const unlisten = gameStatusUnlisteners[gameId];
   if (unlisten) {
     unlisten();
@@ -92,12 +140,42 @@ const evictGame = (gameId: string) => {
  * install completion, scan import) without naming a specific game.
  */
 export const invalidateAllGames = async () => {
-  const ids = new Set([
-    ...Object.keys(gameRegistry),
-    ...Object.keys(gameStatusRegistry),
-  ]);
-  devLog("state", `[invalidateAllGames] refreshing ${ids.size} cached game(s)`);
-  await Promise.all([...ids].map((id) => invalidateGame(id)));
+  // Only entries holding a full Game object need `fetch_game`. Entries seeded
+  // by `useGameStatuses` (the library grid, the sidebar) hold a status ref and
+  // nothing else, and a whole library's worth of them would otherwise be one
+  // `fetch_game` per game on every `update_library` event.
+  const detailed = Object.keys(gameRegistry);
+  const statusOnly = Object.keys(gameStatusRegistry).filter(
+    (id) => !gameRegistry[id],
+  );
+  devLog(
+    "state",
+    `[invalidateAllGames] refreshing ${detailed.length} cached game(s) + ${statusOnly.length} status(es)`,
+  );
+
+  const work: Promise<unknown>[] = detailed.map((id) => invalidateGame(id));
+  if (statusOnly.length > 0) {
+    work.push(
+      invoke<Array<[string, RawGameStatus]>>("fetch_game_statuses", {
+        ids: statusOnly,
+      })
+        .then((pairs) => {
+          for (const [gameId, raw] of pairs) {
+            const statusRef = gameStatusRegistry[gameId];
+            if (!statusRef) continue;
+            try {
+              statusRef.value = parseStatus(raw);
+            } catch {
+              statusRef.value = { type: "Remote" };
+            }
+          }
+        })
+        .catch((e) => {
+          console.warn("[invalidateAllGames] batch status refresh failed:", e);
+        }),
+    );
+  }
+  await Promise.all(work);
 };
 
 // The `update_library` event is the backend's "the installed set changed"
@@ -152,6 +230,51 @@ export const parseStatus = (status: RawGameStatus): GameStatus => {
   throw new Error("No game status: " + JSON.stringify(status));
 };
 
+/**
+ * Populate the shared status registry for many games in ONE IPC call.
+ *
+ * A view that renders a whole library used to `await useGame()` per game, i.e.
+ * one `fetch_game` round trip each. `fetch_game_statuses` reads every status
+ * under a single read lock instead. The seeded entries are the same refs
+ * `useGame` hands out and get the same `update_game/{id}` subscription, so a
+ * download starting or a game exiting still updates the view live.
+ *
+ * Returns only the ids it could resolve; callers must tolerate a missing one.
+ */
+export const useGameStatuses = async (
+  ids: string[],
+): Promise<{ [key: string]: Ref<GameStatus> }> => {
+  const uncached = ids.filter((id) => !gameStatusRegistry[id]);
+  if (uncached.length > 0) {
+    const pairs = await invoke<Array<[string, RawGameStatus]>>(
+      "fetch_game_statuses",
+      { ids: uncached },
+    );
+    for (const [gameId, raw] of pairs) {
+      if (gameStatusRegistry[gameId]) continue;
+      let status: GameStatus;
+      try {
+        status = parseStatus(raw);
+      } catch {
+        // No status row yet. fetch_library seeds one for every library game,
+        // but a cached library read returns before that seed has run, so a
+        // freshly-added game legitimately lands here. Treat it as not
+        // installed rather than dropping it from the caller's list.
+        status = { type: "Remote" };
+      }
+      gameStatusRegistry[gameId] = ref(status);
+      subscribeGameStatus(gameId);
+    }
+  }
+
+  const out: { [key: string]: Ref<GameStatus> } = {};
+  for (const id of ids) {
+    const status = gameStatusRegistry[id];
+    if (status) out[id] = status;
+  }
+  return out;
+};
+
 export const useGame = async (gameId: string) => {
   devLog("state",`[useGame] Fetching game: ${gameId} (cached: ${!!gameRegistry[gameId]})`);
   if (!gameRegistry[gameId]) {
@@ -168,43 +291,16 @@ export const useGame = async (gameId: string) => {
       console.timeEnd(`[useGame] invoke fetch_game ${gameId}`);
       devLog("state",`[useGame] Got game: ${data.game.mName}, status:`, data.status, "version:", !!data.version);
       gameRegistry[gameId] = { game: reactive(data.game), version: ref(data.version) };
-      if (!gameStatusRegistry[gameId]) {
+      if (gameStatusRegistry[gameId]) {
+        // A `useGameStatuses` seed may have read this game before its status
+        // row existed and fallen back to Remote. `fetch_game` creates the row,
+        // so its answer is the authoritative one — write it through the
+        // existing ref rather than replacing it, or every holder detaches.
+        gameStatusRegistry[gameId].value = parseStatus(data.status);
+      } else {
         gameStatusRegistry[gameId] = ref(parseStatus(data.status));
-
-        // Keep the status (and version) ref live for the lifetime of the
-        // cache entry. `invalidateGame` reuses these refs, so the listener
-        // is registered exactly once per game and only torn down by
-        // `evictGame`. The unlisten handle is stored for that teardown.
-        listen(`update_game/${gameId}`, (event) => {
-          const payload: {
-            status: RawGameStatus;
-            version?: GameVersion;
-          } = event.payload as any;
-          // The registry entry may have been invalidated between the event
-          // firing and this callback running; guard against a stale write.
-          if (gameStatusRegistry[gameId]) {
-            gameStatusRegistry[gameId].value = parseStatus(payload.status);
-          }
-          if (payload.version && gameRegistry[gameId]) {
-            gameRegistry[gameId].version.value = payload.version;
-          }
-        })
-          .then((unlisten) => {
-            // If the game was invalidated while the listener was still
-            // being registered, unlisten immediately.
-            if (gameStatusRegistry[gameId]) {
-              gameStatusUnlisteners[gameId] = unlisten;
-            } else {
-              unlisten();
-            }
-          })
-          .catch((e) => {
-            console.error(
-              `[useGame] failed to register update_game listener for ${gameId}:`,
-              e,
-            );
-          });
       }
+      subscribeGameStatus(gameId);
     } catch (e) {
       console.error(`[useGame] FAILED for "${gameId}":`, e);
       console.error(`[useGame] Error type: ${e?.constructor?.name}, message: ${e instanceof Error ? e.message : String(e)}`);
@@ -221,7 +317,13 @@ export const useGame = async (gameId: string) => {
 
 export type LaunchResult =
   | { result: "Success" }
-  | { result: "InstallRequired"; data: [string, string] };
+  | {
+      result: "InstallRequired";
+      // `name` is the dependency's display name, resolved by the backend from
+      // its own cache. Null when that entry has never synced — surface the ids
+      // in that case rather than inventing a name.
+      data: { gameId: string; versionId: string; name: string | null };
+    };
 
 export type VersionOption = {
   versionId: string;

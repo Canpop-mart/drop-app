@@ -20,6 +20,27 @@
       <StreamingSetup @changed="onSetupChanged" />
     </div>
 
+    <!-- The listener behind this is the busiest thing Drop does at idle, so
+         anyone who never streams between their own machines can switch it off
+         and stop the traffic entirely. -->
+    <div class="mt-6">
+      <label class="flex items-start gap-3 text-sm text-zinc-300">
+        <input
+          v-model="streamingEnabled"
+          type="checkbox"
+          class="mt-0.5 rounded border-zinc-600 bg-zinc-800 text-blue-600 focus:ring-blue-500"
+          @change="saveStreamingEnabled"
+        />
+        <span>
+          Let my other devices start games on this PC
+          <span class="mt-0.5 block text-xs text-zinc-500">
+            Off means this PC ignores stream and install requests sent from your
+            Steam Deck or your other computers, and stops checking for them.
+          </span>
+        </span>
+      </label>
+    </div>
+
     <!-- Network access. Nothing outside this PC can reach remote play until
          Windows is told to allow it, and the only place that could be fixed used
          to be the first-run wizard: anyone who declined the administrator prompt,
@@ -443,6 +464,9 @@ const credentialsReset = ref(false);
 const streamingResolution = ref("1280x800");
 const resolutionSaved = ref(false);
 
+// Host-side listener for pushed stream / remote-install requests.
+const streamingEnabled = ref(true);
+
 // Client-side stream quality (used when this PC watches a stream).
 const streamingQuality = ref("balanced");
 const streamingHdr = ref(false);
@@ -697,6 +721,16 @@ async function saveStreamingQuality() {
   }
 }
 
+async function saveStreamingEnabled() {
+  try {
+    await invoke("update_settings", {
+      newSettings: { streamingEnabled: streamingEnabled.value },
+    });
+  } catch (e) {
+    console.error("[SETTINGS] Failed to save the remote play listener:", e);
+  }
+}
+
 async function saveStreamingToggles() {
   try {
     await invoke("update_settings", {
@@ -735,6 +769,9 @@ onMounted(async () => {
     }
     if (typeof settings.streamingHdr === "boolean") {
       streamingHdr.value = settings.streamingHdr;
+    }
+    if (typeof settings.streamingEnabled === "boolean") {
+      streamingEnabled.value = settings.streamingEnabled;
     }
     if (typeof settings.streamingAutoResolution === "boolean") {
       streamingAutoResolution.value = settings.streamingAutoResolution;

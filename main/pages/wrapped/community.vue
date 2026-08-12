@@ -185,7 +185,7 @@ import {
   useServerApi,
   type CommunityWrapped,
 } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import { formatPlaytime } from "~/composables/use-recent-games";
 
 useHead({ title: "Community Wrapped" });
@@ -232,7 +232,7 @@ const cards = computed(() => {
 });
 
 function objectUrl(o: string): string {
-  return serverUrl(`api/v1/object/${o}`);
+  return objectImageUrl(o);
 }
 function fmt(s: number): string {
   return formatPlaytime(s);

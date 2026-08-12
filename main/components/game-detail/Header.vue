@@ -194,14 +194,12 @@
             class="flex -space-x-1.5 ml-0.5"
           >
             <template v-for="p in players.slice(0, 3)" :key="p.userId">
-              <!-- Avatar URLs go through the Tauri `server://` protocol
-                   so the desktop webview can resolve them (a bare
-                   `/api/v1/object/...` path 404s in the file:// origin
-                   the webview runs in). The web build's serverUrl just
-                   returns the same path back. -->
+              <!-- Avatar URLs go through a Tauri protocol so the desktop
+                   webview can resolve them (a bare `/api/v1/object/...`
+                   path 404s in the file:// origin the webview runs in). -->
               <img
                 v-if="p.avatarObjectId"
-                :src="serverUrl(`api/v1/object/${p.avatarObjectId}`)"
+                :src="objectImageUrl(p.avatarObjectId)"
                 class="size-5 rounded-full ring-2 ring-zinc-800 object-cover bg-zinc-700"
                 referrerpolicy="no-referrer"
               />
@@ -247,7 +245,7 @@ import { InstalledType } from "~/types";
 import type { Game, GameStatus, GameVersion } from "~/types";
 import BannerFallback from "~/components/BannerFallback.vue";
 import type { GamePlayerEntry } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import {
   formatLastPlayed,
   formatPlaytime,

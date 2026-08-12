@@ -107,7 +107,13 @@ libc = "0.2"
 
 [dependencies.log4rs]
 version = "1.3.0"
-features = ["console_appender", "file_appender"]
+features = [
+    "console_appender",
+    "rolling_file_appender",
+    "compound_policy",
+    "size_trigger",
+    "fixed_window_roller",
+]
 
 [dependencies.rustbreak]
 version = "2"

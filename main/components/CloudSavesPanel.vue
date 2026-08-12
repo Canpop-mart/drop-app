@@ -28,17 +28,24 @@
           >
             {{ summaryText }}
           </p>
+          <!-- Storage. The cap has always been enforced and never shown, so
+               the first anyone heard of it was an upload being rejected. -->
+          <p v-if="quotaText" class="mt-0.5 text-xs truncate" :class="quotaClass">
+            {{ quotaText }}
+          </p>
         </div>
       </div>
       <div class="flex items-center gap-2 shrink-0">
         <button
           type="button"
           class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium bg-cyan-600/80 text-white hover:bg-cyan-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          :disabled="loading || syncing"
+          :disabled="loading || syncing || syncEnabled === false"
           :title="
-            isNativeGame && ludusaviChecked && !ludusaviAvailable
-              ? 'Install Ludusavi first to sync PC saves'
-              : 'Back up new local saves and pull down cloud-only saves'
+            syncEnabled === false
+              ? 'Turn cloud saves on in Settings to sync'
+              : isNativeGame && ludusaviChecked && !ludusaviAvailable
+                ? 'Install Ludusavi first to sync PC saves'
+                : 'Back up new local saves and pull down cloud-only saves'
           "
           @click.stop="reconcile"
         >
@@ -64,6 +71,36 @@
       leave-to-class="max-h-0 opacity-0"
     >
       <div v-if="expanded" class="border-t border-zinc-700/50">
+        <!-- Cloud saves is opt-in and off until the user turns it on. The
+             panel is on every game page now, so it has to say when the thing
+             it is a panel for is not running. -->
+        <div
+          v-if="syncEnabled === false"
+          class="mx-6 mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3"
+        >
+          <p class="text-sm font-medium text-amber-200">
+            Cloud saves are turned off
+          </p>
+          <p class="text-xs text-zinc-400 mt-1 leading-relaxed">
+            Nothing on this PC is being backed up. Turn cloud saves on in
+            Settings, under Cloud Saves. Anything already on your server is
+            still listed here.
+          </p>
+        </div>
+
+        <!-- Who owns what. PC saves really are shared between accounts on this
+             server, and the panel has to say so before someone is surprised
+             by another person's progress landing in their library. -->
+        <p class="px-6 pt-4 text-xs leading-relaxed text-zinc-500">
+          Emulator saves are backed up to your account alone, with one
+          exception: Switch games keep their saves inside the emulator's own
+          system storage, which every account on this computer shares. PC game
+          saves are shared with everyone on this Drop server, because Drop
+          finds them by where the game puts them on this computer rather than
+          by who is signed in. If two accounts have the same PC save, the one
+          played most recently is the one you see here.
+        </p>
+
         <!-- Sync result / error line. -->
         <p
           v-if="syncMessage"
@@ -125,24 +162,45 @@
           Loading cloud saves…
         </div>
 
-        <!-- Empty. -->
+        <!-- Empty. Three different empty states, because "nothing here" has
+             three different causes and only one of them is fixed by playing
+             the game. Telling someone to play a game Drop can never read the
+             saves of is the failure this replaced. -->
         <div
           v-else-if="!loading && rows.length === 0 && !loadError"
           class="px-6 py-10 text-center"
         >
           <CloudIcon class="mx-auto size-10 text-zinc-600 mb-3" />
-          <p class="text-sm text-zinc-400">No saves yet.</p>
-          <p
-            v-if="isNativeGame && ludusaviChecked && !ludusaviAvailable"
-            class="text-xs text-zinc-500 mt-1"
-          >
-            Install Ludusavi above, then play the game once so it writes its
-            saves.
-          </p>
-          <p v-else class="text-xs text-zinc-500 mt-1">
-            Play the game once so it writes its save files, then hit
-            <span class="text-zinc-400 font-medium">Sync</span>.
-          </p>
+          <template v-if="isNativeGame && ludusaviChecked && !ludusaviAvailable">
+            <p class="text-sm text-zinc-400">No saves yet.</p>
+            <p class="text-xs text-zinc-500 mt-1">
+              Install Ludusavi above, then play the game once so it writes its
+              saves.
+            </p>
+          </template>
+          <template v-else-if="saveLocationUnknown">
+            <p class="text-sm text-zinc-400">
+              Drop cannot find where this game stores its saves.
+            </p>
+            <p
+              class="text-xs text-zinc-500 mt-1.5 max-w-md mx-auto leading-relaxed"
+            >
+              {{ saveLocationUnknownDetail }}
+            </p>
+          </template>
+          <template v-else-if="syncEnabled === false">
+            <p class="text-sm text-zinc-400">Nothing backed up yet.</p>
+            <p class="text-xs text-zinc-500 mt-1">
+              Cloud saves are turned off, so Drop is not backing this game up.
+            </p>
+          </template>
+          <template v-else>
+            <p class="text-sm text-zinc-400">No saves yet.</p>
+            <p class="text-xs text-zinc-500 mt-1">
+              Play the game once so it writes its save files, then hit
+              <span class="text-zinc-400 font-medium">Sync</span>.
+            </p>
+          </template>
         </div>
 
         <!-- Unified status list — one row per save, deduped across cloud and
@@ -188,9 +246,31 @@
                 <span :class="stateMeta(row.state).labelClass">
                   {{ stateMeta(row.state).label }}
                 </span>
+                <!-- Only on shared rows: emulator saves are always yours, so
+                     naming an owner there would be noise. -->
+                <span v-if="row.ownedBy" class="text-zinc-500">
+                  Saved by {{ row.ownedBy }}
+                </span>
               </div>
+              <!-- A second copy of the same save must never be invisible.
+                   Newest wins, and the mtime that decides it comes from
+                   whichever machine uploaded, so silence here would let a
+                   fast clock hide someone's real progress. -->
+              <p v-if="row.shadowNote" class="mt-1 text-xs text-amber-400/80">
+                {{ row.shadowNote }}
+              </p>
               <p v-if="rowError[row.key]" class="mt-1.5 text-xs text-red-400">
                 {{ rowError[row.key] }}
+              </p>
+              <!-- Where a restored PC save actually landed. On a machine that
+                   has never run the game the destination comes from Ludusavi's
+                   catalogue rather than from a file on this disk, and nothing
+                   on screen used to name the folder that was written. -->
+              <p
+                v-if="rowNote[row.key]"
+                class="mt-1.5 text-xs text-zinc-500 break-all"
+              >
+                {{ rowNote[row.key] }}
               </p>
             </div>
 
@@ -283,12 +363,24 @@
             <h3 class="text-base font-semibold font-display text-zinc-100">
               Delete Cloud Save?
             </h3>
-            <p class="mt-2 text-sm text-zinc-400">
+            <p v-if="deleteIsShared" class="mt-2 text-sm text-zinc-400">
+              Delete the cloud copy of
+              <span class="text-zinc-200 font-medium">{{
+                deleteTarget.name
+              }}</span
+              >? This removes your copy only. PC game saves are shared with
+              everyone on this Drop server, so if another account still has
+              this save it can come back the next time you sync. The copy on
+              this computer stays where it is.
+            </p>
+            <p v-else class="mt-2 text-sm text-zinc-400">
               Permanently delete the cloud copy of
               <span class="text-zinc-200 font-medium">{{
                 deleteTarget.name
               }}</span
-              >? This cannot be undone. Your local save file isn't touched.
+              >? This cannot be undone. The copy on this computer stays where
+              it is, but your other devices will remove their copy the next
+              time you play there.
             </p>
           </div>
           <div class="flex justify-end gap-3 border-t border-zinc-700 px-6 py-4">
@@ -331,8 +423,12 @@
  * up not-backed-up files and pulls down cloud-only ones — but deliberately
  * leaves conflicts for an explicit per-row choice so it can never silently
  * clobber a copy. Restore is type-aware: emulator saves write to
- * `{install}/drop-saves/{gameId}/…`; PC saves re-scan with Ludusavi via
- * `restore_pc_cloud_save` so they land where the game actually reads them.
+ * `{install}/drop-saves/{userId}/{gameId}/…`; PC saves re-scan with Ludusavi
+ * via `restore_pc_cloud_save` so they land where the game actually reads them.
+ *
+ * Emulator saves belong to one account. PC saves are shared with every account
+ * on the server, so a row here can be somebody else's copy: `ownedBy` names
+ * them and `shadowNote` says when a second copy of the same save exists.
  */
 import {
   ArrowDownTrayIcon,
@@ -348,9 +444,15 @@ import {
 } from "@heroicons/vue/24/outline";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  cloudSaveQuotaLine,
+  cloudSaveQuotaPercent,
+} from "~/composables/cloud-save-quota";
+import {
   useServerApi,
   type CloudSaveListEntry,
+  type CloudSaveQuota,
 } from "~/composables/use-server-api";
+import type { BackupResult } from "~/types/save-sync";
 
 const props = withDefaults(
   defineProps<{
@@ -397,6 +499,17 @@ interface UnifiedRow {
   whenMs: number; // most recent activity, ms epoch
   cloud: CloudSaveListEntry | null;
   local: LocalSaveEntry | null;
+  /**
+   * Account that owns the cloud copy, shown only when the row can belong to
+   * someone else (a PC save). Null for emulator saves and local-only rows.
+   */
+  ownedBy: string | null;
+  /**
+   * Says out loud that another account holds a save with this filename, and
+   * whether the copy being shown is theirs rather than yours. Null when this
+   * row is the only copy on the server.
+   */
+  shadowNote: string | null;
 }
 
 const expanded = ref(true);
@@ -404,12 +517,54 @@ const loading = ref(false);
 const loadError = ref<string | null>(null);
 const entries = ref<CloudSaveListEntry[]>([]);
 const localEntries = ref<LocalSaveEntry[]>([]);
+const quota = ref<CloudSaveQuota | null>(null);
 
 // Ludusavi availability — probed on mount; gates the install prompt.
 const ludusaviAvailable = ref(false);
 const ludusaviChecked = ref(false);
 const ludusaviInstalling = ref(false);
 const ludusaviError = ref<string | null>(null);
+
+/**
+ * What Drop is able to find for this game, from `game_save_coverage`. Null
+ * until the check answers; a null keeps the empty state on its neutral
+ * wording rather than guessing at a cause.
+ */
+interface SaveCoverage {
+  ludusaviInstalled: boolean;
+  knownToLudusavi: boolean;
+  canonicalTitle: string | null;
+  emulated: boolean;
+  emulatorSupported: boolean;
+}
+const coverage = ref<SaveCoverage | null>(null);
+
+/**
+ * The master cloud-saves switch. Null until read. The feature is opt-in and
+ * off by default, and this panel now appears on every game page, so it has to
+ * be able to say "the thing you are looking at is not running".
+ */
+const syncEnabled = ref<boolean | null>(null);
+
+/**
+ * True when Drop has no way to locate this game's saves, so an empty list is
+ * permanent rather than a game that hasn't been played yet.
+ */
+const saveLocationUnknown = computed(() => {
+  const c = coverage.value;
+  if (!c) return false;
+  if (c.emulated) return !c.emulatorSupported;
+  // With Ludusavi missing the panel shows its install prompt instead, and
+  // that is a different (fixable) answer.
+  return c.ludusaviInstalled && !c.knownToLudusavi;
+});
+
+const saveLocationUnknownDetail = computed(() => {
+  if (coverage.value?.emulated) {
+    return "Drop can read saves from RetroArch and from Switch emulators. This game runs on a different emulator, which keeps its saves somewhere Drop does not know about.";
+  }
+  return "Drop uses Ludusavi's list of games to know where PC saves live, and this game is not on it. Playing it will not change that.";
+});
 
 // Header Sync state.
 const syncing = ref(false);
@@ -419,8 +574,21 @@ const syncError = ref(false);
 // Per-row busy / error, keyed by row.key (filename).
 const rowBusy = ref<Record<string, "backup" | "restore" | "delete">>({});
 const rowError = ref<Record<string, string>>({});
+/** Non-error per-row line, currently the path a restore wrote to. */
+const rowNote = ref<Record<string, string>>({});
 
 const deleteTarget = ref<UnifiedRow | null>(null);
+
+/**
+ * A PC save's delete is a different promise from an emulator save's: the
+ * server only tombstones the caller's own row, so another account's copy of
+ * the same shared file survives and can come back. The dialog says which
+ * promise it's making.
+ */
+const deleteIsShared = computed(() => {
+  const c = deleteTarget.value?.cloud;
+  return !!c && isPcSave(c);
+});
 
 // ── Derived: the unified list + summary ───────────────────────────────────────
 
@@ -430,6 +598,36 @@ function cloudMs(c: CloudSaveListEntry): number {
 }
 function localMs(l: LocalSaveEntry): number {
   return (l.modifiedAt || 0) * 1000;
+}
+
+/** "Ada", "Ada and Bob", "Ada, Bob and Cleo". */
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * What to say when more than one account has a save with this filename.
+ *
+ * Only one copy can be shown, and the one shown is whichever was played most
+ * recently. That is decided partly by a timestamp the other machine reported,
+ * so a copy losing is not proof it is older. Saying nothing would make a
+ * second copy of someone's progress invisible with no way to find out it
+ * exists.
+ */
+function shadowNote(cloud: CloudSaveListEntry): string | null {
+  const others = cloud.alsoHeldBy ?? [];
+  if (cloud.shadowedSaveId) {
+    return cloud.ownedBy
+      ? `You have your own copy of this save. ${cloud.ownedBy} played more recently, so theirs is the one shown.`
+      : "You have your own copy of this save, and a more recent one is shown instead.";
+  }
+  if (others.length > 0) {
+    return others.length > 1
+      ? `${joinNames(others)} also have saves with this name.`
+      : `${others[0]} also has a save with this name.`;
+  }
+  return null;
 }
 
 const rows = computed<UnifiedRow[]>(() => {
@@ -472,7 +670,20 @@ const rows = computed<UnifiedRow[]>(() => {
       whenMs = localMs(local!);
       saveType = local!.saveType;
     }
-    out.push({ key, name: displayName(key), saveType, state, size, whenMs, cloud, local });
+    const ownedBy =
+      cloud && cloud.ownedBy && isPcSave(cloud) ? cloud.ownedBy : null;
+    out.push({
+      key,
+      name: displayName(key),
+      saveType,
+      state,
+      size,
+      whenMs,
+      cloud,
+      local,
+      ownedBy,
+      shadowNote: cloud ? shadowNote(cloud) : null,
+    });
   }
 
   // Float the rows that need attention to the top, alphabetic within a state.
@@ -519,6 +730,26 @@ const summaryText = computed(() => {
       : `${total} save${total === 1 ? "" : "s"} · ${segs.join(" · ")}`;
   const ls = lastSyncedLabel.value;
   return ls ? `${head} · synced ${ls}` : head;
+});
+
+/**
+ * Storage line in the header. Account-wide rather than per-game, because the
+ * cap is: filling it up on one game is what stops the next one backing up.
+ */
+const quotaPercent = computed(() => cloudSaveQuotaPercent(quota.value));
+
+const quotaText = computed(() => {
+  const line = cloudSaveQuotaLine(quota.value);
+  if (!line) return "";
+  return quotaPercent.value >= 95
+    ? `${line}. Your cloud save space is nearly full.`
+    : line;
+});
+
+const quotaClass = computed(() => {
+  if (quotaPercent.value >= 95) return "text-red-400";
+  if (quotaPercent.value >= 80) return "text-amber-400";
+  return "text-zinc-500";
 });
 
 function stateMeta(state: SyncState): {
@@ -571,14 +802,19 @@ function isRowBusy(row: UnifiedRow): boolean {
 // ── Filename identity helpers ────────────────────────────────────────────────
 
 /**
- * Strip the PC-save namespace prefix for display. The scanner namespaces PC
- * saves so they don't collide with emulator saves; `pc__` is the current,
- * sanitize-safe prefix and `pc/` the legacy one.
+ * Turn a cloud filename into something readable. The scanner namespaces PC
+ * saves so they don't collide with emulator saves (`pc__` is the current,
+ * sanitize-safe prefix and `pc/` the legacy one), and it escapes path
+ * separators as `%2F` so a save nested in a subfolder keeps a distinct
+ * identity through the server's filename sanitizer. Both are undone here for
+ * display only — `row.key` stays the wire name every action is keyed on.
  */
 function displayName(filename: string): string {
-  if (filename.startsWith("pc__")) return filename.slice(4);
-  if (filename.startsWith("pc/")) return filename.slice(3);
-  return filename;
+  let name = filename;
+  if (name.startsWith("pc__")) name = name.slice(4);
+  else if (name.startsWith("pc/")) name = name.slice(3);
+  else if (name.startsWith("switch__")) name = name.slice(8);
+  return name.replaceAll("%2F", "/").replaceAll("%25", "%");
 }
 
 function isPcSave(entry: { saveType: string; filename: string }): boolean {
@@ -601,15 +837,20 @@ async function refresh() {
   try {
     // Cloud list + local disk scan in parallel. The local scan is best-effort
     // — a Ludusavi miss shouldn't blank the cloud list, so it soft-fails empty.
-    const [cloud, local] = await Promise.all([
+    // Quota rides along with the two calls the panel already makes. Like the
+    // local scan it soft-fails: an older server without the endpoint should
+    // cost the header a line, not the whole list.
+    const [cloud, local, q] = await Promise.all([
       api.saves.list(props.gameId),
       invoke<LocalSaveEntry[]>("scan_local_game_saves", {
         gameId: props.gameId,
         gameName: props.gameName,
       }).catch(() => [] as LocalSaveEntry[]),
+      api.saves.quota().catch(() => null),
     ]);
     entries.value = cloud;
     localEntries.value = local;
+    quota.value = q;
   } catch (e) {
     loadError.value =
       e instanceof Error
@@ -630,6 +871,36 @@ async function checkLudusavi() {
   }
 }
 
+async function readSyncEnabled() {
+  try {
+    const settings = await invoke<{ cloudSavesEnabled?: boolean }>(
+      "fetch_settings",
+    );
+    syncEnabled.value = settings?.cloudSavesEnabled === true;
+  } catch {
+    // Unknown, so say nothing rather than accuse the setting of being off.
+    syncEnabled.value = null;
+  }
+}
+
+/**
+ * Ask what Drop can find for this game. Separate from `checkLudusavi` because
+ * it runs Ludusavi's name resolution against a ~9 MB catalogue, so it is the
+ * slow half and must not hold up the install prompt.
+ */
+async function checkCoverage() {
+  coverage.value = null;
+  try {
+    coverage.value = await invoke<SaveCoverage>("game_save_coverage", {
+      gameId: props.gameId,
+      gameName: props.gameName,
+    });
+  } catch {
+    // Leave it null. The empty state falls back to neutral wording rather
+    // than claiming a cause we failed to determine.
+  }
+}
+
 async function installLudusavi() {
   if (ludusaviInstalling.value) return;
   ludusaviInstalling.value = true;
@@ -638,6 +909,8 @@ async function installLudusavi() {
     await invoke("install_ludusavi");
     ludusaviAvailable.value = true;
     await refresh();
+    // Only now can Drop answer whether the catalogue knows this game.
+    await checkCoverage();
   } catch (e) {
     ludusaviError.value =
       e instanceof Error
@@ -679,13 +952,16 @@ async function reconcile() {
     let pushed = 0;
     let pulled = 0;
     let pullFailed = 0;
+    let pushErrors: string[] = [];
 
     if (toPush.length > 0) {
-      pushed = await invoke<number>("backup_saves", {
+      const result = await invoke<BackupResult>("backup_saves", {
         gameId: props.gameId,
         gameName: props.gameName,
         filenames: toPush,
       });
+      pushed = result.uploaded;
+      pushErrors = result.errors;
     }
     for (const c of toPull) {
       try {
@@ -702,16 +978,30 @@ async function reconcile() {
     const segs: string[] = [];
     if (pushed > 0) segs.push(`backed up ${pushed}`);
     if (pulled > 0) segs.push(`restored ${pulled}`);
-    syncError.value = false;
-    if (segs.length === 0 && conflicts === 0 && pullFailed === 0) {
+
+    // A rejected file is a failure the server reported inside a 200, so the
+    // call "succeeded" with nothing uploaded. Reporting that as "Everything's
+    // already in sync." over rows still reading "Not backed up" is the exact
+    // lie this panel used to tell.
+    const failed = pushErrors.length + pullFailed;
+    syncError.value = failed > 0;
+    if (segs.length === 0 && conflicts === 0 && failed === 0) {
       syncMessage.value = "Everything's already in sync.";
     } else {
-      let msg = segs.length > 0 ? `Sync complete: ${segs.join(", ")}.` : "Sync complete.";
+      const parts: string[] = [];
+      if (segs.length > 0) parts.push(`Sync complete: ${segs.join(", ")}.`);
+      if (pushErrors.length > 0)
+        parts.push(
+          `${pushErrors.length} save${pushErrors.length === 1 ? "" : "s"} couldn't be backed up: ${pushErrors[0]}`,
+        );
       if (conflicts > 0)
-        msg += ` ${conflicts} conflict${conflicts === 1 ? "" : "s"} need${conflicts === 1 ? "s" : ""} a choice below.`;
+        parts.push(
+          `${conflicts} conflict${conflicts === 1 ? "" : "s"} need${conflicts === 1 ? "s" : ""} a choice below.`,
+        );
       if (pullFailed > 0)
-        msg += ` ${pullFailed} couldn't be restored (game not installed?).`;
-      syncMessage.value = msg;
+        parts.push(`${pullFailed} couldn't be restored (game not installed?).`);
+      if (parts.length === 0) parts.push("Sync complete.");
+      syncMessage.value = parts.join(" ");
     }
   } catch (e) {
     syncError.value = true;
@@ -743,11 +1033,18 @@ async function backupRows(keys: string[]) {
     delete rowError.value[k];
   }
   try {
-    await invoke("backup_saves", {
+    const result = await invoke<BackupResult>("backup_saves", {
       gameId: props.gameId,
       gameName: props.gameName,
       filenames: targets,
     });
+    // A 200 with an empty `results[]` is still a failure for this row: the
+    // server rejected the file and the row is about to redraw as "Not backed
+    // up" with nothing saying why.
+    if (result.errors.length > 0) {
+      for (const k of targets)
+        rowError.value[k] = `Back up failed: ${result.errors[0]}`;
+    }
     await refresh();
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e);
@@ -762,8 +1059,10 @@ async function restoreRow(row: UnifiedRow) {
   if (!row.cloud || rowBusy.value[row.key] !== undefined) return;
   rowBusy.value[row.key] = "restore";
   delete rowError.value[row.key];
+  delete rowNote.value[row.key];
   try {
-    await doRestore(row.cloud);
+    const written = await doRestore(row.cloud);
+    if (written) rowNote.value[row.key] = `Restored to ${written}`;
     await refresh();
   } catch (e) {
     rowError.value[row.key] =
@@ -775,23 +1074,30 @@ async function restoreRow(row: UnifiedRow) {
   }
 }
 
-/** Download + write a cloud save to its real on-disk location (type-aware). */
-async function doRestore(entry: CloudSaveListEntry) {
+/**
+ * Download + write a cloud save to its real on-disk location (type-aware).
+ *
+ * Returns the path a PC save was written to. On a machine that has never run
+ * the game that path comes from Ludusavi's catalogue and not from anything on
+ * this disk, so it is the one thing the user can check the restore against.
+ * Emulator saves go to a location Drop owns, so there is nothing to report.
+ */
+async function doRestore(entry: CloudSaveListEntry): Promise<string | null> {
   const { data } = await api.saves.download(entry.id);
   if (isPcSave(entry)) {
-    await invoke("restore_pc_cloud_save", {
+    return await invoke<string>("restore_pc_cloud_save", {
       gameId: props.gameId,
       filename: entry.filename,
-      data,
-    });
-  } else {
-    await invoke("write_save_file", {
-      gameId: props.gameId,
-      filename: entry.filename,
-      saveType: entry.saveType,
       data,
     });
   }
+  await invoke("write_save_file", {
+    gameId: props.gameId,
+    filename: entry.filename,
+    saveType: entry.saveType,
+    data,
+  });
+  return null;
 }
 
 function askDelete(row: UnifiedRow) {
@@ -804,9 +1110,16 @@ async function confirmDelete() {
   rowBusy.value[row.key] = "delete";
   delete rowError.value[row.key];
   try {
-    await api.saves.delete(row.cloud.id);
+    const deleted = await api.saves.delete(row.cloud.id);
     deleteTarget.value = null;
     await refresh();
+    if (!deleted) {
+      // The row belongs to another account and this user has no copy of their
+      // own. A delete only removes your own copy, so nothing changed, and the
+      // row is still in the list.
+      rowError.value[row.key] =
+        "This save belongs to another account, and you do not have a copy of your own to delete.";
+    }
   } catch (e) {
     rowError.value[row.key] =
       e instanceof Error
@@ -823,6 +1136,8 @@ async function confirmDelete() {
 onMounted(() => {
   refresh();
   checkLudusavi();
+  checkCoverage();
+  readSyncEnabled();
 });
 
 watch(
@@ -832,10 +1147,12 @@ watch(
     localEntries.value = [];
     rowBusy.value = {};
     rowError.value = {};
+    rowNote.value = {};
     syncMessage.value = null;
     syncError.value = false;
     refresh();
     checkLudusavi();
+    checkCoverage();
   },
 );
 

@@ -248,15 +248,30 @@ async function openSteamOSK(): Promise<boolean> {
 
 watch(
   () => props.visible,
-  async (v) => {
+  async (v, _prev, onCleanup) => {
+    // The Steam OSK path awaits before it can take the input lock, and
+    // `visible` can flip underneath it: on /bigpicture the search toggle is a
+    // plain `!showKeyboard`, so a second Y press inside the invoke window
+    // closes the keyboard mid-await. The close already ran its release by
+    // then, and the watch will not fire again for this open, so a lock taken
+    // after that point could never be released and the controller stayed dead
+    // for the rest of the session. Bail instead — `stale` covers a
+    // close-then-reopen, where a newer run owns the lock.
+    let stale = false;
+    onCleanup(() => {
+      stale = true;
+    });
+
     if (v) {
       if (shouldUseSteamOsk()) {
         // Render a focused native input so Steam's OSK has a target.
         // If the OSK invoke fails, fall back to the custom keyboard.
         steamOskMode.value = true;
         await nextTick();
+        if (stale || !props.visible) return;
         steamInputRef.value?.focus();
         const ok = await openSteamOSK();
+        if (stale || !props.visible) return;
         if (!ok) {
           steamOskMode.value = false;
           focusedRow.value = 1;

@@ -225,7 +225,7 @@ import {
   type GameAchievementFirst,
   type CommunityActivityItem,
 } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import { formatPlaytime } from "~/composables/game-detail/use-game-stats";
 
 const props = defineProps<{
@@ -296,7 +296,7 @@ onMounted(async () => {
 });
 
 function avatarUrl(objectId: string): string {
-  return serverUrl(`api/v1/object/${objectId}`);
+  return objectImageUrl(objectId);
 }
 
 function initial(name: string): string {

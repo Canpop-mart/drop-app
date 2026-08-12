@@ -98,7 +98,7 @@ import {
   useServerApi,
   type RouletteResult,
 } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 
 const props = defineProps<{
   /** Optional pool of cover IDs to cycle through during the spin animation. */
@@ -152,7 +152,7 @@ const caption = computed(() => {
 });
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 function pickRandomPreviewCover(): string | null {

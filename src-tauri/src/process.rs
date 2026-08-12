@@ -3,7 +3,7 @@ use std::sync::Arc;
 use process::{
     CONFLICT_CHANNELS, PROCESS_MANAGER,
     error::ProcessError,
-    process_manager::{LaunchOption, ProcessManager},
+    process_manager::{LaunchOption, ProcessManager, run_launch},
 };
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -17,10 +17,17 @@ pub fn get_launch_options(id: String) -> Result<Vec<LaunchOption>, ProcessError>
 }
 
 #[derive(Serialize)]
-#[serde(tag = "result", content = "data")]
+#[serde(tag = "result", content = "data", rename_all_fields = "camelCase")]
 pub enum LaunchResult {
     Success,
-    InstallRequired(String, String),
+    /// The launch stopped because a dependency (in practice, the emulator)
+    /// isn't installed. `name` is the dependency's display name when the local
+    /// cache has it, so the UI can name it without a lookup of its own.
+    InstallRequired {
+        game_id: String,
+        version_id: String,
+        name: Option<String>,
+    },
 }
 
 #[tauri::command]
@@ -31,15 +38,16 @@ pub async fn launch_game(
     // Which installed version to launch; omit for the game's current install.
     version: Option<String>,
 ) -> Result<LaunchResult, ProcessError> {
-    // launch_game_inner holds the PROCESS_MANAGER lock and, on a save-sync
-    // conflict, blocks on the UI-resolution channel for up to 5 minutes
-    // (see process_manager::save_sync). As a *synchronous* command this ran
-    // on the WebView/main thread, so the conflict dialog could never paint
-    // and the whole app froze. Make the command async (Tauri runs it off the
-    // main thread) and run the blocking work on a dedicated OS thread — NOT
-    // spawn_blocking — because launch_game_inner internally calls
-    // tauri::async_runtime::block_on, which panics on a Tokio runtime thread
-    // but is fine on a plain std thread (as it was on the main thread).
+    // launch_game_inner blocks: on a save-sync conflict it waits on the
+    // UI-resolution channel (see process_manager::save_sync). As a
+    // *synchronous* command this ran on the WebView/main thread, so the
+    // conflict dialog could never paint and the whole app froze. Make the
+    // command async (Tauri runs it off the main thread) and run the blocking
+    // work on a dedicated OS thread — NOT spawn_blocking — because the launch
+    // internally calls tauri::async_runtime::block_on, which panics on a Tokio
+    // runtime thread but is fine on a plain std thread (as it was on the main
+    // thread). The PROCESS_MANAGER lock is no longer held across the wait;
+    // `run_launch` takes it twice, either side of the sync.
     let (tx, rx) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
         let _ = tx.send(launch_game_inner(
@@ -77,23 +85,20 @@ fn launch_game_inner(
     incognito: bool,
     version: Option<String>,
 ) -> Result<LaunchResult, ProcessError> {
-    let result = {
-        let mut process_manager_lock = PROCESS_MANAGER.lock();
-
-        if streaming {
-            process_manager_lock.launch_process_streaming(id, index, config_override)
-        } else {
-            process_manager_lock.launch_process(id, index, incognito, version)
-        }
-    };
+    let result = run_launch(id, index, streaming, config_override, incognito, version);
 
     if let Err(err) = &result
-        && let ProcessError::RequiredDependency(game_id, version_id) = err
+        && let ProcessError::RequiredDependency {
+            game_id,
+            version_id,
+            name,
+        } = err
     {
-        return Ok(LaunchResult::InstallRequired(
-            game_id.to_string(),
-            version_id.to_string(),
-        ));
+        return Ok(LaunchResult::InstallRequired {
+            game_id: game_id.clone(),
+            version_id: version_id.clone(),
+            name: name.clone(),
+        });
     }
 
     result?;

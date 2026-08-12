@@ -72,9 +72,9 @@
           </button>
           <button
             v-if="item.local"
-            :ref="(el: any) => registerAction(el, { onSelect: () => saves.deleteSave(item.local!) })"
+            :ref="(el: any) => registerAction(el, { onSelect: () => saves.requestDelete(item.local!) })"
             class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-red-900/20 text-red-400 hover:bg-red-900/30"
-            @click="saves.deleteSave(item.local!)"
+            @click="saves.requestDelete(item.local!)"
           >
             Delete
           </button>

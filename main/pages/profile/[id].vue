@@ -120,7 +120,7 @@ import {
   type ShowcaseItem,
   type FavoriteEntry,
 } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import {
   formatPlaytime,
   formatLastPlayed,
@@ -146,7 +146,7 @@ const error = ref<string | null>(null);
 const { vars } = useProfileTheme(() => profile.value?.profileTheme);
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 function goToGame(gameId: string) {

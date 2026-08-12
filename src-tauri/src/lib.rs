@@ -36,7 +36,15 @@ use database::{
 use log::{LevelFilter, debug, info, warn};
 use log4rs::{
     Config,
-    append::{console::ConsoleAppender, file::FileAppender},
+    append::{
+        console::ConsoleAppender,
+        rolling_file::{
+            RollingFileAppender,
+            policy::compound::{
+                CompoundPolicy, roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger,
+            },
+        },
+    },
     config::{Appender, Root},
     encode::pattern::PatternEncoder,
 };
@@ -61,6 +69,7 @@ mod games;
 mod host_devices;
 mod process;
 mod remote;
+mod save_scope_migration;
 mod scheduler;
 mod settings;
 mod streaming;
@@ -81,8 +90,29 @@ use zerotier::*;
 
 use crate::scheduler::scheduler_task;
 
+/// Roll `drop.log` at 8 MiB. Big enough to hold a long session with a download
+/// in it, small enough that a bug report attaches in seconds.
+const LOG_FILE_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// How many rolled logs to keep beside the live one, so `drop.log` plus the
+/// archive can never exceed roughly 32 MiB. Appending forever produced a 60 MB
+/// file that had been growing since April, and every retry line in it is a
+/// synchronous write from a request path.
+const LOG_FILE_ARCHIVE_COUNT: u32 = 3;
+
 async fn setup(handle: AppHandle) -> AppState {
-    let logfile = FileAppender::builder()
+    let log_path = DATA_ROOT_DIR.join("drop.log");
+    // `{}` is the archive index: drop.1.log is the most recent roll.
+    let roller_pattern = DATA_ROOT_DIR.join("drop.{}.log");
+    let roller = FixedWindowRoller::builder()
+        .build(&roller_pattern.to_string_lossy(), LOG_FILE_ARCHIVE_COUNT)
+        .expect("Failed to build log roller");
+    let policy = CompoundPolicy::new(
+        Box::new(SizeTrigger::new(LOG_FILE_MAX_BYTES)),
+        Box::new(roller),
+    );
+
+    let logfile = RollingFileAppender::builder()
         .encoder(Box::new(PatternEncoder::new(
             "{d} | {l} | {f}:{L} - {m}{n}",
         )))
@@ -90,7 +120,7 @@ async fn setup(handle: AppHandle) -> AppState {
         // evidence. Users (and devs) need to be able to look at the prior
         // session's tail when triaging "what just happened?" reports.
         .append(true)
-        .build(DATA_ROOT_DIR.join("./drop.log"))
+        .build(&log_path, Box::new(policy))
         .expect("Failed to setup logfile");
 
     let console = ConsoleAppender::builder()
@@ -168,6 +198,11 @@ async fn setup(handle: AppHandle) -> AppState {
     debug!("database is set up");
 
     let (app_status, user) = auth::setup().await;
+
+    // Bring this device's save state into per-user directories, now that we
+    // know who is signed in. No-op when it has already run, and deferred (not
+    // skipped) when nobody is signed in.
+    save_scope_migration::run();
 
     // Note: games whose install directory has vanished are already handled
     // by `reconcile_on_startup` above (it demotes them to `Remote`), so the
@@ -340,11 +375,14 @@ pub fn run() {
             write_pc_save_file,
             restore_pc_cloud_save,
             list_cloud_saves,
+            list_cloud_save_summaries,
+            cloud_save_quota,
             download_cloud_save,
             delete_cloud_save,
             sync_game_saves_now,
             backup_saves,
             scan_local_game_saves,
+            game_save_coverage,
             list_pc_game_saves,
             backup_pc_game_saves,
             restore_pc_game_saves,
@@ -460,6 +498,12 @@ pub fn run() {
             // Per-launch compat reporting: every game exit emits
             // `game_launch_outcome`; this turns each into a telemetry POST.
             crate::compat::register_launch_telemetry(&handle);
+
+            // Keep the server's idea of what this device has installed in step
+            // with reality. Without this it is only ever written once per app
+            // start, so another device is told to stream a game this one
+            // uninstalled hours ago.
+            crate::streaming::register_installed_sync(&handle);
 
             tauri::async_runtime::block_on(async move {
                 let state = setup(handle.clone()).await;
@@ -805,6 +849,11 @@ pub async fn recieve_handshake(app: AppHandle, path: String) {
     let _ = clear_cached_object("library");
 
     drop(state_lock);
+
+    // A sign-in is the other moment the save-scope migration can finally run:
+    // it does nothing while signed out, so the first launch after an update
+    // may well have deferred it.
+    save_scope_migration::run();
 
     app_emit!(&app, "auth/finished", ());
 }

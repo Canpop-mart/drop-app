@@ -12,6 +12,13 @@ pub struct User {
 }
 
 impl User {
+    /// The account id the server keys everything by. Local save state is
+    /// scoped by this so two Drop accounts sharing one PC cannot launder
+    /// saves into each other's cloud library.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     /// The user's chosen display name (shown in-game via GBE).
     pub fn display_name(&self) -> &str {
         &self.display_name

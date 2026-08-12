@@ -89,11 +89,9 @@
                 </p>
                 <p
                   class="truncate text-[10px] font-bold uppercase font-display"
-                  :class="[
-                    getGameStatusStyleText(games[item.id].status.value)[0],
-                  ]"
+                  :class="[navStatus(item)[0]]"
                 >
-                  {{ getGameStatusStyleText(games[item.id].status.value)[1] }}
+                  {{ navStatus(item)[1] }}
                 </p>
               </div>
             </div>
@@ -133,6 +131,19 @@
   </div>
 </template>
 
+<script lang="ts">
+import type { GameStatus } from "~/types";
+
+// Module scope, NOT `useState`. Nuxt's payload state is a deep `reactive()`,
+// and reading a property of a reactive object unwraps a Ref, so a
+// `Ref<GameStatus>` stored in there came back out as a bare `GameStatus` and
+// every `.value` read below threw. A module-level object survives the remount
+// this component takes on each /library/<id> navigation just as well, and keeps
+// the refs intact — same shape as `gameStatusRegistry` in composables/game.ts,
+// which is where these refs come from.
+let gameStatuses: { [key: string]: Ref<GameStatus> } = {};
+</script>
+
 <script setup lang="ts">
 import { devLog } from "~/composables/dev-mode";
 import { Disclosure, DisclosureButton, DisclosurePanel } from "@headlessui/vue";
@@ -147,7 +158,6 @@ import {
   InstalledType,
   type Collection as Collection,
   type Game,
-  type GameStatus,
 } from "~/types";
 import { TransitionGroup } from "vue";
 import { useListen } from "~/composables/useListen";
@@ -196,11 +206,23 @@ const router = useRouter();
 const searchQuery = ref("");
 
 const loading = ref(false);
-const games: {
-  [key: string]: { game: Game; status: Ref<GameStatus, GameStatus> };
-} = {};
 
-const collections: Ref<Collection[]> = ref([]);
+// Keyed singletons. This component remounts on EVERY /library/<id> navigation
+// (pages/library.vue renders it for each game route), so component-local state
+// meant rebuilding the whole library from scratch on every click. Shared state
+// is the house convention for server-data caches — see composables/shelves.ts.
+// (`gameStatuses` is the exception, at module scope above.)
+const collections = useState<Collection[]>(
+  "library-search-collections",
+  () => [],
+);
+// One hard refresh per app session, not per navigation. See the mount block.
+const revalidated = useState("library-search-revalidated", () => false);
+
+/** A game with no status row yet renders as not installed, same as Remote. */
+function navStatus(item: { status?: Ref<GameStatus> }): [string, string] {
+  return getGameStatusStyleText(item.status?.value ?? { type: "Remote" });
+}
 
 async function calculateGames(clearAll = false, forceRefresh = false) {
   try {
@@ -245,16 +267,14 @@ async function calculateGamesLogic(clearAll = false, forceRefresh = false) {
     ...library.missing,
   ].filter((v, i, a) => a.indexOf(v) === i);
 
-  // Load new games with concurrency limit to avoid request storms
-  const newGames = allGames.filter((game) => !games[game.id]);
-  const batchSize = 3;
-  for (let i = 0; i < newGames.length; i += batchSize) {
-    const batch = newGames.slice(i, i + batchSize);
-    const results = await Promise.all(batch.map((game) => useGame(game.id)));
-    for (let j = 0; j < batch.length; j++) {
-      games[batch[j].id] = results[j];
-    }
-  }
+  // One IPC call for every status. This was a `useGame()` per game, batched
+  // three at a time, so an 82-game library meant 28 serial rounds of
+  // `fetch_game`. The batched fix landed on the library grid and never reached
+  // here. The refs come from the same shared registry, so a download starting
+  // or a game exiting still updates the sidebar live.
+  // Assigned before `collections` below on purpose: `navigation` is driven by
+  // `collections`, so the map is always in place by the time it re-evaluates.
+  gameStatuses = await useGameStatuses(allGames.map((g) => g.id));
 
   const libraryCollection = {
     id: "library",
@@ -288,24 +308,44 @@ async function calculateGamesLogic(clearAll = false, forceRefresh = false) {
   ];
 }
 
-// Wait up to 300 ms for the library to load, otherwise
-// show the loading state while we while
-await new Promise<void>((r) => {
-  let hasResolved = false;
-  const resolveFunc = () => {
-    if (!hasResolved) r();
-    hasResolved = true;
-  };
-  calculateGames(true, true).then(resolveFunc);
-  setTimeout(resolveFunc, 300);
-});
+// Cache-first. A hard refresh here made every single game navigation hit the
+// server AND take the database write guard, whose Drop re-encrypts and rewrites
+// the ENTIRE database to disk — that is the "everything takes a couple of
+// seconds" tax. The cached read needs neither. Freshness still comes from the
+// `update_library` listener below, the refresh button, the library grid's own
+// revalidation, and the once-per-session background refresh here.
+if (collections.value.length > 0) {
+  // Already populated by an earlier mount: render it immediately.
+  calculateGames(false, false);
+} else {
+  // Wait up to 300 ms for the library to load, otherwise
+  // show the loading state while we while
+  await new Promise<void>((r) => {
+    let hasResolved = false;
+    const resolveFunc = () => {
+      if (!hasResolved) r();
+      hasResolved = true;
+    };
+    calculateGames(true, false).then(resolveFunc);
+    setTimeout(resolveFunc, 300);
+  });
+}
+
+if (!revalidated.value) {
+  revalidated.value = true;
+  // Background, non-blocking: the cached library can be a session old, so pick
+  // up anything added elsewhere (notably from the store) exactly once.
+  calculateGames(false, true);
+}
 
 const navigation = computed(() =>
   collections.value.map((collection) => {
     const items = collection.entries.map(({ game }) => {
-      const status = games[game.id].status;
+      const status = gameStatuses[game.id];
 
-      const isInstalled = computed(() => status.value.type != "Remote");
+      const isInstalled = computed(
+        () => !!status && status.value.type != "Remote",
+      );
 
       const item = {
         label: game.mName,
@@ -313,6 +353,7 @@ const navigation = computed(() =>
         prefix: `/library/${game.id}`,
         icon: game.mIconObjectId,
         isInstalled,
+        status,
         id: game.id,
         type: game.type,
       };

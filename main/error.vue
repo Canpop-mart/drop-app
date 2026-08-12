@@ -8,18 +8,14 @@
       <p class="text-sm text-zinc-500 mb-8">
         Press the back button or select an option below to continue.
       </p>
+      <!-- One button, not two: BPM's home screen and its library are the same
+           page now, so "Library" led to the same place as "BPM Home". -->
       <div class="flex items-center justify-center gap-4">
         <button
           class="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl transition-colors"
           @click="goHome"
         >
           BPM Home
-        </button>
-        <button
-          class="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold rounded-xl transition-colors"
-          @click="goLibrary"
-        >
-          Library
         </button>
       </div>
     </div>
@@ -136,12 +132,6 @@ onMounted(() => {
 function goHome() {
   // BPM home — only shown when isBigPicture is true.
   clearError({ redirect: "/bigpicture" });
-}
-
-function goLibrary() {
-  clearError({
-    redirect: isBigPicture.value ? "/bigpicture/library" : "/library",
-  });
 }
 
 function goStore() {

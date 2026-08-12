@@ -42,6 +42,12 @@ export default defineNuxtConfig({
   app: {
     baseURL: "/main",
     head: {
+      // Without an explicit icon the webview asks the *origin root* for
+      // /favicon.ico, which is outside this app's baseURL and belongs to no
+      // view, so Tauri's asset resolver logged an error for every window and
+      // every navigation (4,612 of them in two days of one user's log).
+      // Pointing at a real file under /main stops the root probe entirely.
+      link: [{ rel: "icon", type: "image/x-icon", href: "/main/favicon.ico" }],
       meta: [
         // Ensure consistent viewport scaling across desktop, Gamescope, and
         // docked modes. Without this, WebKitGTK defaults to a ~980px virtual

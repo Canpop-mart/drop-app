@@ -134,7 +134,7 @@ import {
 } from "@heroicons/vue/24/solid";
 import Avatar from "~/components/Avatar.vue";
 import type { UserProfile, UserStats } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import { formatPlaytime } from "~/composables/use-recent-games";
 
 const props = defineProps<{
@@ -169,7 +169,7 @@ const statPills = computed(() => {
 });
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 </script>
 

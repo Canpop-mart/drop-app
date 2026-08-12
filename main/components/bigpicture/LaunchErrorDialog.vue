@@ -199,9 +199,25 @@ useListen<LaunchErrorDetail>("launch_external_error_detail", async (event) => {
   logOpen.value = false;
   focusedButton.value = "view";
   copied.value = false;
-  lockId = focusNav.acquireInputLock();
-  wireGamepad();
   await loadLog();
+});
+
+// The lock is driven by `visible` rather than taken in the listener above,
+// because that listener can run twice over: exit.rs emits once per suspicious
+// exit, so two games failing in the same window (or one failing while the
+// dialog is already up) overlaps two handlers across the `resolveGameName`
+// await. Acquiring there pushed a second id onto the lock stack that no
+// dismiss could ever pop, and this component lives in the layout and never
+// unmounts, so the controller stayed dead until the user left Big Picture.
+// A watch cannot fire on a true→true edge, so the second event is a no-op.
+watch(visible, (v) => {
+  if (v) {
+    lockId = focusNav.acquireInputLock();
+    wireGamepad();
+  } else {
+    unwireGamepad();
+    focusNav.releaseInputLock(lockId);
+  }
 });
 
 async function resolveGameName(gid: string): Promise<string | null> {
@@ -290,8 +306,8 @@ function dismiss() {
   detail.value = null;
   logTail.value = "";
   logPath.value = "";
-  unwireGamepad();
-  focusNav.releaseInputLock(lockId);
+  // Unwiring and the lock release ride the `visible` watch above. Every
+  // gamepad handler bails on `!visible.value`, so nothing fires in between.
 }
 
 function cycleFocus(delta: number) {

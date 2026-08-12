@@ -1,5 +1,7 @@
 <template>
-  <div class="flex flex-col h-full" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
+  <!-- Scrolling belongs to the BPM layout's single [data-bp-scroll]
+       container; the tab panes below are plain flex children. -->
+  <div class="flex flex-col min-h-full" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
     <!-- Tab navigation -->
     <div class="flex items-center gap-2 px-8 py-4 border-b" :style="{ borderColor: 'var(--bpm-border)' }">
       <button
@@ -55,7 +57,7 @@
     />
 
     <!-- Loading skeleton -->
-    <div v-if="loading" class="flex-1 overflow-y-auto px-8 py-6">
+    <div v-if="loading" class="flex-1 px-8 py-6">
       <div class="space-y-6">
         <div class="aspect-[21/9] rounded-2xl bg-zinc-800/50 animate-pulse" />
         <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
@@ -65,7 +67,7 @@
     </div>
 
     <!-- ═══ Featured tab ═══ -->
-    <div v-else-if="activeTab === 'featured'" class="flex-1 overflow-y-auto px-8 py-6" data-bp-scroll>
+    <div v-else-if="activeTab === 'featured'" class="flex-1 px-8 py-6">
       <!-- Hero carousel -->
       <div v-if="featured.length > 0" class="mb-8">
         <div
@@ -103,8 +105,10 @@
             <button
               v-for="(_, i) in featured"
               :key="i"
+              :ref="(el: any) => registerFeaturedHero(el, { onSelect: () => (heroIndex = i) })"
               class="size-2 rounded-full transition-colors"
               :class="i === heroIndex ? 'bg-blue-500' : 'bg-zinc-600'"
+              :aria-label="`Show featured game ${i + 1}`"
               @click.stop="heroIndex = i"
             />
           </div>
@@ -233,7 +237,7 @@
     </div>
 
     <!-- ═══ Browse tab ═══ -->
-    <div v-else-if="activeTab === 'browse'" class="flex-1 overflow-y-auto px-8 py-6" data-bp-scroll>
+    <div v-else-if="activeTab === 'browse'" class="flex-1 px-8 py-6">
       <!-- Game roulette — muted variant, hand-rolled so we don't drag
            the shared component into this focusable grid. Card-level
            activation routes through `onRouletteCardSelect` so a remote
@@ -542,8 +546,7 @@
     <!-- ═══ Collections tab ═══ -->
     <div
       v-else-if="activeTab === 'collections'"
-      class="flex-1 overflow-y-auto px-8 py-6"
-      data-bp-scroll
+      class="flex-1 px-8 py-6"
     >
       <!-- Detail view (in-page): a selected collection's games + bulk add. -->
       <template v-if="viewingCollection">
@@ -803,6 +806,7 @@ import {
   type StoreCollectionDetail,
 } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import { deduplicatedInvoke } from "~/composables/game";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
@@ -896,7 +900,7 @@ const visibleRecentGames = computed(() => recentGames.value.slice(0, gridCols.va
 const visibleRandomGames = computed(() => randomGames.value.slice(0, gridCols.value * 2));
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 // ── Roulette state (BPM-side, hand-rolled so we don't need to wrap the
@@ -1203,7 +1207,7 @@ async function addSelectedToShelf(shelfId: string) {
 }
 
 // "Add to Library" = POST each selected game id to the user's default
-// collection, which is what `/bigpicture/library` lists. The endpoint
+// collection, which is what the `/bigpicture` grid lists. The endpoint
 // pattern mirrors the per-game button at `library/[id].vue:addToLibrary`.
 async function addSelectedToLibrary() {
   if (!selectedIds.value.size || bulkApplying.value) return;

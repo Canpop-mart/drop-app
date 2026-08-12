@@ -171,7 +171,7 @@ impl GameDownloadAgent {
             metadata.version.clone(),
             metadata.target_platform,
             data_base_dir_path.clone(),
-        );
+        )?;
 
         let result = Self {
             metadata,

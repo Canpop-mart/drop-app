@@ -186,9 +186,13 @@
           >
             <div class="min-w-0 space-y-4">
               <CollapsibleSection title="Description">
+                <!-- Cap in CHARACTERS, not viewport width: `max-w-none` let
+                     lines run the full width of a wide monitor. -->
                 <div
+                  ref="descriptionEl"
                   v-html="htmlDescription"
-                  class="prose prose-invert prose-blue max-w-none"
+                  class="game-description prose prose-invert prose-blue max-w-[75ch]"
+                  @click="openDescriptionImage"
                 />
               </CollapsibleSection>
 
@@ -400,7 +404,7 @@
           </div>
 
           <CloudSavesPanel
-            v-else-if="activeDetailTab === 'saves' && devMode.enabled.value"
+            v-else-if="activeDetailTab === 'saves'"
             :game-id="game.id"
             :game-name="game.mName"
             :is-native-game="config.isNativeGame.value"
@@ -409,6 +413,15 @@
       </div>
     </div>
   </div>
+
+  <!-- Description images open in the same viewer as the gallery carousel. -->
+  <ImageLightbox
+    :open="descriptionLightboxOpen"
+    :srcs="descriptionImageSrcs"
+    :start-index="descriptionImageIndex"
+    :alt-prefix="`${game.mName} image`"
+    @close="descriptionLightboxOpen = false"
+  />
 
   <!-- Install flow modal. -->
   <GameDetailInstallModal
@@ -711,12 +724,6 @@
     </div>
   </Transition>
 
-  <!-- Cloud save conflict resolution. -->
-  <SaveConflictDialog
-    v-model="saveConflictOpen"
-    :game-id="game.id"
-    :conflicts="saveConflicts"
-  />
 </template>
 
 <script setup lang="ts">
@@ -744,11 +751,17 @@ import { useGameConfig } from "~/composables/game-detail/use-game-config";
 import { useModInstall } from "~/composables/game-detail/use-mod-install";
 import { useInstalledMods } from "~/composables/game-detail/use-installed-mods";
 import {
+  shouldShowModsTab,
+  resolveActiveTab,
+  modDisplayName,
+  modDependentNames,
+  type AvailableMod,
+} from "~/composables/game-detail/mods-tab";
+import {
   useServerApi,
   type GamePlayerEntry,
   type GameAchievementFirst,
 } from "~/composables/use-server-api";
-import type { SaveConflict } from "~/types/save-sync";
 
 const route = useRoute();
 const router = useRouter();
@@ -758,16 +771,45 @@ const { game, status, version } = await useGame(id);
 
 const bannerUrl = await useObject(game.mBannerObjectId);
 
-// Compat data scoped to this game. Soft-fails (returns null) so a
-// server-side problem with the compat endpoints doesn't 500 the page.
-const compatSummaryRef = await useCompatSummary().catch(() => null);
-const gameCompat = computed(() => compatSummaryRef?.value?.[id]);
+// Compat data scoped to this game. Read straight off the cached state and kick
+// the fetch fire-and-forget: awaiting it held the entire game page behind
+// Suspense for a round-trip, and the compat badge is a garnish that can pop in.
+// Still soft-fails (the state stays undefined) so a server-side problem with
+// the compat endpoints doesn't take the page with it.
+const compatSummaryRef = compatSummaryState();
+useCompatSummary().catch((e) => {
+  console.warn("[game] compat summary fetch failed:", e);
+});
+const gameCompat = computed(() => compatSummaryRef.value?.[id]);
 
 // Dev mode gates the per-game compat-test action button (the display
 // panel itself is read-only and renders independent of dev mode).
 const devMode = useDevMode();
 
 const htmlDescription = renderMarkdown(game.mDescription);
+
+// ── Description images ──────────────────────────────────────────────────
+// The rendered markdown lands in a `v-html` sink as inert <img> tags, and they
+// can't be marked up on the way in: `sanitize.ts` runs DOMPurify with
+// ALLOW_DATA_ATTR:false, so a data-* hook would be stripped. Delegate off the
+// wrapper instead and read the rendered <img> list back out of the DOM.
+const descriptionEl = ref<HTMLElement | null>(null);
+const descriptionImageSrcs = ref<string[]>([]);
+const descriptionImageIndex = ref(0);
+const descriptionLightboxOpen = ref(false);
+
+function openDescriptionImage(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (!target || target.tagName !== "IMG") return;
+  const wrapper = descriptionEl.value;
+  if (!wrapper) return;
+  const images = Array.from(wrapper.querySelectorAll("img"));
+  const index = images.indexOf(target as HTMLImageElement);
+  if (index < 0) return;
+  descriptionImageSrcs.value = images.map((img) => img.currentSrc || img.src);
+  descriptionImageIndex.value = index;
+  descriptionLightboxOpen.value = true;
+}
 
 // ── Composables ──────────────────────────────────────────────────────────
 const installCtl = useGameInstall(game);
@@ -780,14 +822,10 @@ const config = useGameConfig(game, version);
 // "Available" mods come from the server; "installed" mods are read from the
 // client's on-disk `.moddata` ledgers. Both live under the Mods tab, which only
 // appears once the base game is installed.
-type AvailableMod = {
-  id: string;
-  mName: string;
-  mShortDescription: string;
-  mIconObjectId: string;
-  requiredMods?: Array<{ gameId: string; name: string }>;
-};
 const availableMods = ref<AvailableMod[]>([]);
+// Distinguishes "no mods" from "haven't asked yet", which is what decides
+// whether the Mods tab is hidden or still showing.
+const modsLoaded = ref(false);
 const modInstall = useModInstall(id);
 const installedModsCtl = useInstalledMods(id);
 const modToUninstall = ref<string | null>(null);
@@ -802,7 +840,7 @@ function isModInstalled(modId: string): boolean {
 /** Name for an installed mod (the ledger only stores ids), falling back to the
  *  id when the mod is no longer listed by the server. */
 function installedModName(modId: string): string {
-  return availableMods.value.find((m) => m.id === modId)?.mName ?? modId;
+  return modDisplayName(availableMods.value, modId);
 }
 
 async function loadAvailableMods() {
@@ -815,6 +853,8 @@ async function loadAvailableMods() {
   } catch (e) {
     console.warn("[library/[id]] failed to load available mods:", e);
     availableMods.value = [];
+  } finally {
+    modsLoaded.value = true;
   }
 }
 
@@ -833,15 +873,11 @@ async function confirmUninstallMod() {
 /** Installed mods on this game that require `modId` (by name) — surfaced as a
  *  warning before uninstalling a prerequisite like SMAPI. */
 function modDependents(modId: string | null): string[] {
-  if (!modId) return [];
-  return installedModsCtl.installedMods.value
-    .filter((m) => m.gameId !== modId)
-    .filter((m) =>
-      availableMods.value
-        .find((a) => a.id === m.gameId)
-        ?.requiredMods?.some((r) => r.gameId === modId),
-    )
-    .map((m) => installedModName(m.gameId));
+  return modDependentNames(
+    availableMods.value,
+    installedModsCtl.installedMods.value,
+    modId,
+  );
 }
 
 // ── Installed versions (multi-version install) ───────────────────────────────
@@ -944,16 +980,33 @@ const activeDetailTab =
 
 const isInstalled = computed(() => status.value.type === "Installed");
 
-// Cloud saves is dev-gated; the Mods tab appears whenever the base game is
-// installed (an empty state covers the no-mods-yet case), so it's discoverable
-// even before any mod is wired up.
+// The Mods tab is hidden for games with no mods — an empty tab was just a dead
+// end. See `shouldShowModsTab` for the loading rule. Cloud Saves is always
+// shown: its own panel says whether the feature is on and what it can find,
+// and hiding it left people unable to discover the feature at all.
 const visibleDetailTabs = computed(() =>
   detailTabs.filter((t) => {
-    if (t.value === "saves") return devMode.enabled.value;
-    if (t.value === "mods") return isInstalled.value;
+    if (t.value === "mods") {
+      return shouldShowModsTab({
+        installed: isInstalled.value,
+        loaded: modsLoaded.value,
+        availableCount: availableMods.value.length,
+        installedCount: installedModsCtl.installedMods.value.length,
+      });
+    }
     return true;
   }),
 );
+
+// Uninstalling the last mod (or the game) can pull the current tab out from
+// under the user, which otherwise leaves the panel area blank.
+watch(visibleDetailTabs, (tabs) => {
+  activeDetailTab.value = resolveActiveTab(
+    tabs.map((t) => t.value),
+    activeDetailTab.value,
+    "about",
+  );
+});
 
 // ── Community surfaces ───────────────────────────────────────────────────
 // Per-game players + first-to-unlock are fetched once at the page level
@@ -1248,20 +1301,18 @@ function onCompatTestResult(outcome: unknown) {
   );
 }
 
-// ── Cloud save conflict resolution ───────────────────────────────────────
-const saveConflictOpen = ref(false);
-const saveConflicts = ref<SaveConflict[]>([]);
-
-useListen<{ gameId: string; conflicts: SaveConflict[] }>(
-  `save_sync_conflict/${game.id}`,
-  (event) => {
-    saveConflicts.value = event.payload.conflicts;
-    saveConflictOpen.value = true;
-  },
-);
+// Cloud save conflicts are handled app-wide by `SaveSyncConflictHost`
+// (mounted in app.vue): a launch can start from anywhere, so the listener
+// cannot live on the page for one game.
 </script>
 
 <style scoped>
+/* Description images are clickable (delegated to the wrapper), so they need
+   to look it. :deep because they come from a v-html sink. */
+.game-description :deep(img) {
+  cursor: zoom-in;
+}
+
 .slide-enter-active,
 .slide-leave-active {
   transition: all 0.3s ease;

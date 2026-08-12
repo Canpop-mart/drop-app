@@ -54,7 +54,7 @@
 <script setup lang="ts">
 import { StarIcon } from "@heroicons/vue/24/solid";
 import type { FavoriteEntry } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 
 defineProps<{
   favorites: FavoriteEntry[];
@@ -64,7 +64,7 @@ defineProps<{
 defineEmits<{ (e: "select-game", gameId: string): void }>();
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 </script>
 

@@ -21,12 +21,22 @@ import type {
   QualityPreset,
 } from "~/types";
 
+/**
+ * Which physical pad layout the emulator should assume.
+ *
+ * "Auto" is not "do nothing" — it means Drop detects the connected pad and
+ * writes that layout's button numbers. The explicit entries exist to correct
+ * it, which matters because a pad Drop cannot identify falls back to the Xbox
+ * numbers, and on a PlayStation pad those rotate every face button by one
+ * position and leave the emulator shortcuts on buttons that do not exist.
+ */
 export const CONTROLLER_OPTIONS: {
   label: string;
   value: ControllerType | null;
 }[] = [
   { label: "Auto", value: null },
   { label: "Xbox (A=South)", value: "Xbox" },
+  { label: "PlayStation (Cross=South)", value: "PlayStation" },
   { label: "Nintendo (A=East)", value: "Nintendo" },
 ];
 

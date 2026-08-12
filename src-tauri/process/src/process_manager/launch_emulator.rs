@@ -69,10 +69,28 @@ impl ProcessManager<'_> {
         effective_cwd: &mut Option<String>,
         emulator_rom_path: &mut Option<String>,
     ) -> Result<String, ProcessError> {
-        let err = ProcessError::RequiredDependency(
-            emulator.game_id.to_string(),
-            emulator.version_id.to_string(),
-        );
+        // Resolved up front so every error below can name the emulator rather
+        // than hand the UI a bare id it has to look up (and fail to look up)
+        // for itself. Best-effort: an emulator whose library entry has never
+        // synced legitimately has no cached name.
+        let emulator_name = remote::cache::get_cached_object::<games::library::Game>(
+            &format!("game/{}", emulator.game_id),
+        )
+        .ok()
+        .map(|g| g.m_name);
+
+        let err = ProcessError::RequiredDependency {
+            game_id: emulator.game_id.to_string(),
+            version_id: emulator.version_id.to_string(),
+            name: emulator_name.clone(),
+        };
+        let setup_err = || {
+            ProcessError::EmulatorSetupRequired(
+                emulator_name
+                    .clone()
+                    .unwrap_or_else(|| emulator.game_id.to_string()),
+            )
+        };
 
         let emulator_metadata = db_lock
             .applications
@@ -95,9 +113,7 @@ impl ProcessManager<'_> {
             GameDownloadStatus::Installed {
                 install_type: InstalledGameType::SetupRequired,
                 ..
-            } => Err(ProcessError::InvalidArguments(
-                "Complete emulator setup before launching games that use it.".to_string(),
-            )),
+            } => Err(setup_err()),
             _ => Err(err.clone()),
         }?;
 
@@ -148,6 +164,16 @@ impl ProcessManager<'_> {
         } else {
             target_command.command.clone()
         };
+        // A deleted ROM does not stop the emulator from starting — RetroArch
+        // opens on its own menu and sits there, which reads as "Play did
+        // nothing". Catch it here, where we can still say which file is gone.
+        if !rom_path.is_empty() {
+            let rom = std::path::Path::new(&rom_path);
+            if rom.is_absolute() && !rom.exists() {
+                return Err(ProcessError::RomMissing(rom_path));
+            }
+        }
+
         *emulator_rom_path = Some(rom_path.clone());
 
         // Substitute the `{rom}` placeholder wherever it appears.

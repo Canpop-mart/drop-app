@@ -4,7 +4,7 @@
  * Usage in a component's onMounted:
  *
  *   const el = ref<HTMLElement | null>(null);
- *   useBpFocusable(el, "nav", { onSelect: () => router.push("/bigpicture/library") });
+ *   useBpFocusable(el, "nav", { onSelect: () => router.push("/bigpicture/store") });
  *
  * Or in v-for with a function ref:
  *
@@ -56,6 +56,14 @@ export function useBpFocusableGroup(group: string) {
     registrations.clear();
   });
 
+  // If the component owning a trapped group goes away (navigating out with
+  // its overlay still open), the restriction would otherwise stay pinned to
+  // a group that no longer has any elements, killing cross-group movement
+  // for the rest of the session.
+  onScopeDispose(() => {
+    if (focusNav.focusRestriction.value === group) focusNav.unrestrictFocus();
+  });
+
   return function register(
     el: Element | ComponentPublicInstance | null,
     options?: {
@@ -68,56 +76,6 @@ export function useBpFocusableGroup(group: string) {
     if (!el) {
       // Vue calls the ref with null when the element unmounts. Drop any
       // stale registrations whose DOM node is no longer connected.
-      for (const [node, unregister] of registrations) {
-        if (!node.isConnected) {
-          unregister();
-          registrations.delete(node);
-        }
-      }
-      return;
-    }
-    const htmlEl = (el as any).$el ?? el;
-    if (!(htmlEl instanceof HTMLElement)) return;
-    if (registrations.has(htmlEl)) return;
-    const unregister = focusNav.registerElement(htmlEl, group, options);
-    registrations.set(htmlEl, unregister);
-  };
-}
-
-/**
- * Like useBpFocusableGroup, but also registers the group as a grid.
- * Grid groups use index-aligned (column-sticky) navigation instead of
- * spatial cone search, which produces predictable movement in tile grids.
- *
- * Usage:
- *   const registerTile = useBpFocusableGrid("content");
- *   // In template: :ref="(el) => registerTile(el, { onSelect: ... })"
- */
-export function useBpFocusableGrid(group: string) {
-  const focusNav = useFocusNavigation();
-  const registrations = new Map<HTMLElement, () => void>();
-
-  // Register this group as a grid on mount
-  onMounted(() => {
-    focusNav.registerGrid(group);
-  });
-
-  onUnmounted(() => {
-    focusNav.unregisterGrid(group);
-    for (const unregister of registrations.values()) unregister();
-    registrations.clear();
-  });
-
-  return function register(
-    el: Element | ComponentPublicInstance | null,
-    options?: {
-      onSelect?: () => void;
-      onContext?: () => void;
-      onFocus?: () => void;
-      onHold?: () => void;
-    },
-  ) {
-    if (!el) {
       for (const [node, unregister] of registrations) {
         if (!node.isConnected) {
           unregister();

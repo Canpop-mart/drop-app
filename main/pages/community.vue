@@ -16,8 +16,16 @@
           <SparklesIcon class="size-4" />
           Wrapped
         </NuxtLink>
+        <button
+          v-if="!stats && statsError"
+          class="flex items-center gap-1.5 text-sm text-zinc-500 font-medium hover:text-zinc-300 transition-colors"
+          @click="loadStats"
+        >
+          <ArrowPathIcon class="size-3.5" />
+          Server stats unavailable · Retry
+        </button>
         <div
-          v-if="stats"
+          v-else-if="stats"
           class="flex items-center gap-2 text-sm text-zinc-400 font-medium"
         >
           <span class="flex items-center gap-1.5">
@@ -62,8 +70,10 @@
       <div class="min-w-0">
         <CommunityWeeklyRecap
           :slides="weeklyRecap"
+          :failed="recapError"
           @go-to-game="goToGame"
           @go-to-user="goToUser"
+          @retry="loadWeeklyRecap"
         />
         <CommunityWeeklyChallenge
           v-if="SHOW_WEEKLY_QUEST"
@@ -77,12 +87,29 @@
             <BoltIcon class="size-4 text-blue-400" />
             Recent activity
           </h2>
-          <div
-            v-if="activityLoading"
-            class="text-sm text-zinc-500 py-10 text-center"
-          >
-            Loading activity...
+          <!-- The outer div holds the slot in the chain for the whole load;
+               the skeleton inside it only appears once the load has run past
+               the ~180ms threshold, so a fast feed paints straight in. -->
+          <div v-if="activityLoading">
+            <div v-if="showActivitySkeleton" class="space-y-2">
+              <div
+                v-for="i in 5"
+                :key="i"
+                class="flex items-center gap-3 rounded-lg bg-zinc-800/30 p-3"
+              >
+                <div class="size-9 shrink-0 rounded-full bg-zinc-800/60 animate-pulse" />
+                <div class="flex-1 space-y-2">
+                  <div class="h-3 w-2/5 rounded bg-zinc-800/60 animate-pulse" />
+                  <div class="h-3 w-1/4 rounded bg-zinc-800/60 animate-pulse" />
+                </div>
+              </div>
+            </div>
           </div>
+          <SectionError
+            v-else-if="activityError"
+            detail="The activity feed didn't load."
+            @retry="loadActivity"
+          />
           <div
             v-else-if="clusteredActivity.length === 0"
             class="text-sm text-zinc-500 py-10 text-center"
@@ -202,12 +229,23 @@
             <TrophyIcon class="size-4 text-yellow-500" />
             Top players
           </h3>
-          <div
-            v-if="leaderboardLoading"
-            class="text-sm text-zinc-500 py-8 text-center"
-          >
-            Loading leaderboard...
+          <div v-if="leaderboardLoading">
+            <div
+              v-if="showLeaderboardSkeleton"
+              class="rounded-xl bg-zinc-800/50 ring-1 ring-zinc-700/40 divide-y divide-zinc-700/40"
+            >
+              <div v-for="i in 5" :key="i" class="flex items-center gap-3 p-3">
+                <div class="size-4 rounded bg-zinc-700/50 animate-pulse" />
+                <div class="size-8 shrink-0 rounded-full bg-zinc-700/50 animate-pulse" />
+                <div class="h-3 flex-1 rounded bg-zinc-700/50 animate-pulse" />
+              </div>
+            </div>
           </div>
+          <SectionError
+            v-else-if="leaderboardError"
+            detail="The leaderboard didn't load."
+            @retry="loadLeaderboard"
+          />
           <div
             v-else-if="leaderboard.length === 0"
             class="text-sm text-zinc-500 py-8 text-center"
@@ -241,6 +279,7 @@
 
 <script setup lang="ts">
 import { TrophyIcon, BoltIcon, SparklesIcon } from "@heroicons/vue/24/solid";
+import { ArrowPathIcon } from "@heroicons/vue/24/outline";
 import { invoke } from "@tauri-apps/api/core";
 import {
   useServerApi,
@@ -252,7 +291,7 @@ import {
   type MvpToday,
   type WeeklyChallenge,
 } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import { clusterActivity } from "~/composables/use-community-clusters";
 
 useHead({ title: "Community" });
@@ -273,6 +312,18 @@ const mvp = ref<MvpToday | null>(null);
 const weeklyChallenge = ref<WeeklyChallenge | null>(null);
 const activityLoading = ref(true);
 const leaderboardLoading = ref(true);
+const showActivitySkeleton = useDeferredLoading(() => activityLoading.value);
+const showLeaderboardSkeleton = useDeferredLoading(
+  () => leaderboardLoading.value,
+);
+
+// Each section owns its own failure flag. Without these a dead server and an
+// empty server rendered the same "No recent activity to show." / "No players
+// yet." copy, so there was no way to tell a broken page from a quiet one.
+const statsError = ref(false);
+const activityError = ref(false);
+const leaderboardError = ref(false);
+const recapError = ref(false);
 
 // Recent activity: keep only the last week of the fetched events, then cap how
 // many rows render — so a slow week still populates but a busy one doesn't turn
@@ -342,7 +393,7 @@ const mvpTooltip = computed(() => {
 });
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 function goToGame(gameId: string) {
@@ -372,31 +423,65 @@ function refreshNowPlaying() {
 
 let nowPlayingTimer: ReturnType<typeof setInterval> | null = null;
 
-onMounted(() => {
+function loadStats() {
+  statsError.value = false;
   api.community
     .stats()
     .then((s) => (stats.value = s))
-    .catch((e) => console.warn("[community] stats failed:", e));
+    .catch((e) => {
+      console.warn("[community] stats failed:", e);
+      statsError.value = true;
+    });
+}
 
+function loadActivity() {
+  activityLoading.value = true;
+  activityError.value = false;
+  // 30, not 100. Each row paints two images, so the old limit asked for 200
+  // pictures in one go and was comfortably the heaviest paint in the app. Big
+  // Picture already uses the server default.
   api.community
-    .activity(100)
+    .activity(30)
     .then((a) => (activity.value = a))
-    .catch((e) => console.warn("[community] activity failed:", e))
+    .catch((e) => {
+      console.warn("[community] activity failed:", e);
+      activityError.value = true;
+    })
     .finally(() => (activityLoading.value = false));
+}
 
+function loadLeaderboard() {
+  leaderboardLoading.value = true;
+  leaderboardError.value = false;
   api.community
     .leaderboard()
     .then((d) => (leaderboard.value = d.playtime))
-    .catch((e) => console.warn("[community] leaderboard failed:", e))
+    .catch((e) => {
+      console.warn("[community] leaderboard failed:", e);
+      leaderboardError.value = true;
+    })
     .finally(() => (leaderboardLoading.value = false));
+}
 
-  refreshNowPlaying();
-  nowPlayingTimer = setInterval(refreshNowPlaying, 30_000);
-
+function loadWeeklyRecap() {
+  recapError.value = false;
   api.community
     .weeklyRecap()
     .then((w) => (weeklyRecap.value = w))
-    .catch((e) => console.warn("[community] weekly-recap failed:", e));
+    .catch((e) => {
+      console.warn("[community] weekly-recap failed:", e);
+      recapError.value = true;
+    });
+}
+
+onMounted(() => {
+  loadStats();
+  loadActivity();
+  loadLeaderboard();
+  loadWeeklyRecap();
+
+  refreshNowPlaying();
+  nowPlayingTimer = setInterval(refreshNowPlaying, 30_000);
 
   api.community
     .mvpToday()

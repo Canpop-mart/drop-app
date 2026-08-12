@@ -3,6 +3,7 @@
     <div class="relative">
       <div v-if="imageIds.length > 0">
         <div
+          :ref="(el: any) => registerAction?.(el, { onSelect: () => (fullscreenOpen = true) })"
           class="relative aspect-video rounded-lg overflow-hidden cursor-pointer group"
         >
           <div
@@ -82,95 +83,52 @@
     </div>
   </div>
 
-  <!-- Fullscreen viewer. -->
-  <Transition
-    enter="transition ease-out duration-300"
-    enter-from="opacity-0"
-    enter-to="opacity-100"
-    leave="transition ease-in duration-200"
-    leave-from="opacity-100"
-    leave-to="opacity-0"
-  >
-    <div
-      v-if="fullscreenOpen"
-      class="fixed inset-0 z-50 bg-black/95 flex items-center justify-center"
-      @click="fullscreenOpen = false"
-    >
-      <div
-        class="relative w-full h-full flex items-center justify-center"
-        @click.stop
-      >
-        <button
-          class="absolute top-4 right-4 p-2 rounded-full bg-zinc-900/50 text-zinc-100 hover:bg-zinc-900 transition-colors"
-          @click.stop="fullscreenOpen = false"
-        >
-          <XMarkIcon class="size-6" />
-        </button>
-
-        <button
-          v-if="imageIds.length > 1"
-          @click.stop="previousImage()"
-          class="absolute left-4 p-3 rounded-full bg-zinc-900/50 text-zinc-100 hover:bg-zinc-900 transition-colors"
-        >
-          <ChevronLeftIcon class="size-6" />
-        </button>
-        <button
-          v-if="imageIds.length > 1"
-          @click.stop="nextImage()"
-          class="absolute right-4 p-3 rounded-full bg-zinc-900/50 text-zinc-100 hover:bg-zinc-900 transition-colors"
-        >
-          <ChevronRightIcon class="size-6" />
-        </button>
-
-        <TransitionGroup
-          name="slide"
-          tag="div"
-          class="w-full h-full flex items-center justify-center"
-          @click.stop
-        >
-          <img
-            v-for="(url, index) in imageIds"
-            v-show="currentImageIndex === index"
-            :key="index"
-            :src="useObject(url)"
-            class="max-h-[90vh] max-w-[90vw] object-contain"
-            :alt="`${gameName} screenshot ${index + 1}`"
-          />
-        </TransitionGroup>
-
-        <div
-          class="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-zinc-900/50 backdrop-blur-sm"
-        >
-          <p class="text-zinc-100 text-sm font-medium">
-            {{ currentImageIndex + 1 }} / {{ imageIds.length }}
-          </p>
-        </div>
-      </div>
-    </div>
-  </Transition>
+  <!-- Fullscreen viewer — shared with the description images on both surfaces. -->
+  <ImageLightbox
+    :open="fullscreenOpen"
+    :srcs="imageSrcs"
+    :start-index="currentImageIndex"
+    :alt-prefix="`${gameName} screenshot`"
+    :gamepad="!!registerAction"
+    @navigate="currentImageIndex = $event"
+    @close="fullscreenOpen = false"
+  />
 </template>
 
 <script setup lang="ts">
 /**
- * Gallery tab for the library game-detail page — the image carousel and
- * its fullscreen viewer. Self-contained: it owns the current index and
- * the fullscreen open state, so the parent just passes the image IDs.
+ * Gallery for the library game-detail page — the image carousel, shared by the
+ * desktop About tab and Big Picture. Self-contained: it owns the current index
+ * and the fullscreen open state, so the parent just passes the image IDs. The
+ * fullscreen viewer itself is `ImageLightbox`, shared with description images.
  */
 import {
   ArrowsPointingOutIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   PhotoIcon,
-  XMarkIcon,
 } from "@heroicons/vue/20/solid";
 
 const props = defineProps<{
   imageIds: string[];
   gameName: string;
+  /**
+   * Optional — pass the Big Picture page's focus-nav registrar (the "content"
+   * group from `useBpFocusableGroup`) so a controller can reach the carousel
+   * and open it fullscreen. Absent on desktop, which is mouse-driven.
+   */
+  registerAction?: (
+    el: any,
+    opts: { onSelect: () => void; onContext?: () => void },
+  ) => void;
 }>();
 
 const currentImageIndex = ref(0);
 const fullscreenOpen = ref(false);
+
+// `useObject` (object://) rather than the server:// proxy: it is the only
+// image path with a cache in front of it.
+const imageSrcs = computed(() => props.imageIds.map((id) => useObject(id)));
 
 function nextImage() {
   if (props.imageIds.length === 0) return;

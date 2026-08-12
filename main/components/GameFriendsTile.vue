@@ -3,6 +3,7 @@
     <!-- The clickable pill — styled to match the existing stat-bar tiles. -->
     <button
       type="button"
+      :ref="(el: any) => registerAction?.(el, { onSelect: toggle })"
       class="group inline-flex items-center gap-3 rounded-lg bg-zinc-800/60 backdrop-blur-sm px-5 py-3 border border-zinc-700/50 hover:border-zinc-600 transition-colors"
       :class="{ 'border-blue-500/50': expanded }"
       :disabled="players.length === 0 && !loading"
@@ -112,7 +113,7 @@
 import { ChevronDownIcon } from "@heroicons/vue/20/solid";
 import { UsersIcon, TrophyIcon } from "@heroicons/vue/24/solid";
 import { useServerApi, type GamePlayerEntry } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import { formatPlaytime } from "~/composables/game-detail/use-game-stats";
 
 const props = defineProps<{
@@ -120,6 +121,15 @@ const props = defineProps<{
   /** Optional preloaded list, so the page can fetch once and pass to both
    *  this tile and the Community tab. */
   players?: GamePlayerEntry[];
+  /**
+   * Optional — the Big Picture page's focus-nav registrar (the "content"
+   * group from `useBpFocusableGroup`), so a controller can expand the list.
+   * Absent on desktop, which is mouse-driven.
+   */
+  registerAction?: (
+    el: any,
+    opts: { onSelect: () => void; onContext?: () => void },
+  ) => void;
 }>();
 
 const api = useServerApi();
@@ -160,7 +170,7 @@ const visibleAvatars = computed(() => players.value.slice(0, 3));
 const visibleCount = computed(() => Math.min(3, players.value.length));
 
 function avatarUrl(objectId: string): string {
-  return serverUrl(`api/v1/object/${objectId}`);
+  return objectImageUrl(objectId);
 }
 
 function initial(name: string): string {

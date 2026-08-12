@@ -41,7 +41,7 @@
       <!-- User avatar (clickable → profile) -->
       <button
         v-if="state?.user"
-        :ref="(el: any) => registerContent(el, { onSelect: () => router.push(`/bigpicture/profile/${state?.user?.username}`) })"
+        :ref="(el: any) => registerChrome(el, { onSelect: () => router.push(`/bigpicture/profile/${state?.user?.username}`) })"
         class="flex items-center gap-2 rounded-full transition-all hover:ring-2 hover:ring-blue-500/50 focus:ring-2 focus:ring-blue-500/50"
         @click="router.push(`/bigpicture/profile/${state?.user?.username}`)"
       >
@@ -78,7 +78,11 @@ const route = useRoute();
 const router = useRouter();
 const gamepad = useGamepad();
 const state = useAppState();
-const registerContent = useBpFocusableGroup("content");
+// "chrome", not "content". The layout mounts the top bar BEFORE the page
+// slot, so an avatar registered into "content" was permanently element #0 of
+// that group and every default-focus fallback landed on a 32px button in the
+// corner instead of the page's primary action.
+const registerChrome = useBpFocusableGroup("chrome");
 
 // Clock
 const clock = ref("");
@@ -100,7 +104,7 @@ watch(
   () => route.path,
   async (path) => {
     const match = path.match(/^\/bigpicture\/library\/([^/]+)$/);
-    if (match && match[1] !== "collections") {
+    if (match) {
       try {
         const response = await fetch(serverUrl(`api/v1/client/game/${match[1]}`));
         if (response.ok) {
@@ -125,20 +129,13 @@ const breadcrumbs = computed(() => {
   if (path === "/bigpicture") return crumbs;
 
   if (path.startsWith("/bigpicture/library")) {
-    crumbs.push({ label: "Library" });
-    // If on a game detail page, add the game name
-    if (path !== "/bigpicture/library" && path !== "/bigpicture/library/collections") {
-      crumbs.push({ label: gameName.value || "Game" });
-    }
-    if (path === "/bigpicture/library/collections") {
-      crumbs.push({ label: "Collections" });
-    }
+    // Home IS the library now, so there is no separate Library crumb to sit
+    // between it and the game. `/bigpicture/library` itself redirects home.
+    crumbs.push({ label: gameName.value || "Game" });
   } else if (path.startsWith("/bigpicture/store")) {
     crumbs.push({ label: "Store" });
   } else if (path.startsWith("/bigpicture/community")) {
     crumbs.push({ label: "Community" });
-  } else if (path.startsWith("/bigpicture/news")) {
-    crumbs.push({ label: "News" });
   } else if (path.startsWith("/bigpicture/downloads")) {
     crumbs.push({ label: "Downloads" });
   } else if (path.startsWith("/bigpicture/profile")) {

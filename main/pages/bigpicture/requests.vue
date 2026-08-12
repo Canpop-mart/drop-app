@@ -138,11 +138,7 @@
             <div class="flex items-center gap-1.5 min-w-0">
               <img
                 v-if="req.requester?.profilePictureObjectId"
-                :src="
-                  serverUrl(
-                    `api/v1/object/${req.requester.profilePictureObjectId}`,
-                  )
-                "
+                :src="objectImageUrl(req.requester.profilePictureObjectId)"
                 class="size-5 rounded-full shrink-0"
               />
               <span class="truncate">
@@ -172,6 +168,7 @@
  */
 import { ChevronUpIcon, ChevronDownIcon } from "@heroicons/vue/24/outline";
 import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 

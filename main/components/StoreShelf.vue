@@ -82,7 +82,7 @@
  */
 import { ChevronLeftIcon, ChevronRightIcon } from "@heroicons/vue/24/outline";
 import type { StoreGame, TrendingGame } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 
 const props = withDefaults(
   defineProps<{
@@ -102,7 +102,7 @@ defineEmits<{
 const visibleGames = computed(() => props.games.slice(0, props.max));
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 // ── Horizontal-scroll state ──────────────────────────────────────────────

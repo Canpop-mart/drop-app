@@ -98,25 +98,50 @@ pub async fn fetch_library_logic(
             .flat_map(|v| v.entries.iter().map(|v| v.game.clone())),
     );
 
+    // The write guard's Drop re-encrypts and rewrites the ENTIRE database to
+    // disk before it releases, so taking it here made every library fetch a
+    // full-DB write — and the sidebar fetches the library on every navigation.
+    // Nothing below actually mutates the DB unless a game is new to the library,
+    // so do the work under a read lock and only escalate when there is a status
+    // row genuinely missing. `cache_object_db` writes its own files under
+    // `cache_dir` and only borrows the database to find that path.
     let installed_metas = {
-        let mut db_handle = borrow_db_mut_checked();
+        let db_handle = borrow_db_checked();
 
         for game in &all_games {
-            if !db_handle.applications.game_statuses.contains_key(game.id()) {
-                db_handle
-                    .applications
-                    .game_statuses
-                    .insert(game.id().clone(), GameDownloadStatus::Remote {});
-            }
             cache_object_db(&format!("game/{}", game.id), game, &db_handle)?;
         }
 
-        db_handle
+        let unseeded: Vec<String> = all_games
+            .iter()
+            .filter(|game| !db_handle.applications.game_statuses.contains_key(game.id()))
+            .map(|game| game.id().clone())
+            .collect();
+
+        // Seeding only ever adds `game_statuses` rows, so reading the installed
+        // versions before it is equivalent to reading them after.
+        let installed_metas = db_handle
             .applications
             .installed_game_version
             .values()
             .cloned()
-            .collect::<Vec<DownloadableMetadata>>()
+            .collect::<Vec<DownloadableMetadata>>();
+
+        // Released before the write guard is taken: RwLock has no upgrade.
+        drop(db_handle);
+
+        if !unseeded.is_empty() {
+            let mut db_handle = borrow_db_mut_checked();
+            for id in unseeded {
+                db_handle
+                    .applications
+                    .game_statuses
+                    .entry(id)
+                    .or_insert(GameDownloadStatus::Remote {});
+            }
+        }
+
+        installed_metas
     };
 
     // Add games that are installed but no longer in library
@@ -898,34 +923,81 @@ pub struct SaveFileInfo {
     pub save_type: String,
 }
 
-/// Find the emulator install directory for a game by checking if it has
-/// an emulator association via its launch config.
-fn find_emulator_saves_dir(game_id: &str) -> Option<std::path::PathBuf> {
+/// Find the install root of the emulator that runs `game_id`.
+///
+/// Preference order:
+///   1. An installed title that already has this user's `drop-saves/{user_id}/
+///      {game_id}` on disk. That directory only exists once Drop has patched a
+///      RetroArch config, so it is the strongest signal but far from universal.
+///   2. `game_id` itself, if it's installed and has its own `drop-saves`.
+///   3. The emulator named by the game's launch config.
+///
+/// Steps 1 and 2 ask [`remote::save_sync::resolve_emu_saves_root`] for the
+/// path rather than joining it here, so discovery cannot drift from the writer
+/// and start reporting "no saves" for a game that is saving perfectly well —
+/// including in the window where the per-user move has not finished and the
+/// saves are still in the legacy directory.
+///
+/// Step 3 is what makes Switch titles work at all. Their saves live in the
+/// emulator's NAND under `user/`, never in `drop-saves`, so steps 1 and 2 find
+/// nothing and every save-related command used to bail out with "Save
+/// directory not found" — the panel showed zero local saves for exactly the
+/// games whose saves are hardest to recover by hand.
+fn find_emulator_root(game_id: &str) -> Option<std::path::PathBuf> {
     let db = borrow_db_checked();
+    let user_id = remote::save_sync::current_user_id();
+    let saves_dir = |root: &Path| -> std::path::PathBuf {
+        remote::save_sync::resolve_emu_saves_root(root, user_id.as_deref(), game_id)
+    };
 
-    // Check all installed game versions for one that has this game's saves
-    for (_emu_id, status) in db.applications.game_statuses.iter() {
+    let installed_dir = |id: &str| -> Option<std::path::PathBuf> {
+        match db.applications.game_statuses.get(id) {
+            Some(GameDownloadStatus::Installed { install_dir, .. }) => {
+                Some(std::path::PathBuf::from(install_dir))
+            }
+            _ => None,
+        }
+    };
+
+    for (_id, status) in db.applications.game_statuses.iter() {
         if let GameDownloadStatus::Installed { install_dir, .. } = status {
-            let saves_path = Path::new(install_dir)
-                .join("drop-saves")
-                .join(game_id);
-            if saves_path.exists() {
-                return Some(saves_path);
+            let root = Path::new(install_dir);
+            if saves_dir(root).exists() {
+                return Some(root.to_path_buf());
             }
         }
     }
 
-    // Also check if game_id IS the emulator (native game with saves)
-    if let Some(GameDownloadStatus::Installed { install_dir, .. }) =
-        db.applications.game_statuses.get(game_id)
+    if let Some(root) = installed_dir(game_id)
+        && saves_dir(&root).exists()
     {
-        let saves_path = Path::new(install_dir).join("drop-saves").join(game_id);
-        if saves_path.exists() {
-            return Some(saves_path);
-        }
+        return Some(root);
     }
 
-    None
+    // Fall back to the emulator this game is associated with, whether or not
+    // it has ever written a `drop-saves` directory.
+    //
+    // `game_versions` is keyed by VERSION id, not game id, so looking it up
+    // with the game id never matched and this whole step was dead — which is
+    // why Switch titles still bailed out with "Save directory not found".
+    // Resolve the installed version first, the same way `find_switch_title_id`
+    // does.
+    let version = &db.applications.installed_game_version.get(game_id)?.version;
+    db.applications
+        .game_versions
+        .get(version)
+        .and_then(|gv| gv.launches.iter().find_map(|l| l.emulator.as_ref()))
+        .and_then(|emu| installed_dir(&emu.game_id))
+}
+
+/// Where Drop keeps a game's RetroArch-style saves: `{emu_root}/drop-saves/
+/// {user_id}/{game_id}`. May not exist yet — callers that only read handle that
+/// fine, and the ones that write create it.
+fn find_emulator_saves_dir(game_id: &str) -> Option<std::path::PathBuf> {
+    let user_id = remote::save_sync::current_user_id();
+    find_emulator_root(game_id).map(|root| {
+        remote::save_sync::resolve_emu_saves_root(&root, user_id.as_deref(), game_id)
+    })
 }
 
 /// List all save files and save states for a game.
@@ -1021,6 +1093,24 @@ pub fn read_save_file(
 }
 
 /// Write base64-encoded save data to a local save file (for cloud download).
+///
+/// This is the target of every non-PC restore in the Cloud Saves panel and of
+/// every "Keep cloud" answer to a conflict, so it is the single most
+/// destructive command in the client. It delegates the write to
+/// `remote::save_sync::write_downloaded_save` rather than doing its own
+/// `fs::write`, which gets two things the hand-rolled version never had:
+///
+///   * a checked, timestamped backup of whatever it is about to replace, and
+///   * `switch__` filename decoding. Without it a Switch save was written out
+///     as one literal junk filename in `drop-saves/`, the real NAND save was
+///     left untouched, and the panel then reported the row as Synced.
+///
+/// Refuses without a signed-in account, like every other sync path. Downloads
+/// keep working while the identity is gone — `auth` lives in the encrypted
+/// database and the user object lives in the on-disk cache, so one can be
+/// readable while the other is not — and without this guard the restored bytes
+/// landed in the shared legacy tree that the scanner never reads and that
+/// another account can later adopt.
 #[tauri::command]
 pub fn write_save_file(
     game_id: String,
@@ -1028,16 +1118,18 @@ pub fn write_save_file(
     save_type: String,
     data: String,
 ) -> Result<(), String> {
-    let saves_dir = find_emulator_saves_dir(&game_id)
+    let user_id = remote::save_sync::current_user_id()
+        .ok_or_else(|| "Sign in to restore saves.".to_string())?;
+    let emu_root = find_emulator_root(&game_id)
         .ok_or_else(|| "Save directory not found".to_string())?;
 
-    let subdir = match save_type.as_str() {
-        "save" => "saves",
-        "state" => "states",
-        _ => return Err("Invalid save type".to_string()),
-    };
+    if !matches!(save_type.as_str(), "save" | "state") {
+        return Err("Invalid save type".to_string());
+    }
 
     // Security check: filename must be a plain leaf name with no traversal.
+    // Switch names survive this — their separators are percent-encoded — and
+    // `decode_switch_relpath` re-checks the decoded path for escapes.
     if filename.is_empty()
         || filename.contains("..")
         || filename.contains('/')
@@ -1046,17 +1138,22 @@ pub fn write_save_file(
         return Err("Invalid filename".to_string());
     }
 
-    let dir = saves_dir.join(subdir);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create dir: {e}"))?;
-
-    let file_path = dir.join(&filename);
-
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&data)
         .map_err(|e| format!("Invalid base64: {e}"))?;
 
-    std::fs::write(&file_path, &bytes).map_err(|e| format!("Failed to write: {e}"))?;
+    // No expected hash: this is a user-initiated restore of bytes the panel
+    // already fetched, so it always writes (and always backs up first).
+    remote::save_sync::write_downloaded_save(
+        &emu_root,
+        Some(&user_id),
+        &game_id,
+        &filename,
+        &save_type,
+        &bytes,
+        None,
+    )?;
     Ok(())
 }
 
@@ -1103,6 +1200,39 @@ pub async fn list_cloud_saves(
         .map_err(|e| e.to_string())
 }
 
+/// One summary row per game the signed-in user can READ cloud saves for: file
+/// count, size, and when it last reached the server.
+///
+/// Readable, not owned. PC saves are shared across every account on a Drop
+/// server, so a housemate's backup of a game this user has never launched comes
+/// back here too. `ownCount` / `ownBytes` are the caller's own share of each
+/// row and are what any surface claiming "your saves are backed up" has to
+/// count; `fileCount` / `totalBytes` are what a listing of that game would
+/// show.
+///
+/// Same auth reasoning as [`list_cloud_saves`]. This is what makes "are my
+/// saves backed up" answerable for a whole library in one request, instead of
+/// one collapsed panel per game each gated behind a Ludusavi scan.
+#[tauri::command]
+pub async fn list_cloud_save_summaries()
+-> Result<Vec<remote::save_sync::CloudSaveGameSummary>, String> {
+    remote::save_sync::list_cloud_save_summaries()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The signed-in user's cloud-save storage usage and cap.
+///
+/// The server has enforced this cap since the feature shipped; nothing in
+/// either repo read it, so the only way to find out it existed was to have an
+/// upload rejected.
+#[tauri::command]
+pub async fn cloud_save_quota() -> Result<remote::save_sync::CloudSaveQuota, String> {
+    remote::save_sync::fetch_quota()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Download one cloud save by id; return the decoded bytes as base64 so
 /// the frontend can forward them to `write_save_file` / `write_pc_save_file`
 /// without a second round-trip.
@@ -1118,8 +1248,12 @@ pub async fn download_cloud_save(id: String) -> Result<String, String> {
 /// Soft-delete one cloud save by id. Server records a tombstone keyed on
 /// the deleting device so other clients delete their local copy on next
 /// sync.
+///
+/// Returns whether the caller had a copy to delete. A shared PC save's row can
+/// belong to another account, and a delete only ever tombstones your own row,
+/// so `false` means there was nothing of yours behind that row.
 #[tauri::command]
-pub async fn delete_cloud_save(id: String) -> Result<(), String> {
+pub async fn delete_cloud_save(id: String) -> Result<bool, String> {
     remote::save_sync::delete_cloud_save(&id)
         .await
         .map_err(|e| e.to_string())
@@ -1143,15 +1277,48 @@ fn scan_all_local_saves(
         None,
     ));
 
-    // `find_emulator_saves_dir` → `<install>/drop-saves/<game_id>`;
-    // `scan_emu_saves` wants the install root and re-joins those segments.
-    if let Some(saves_dir) = find_emulator_saves_dir(game_id)
-        && let Some(emu_root) = saves_dir.parent().and_then(|p| p.parent())
-    {
-        out.extend(remote::save_sync::scan_emu_saves(emu_root, game_id));
+    // `scan_emu_saves` walks both `drop-saves/<user_id>/<game_id>` and the
+    // Switch NAND roots, so it needs the emulator install root, not the saves
+    // subdir.
+    if let Some(emu_root) = find_emulator_root(game_id) {
+        out.extend(remote::save_sync::scan_emu_saves(
+            &emu_root,
+            remote::save_sync::current_user_id().as_deref(),
+            game_id,
+            find_switch_title_id(game_id).as_deref(),
+        ));
     }
 
     out
+}
+
+/// Best-effort Switch title id for a game, read out of its launch command or
+/// install directory (a dump usually carries the id in its filename).
+///
+/// Mirrors what the launch path passes to `scan_emu_saves`. Without it the
+/// NAND is skipped, which is deliberate: the scan is filed under one gameId,
+/// and the NAND is shared by every installed Switch title.
+fn find_switch_title_id(game_id: &str) -> Option<String> {
+    let db = borrow_db_checked();
+    let version = &db.applications.installed_game_version.get(game_id)?.version;
+    let from_launch = db
+        .applications
+        .game_versions
+        .get(version)
+        .and_then(|gv| {
+            gv.launches
+                .iter()
+                .find_map(|l| remote::save_sync::switch_title_id_from_path(&l.command))
+        });
+    if from_launch.is_some() {
+        return from_launch;
+    }
+    match db.applications.game_statuses.get(game_id) {
+        Some(GameDownloadStatus::Installed { install_dir, .. }) => {
+            remote::save_sync::switch_title_id_from_path(install_dir)
+        }
+        _ => None,
+    }
 }
 
 /// One locally-detected save file, for the panel's unified status list.
@@ -1196,6 +1363,114 @@ pub async fn scan_local_game_saves(
     .map_err(|e| format!("Local save scan task failed: {e}"))
 }
 
+/// Whether Drop knows where a game keeps its saves at all.
+///
+/// Drop's coverage is narrower than the library: PC titles in Ludusavi's
+/// catalogue, RetroArch (because Drop redirects its save directory), and the
+/// yuzu-family Switch NAND. Everything else scans to an empty list, which is
+/// indistinguishable from a game nobody has played yet — so the panel told
+/// people to "play the game once" when playing it a hundred times would
+/// produce nothing Drop can see.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCoverage {
+    pub ludusavi_installed: bool,
+    /// Ludusavi's catalogue has an entry for this game, so Drop knows where
+    /// its PC saves live even before any exist.
+    pub known_to_ludusavi: bool,
+    /// The catalogue title the display name resolved to.
+    pub canonical_title: Option<String>,
+    /// This game launches through an emulator.
+    pub emulated: bool,
+    /// That emulator is one whose saves Drop can find.
+    pub emulator_supported: bool,
+}
+
+/// The emulator install root this game launches through, if any, and whether
+/// Drop can find saves inside it.
+fn emulator_save_support(game_id: &str) -> (bool, bool) {
+    let emulated = {
+        let db = borrow_db_checked();
+        db.applications
+            .installed_game_version
+            .get(game_id)
+            .and_then(|meta| db.applications.game_versions.get(&meta.version))
+            .is_some_and(|gv| gv.launches.iter().any(|l| l.emulator.is_some()))
+    };
+    if !emulated {
+        return (false, false);
+    }
+    // RetroArch is covered because Drop points its save directory at
+    // `drop-saves`; the yuzu family is covered because the NAND scan knows its
+    // layout. A standalone Dolphin or PCSX2 writes where it likes and Drop
+    // never sees it.
+    let supported = find_emulator_root(game_id).is_some_and(|root| {
+        remote::retroarch::discovery::is_retroarch(&root)
+            || remote::switchemu::discovery::detect_switch_emulator(&root).is_some()
+    });
+    (true, supported)
+}
+
+#[tauri::command]
+pub async fn game_save_coverage(
+    game_id: String,
+    game_name: String,
+) -> Result<SaveCoverage, String> {
+    // `resolve_canonical_title` shells out to Ludusavi twice in the worst
+    // case, and it reads a ~9 MB catalogue. Not on the UI thread.
+    tokio::task::spawn_blocking(move || {
+        let steam_app_id = find_steam_app_id(&game_id);
+        let pc = remote::save_sync::pc_save_coverage(&game_name, steam_app_id.as_deref());
+        let (emulated, emulator_supported) = emulator_save_support(&game_id);
+        SaveCoverage {
+            ludusavi_installed: pc.ludusavi_installed,
+            known_to_ludusavi: pc.known_to_ludusavi,
+            canonical_title: pc.canonical_title,
+            emulated,
+            emulator_supported,
+        }
+    })
+    .await
+    .map_err(|e| format!("Save coverage check failed: {e}"))
+}
+
+/// Drop the saves that will not fit under the user's cloud-save quota, before
+/// a single byte is read off disk or sent, and say which those were.
+///
+/// `Err` only when there is no room for anything: one oversized save must not
+/// stop the small ones going up, because the server itself would have stored
+/// them. See `remote::save_sync::preflight_quota` for what the check does and
+/// does not promise.
+async fn trim_to_quota(
+    game_id: &str,
+    targets: Vec<remote::save_sync::LocalSaveFile>,
+) -> Result<(Vec<remote::save_sync::LocalSaveFile>, Option<String>), String> {
+    // The plan borrows `targets`, so everything it has to say is pulled out
+    // here and the borrow ends before the list itself is consumed.
+    let (skipped, message, nothing_fits) = {
+        let all: Vec<&remote::save_sync::LocalSaveFile> = targets.iter().collect();
+        let plan = remote::save_sync::preflight_quota(game_id, &all).await;
+        let nothing_fits = plan.nothing_fits();
+        (plan.skipped, plan.message, nothing_fits)
+    };
+
+    if nothing_fits {
+        return Err(message
+            .unwrap_or_else(|| "Your cloud save storage is full.".to_string()));
+    }
+    if skipped.is_empty() {
+        return Ok((targets, None));
+    }
+    let skipped: HashSet<String> = skipped.into_iter().collect();
+    Ok((
+        targets
+            .into_iter()
+            .filter(|f| !skipped.contains(&f.filename))
+            .collect(),
+        message,
+    ))
+}
+
 /// Manually scan + upload this game's saves to the cloud, on demand —
 /// independent of whether the game is installed or has ever been launched.
 ///
@@ -1220,39 +1495,52 @@ pub async fn sync_game_saves_now(
     if !borrow_db_checked().settings.cloud_saves_enabled {
         return Err("Cloud saves are disabled in settings.".to_string());
     }
+    // The server keys every cloud row by user id, and so does the local
+    // manifest. Without an identity this would push saves into whichever
+    // account happens to be paired, so refuse rather than guess.
+    let user_id = remote::save_sync::current_user_id()
+        .ok_or_else(|| "Sign in to sync saves.".to_string())?;
 
     // Same detection the panel's refresh shows — PC (Ludusavi) + emulator.
-    let current_saves = scan_all_local_saves(&game_id, &game_name);
+    let scanned = scan_all_local_saves(&game_id, &game_name);
 
-    if current_saves.is_empty() {
+    if scanned.is_empty() {
         return Ok(0);
+    }
+
+    // Whatever the quota has room for still goes up. The rest is named in the
+    // log rather than dropped silently; this command returns a bare count, so
+    // there is nowhere else to put it.
+    let (current_saves, quota_message) = trim_to_quota(&game_id, scanned).await?;
+    if let Some(message) = &quota_message {
+        warn!("[SAVE-SYNC] Manual sync: {message}");
     }
 
     // Empty baseline => every detected file is treated as new and uploaded.
     let baseline = std::collections::HashMap::new();
-    let (count, errors) =
+    let (uploaded, failures) =
         remote::save_sync::upload_changed_saves(&game_id, &baseline, &current_saves)
             .await
             .map_err(|e| format!("Upload failed: {e}"))?;
 
-    for err in &errors {
+    for err in &failures {
         warn!("[SAVE-SYNC] Manual sync upload error: {err}");
     }
 
     // Persist the synced state so subsequent launch/exit diffs are correct.
-    let mut manifest = remote::save_sync::load_manifest(&game_id);
-    for file in &current_saves {
-        manifest.files.insert(
-            file.filename.clone(),
-            remote::save_sync::SyncFileEntry {
-                save_type: file.save_type.clone(),
-                synced_hash: file.data_hash.clone(),
-                cloud_id: None,
-                synced_at: chrono::Utc::now().to_rfc3339(),
-            },
-        );
-    }
-    manifest.last_synced_at = Some(chrono::Utc::now().to_rfc3339());
+    // `record_synced_files` skips files the server rejected — those never
+    // reached the cloud and would otherwise be treated as already synced from
+    // here on — and stamps the rest with their real cloud id.
+    let count = uploaded.len();
+    let cloud_ids: std::collections::HashMap<String, String> = uploaded.into_iter().collect();
+    let unsynced: Vec<String> = failures.iter().map(|f| f.filename.clone()).collect();
+    let mut manifest = remote::save_sync::load_manifest(&user_id, &game_id);
+    remote::save_sync::record_synced_files(
+        &mut manifest,
+        &current_saves,
+        &cloud_ids,
+        &unsynced,
+    );
     if let Err(e) = remote::save_sync::save_manifest(&manifest) {
         warn!("[SAVE-SYNC] Manual sync: failed to persist manifest: {e}");
     }
@@ -1272,61 +1560,107 @@ pub async fn sync_game_saves_now(
 ///
 /// Scans once, keeps only the requested filenames, uploads them in a single
 /// bulk call, and records them in the manifest so later diffs are correct.
-/// Returns the number of files uploaded.
 #[tauri::command]
 pub async fn backup_saves(
     game_id: String,
     game_name: String,
     filenames: Vec<String>,
-) -> Result<usize, String> {
+) -> Result<BackupResult, String> {
     if !borrow_db_checked().settings.cloud_saves_enabled {
         return Err("Cloud saves are disabled in settings.".to_string());
     }
+    let user_id = remote::save_sync::current_user_id()
+        .ok_or_else(|| "Sign in to sync saves.".to_string())?;
     if filenames.is_empty() {
-        return Ok(0);
+        return Ok(BackupResult::default());
     }
 
     let wanted: std::collections::HashSet<&str> =
         filenames.iter().map(|s| s.as_str()).collect();
-    let targets: Vec<remote::save_sync::LocalSaveFile> = scan_all_local_saves(&game_id, &game_name)
-        .into_iter()
+    let found = scan_all_local_saves(&game_id, &game_name);
+    let mut targets: Vec<remote::save_sync::LocalSaveFile> = found
+        .iter()
         .filter(|f| wanted.contains(f.filename.as_str()))
+        .cloned()
         .collect();
+    // Fall back to matching on the basename. Big Picture builds its request
+    // from Ludusavi's own listing, which is basename-keyed, so it asks for
+    // `pc__save.dat` where the scan now reports `pc__slot1%2Fsave.dat`. Only
+    // used when nothing matched exactly, so a game with one save per folder
+    // still resolves to exactly one file.
+    if targets.is_empty() {
+        targets = found
+            .iter()
+            .filter(|f| {
+                remote::save_sync::decode_pc_relpath(&f.filename)
+                    .and_then(|rel| {
+                        rel.file_name()
+                            .map(|n| format!("pc__{}", n.to_string_lossy()))
+                    })
+                    .is_some_and(|basename| wanted.contains(basename.as_str()))
+            })
+            .cloned()
+            .collect();
+    }
     if targets.is_empty() {
         return Err(
             "None of those saves are on this device anymore — try refreshing.".to_string(),
         );
     }
 
+    // Anything the quota has room for still goes up; the rest comes back as a
+    // row error rather than taking the whole request down with it.
+    let (targets, quota_message) = trim_to_quota(&game_id, targets).await?;
+
     // Empty baseline => every file we hand it is treated as new and uploaded.
     let baseline = std::collections::HashMap::new();
-    let (count, errors) =
+    let (uploaded, failures) =
         remote::save_sync::upload_changed_saves(&game_id, &baseline, &targets)
             .await
             .map_err(|e| format!("Upload failed: {e}"))?;
-    for err in &errors {
+    for err in &failures {
         warn!("[SAVE-SYNC] Backup error: {err}");
     }
 
     // Record the synced state for each pushed file so later diffs are correct.
-    let mut manifest = remote::save_sync::load_manifest(&game_id);
-    for file in &targets {
-        manifest.files.insert(
-            file.filename.clone(),
-            remote::save_sync::SyncFileEntry {
-                save_type: file.save_type.clone(),
-                synced_hash: file.data_hash.clone(),
-                cloud_id: None,
-                synced_at: chrono::Utc::now().to_rfc3339(),
-            },
-        );
-    }
-    manifest.last_synced_at = Some(chrono::Utc::now().to_rfc3339());
+    // Files the server rejected are left out: they are not in the cloud, and
+    // marking them synced would stop the next session from retrying them.
+    let count = uploaded.len();
+    let cloud_ids: std::collections::HashMap<String, String> = uploaded.into_iter().collect();
+    let unsynced: Vec<String> = failures.iter().map(|f| f.filename.clone()).collect();
+    let mut manifest = remote::save_sync::load_manifest(&user_id, &game_id);
+    remote::save_sync::record_synced_files(&mut manifest, &targets, &cloud_ids, &unsynced);
     if let Err(e) = remote::save_sync::save_manifest(&manifest) {
         warn!("[SAVE-SYNC] Backup: failed to persist manifest: {e}");
     }
 
-    Ok(count)
+    let mut errors: Vec<String> = failures
+        .iter()
+        .map(|f| format!("{}: {}", f.filename, f.error))
+        .collect();
+    if let Some(message) = quota_message {
+        errors.push(message);
+    }
+
+    Ok(BackupResult {
+        uploaded: count,
+        errors,
+    })
+}
+
+/// What [`backup_saves`] actually achieved.
+///
+/// This used to be a bare `usize`. The whole request can succeed while the
+/// server rejects every file inside it (`errors[]` in the bulk-upload
+/// response), and the panel then printed "Everything's already in sync." over
+/// rows still reading "Not backed up" — the exact shape of failure cloud saves
+/// keeps producing, reported as success.
+#[derive(serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupResult {
+    pub uploaded: usize,
+    /// One `filename: reason` line per file the server refused.
+    pub errors: Vec<String>,
 }
 
 /// Resolve a PC cloud save back to its real on-disk location and write it.
@@ -1349,10 +1683,14 @@ pub fn restore_pc_cloud_save(
     use base64::Engine;
 
     // PC saves uploaded by the launch-time sync carry a namespace prefix so
-    // they don't collide with emu save filenames. `strip_pc_prefix` handles the
-    // current `pc__` prefix and the legacy `pc/` prefix, and leaves un-prefixed
-    // (older or hand-uploaded) rows untouched so restore still does the right thing.
-    let basename = remote::save_sync::scan::strip_pc_prefix(filename.as_str());
+    // they don't collide with emu save filenames, and the body is the save's
+    // path relative to the game's save root. `decode_pc_relpath` handles the
+    // current `pc__` prefix and the legacy `pc/` prefix, and a legacy bare
+    // basename decodes to itself so those rows restore exactly as before.
+    let rel = remote::save_sync::decode_pc_relpath(filename.as_str()).ok_or_else(|| {
+        format!("That save's name is not one this device will write to disk: {filename}")
+    })?;
+    let rel_str = rel.to_string_lossy().to_string();
 
     // Game metadata is cached under `game/{id}` — fetch_library_logic and
     // fetch_game_logic both write that key now. The bare-`{id}` read is a
@@ -1390,9 +1728,28 @@ pub fn restore_pc_cloud_save(
     #[cfg(not(target_os = "linux"))]
     let wine_prefix: Option<std::path::PathBuf> = None;
 
+    // The install directory anchors the manifest's `<base>` placeholder, which
+    // is how games that save next to their own executable resolve on a machine
+    // that has never run them. Absent when the game isn't installed here, and
+    // those patterns are simply skipped.
+    let install_dir = match borrow_db_checked().applications.game_statuses.get(&game_id) {
+        Some(GameDownloadStatus::Installed { install_dir, .. }) => {
+            Some(PathBuf::from(install_dir))
+        }
+        _ => None,
+    };
+
+    // Same identifier every other Ludusavi call site passes. Without it the
+    // resolution drops to `--normalized`, which cannot tell a game from its
+    // remaster, and tier 3 of the resolver will happily write to a folder
+    // nothing on this disk vouches for.
+    let steam_app_id = find_steam_app_id(&game_id);
+
     let dest = remote::save_sync::find_pc_save_destination(
         &game_name,
-        basename,
+        steam_app_id.as_deref(),
+        &rel_str,
+        install_dir.as_deref(),
         wine_prefix.as_deref(),
     )?;
 
@@ -1400,34 +1757,25 @@ pub fn restore_pc_cloud_save(
         .decode(&data)
         .map_err(|e| format!("Invalid base64: {e}"))?;
 
-    let written = remote::save_sync::write_downloaded_pc_save(&filename, &bytes, Some(&dest))?;
+    let written =
+        remote::save_sync::write_downloaded_pc_save(&filename, &bytes, Some(&dest), None)?;
     Ok(written.display().to_string())
 }
 
 /// Write base64-encoded data to a PC save file at its full path.
 /// Used for restoring individual cloud saves to their original location.
+///
+/// `replace_save_file` takes a timestamped backup and only writes if that
+/// backup succeeded, so a restore over the wrong save is recoverable and a
+/// failed backup no longer means the original gets destroyed anyway.
 #[tauri::command]
 pub fn write_pc_save_file(file_path: String, data: String) -> Result<(), String> {
     let path = validate_pc_save_path(&file_path)?;
-    // Ensure parent directory exists
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create dir: {e}"))?;
-    }
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&data)
         .map_err(|e| format!("Invalid base64: {e}"))?;
-    // If file exists, create a backup first
-    if path.exists() {
-        let backup = path.with_extension(
-            path.extension()
-                .map(|e| format!("{}.bak", e.to_string_lossy()))
-                .unwrap_or_else(|| "bak".to_string()),
-        );
-        let _ = std::fs::copy(&path, &backup); // best-effort backup
-    }
-    std::fs::write(&path, &bytes).map_err(|e| format!("Failed to write: {e}"))?;
-    Ok(())
+    remote::save_sync::replace_save_file(&path, &bytes)
 }
 
 // ── Ludusavi integration for PC game saves ────────────────────────────────
@@ -1458,11 +1806,13 @@ const LUDUSAVI_ARCHIVE: &str = "ludusavi-v0.27.0-linux.tar.gz";
 const LUDUSAVI_ARCHIVE: &str = "ludusavi-v0.27.0-mac.tar.gz";
 
 /// Get the directory where Drop stores bundled tools.
+///
+/// Same resolver the database uses, so this agrees with
+/// `remote::save_sync`'s own lookup. Both used to hardcode `"drop"`; a debug
+/// build's data root is `drop-debug`, so the installer put Ludusavi in one
+/// place and the save scan looked in another.
 fn tools_dir() -> std::path::PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("drop")
-        .join("tools")
+    database::db::DATA_ROOT_DIR.join("tools")
 }
 
 /// Find Ludusavi binary — check Drop's tools dir, then PATH, then common locations.
@@ -1772,62 +2122,14 @@ fn extract_ludusavi_from_tar_gz(
     Err("Ludusavi binary not found in tar.gz archive".to_string())
 }
 
-/// Try to find the Steam App ID for a game from its install directory.
+/// The Steam app id for a game, when Drop can work one out.
+///
+/// A thin alias over [`remote::save_sync::steam_app_id_for_game`], which is
+/// where the lookup lives now: the launch and exit save-sync paths run in the
+/// `process` crate and needed the same answer, and a second copy of it there
+/// would be the third.
 fn find_steam_app_id(game_id: &str) -> Option<String> {
-    let db = borrow_db_checked();
-    let install_dir = match db.applications.game_statuses.get(game_id) {
-        Some(GameDownloadStatus::Installed { install_dir, .. }) => install_dir.clone(),
-        _ => return None,
-    };
-    drop(db);
-
-    // Check steam_appid.txt in the install directory
-    let appid_path = Path::new(&install_dir).join("steam_appid.txt");
-    if let Ok(contents) = std::fs::read_to_string(&appid_path) {
-        let trimmed = contents.trim();
-        if !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit()) {
-            return Some(trimmed.to_string());
-        }
-    }
-
-    // Check inside drop-goldberg subdirectories (in install dir)
-    let goldberg_dir = Path::new(&install_dir).join("drop-goldberg");
-    if let Ok(entries) = std::fs::read_dir(&goldberg_dir) {
-        for entry in entries.flatten() {
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.chars().all(|c| c.is_ascii_digit()) {
-                    return Some(name);
-                }
-            }
-        }
-    }
-
-    // Check %AppData%/drop-goldberg/ (shared Goldberg save location)
-    if let Some(appdata) = dirs::data_dir() {
-        let shared_goldberg = appdata.join("drop-goldberg");
-        if let Ok(entries) = std::fs::read_dir(&shared_goldberg) {
-            for entry in entries.flatten() {
-                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name.chars().all(|c| c.is_ascii_digit()) {
-                        // Verify this AppID belongs to our game by checking
-                        // if the achievements.json references exist
-                        let ach_path = entry.path().join("achievements.json");
-                        if ach_path.exists() || entry.path().join("stats.json").exists() {
-                            // Can't be 100% sure it's this game, but if there's
-                            // only one or the ID matches steam_appid.txt elsewhere,
-                            // it's a good match.
-                            log::info!("[LUDUSAVI] Found potential AppID {} in shared goldberg dir", name);
-                            return Some(name);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    None
+    remote::save_sync::steam_app_id_for_game(game_id)
 }
 
 /// List PC game save locations using Ludusavi.
@@ -2258,6 +2560,12 @@ pub async fn check_ludusavi() -> bool {
 }
 
 /// Delete a specific save file or save state.
+///
+/// Routed through `remove_save_file` so the bytes are copied aside under a
+/// timestamped name first, and so a failed backup aborts the delete instead of
+/// preceding it. The UI confirms before calling this, but the BPM button is
+/// also a gamepad action — one stray A-press on a couch controller lands here,
+/// and a save file has no second copy anywhere else.
 #[tauri::command]
 pub fn delete_game_save(
     game_id: String,
@@ -2287,7 +2595,8 @@ pub fn delete_game_save(
         return Err("Invalid file path".to_string());
     }
 
-    std::fs::remove_file(&canonical).map_err(|e| format!("Failed to delete: {e}"))
+    remote::save_sync::remove_save_file(&canonical)?;
+    Ok(())
 }
 
 /// Check whether a game's ROM hash matches RetroAchievements' known hashes.

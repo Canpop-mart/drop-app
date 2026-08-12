@@ -723,6 +723,7 @@ import {
   type TrendingGame,
 } from "~/composables/use-server-api";
 import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import { deduplicatedInvoke } from "~/composables/game";
 import StoreShelf from "~/components/StoreShelf.vue";
 import StoreRecentlyUpdated from "~/components/StoreRecentlyUpdated.vue";
@@ -980,7 +981,7 @@ const allTags = ref<StoreTag[]>([]);
 const libraries = ref<Array<{ id: string; name: string }>>([]);
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 function goToGame(gameId?: string) {

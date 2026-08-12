@@ -343,8 +343,13 @@ pub mod data {
             pub ra_expired_token: String,
             /// Global on/off switch for cloud save sync. When false, the
             /// pre-launch sync check and post-exit upload are both skipped.
-            /// Defaults to true so existing users keep their current behaviour.
-            #[serde(default = "default_true")]
+            ///
+            /// Defaults to FALSE, and this is the real gate — every sync path
+            /// reads it, so nothing can start uploading a person's saves to a
+            /// server because a UI gate was lifted. Cloud saves is opt-in: the
+            /// user turns it on in Settings or in the setup wizard, or it does
+            /// not run. Do not "restore" this to `default_true`.
+            #[serde(default)]
             pub cloud_saves_enabled: bool,
             /// Friendly per-device label shown in the cloud save conflict UI
             /// (`uploadedFrom`). When `None` or empty, falls back to the raw
@@ -405,12 +410,35 @@ pub mod data {
             /// written into its config.
             #[serde(default)]
             pub streaming_virtual_sink: String,
+            /// Whether this device answers stream and remote-install requests
+            /// pushed to it by the account's other devices.
+            ///
+            /// The background poller that serves them asks the server every few
+            /// seconds for the whole life of the app, which is by far the most
+            /// traffic Drop generates at idle. Anyone who does not stream
+            /// between their own machines is paying for a feature they never
+            /// use, so this turns the poller off outright. Defaults to true:
+            /// silently dropping requests on a device that already answers them
+            /// would look like the other end being broken.
+            #[serde(default = "default_true")]
+            pub streaming_enabled: bool,
             /// Set once Windows Firewall has been opened for remote play.
             /// Adding the rules needs elevation, so it is a one-off setup step
             /// with a UAC prompt rather than something to retry on every
             /// stream — which is what it used to be, and it failed every time.
             #[serde(default)]
             pub streaming_firewall_configured: bool,
+            /// How far the local save-scope migration has run on this device.
+            ///
+            /// Save state used to be keyed by game id alone, so two accounts on
+            /// one PC shared it. Version 1 moves `sync-manifests/{gameId}.json`
+            /// into `sync-manifests/{userId}/` and adopts each emulator's
+            /// `drop-saves/{gameId}` tree into `drop-saves/{userId}/`. Stored as
+            /// a number rather than a bool so a later reshuffle has somewhere to
+            /// go, and so the state is inspectable when a user reports saves
+            /// that went missing. 0 = never run.
+            #[serde(default)]
+            pub save_scope_migration_version: u32,
         }
 
         // Manual Debug impl: redact the Sunshine password so it never leaks
@@ -459,9 +487,14 @@ pub mod data {
                     .field("streaming_adapter", &self.streaming_adapter)
                     .field("streaming_audio_sink", &self.streaming_audio_sink)
                     .field("streaming_virtual_sink", &self.streaming_virtual_sink)
+                    .field("streaming_enabled", &self.streaming_enabled)
                     .field(
                         "streaming_firewall_configured",
                         &self.streaming_firewall_configured,
+                    )
+                    .field(
+                        "save_scope_migration_version",
+                        &self.save_scope_migration_version,
                     )
                     .finish()
             }
@@ -495,7 +528,7 @@ pub mod data {
                     ra_username: String::new(),
                     ra_token: String::new(),
                     ra_expired_token: String::new(),
-                    cloud_saves_enabled: default_true(),
+                    cloud_saves_enabled: false,
                     device_name: None,
                     display_name: None,
                     streaming_quality: default_streaming_quality(),
@@ -506,7 +539,9 @@ pub mod data {
                     streaming_adapter: String::new(),
                     streaming_audio_sink: String::new(),
                     streaming_virtual_sink: String::new(),
+                    streaming_enabled: true,
                     streaming_firewall_configured: false,
+                    save_scope_migration_version: 0,
                 }
             }
         }

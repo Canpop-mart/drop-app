@@ -7,12 +7,14 @@
  *    Ready, and watch for the host ending the session.
  *  - Cleanup: `stopStreaming()` cancels pending requests, stops host-side
  *    Sunshine sessions, kills Moonlight, and clears every interval.
- *  - Device discovery: the list of other registered devices, split into
- *    `streamableDevices` (have this game) and `installableDevices` (don't).
+ *  - Device discovery: the other registered devices, split into `streamTargets`
+ *    (have this game) and `installTargets` (don't), each entry carrying whether
+ *    that device is reachable. `stream-targets.ts` holds those rules.
  *
- * Extracted verbatim — behaviour-identical — from the 3232-line
- * `pages/bigpicture/library/[id].vue`. All timers are owned here and torn
- * down in `dispose()`, which the page calls from `onUnmounted`.
+ * Extracted from the 3232-line `pages/bigpicture/library/[id].vue`. The timers
+ * for a live stream are owned here and torn down in `dispose()`, which the page
+ * calls from `onUnmounted`; the session list itself comes from the app-wide poll
+ * in `use-remote-sessions`, so this and the stream button share one request.
  *
  * Per-game-detail composable: NOT a singleton — call from a component
  * `setup()`. The streaming/devices UI is shown to everyone; nothing here is
@@ -20,10 +22,19 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { hostname, platform } from "@tauri-apps/plugin-os";
 import { devLog } from "~/composables/dev-mode";
+import { useDisplayName } from "~/composables/use-display-name";
+import { useRemoteSessions } from "~/composables/use-remote-sessions";
 import { useStreaming } from "~/composables/useStreaming";
 import type { ClientDevice } from "~/composables/useStreaming";
-import type { GameVersion } from "~/types";
+import {
+  buildInstallMenuItems,
+  buildPlayMenuItems,
+  partitionDevices,
+  type LocalIdentity,
+} from "~/composables/bigpicture/stream-targets";
+import type { GameVersion, Settings } from "~/types";
 
 /** Granular streaming phase, drives the loading indicator label. */
 export type StreamingPhase =
@@ -46,13 +57,23 @@ export function useBpmGameStreaming(
   const {
     stopStreamingSession,
     stopAllHostSessions,
-    listRemoteSessions,
     getConnectionInfo,
     requestStream,
     killMoonlight,
     listDevices,
     remoteInstall,
   } = useStreaming();
+
+  // The session list is polled once for the whole app. This composable and the
+  // stream button both live on a BPM game page and used to run a 15s timer
+  // each, so the page asked for the same list twice per tick.
+  const {
+    sessions: remoteSessions,
+    start: startSessionPoll,
+    stop: stopSessionPoll,
+    setPollInterval,
+    refresh: refreshRemoteSessions,
+  } = useRemoteSessions();
 
   // ── State ─────────────────────────────────────────────────────────────
   const isStreaming = ref(false);
@@ -64,7 +85,6 @@ export function useBpmGameStreaming(
   let activeStreamSessionId: string | null = null;
   let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   let moonlightWatchInterval: ReturnType<typeof setInterval> | null = null;
-  let streamPollInterval: ReturnType<typeof setInterval> | null = null;
   let streamGuard = false;
 
   const streamingPhaseLabel = computed(() => {
@@ -85,33 +105,72 @@ export function useBpmGameStreaming(
   });
 
   // ── Device discovery ──────────────────────────────────────────────────
-  // Deduplicate by name+platform, keeping the most recently connected entry.
-  const otherDevices = computed(() => {
-    const others = devices.value.filter((d) => !d.isSelf);
-    const byKey = new Map<string, ClientDevice>();
-    for (const d of others) {
-      const key = `${d.name}::${d.platform}`;
-      const existing = byKey.get(key);
-      if (!existing || d.lastConnected > existing.lastConnected) {
-        byKey.set(key, d);
+  // The rules live in `stream-targets.ts`, which is pure and tested. This
+  // section is only the plumbing: who we are, what time it is, and one fetch.
+
+  const { accountName } = useDisplayName();
+  const localIdentity = ref<LocalIdentity | null>(null);
+
+  /**
+   * This machine's own identity, used to recognise leftover registrations of
+   * it that the server's `isSelf` cannot see. Read once and cached: none of
+   * these change while the app is running, except the display name, which is
+   * re-read on every device load because Settings can change it.
+   */
+  async function resolveLocalIdentity(): Promise<LocalIdentity | null> {
+    let host = localIdentity.value?.hostname ?? null;
+    if (!host) {
+      try {
+        host = (await hostname())?.trim() || null;
+      } catch {
+        // Some sandboxes refuse the call. The isSelf flag still applies.
+        host = null;
       }
     }
-    return [...byKey.values()];
-  });
+    let displayName: string | null = null;
+    try {
+      const settings = await invoke<Settings>("fetch_settings");
+      displayName = settings.displayName?.trim() || accountName() || null;
+    } catch {
+      displayName = accountName() || null;
+    }
+    localIdentity.value = { platform: platform(), hostname: host, displayName };
+    return localIdentity.value;
+  }
 
-  // Devices that have this game installed — "Play on {device}" targets.
-  const streamableDevices = computed(() =>
-    otherDevices.value.filter((d) => d.hasGame === true),
+  // Reachability is judged against a clock, so it needs a reactive one or the
+  // menu keeps claiming a device is up long after it went to sleep. This only
+  // ever makes the list more conservative, and it costs no requests.
+  const now = ref(Date.now());
+  let clockInterval: ReturnType<typeof setInterval> | null = null;
+
+  const partition = computed(() =>
+    partitionDevices(devices.value, {
+      local: localIdentity.value,
+      nowMs: now.value,
+    }),
   );
-  // Devices that definitively do NOT have this game (can install on).
-  // Strict `=== false` — devices that haven't reported (`undefined`) are
-  // unknown and excluded from BOTH lists, so an already-installed game
-  // never shows a spurious "Install on X" entry.
-  const installableDevices = computed(() =>
-    otherDevices.value.filter((d) => d.hasGame === false),
+
+  /** Devices that have this game installed. Offline ones are kept, flagged. */
+  const streamTargets = computed(() => partition.value.stream);
+  /** Devices that definitively do NOT have this game (can install on). */
+  const installTargets = computed(() => partition.value.install);
+  /** The subset a stream request can actually reach right now. */
+  const onlineStreamTargets = computed(() =>
+    streamTargets.value.filter((t) => t.online),
+  );
+
+  /** Rows of the dropdown for a game installed here. Index = row. */
+  const playMenuItems = computed(() => buildPlayMenuItems(partition.value));
+  /** Rows of the dropdown for a game that is not installed here. */
+  const installMenuItems = computed(() =>
+    buildInstallMenuItems(partition.value),
   );
 
   async function loadDevices() {
+    // Identity first: a device list judged without it can show this machine.
+    await resolveLocalIdentity();
+    now.value = Date.now();
     try {
       devices.value = await listDevices(gameId);
     } catch {
@@ -136,67 +195,57 @@ export function useBpmGameStreaming(
     streamingPhase.value = null;
     streamGuard = false;
     onError(reason?.trim() ? reason : NO_HOST_RESPONSE);
-    if (streamPollInterval) clearInterval(streamPollInterval);
-    streamPollInterval = setInterval(pollRemoteSessions, 15_000);
+    setPollInterval();
   }
 
   // ── Remote session polling ────────────────────────────────────────────
-  async function pollRemoteSessions() {
-    try {
-      const sessions = await listRemoteSessions();
-
-      // A host that gave up leaves its reason on the session. Surface it as
-      // soon as we see it rather than making the user sit out the 60s timeout.
-      if (pendingRequestSessionId.value) {
-        const ours = sessions.find(
-          (s: any) => s.id === pendingRequestSessionId.value,
-        );
-        if (ours && ours.status === "Stopped" && ours.error) {
-          devLog(
-            "event",
-            "[BPM:STREAM] Host failed the request:",
-            ours.error,
-          );
-          failPendingRequest(ours.error);
-          return;
-        }
+  /** Runs on every tick of the shared poll, with that tick's session list. */
+  async function onRemoteSessions(sessions: any[]) {
+    // A host that gave up leaves its reason on the session. Surface it as
+    // soon as we see it rather than making the user sit out the 60s timeout.
+    if (pendingRequestSessionId.value) {
+      const ours = sessions.find(
+        (s: any) => s.id === pendingRequestSessionId.value,
+      );
+      if (ours && ours.status === "Stopped" && ours.error) {
+        devLog("event", "[BPM:STREAM] Host failed the request:", ours.error);
+        failPendingRequest(ours.error);
+        return;
       }
+    }
 
-      const found =
-        sessions.find(
-          (s: any) =>
-            s.game?.id === gameId &&
-            (s.status === "Ready" ||
-              s.status === "Starting" ||
-              s.status === "Streaming"),
-        ) ?? null;
-      availableStream.value = found;
+    const found =
+      sessions.find(
+        (s: any) =>
+          s.game?.id === gameId &&
+          (s.status === "Ready" ||
+            s.status === "Starting" ||
+            s.status === "Streaming"),
+      ) ?? null;
+    availableStream.value = found;
 
-      if (pendingRequestSessionId.value && found) {
-        if (found.status === "Starting") {
-          streamingPhase.value = "host-preparing";
-        }
+    if (pendingRequestSessionId.value && found) {
+      if (found.status === "Starting") {
+        streamingPhase.value = "host-preparing";
       }
+    }
 
-      // Pending request just became Ready → auto-connect.
-      if (
-        pendingRequestSessionId.value &&
-        found &&
-        found.status === "Ready"
-      ) {
-        devLog(
-          "event",
-          "[BPM:STREAM] Our requested session is now Ready! Auto-connecting...",
-        );
-        streamingPhase.value = "connecting";
-        pendingRequestSessionId.value = null;
-        isStreaming.value = false;
-        await connectToRemoteStream();
-      }
-    } catch {
-      // Silently ignore poll errors
+    // Pending request just became Ready → auto-connect.
+    if (pendingRequestSessionId.value && found && found.status === "Ready") {
+      devLog(
+        "event",
+        "[BPM:STREAM] Our requested session is now Ready! Auto-connecting...",
+      );
+      streamingPhase.value = "connecting";
+      pendingRequestSessionId.value = null;
+      isStreaming.value = false;
+      await connectToRemoteStream();
     }
   }
+
+  watch(remoteSessions, (sessions) => {
+    void onRemoteSessions(sessions);
+  });
 
   async function connectToRemoteStream() {
     if (!availableStream.value) return;
@@ -241,14 +290,15 @@ export function useBpmGameStreaming(
       });
 
       // Restore normal poll interval
-      if (streamPollInterval) clearInterval(streamPollInterval);
-      streamPollInterval = setInterval(pollRemoteSessions, 15_000);
+      setPollInterval();
 
-      // Watch for the host ending the session → kill Moonlight.
+      // Watch for the host ending the session → kill Moonlight. Faster than the
+      // shared poll on purpose: a dead stream should not leave Moonlight
+      // full-screen over the UI for another ten seconds.
       if (moonlightWatchInterval) clearInterval(moonlightWatchInterval);
       moonlightWatchInterval = setInterval(async () => {
         try {
-          const sessions = await listRemoteSessions();
+          const sessions = await refreshRemoteSessions();
           const current = sessions.find((s: any) => s.id === sessionId);
           if (!current || current.status === "Stopped") {
             devLog(
@@ -312,8 +362,7 @@ export function useBpmGameStreaming(
       devLog("event", "[BPM:STREAM] Stream requested, session:", sessionId);
 
       // Speed up polling while waiting for the host to accept.
-      if (streamPollInterval) clearInterval(streamPollInterval);
-      streamPollInterval = setInterval(pollRemoteSessions, 3_000);
+      setPollInterval(3_000);
 
       // Time out after 60s if no host responds. One last look for a reason
       // first — the poll may not have run since the host failed.
@@ -324,7 +373,7 @@ export function useBpmGameStreaming(
         );
         let reason: string | null = null;
         try {
-          const sessions = await listRemoteSessions();
+          const sessions = await refreshRemoteSessions();
           reason = sessions.find((s: any) => s.id === sessionId)?.error ?? null;
         } catch {
           // No reason available — the generic wording covers it.
@@ -397,8 +446,7 @@ export function useBpmGameStreaming(
         clearInterval(moonlightWatchInterval);
         moonlightWatchInterval = null;
       }
-      if (streamPollInterval) clearInterval(streamPollInterval);
-      streamPollInterval = setInterval(pollRemoteSessions, 15_000);
+      setPollInterval();
     } finally {
       isStreaming.value = false;
       streamingPhase.value = null;
@@ -407,8 +455,23 @@ export function useBpmGameStreaming(
     }
   }
 
-  /** Request a stream from a specific device. */
-  function streamFromDevice(device: ClientDevice) {
+  /**
+   * Request a stream from a specific device.
+   *
+   * The last check before the request goes out: a stream nobody can pick up
+   * expires on the server after two minutes, so a target that has gone quiet
+   * since the menu was drawn gets a straight answer instead of a minute of
+   * spinner followed by "no host responded".
+   */
+  function streamFromDevice(device: ClientDevice | undefined) {
+    if (!device) return;
+    const target = streamTargets.value.find((t) => t.device.id === device.id);
+    if (!target?.online) {
+      onError(
+        `${device.name} is not connected right now, so it cannot start the game. Turn it on and open Drop, then try again.`,
+      );
+      return;
+    }
     devLog(
       "event",
       `[BPM:STREAM] Requesting stream from device: ${device.name} (${device.id})`,
@@ -417,9 +480,18 @@ export function useBpmGameStreaming(
   }
 
   /** Ask another device to install this game. */
-  async function installOnDevice(device: ClientDevice) {
+  async function installOnDevice(device: ClientDevice | undefined) {
     // Guard against a stale focus index firing with no device.
     if (!device) return;
+    // Same reasoning as `streamFromDevice`: an install request is the same
+    // pending session and expires just as fast if nothing is there to take it.
+    const target = installTargets.value.find((t) => t.device.id === device.id);
+    if (!target?.online) {
+      onError(
+        `${device.name} is not connected right now, so it cannot start the download. Turn it on and open Drop, then try again.`,
+      );
+      return;
+    }
     devLog(
       "event",
       `[BPM:STREAM] Remote install on device: ${device.name} (${device.id})`,
@@ -437,15 +509,20 @@ export function useBpmGameStreaming(
 
   /** Start receiver-side polling. Call from the page's `onMounted`. */
   function startPolling() {
-    pollRemoteSessions();
-    streamPollInterval = setInterval(pollRemoteSessions, 15_000);
+    void startSessionPoll();
+    if (!clockInterval) {
+      clockInterval = setInterval(() => {
+        now.value = Date.now();
+      }, 30_000);
+    }
   }
 
   /** Tear down every interval. Call from the page's `onUnmounted`. */
   function dispose() {
-    if (streamPollInterval) {
-      clearInterval(streamPollInterval);
-      streamPollInterval = null;
+    stopSessionPoll();
+    if (clockInterval) {
+      clearInterval(clockInterval);
+      clockInterval = null;
     }
     if (heartbeatInterval) {
       clearInterval(heartbeatInterval);
@@ -463,8 +540,11 @@ export function useBpmGameStreaming(
     streamingPhase,
     streamingPhaseLabel,
     devices,
-    streamableDevices,
-    installableDevices,
+    streamTargets,
+    installTargets,
+    onlineStreamTargets,
+    playMenuItems,
+    installMenuItems,
     // Actions
     loadDevices,
     streamGame,

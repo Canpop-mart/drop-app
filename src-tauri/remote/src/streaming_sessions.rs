@@ -1,4 +1,4 @@
-use log::info;
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -214,7 +214,9 @@ pub async fn heartbeat_streaming(
     };
 
     remote_request_ok(RemoteRequest::post(url, &body)).await?;
-    info!("Heartbeat sent for streaming session {}", session_id);
+    // Once every few seconds for the whole length of a stream. The start and
+    // stop lines either side of it are what a reader is actually looking for.
+    debug!("Heartbeat sent for streaming session {}", session_id);
     Ok(())
 }
 
@@ -222,7 +224,9 @@ pub async fn heartbeat_streaming(
 pub async fn list_streaming_sessions() -> Result<Vec<StreamingSession>, RemoteAccessError> {
     let url = generate_url(&["/api/v1/client/streaming/sessions"], &[])?;
     let sessions: Vec<StreamingSession> = remote_request(RemoteRequest::get(url)).await?;
-    info!("Fetched {} streaming sessions", sessions.len());
+    // Polled every 15s by any open game page, so this is one of the noisiest
+    // lines in the log and says nothing a reader needs at INFO.
+    debug!("Fetched {} streaming sessions", sessions.len());
     Ok(sessions)
 }
 
@@ -325,7 +329,7 @@ pub async fn list_devices(game_id: Option<&str>) -> Result<Vec<ClientDevice>, Re
     };
     let url = generate_url(&["/api/v1/client/devices"], &query)?;
     let devices: Vec<ClientDevice> = remote_request(RemoteRequest::get(url)).await?;
-    info!("Fetched {} devices", devices.len());
+    debug!("Fetched {} devices", devices.len());
     Ok(devices)
 }
 

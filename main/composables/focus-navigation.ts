@@ -30,95 +30,6 @@ interface FocusGroup {
   lastFocused: FocusableElement | null;
 }
 
-// ── Grid navigation (Phase 1a) ──────────────────────────────────────────────
-// Groups registered as grids use index-aligned navigation instead of spatial.
-// When moving up/down, the column index is preserved ("sticky column").
-// Left/right moves within a row and updates the sticky column.
-
-interface GridRow {
-  elements: FocusableElement[];
-  top: number; // average Y position of this row (for sorting)
-}
-
-interface GridContext {
-  /** Remembered column index — survives vertical navigation across rows of different lengths. */
-  stickyCol: number;
-}
-
-/** Set of group names that should use grid navigation. */
-const gridGroups = new Set<string>();
-
-/** Per-group grid navigation context (sticky column memory). */
-const gridContexts = new Map<string, GridContext>();
-
-/**
- * Compute the visual grid layout from a set of focusable elements.
- * Groups elements into rows based on their vertical position (within a
- * tolerance), then sorts each row left-to-right.
- */
-function computeGridLayout(elements: FocusableElement[]): GridRow[] {
-  const connected = elements.filter((e) => e.el.isConnected);
-  if (connected.length === 0) return [];
-
-  // Measure once
-  const measured = connected.map((e) => ({
-    el: e,
-    rect: e.el.getBoundingClientRect(),
-  }));
-
-  // Sort by Y then X
-  measured.sort((a, b) => {
-    const rowDiff = a.rect.top - b.rect.top;
-    if (Math.abs(rowDiff) > 10) return rowDiff;
-    return a.rect.left - b.rect.left;
-  });
-
-  // Group into rows
-  const rows: GridRow[] = [];
-  let currentRow: typeof measured = [];
-  let currentRowTop = -Infinity;
-
-  for (const item of measured) {
-    if (
-      currentRow.length === 0 ||
-      Math.abs(item.rect.top - currentRowTop) <= 10
-    ) {
-      currentRow.push(item);
-      if (currentRow.length === 1) currentRowTop = item.rect.top;
-    } else {
-      rows.push({
-        elements: currentRow.map((m) => m.el),
-        top: currentRowTop,
-      });
-      currentRow = [item];
-      currentRowTop = item.rect.top;
-    }
-  }
-  if (currentRow.length > 0) {
-    rows.push({
-      elements: currentRow.map((m) => m.el),
-      top: currentRowTop,
-    });
-  }
-
-  return rows;
-}
-
-/**
- * Find (rowIndex, colIndex) of `target` within the given grid layout.
- * Returns null if not found.
- */
-function findInGrid(
-  rows: GridRow[],
-  target: FocusableElement,
-): { row: number; col: number } | null {
-  for (let r = 0; r < rows.length; r++) {
-    const col = rows[r].elements.indexOf(target);
-    if (col !== -1) return { row: r, col };
-  }
-  return null;
-}
-
 // ── Direction helpers ────────────────────────────────────────────────────────
 
 type Direction = "up" | "down" | "left" | "right";
@@ -178,6 +89,36 @@ function findNearest(
   return best;
 }
 
+/**
+ * A group's default element: the first STILL-CONNECTED member in DOM order.
+ *
+ * Both filters matter. The Set's iteration order is mount order, which stops
+ * matching the visual order as soon as anything re-registers, and a detached
+ * node reports `getBoundingClientRect()` as all zeroes — focusing one makes
+ * `findNearest` measure every subsequent move from the viewport's top-left
+ * corner, which is the "D-pad does nothing, or jumps somewhere random"
+ * symptom.
+ */
+function firstInGroup(group: FocusGroup): FocusableElement | null {
+  let best: FocusableElement | null = null;
+  for (const f of group.elements) {
+    if (!f.el.isConnected) continue;
+    if (
+      !best ||
+      f.el.compareDocumentPosition(best.el) & Node.DOCUMENT_POSITION_FOLLOWING
+    ) {
+      best = f;
+    }
+  }
+  return best;
+}
+
+/** Where focus should land when entering a group: its memory, else its first element. */
+function defaultFocusFor(group: FocusGroup): FocusableElement | null {
+  if (group.lastFocused?.el.isConnected) return group.lastFocused;
+  return firstInGroup(group);
+}
+
 // ── Singleton state ──────────────────────────────────────────────────────────
 
 const groups = reactive(new Map<string, FocusGroup>());
@@ -207,12 +148,19 @@ const focusRestriction = ref<string | null>(null);
 let stickPollInterval: ReturnType<typeof setInterval> | null = null;
 
 /**
- * Ownership-based input lock.  Each acquireInputLock() returns a unique ID.
- * releaseInputLock(id) only unlocks if the caller is still the current owner.
- * This prevents a race where an old component's onUnmounted undoes a newer
- * component's lock (e.g. navigating between two iframe pages).
+ * Ownership-based input lock.  Each acquireInputLock() returns a unique ID
+ * that is pushed onto a STACK; releaseInputLock(id) pops that one id and only
+ * drops the lock once the stack empties.
+ *
+ * It was a single slot, which broke every nested overlay: the game page's
+ * shelf picker acquires the lock, its "Create New Shelf" button opens
+ * BigPictureKeyboard which acquires its own, and closing the keyboard
+ * unlocked everything while the picker was still up — one D-pad press then
+ * moved the picker AND the page behind it. It also let an id that was never
+ * the owner (or was already released) unlock the app.
  */
-let _inputLockId = 0;
+let _inputLockSeq = 0;
+const _inputLockStack: number[] = [];
 
 // Ordered list of group names for LB/RB cycling
 const groupOrder = ref<string[]>([]);
@@ -473,33 +421,14 @@ function navigate(direction: Direction) {
     // Focus first element in current group or first available
     const group =
       groups.get(currentGroup.value) || groups.values().next().value;
-    if (group && group.elements.size > 0) {
-      applyFocus(group.lastFocused || (group.elements.values().next().value ?? null));
-    }
+    const target = group ? defaultFocusFor(group) : null;
+    if (target) applyFocus(target);
     return;
   }
 
   const groupName = currentFocused.value.group;
   const group = groups.get(groupName);
   if (!group) return;
-
-  // ── Grid navigation (Phase 1a) ──────────────────────────────────────────
-  if (gridGroups.has(groupName)) {
-    const target = navigateGrid(
-      currentFocused.value,
-      group,
-      groupName,
-      direction,
-    );
-    if (target) {
-      applyFocus(target);
-      const gp = useGamepad();
-      gp.vibrate("light");
-      return;
-    }
-    // Grid navigation returned null — fall through to spatial search
-    // so focus can escape the grid (e.g. up from top row to filter bar)
-  }
 
   // ── Spatial search (within current group first) ─────────────────────────
   const candidates = Array.from(group.elements)
@@ -547,80 +476,12 @@ function navigate(direction: Direction) {
   }
 }
 
-/**
- * Index-aligned grid navigation.
- * - Left/Right: move within the row, update stickyCol.
- * - Up/Down: move to the same stickyCol in the adjacent row.
- *   If the target row is shorter, clamp to the last column.
- *   Does NOT wrap at edges.
- */
-function navigateGrid(
-  current: FocusableElement,
-  group: FocusGroup,
-  groupName: string,
-  direction: Direction,
-): FocusableElement | null {
-  const elements = Array.from(group.elements);
-  const rows = computeGridLayout(elements);
-  if (rows.length === 0) return null;
-
-  const pos = findInGrid(rows, current);
-  if (!pos) return null;
-
-  // Ensure grid context exists
-  if (!gridContexts.has(groupName)) {
-    gridContexts.set(groupName, { stickyCol: pos.col });
-  }
-  const ctx = gridContexts.get(groupName)!;
-
-  let targetRow = pos.row;
-  let targetCol = pos.col;
-
-  switch (direction) {
-    case "left":
-      if (pos.col > 0) {
-        targetCol = pos.col - 1;
-        ctx.stickyCol = targetCol;
-      } else {
-        return null; // no wrap
-      }
-      break;
-
-    case "right":
-      if (pos.col < rows[pos.row].elements.length - 1) {
-        targetCol = pos.col + 1;
-        ctx.stickyCol = targetCol;
-      } else {
-        return null; // no wrap
-      }
-      break;
-
-    case "up":
-      if (pos.row > 0) {
-        targetRow = pos.row - 1;
-        // Use sticky column, clamped to row length
-        targetCol = Math.min(ctx.stickyCol, rows[targetRow].elements.length - 1);
-      } else {
-        return null; // no wrap
-      }
-      break;
-
-    case "down":
-      if (pos.row < rows.length - 1) {
-        targetRow = pos.row + 1;
-        // Use sticky column, clamped to row length
-        targetCol = Math.min(ctx.stickyCol, rows[targetRow].elements.length - 1);
-      } else {
-        return null; // no wrap
-      }
-      break;
-  }
-
-  return rows[targetRow].elements[targetCol] ?? null;
-}
-
 function cycleGroup(forward: boolean) {
   if (groupOrder.value.length <= 1) return;
+  // A modal has trapped focus in one group. Letting LB/RB hop out leaves the
+  // ring behind a still-open overlay AND strands `focusRestriction` pointing
+  // at a group the user has walked away from.
+  if (focusRestriction.value) return;
 
   // M3 fix: if current group not in order list, start from index 0
   let idx = groupOrder.value.indexOf(currentGroup.value);
@@ -639,13 +500,13 @@ function cycleGroup(forward: boolean) {
 
     const nextGroupName = groupOrder.value[nextIdx];
     const nextGroup = groups.get(nextGroupName);
+    if (!nextGroup) continue;
 
-    // Skip empty groups (e.g. iframe pages with no content elements)
-    if (!nextGroup || nextGroup.elements.size === 0) continue;
+    // Skip groups with nothing live in them (e.g. iframe pages with no
+    // content elements, or a group whose members have all unmounted).
+    const target = defaultFocusFor(nextGroup);
+    if (!target) continue;
 
-    // Restore last focused or pick first
-    const target =
-      nextGroup.lastFocused || (nextGroup.elements.values().next().value ?? null);
     applyFocus(target, true); // true indicates this is from a group cycle
     return;
   }
@@ -774,31 +635,26 @@ export function useFocusNavigation() {
     // Return unregister function
     return () => {
       const g = groups.get(group);
-      if (g) {
-        g.elements.delete(focusable);
-        if (g.lastFocused === focusable) g.lastFocused = null;
-        if (currentFocused.value === focusable) {
-          currentFocused.value = null;
-        }
-      }
+      if (!g) return;
+      g.elements.delete(focusable);
+      if (g.lastFocused === focusable) g.lastFocused = null;
+      if (currentFocused.value !== focusable) return;
+
+      // Nulling `currentFocused` directly left `.bp-focused` on the detached
+      // node and picked no replacement, so the screen ended up with no ring
+      // at all (typing in the library search did exactly this). Clear it
+      // properly, then hand focus to whatever survived once the DOM settles.
+      applyFocus(null);
+      nextTick(() => {
+        if (currentFocused.value) return;
+        const restricted = focusRestriction.value;
+        const candidate = restricted
+          ? groups.get(restricted)
+          : (g.elements.size > 0 ? g : groups.get("content"));
+        const target = candidate ? defaultFocusFor(candidate) : null;
+        if (target) applyFocus(target);
+      });
     };
-  }
-
-  /**
-   * Register a focus group as a grid layout.
-   * Navigation within this group will use index-aligned column-sticky
-   * movement instead of spatial cone search.
-   */
-  function registerGrid(group: string) {
-    gridGroups.add(group);
-  }
-
-  /**
-   * Unregister a group from grid navigation (reverts to spatial).
-   */
-  function unregisterGrid(group: string) {
-    gridGroups.delete(group);
-    gridContexts.delete(group);
   }
 
   function setGroupOrder(order: string[]) {
@@ -807,9 +663,9 @@ export function useFocusNavigation() {
 
   function focusGroup(groupName: string) {
     const group = groups.get(groupName);
-    if (!group || group.elements.size === 0) return;
-    const target = group.lastFocused || (group.elements.values().next().value ?? null);
-    applyFocus(target);
+    if (!group) return;
+    const target = defaultFocusFor(group);
+    if (target) applyFocus(target);
   }
 
   function clearFocus() {
@@ -819,34 +675,39 @@ export function useFocusNavigation() {
   /**
    * Acquire the input lock. Returns a unique ID the caller must
    * pass to releaseInputLock() when it wants to give up the lock.
+   * Locks nest: an overlay opened on top of another overlay gets its
+   * own id and releasing it leaves the outer one holding.
    */
   function acquireInputLock(): number {
-    _inputLockId++;
+    const id = ++_inputLockSeq;
+    _inputLockStack.push(id);
     inputLocked.value = true;
-    devLog("focus", `acquireInputLock id=${_inputLockId}`);
+    devLog("focus", `acquireInputLock id=${id} (depth=${_inputLockStack.length})`);
     // Also raise the global lock on the gamepad module so that
     // page-level `gamepad.onButton` subscribers (not just focus-nav's
     // own handlers) are silenced.  Modal components that wire their
     // own handlers while holding the lock must opt in with
     // `{ bypassInputLock: true }` to keep receiving events.
     setGlobalInputLock(true);
-    return _inputLockId;
+    return id;
   }
 
   /**
-   * Release the input lock — but only if the caller is still the
-   * current owner (i.e. no newer lock was acquired in the meantime).
+   * Release one holder's lock. Releasing an id that isn't on the stack
+   * (never acquired, or already released) is a no-op — it must never
+   * unlock on someone else's behalf.
    */
   function releaseInputLock(id: number) {
-    if (id === _inputLockId) {
-      devLog("focus", `releaseInputLock id=${id}`);
+    const idx = _inputLockStack.lastIndexOf(id);
+    if (idx === -1) {
+      devLog("focus", `releaseInputLock id=${id} SKIPPED (not held)`);
+      return;
+    }
+    _inputLockStack.splice(idx, 1);
+    devLog("focus", `releaseInputLock id=${id} (depth=${_inputLockStack.length})`);
+    if (_inputLockStack.length === 0) {
       inputLocked.value = false;
       setGlobalInputLock(false);
-    } else {
-      devLog(
-        "focus",
-        `releaseInputLock id=${id} SKIPPED (current owner=${_inputLockId})`,
-      );
     }
   }
 
@@ -871,16 +732,19 @@ export function useFocusNavigation() {
     for (const unsub of gamepadUnsubs) unsub();
     gamepadUnsubs.length = 0;
 
-    // Clear all focus groups, grid registrations, history, and state
+    // Clear all focus groups, history, and state
     groups.clear();
-    gridGroups.clear();
-    gridContexts.clear();
     focusHistory.clear();
     routeStateStore.clear();
     currentFocused.value = null;
     currentGroup.value = "";
     enabled.value = false;
+    // A restriction left pinned to a dead modal's group disables all
+    // cross-group movement for the rest of the session — including across
+    // a BPM exit and re-entry, since this state is module-level.
+    focusRestriction.value = null;
     inputLocked.value = false;
+    _inputLockStack.length = 0;
     setGlobalInputLock(false);
     groupOrder.value = [];
 
@@ -926,10 +790,8 @@ export function useFocusNavigation() {
       if (currentFocused.value) return;
 
       const group = groups.get(preferredGroup);
-      if (group && group.elements.size > 0) {
-        const target = group.lastFocused || (group.elements.values().next().value ?? null);
-        applyFocus(target);
-      }
+      const target = group ? defaultFocusFor(group) : null;
+      if (target) applyFocus(target);
     });
   }
 
@@ -965,11 +827,11 @@ export function useFocusNavigation() {
     currentGroup: readonly(currentGroup),
     enabled,
     inputLocked,
+    /** The group focus is currently trapped in, if any. See restrictFocus(). */
+    focusRestriction: readonly(focusRestriction),
 
     // Methods
     registerElement,
-    registerGrid,
-    unregisterGrid,
     setGroupOrder,
     focusGroup,
     clearFocus,
@@ -1114,12 +976,18 @@ function wireGamepad() {
       if (!enabled.value || inputLocked.value) return;
       stopRepeat();
 
+      // A modal has focus trapped. B belongs to that overlay's own handler,
+      // which closes it and calls unrestrictFocus(). Neither hopping to the
+      // nav rail (which strands the restriction on a group the user has left)
+      // nor route back-navigation (which leaves the page under an open modal)
+      // is right here.
+      if (focusRestriction.value) return;
+
       // If we're in a group other than "nav", go back to nav
       if (currentGroup.value && currentGroup.value !== "nav") {
         const navGroup = groups.get("nav");
-        if (navGroup && navGroup.elements.size > 0) {
-          const target =
-            navGroup.lastFocused || (navGroup.elements.values().next().value ?? null);
+        const target = navGroup ? defaultFocusFor(navGroup) : null;
+        if (target) {
           applyFocus(target);
           useBpAudio().play("back");
           return;
@@ -1149,7 +1017,7 @@ function wireGamepad() {
 
         // Prefer an explicit `backTo` path stashed by whoever navigated here.
         // This lets e.g. the store page send the user to /bigpicture/library/:id
-        // and still get B-back to /bigpicture/store instead of /bigpicture/library.
+        // and still get B-back to /bigpicture/store instead of the home screen.
         // Consume-on-use: `backTo` is cleared after reading, so a second visit
         // without a new set-call falls through to the parent-chop default.
         const bag = routeStateStore.get(path);
@@ -1161,12 +1029,16 @@ function wireGamepad() {
           return;
         }
 
-        // On a deep page (e.g. /bigpicture/library/xyz) — navigate to parent
-        // Profile pages are reached from community, so go back there
+        // On a deep page (e.g. /bigpicture/library/xyz) — navigate to parent.
+        // Two sections don't own their own index page: profiles are reached
+        // from community, and the library was merged into the home screen
+        // (/bigpicture/library is now only a redirect).
+        const PARENT_OVERRIDES: Record<string, string> = {
+          profile: "/bigpicture/community",
+          library: "/bigpicture",
+        };
         const parentPath =
-          segments[0] === "profile"
-            ? "/bigpicture/community"
-            : "/bigpicture/" + segments[0];
+          PARENT_OVERRIDES[segments[0]] ?? "/bigpicture/" + segments[0];
         useBpAudio().play("back");
         router.push(parentPath);
       } else {
@@ -1231,10 +1103,9 @@ function wireGamepad() {
   function findScrollContainer(): HTMLElement | null {
     // Walk up from the focused element and pick the innermost actually-
     // scrollable ancestor. The data-bp-scroll attribute is a page-author
-    // hint but we don't require it — many BPM pages have their own
-    // overflow-y-auto scroller that isn't tagged, and preferring the
-    // layout's outer tagged container means scrollBy() runs on the wrong
-    // element (the outer has no overflow because the inner fills it).
+    // hint but we don't require it — a page can still open an inner
+    // scroller (a modal list, a wizard shell) that isn't tagged, and it
+    // has to win over the layout's outer container.
     if (currentFocused.value?.el) {
       let parent = currentFocused.value.el.parentElement;
       while (parent) {

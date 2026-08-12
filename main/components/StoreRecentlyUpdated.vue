@@ -125,7 +125,7 @@
  */
 import { ChevronLeftIcon, ChevronRightIcon } from "@heroicons/vue/24/outline";
 import type { StoreGame } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import BannerFallback from "~/components/BannerFallback.vue";
 
 const props = withDefaults(
@@ -145,7 +145,7 @@ defineEmits<{
 }>();
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 // ── Horizontal-scroll state ─────────────────────────────────────────

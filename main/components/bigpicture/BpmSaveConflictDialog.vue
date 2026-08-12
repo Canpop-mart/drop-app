@@ -11,9 +11,21 @@
           <h2 class="text-xl font-semibold font-display text-zinc-100 mb-2">
             Cloud Save Conflict
           </h2>
-          <p class="text-zinc-400 text-sm mb-4">
-            Some saves were modified both locally and in the cloud.
+          <p class="text-zinc-400 text-sm mb-1">
+            Some saves were changed both on this PC and in the cloud.
           </p>
+          <p
+            v-if="secondsLeft !== undefined"
+            class="text-sm mb-4"
+            :class="secondsLeft <= 10 ? 'text-amber-300' : 'text-zinc-500'"
+          >
+            {{
+              secondsLeft > 0
+                ? `Starting without syncing saves in ${secondsLeft}s.`
+                : "Time's up. Starting the game without syncing saves."
+            }}
+          </p>
+          <div v-else class="mb-4" />
 
           <div ref="scrollContainer" class="space-y-3 max-h-72 overflow-y-auto pr-1">
             <div
@@ -102,9 +114,9 @@
                 ? 'bg-zinc-700 text-zinc-100 ring-2 ring-blue-500'
                 : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'"
               :disabled="submitting"
-              @click="keepAllLocal"
+              @click="emit('dismissed')"
             >
-              <BigPictureButtonPrompt button="B" label="Keep All Local" size="sm" />
+              <BigPictureButtonPrompt button="B" label="Decide later" size="sm" />
             </button>
             <button
               class="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
@@ -134,10 +146,13 @@ const props = defineProps<{
   visible: boolean;
   gameId: string;
   conflicts: SaveConflict[];
+  /** Countdown to the backend's resolve timeout, driven by the host. */
+  secondsLeft?: number;
 }>();
 
 const emit = defineEmits<{
   resolved: [];
+  dismissed: [];
 }>();
 
 const choices = ref<string[]>([]);
@@ -266,7 +281,7 @@ function wireGamepad() {
       if (!props.visible) return;
       if (focusArea.value === "buttons") {
         if (focusedButton.value === "confirm") submit();
-        else keepAllLocal();
+        else emit("dismissed");
       } else {
         // In conflict rows, A jumps down to confirm button
         focusArea.value = "buttons";
@@ -275,11 +290,13 @@ function wireGamepad() {
     }, bypass),
   );
 
-  // B = keep all local / cancel
+  // B = decide later. This used to be "keep all local", which uploaded this
+  // device's copy over the cloud row on a back press — the most reflexive
+  // button on the pad wired to the one irreversible action on screen.
   unsubs.push(
     gamepad.onButton(GamepadButton.East, () => {
       if (!props.visible) return;
-      keepAllLocal();
+      emit("dismissed");
     }, bypass),
   );
 }
@@ -295,11 +312,6 @@ onUnmounted(() => {
     focusNav.releaseInputLock(lockId);
   }
 });
-
-function keepAllLocal() {
-  choices.value = props.conflicts.map(() => "keep_local");
-  submit();
-}
 
 async function submit() {
   if (submitting.value) return;

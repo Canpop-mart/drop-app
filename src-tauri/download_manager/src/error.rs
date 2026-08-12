@@ -47,6 +47,12 @@ pub enum ApplicationDownloadError {
     /// what is missing or mismatched. An install in this state must NOT be
     /// marked `Installed`.
     ValidationFailed(String),
+    /// The install's `.dropdata` chunk ledger exists but no reader could
+    /// decode it. The string is the ledger's path. Refusing here is
+    /// deliberate: without the ledger we cannot tell which chunks already
+    /// landed, and the old behaviour (start from an empty ledger) quietly
+    /// re-downloaded multi-gigabyte games.
+    UnreadableDropData(String),
 }
 
 impl Display for ApplicationDownloadError {
@@ -84,6 +90,15 @@ impl Display for ApplicationDownloadError {
                     f,
                     "Install verification failed: {details}. The download did not \
                      complete correctly — re-download the game to repair it."
+                )
+            }
+            ApplicationDownloadError::UnreadableDropData(path) => {
+                write!(
+                    f,
+                    "Drop could not read the install record at {path}, so it does not know \
+                     which parts of this game are already on disk. Continuing would \
+                     re-download the whole game, so the download was stopped instead. \
+                     If you want to start over, delete that file and queue the download again."
                 )
             }
         }

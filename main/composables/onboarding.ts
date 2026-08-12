@@ -9,8 +9,6 @@
  * step performs its own "already configured?" check and offers to skip.
  */
 
-import { isDevEnabled } from "./dev-mode";
-
 const COMPLETED_AT_KEY = "drop:wizard_completed_at";
 const STEP_SEEN_PREFIX = "drop:wizard_step_seen:";
 
@@ -29,20 +27,13 @@ export const WIZARD_STEPS = [
 
 export type WizardStep = (typeof WIZARD_STEPS)[number];
 
-// Steps gated behind dev mode. When dev mode is off these are skipped by
-// `activeSteps()`, so `nextRoute`/`prevRoute`/`stepNumber`/`total` all see
-// a wizard that's one entry shorter and the user never lands on the page.
-const DEV_ONLY_STEPS: ReadonlySet<WizardStep> = new Set(["saves"]);
-
 /**
- * Returns the current sequence of wizard steps, filtered by dev mode.
- * Re-evaluated on each call — `isDevEnabled()` reads from a module-level
- * boolean, not a Vue ref, so toggling dev mode mid-wizard requires a
- * page revisit to take effect (an acceptable edge case).
+ * The sequence of wizard steps. Every step ships to every user; there is no
+ * longer a dev-only subset, so `nextRoute`/`prevRoute`/`stepNumber`/`total`
+ * all count the same list.
  */
 function activeSteps(): readonly WizardStep[] {
-  if (isDevEnabled()) return WIZARD_STEPS;
-  return WIZARD_STEPS.filter((s) => !DEV_ONLY_STEPS.has(s));
+  return WIZARD_STEPS;
 }
 
 export function useOnboarding() {

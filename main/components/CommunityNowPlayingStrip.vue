@@ -53,7 +53,7 @@
 </template>
 
 <script setup lang="ts">
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import type { NowPlayingEntry } from "~/composables/use-server-api";
 
 defineProps<{
@@ -65,7 +65,7 @@ defineEmits<{
 }>();
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 </script>
 

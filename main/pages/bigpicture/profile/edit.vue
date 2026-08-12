@@ -383,6 +383,7 @@ import { TrophyIcon } from "@heroicons/vue/24/solid";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
 import ProfilePicturePicker from "~/components/ProfilePicturePicker.vue";
 import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import type { UserProfile, StoreGame } from "~/composables/use-server-api";
 import { useAppState } from "~/composables/app-state";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
@@ -393,7 +394,7 @@ import { devLog } from "~/composables/dev-mode";
 definePageMeta({ layout: "bigpicture" });
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 const THEME_MAP: Record<string, { from: string; to: string }> = {

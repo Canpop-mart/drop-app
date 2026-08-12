@@ -227,7 +227,7 @@
  * a `tab` event so the parent can lazy-fetch the corresponding list.
  */
 import type { StoreGame } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import BannerFallback from "~/components/BannerFallback.vue";
 
 type TabValue = "new" | "popular" | "random";
@@ -307,7 +307,7 @@ const previewScreenshots = computed(() => {
 });
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 // Per-row meta — varies by tab. New shows release/added date, Most

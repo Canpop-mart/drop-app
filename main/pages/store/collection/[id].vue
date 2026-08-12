@@ -118,7 +118,7 @@ import {
   useServerApi,
   type StoreCollectionDetail,
 } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import { deduplicatedInvoke } from "~/composables/game";
 
 const route = useRoute();
@@ -135,7 +135,7 @@ const pageTitle = computed(() => collection.value?.name ?? "Collection");
 useHead({ title: pageTitle });
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 // Click-through to a game's store presentation page (same destination the

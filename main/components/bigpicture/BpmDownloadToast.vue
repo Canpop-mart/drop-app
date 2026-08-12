@@ -139,7 +139,7 @@ function goToLibrary() {
   if (id) {
     const target = `/bigpicture/library/${id}`;
     // Record where the user was so pressing B returns them there instead
-    // of bouncing to /bigpicture/library.
+    // of bouncing to the BPM home screen.
     focusNav.setRouteState("backTo", origin, target);
     router.push(target);
   }

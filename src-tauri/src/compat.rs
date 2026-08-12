@@ -183,7 +183,7 @@ pub async fn start_compat_test(
         .or_else(|| detected_proton_version.clone());
 
     // ── 1. Launch ─────────────────────────────────────────────────────
-    // launch_process is sync but calls block_on internally (e.g. Ludusavi
+    // run_launch is sync but calls block_on internally (e.g. Ludusavi
     // save sync). Calling it directly from this async context panics with
     // "Cannot start a runtime from within a runtime" because the tokio
     // multi-thread scheduler refuses nested block_on calls. spawn_blocking
@@ -193,11 +193,10 @@ pub async fn start_compat_test(
     let launch_result = {
         let game_id_clone = game_id.clone();
         tokio::task::spawn_blocking(move || {
-            let mut process_manager_lock = PROCESS_MANAGER.lock();
             // Compat-test launches are never incognito — the whole point of
             // the test is to record a result against the game, which means
             // the session + presence side effects are the desired behaviour.
-            process_manager_lock.launch_process(game_id_clone, index, false, None)
+            process::process_manager::run_launch(game_id_clone, index, false, None, false, None)
         })
         .await
         .map_err(|e| CompatTestError::LaunchFailed(format!("join error: {e}")))?
@@ -205,7 +204,7 @@ pub async fn start_compat_test(
 
     match launch_result {
         Ok(()) => {}
-        Err(ProcessError::RequiredDependency(_, _)) => {
+        Err(ProcessError::RequiredDependency { .. }) => {
             // The game (or one of its dependencies) wasn't installed.
             // Treat as InstallFailed since "we couldn't even attempt to
             // launch it for compat reasons" is the most accurate bucket.

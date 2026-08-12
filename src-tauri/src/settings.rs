@@ -110,6 +110,7 @@ const ALLOWED_SETTINGS_KEYS: &[&str] = &[
     "streamingAdapter",
     "streamingAudioSink",
     "streamingVirtualSink",
+    "streamingEnabled",
 ];
 
 /// Max length accepted for free-form string settings. Prevents a rogue

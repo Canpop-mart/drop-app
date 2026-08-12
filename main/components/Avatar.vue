@@ -38,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 
 const props = withDefaults(
   defineProps<{
@@ -55,9 +55,7 @@ const px = computed(() => `${props.size}px`);
 const fontPx = computed(() => `${Math.round(props.size * 0.42)}px`);
 const dotPx = computed(() => `${Math.max(8, Math.round(props.size * 0.28))}px`);
 
-const src = computed(() =>
-  props.objectId ? serverUrl(`api/v1/object/${props.objectId}`) : "",
-);
+const src = computed(() => objectImageUrl(props.objectId));
 
 const initial = computed(() => {
   const n = (props.name ?? "").trim();

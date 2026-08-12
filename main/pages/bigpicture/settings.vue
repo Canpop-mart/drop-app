@@ -757,7 +757,7 @@
 
       <!-- ═══════ Cloud Saves ═══════ -->
       <div
-        v-if="activeSection === 'cloudsaves' && dev.enabled.value"
+        v-if="activeSection === 'cloudsaves'"
         class="space-y-5 max-w-xl"
       >
         <h3 class="text-lg font-semibold text-zinc-200 font-display">
@@ -767,6 +767,34 @@
           Choose whether Drop syncs save files with your server and how this
           device shows up in conflict prompts.
         </p>
+
+        <!-- Backup status. Read-only, so it is not registered as focusable
+             content: there is nothing here to select, and a controller stop
+             on a paragraph is a dead end. -->
+        <div class="bg-zinc-900/50 rounded-xl p-4 space-y-2">
+          <p
+            class="font-medium text-sm"
+            :class="cloudStatusError ? 'text-amber-300' : 'text-zinc-200'"
+          >
+            {{ cloudStatusHeadline }}
+          </p>
+          <p v-if="cloudStatusDetail" class="text-amber-300/70 text-xs">
+            {{ cloudStatusDetail }}
+          </p>
+          <div
+            v-if="cloudQuota"
+            class="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden"
+          >
+            <div
+              class="h-full rounded-full transition-all"
+              :class="cloudQuotaBarClass"
+              :style="{ width: `${cloudQuotaPercent}%` }"
+            />
+          </div>
+          <p v-if="cloudQuota" class="text-zinc-500 text-xs">
+            {{ cloudQuotaLine }}
+          </p>
+        </div>
 
         <!-- Sync toggle -->
         <div
@@ -838,6 +866,31 @@
         <p class="text-xs text-zinc-500">
           Under the hood this is Sunshine on the host PC and Moonlight here.
         </p>
+
+        <!-- Host-side listener. Off stops this device both answering and
+             checking for requests from the account's other machines. -->
+        <div class="bg-zinc-900/50 rounded-xl p-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-zinc-300">
+                Let my other devices start games here
+              </p>
+              <p class="text-xs text-zinc-500 mt-0.5">
+                Needed to play this device's games on another one. Off saves
+                battery and network on a device you only ever play on.
+              </p>
+            </div>
+            <button
+              :ref="(el: any) => registerContent(el, {})"
+              type="button"
+              class="px-5 py-2 rounded-lg text-sm font-medium transition-colors shrink-0"
+              :class="streamingEnabled ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+              @click="setStreamingEnabled(!streamingEnabled)"
+            >
+              {{ streamingEnabled ? "On" : "Off" }}
+            </button>
+          </div>
+        </div>
 
         <!-- Stream quality — client-side: what this device requests from
              Moonlight when it plays a game streamed from another PC. -->
@@ -1273,6 +1326,19 @@ import { useBpmTheme, themes, type ThemeId } from "~/composables/bp-theme";
 import { useDeckMode } from "~/composables/deck-mode";
 import { useUiZoom } from "~/composables/ui-zoom";
 import { useDevMode, devLog, type DevCategory } from "~/composables/dev-mode";
+import {
+  hasOwnSaves,
+  ownSaveCount,
+} from "~/composables/cloud-save-ownership";
+import {
+  cloudSaveQuotaLine,
+  cloudSaveQuotaPercent,
+} from "~/composables/cloud-save-quota";
+import {
+  useServerApi,
+  type CloudSaveGameSummary,
+  type CloudSaveQuota,
+} from "~/composables/use-server-api";
 import { hostname } from "@tauri-apps/plugin-os";
 import { type Ref } from "vue";
 
@@ -1374,10 +1440,7 @@ const sections = computed(() => {
   ];
   const tail = [
     { label: "Achievements", value: "achievements" },
-    // Cloud saves is dev-gated — it doesn't sync seamlessly enough yet.
-    ...(dev.enabled.value
-      ? [{ label: "Cloud Saves", value: "cloudsaves" }]
-      : []),
+    { label: "Cloud Saves", value: "cloudsaves" },
     { label: "Remote Play", value: "streaming" },
     { label: "Developer", value: "developer" },
     { label: "About", value: "about" },
@@ -1538,6 +1601,19 @@ async function setStreamingHdr(value: boolean) {
   }
 }
 
+// Whether this device answers stream / install requests pushed by the account's
+// other devices. The poller behind it is Drop's heaviest idle traffic.
+const streamingEnabled = ref<boolean>(true);
+
+async function setStreamingEnabled(value: boolean) {
+  streamingEnabled.value = value;
+  try {
+    await invoke("update_settings", { newSettings: { streamingEnabled: value } });
+  } catch (e) {
+    console.error("[BPM:SETTINGS] Failed to save the remote play listener:", e);
+  }
+}
+
 // Auto resolution — stream at the client's current display size.
 const streamingAutoResolution = ref<boolean>(true);
 
@@ -1667,6 +1743,8 @@ onMounted(async () => {
       streamingHdr.value = settings.streamingHdr;
     if (typeof settings.streamingAutoResolution === "boolean")
       streamingAutoResolution.value = settings.streamingAutoResolution;
+    if (typeof settings.streamingEnabled === "boolean")
+      streamingEnabled.value = settings.streamingEnabled;
     if (typeof settings.streamingDisplay === "string")
       streamingDisplay.value = settings.streamingDisplay;
     if (typeof settings.streamingAudioSink === "string")
@@ -1686,7 +1764,10 @@ onMounted(async () => {
 // we just persist whatever the user types. When deviceName is blank the
 // backend falls back to the raw OS hostname.
 
-const cloudSavesEnabled = ref(true);
+// Opt-in, so the toggle starts off. Showing it on before the real setting has
+// been read would tell someone their saves are being backed up when nothing
+// is running.
+const cloudSavesEnabled = ref(false);
 const deviceName = ref("");
 const cloudSavesSaved = ref(false);
 const hostnamePlaceholder = ref("Auto-detected");
@@ -1714,7 +1795,71 @@ onMounted(async () => {
   } catch {
     // Keep "Auto-detected" fallback.
   }
+
+  void loadCloudStatus();
 });
+
+// Backup status, so Big Picture can answer "are my saves backed up" without
+// sending the user back to the desktop settings page. Read-only here: the
+// per-game panel is where anything is actually done about it.
+const cloudSummaries = ref<CloudSaveGameSummary[]>([]);
+const cloudQuota = ref<CloudSaveQuota | null>(null);
+const cloudStatusLoaded = ref(false);
+const cloudStatusError = ref(false);
+
+const cloudStatusHeadline = computed(() => {
+  // A fetch that failed, or has not come back, is not grounds for saying
+  // nothing is backed up. This section used to render that sentence for a
+  // server that was down, an expired session, and the whole time the request
+  // was in flight.
+  if (cloudStatusError.value) return "Drop could not check your backups";
+  if (!cloudStatusLoaded.value) return "Checking your backups…";
+  // Own rows only: the summary lists every game this account can read, and PC
+  // saves are readable across every account on the server.
+  const owned = cloudSummaries.value.filter(hasOwnSaves);
+  const n = owned.length;
+  if (n === 0) return "Nothing is backed up yet";
+  const files = owned.reduce((t, g) => t + ownSaveCount(g), 0);
+  return `${n} ${n === 1 ? "game" : "games"} backed up, ${files} ${
+    files === 1 ? "file" : "files"
+  }`;
+});
+
+/** The line under the headline, when the headline needs one. */
+const cloudStatusDetail = computed(() => {
+  if (cloudStatusError.value)
+    return "Your Drop server did not answer, so this cannot say what is backed up.";
+  return "";
+});
+
+const cloudQuotaPercent = computed(() => cloudSaveQuotaPercent(cloudQuota.value));
+const cloudQuotaLine = computed(() => cloudSaveQuotaLine(cloudQuota.value));
+
+const cloudQuotaBarClass = computed(() => {
+  if (cloudQuotaPercent.value >= 95) return "bg-red-500";
+  if (cloudQuotaPercent.value >= 80) return "bg-amber-500";
+  return "bg-blue-500";
+});
+
+async function loadCloudStatus() {
+  const api = useServerApi();
+  cloudStatusError.value = false;
+  try {
+    const [games, q] = await Promise.all([
+      api.saves.summaries(),
+      api.saves.quota().catch(() => null),
+    ]);
+    cloudSummaries.value = games;
+    cloudQuota.value = q;
+    cloudStatusLoaded.value = true;
+  } catch (e) {
+    // Big Picture is a lean-back surface, so this is one line rather than an
+    // error card. It is not silence: swallowing the failure left the section
+    // reading "Nothing is backed up yet" for a server that was simply down.
+    cloudStatusError.value = true;
+    console.warn("[BPM:SETTINGS] cloud save status fetch failed:", e);
+  }
+}
 
 async function persistCloudSaves() {
   try {

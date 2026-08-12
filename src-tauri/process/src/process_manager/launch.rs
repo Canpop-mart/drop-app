@@ -62,45 +62,133 @@ use crate::{
     },
 };
 
+/// Everything the pre-launch cloud-save sync needs, captured while the
+/// PROCESS_MANAGER lock is held so the sync itself can run without it.
+struct SaveSyncRequest {
+    game_id: String,
+    target_platform: Platform,
+    /// The emulator's install dir, for an emulator launch. Its presence is
+    /// what selects the emulator discovery strategy over Ludusavi.
+    effective_cwd: Option<String>,
+    emulator_rom_path: Option<String>,
+    streaming: bool,
+}
+
+/// A launch that is fully resolved and built but not yet spawned.
+///
+/// Produced under the PROCESS_MANAGER lock by `prepare_launch` and consumed by
+/// `finish_launch`, with the cloud-save sync running in between —
+/// deliberately outside the lock.
+struct PreparedLaunch {
+    spawn_plan: SpawnPlan,
+    meta: DownloadableMetadata,
+    game_id: String,
+    log_path: PathBuf,
+    error_log_path: PathBuf,
+    incognito: bool,
+    sync: SaveSyncRequest,
+}
+
+/// Holds the `pending_launches` reservation for a launch that is between
+/// `prepare_launch` and `finish_launch`, and releases it if that stretch never
+/// finishes.
+///
+/// The stretch is the save sync, and it can unwind. `block_with_timeout` calls
+/// `tauri::async_runtime::block_on`, and both `launch_game_streaming` and
+/// `start_compat_test` reach `run_launch` from inside `spawn_blocking` — the
+/// nested-runtime case that panics. Before the lock split a panic there left
+/// the manager clean; without this guard it strands the game id in
+/// `pending_launches` for the rest of the app's life, and every later Play
+/// press answers `AlreadyRunning` for a game that is not running.
+struct LaunchReservation {
+    /// `None` once `disarm` has handed ownership of the removal to
+    /// `finish_launch`.
+    game_id: Option<String>,
+}
+
+impl LaunchReservation {
+    fn new(game_id: String) -> Self {
+        Self {
+            game_id: Some(game_id),
+        }
+    }
+
+    /// Give up the reservation because `finish_launch` is about to remove it
+    /// itself. Called with the PROCESS_MANAGER lock already held, which is why
+    /// it must consume the guard: a `Drop` running at that point would
+    /// deadlock trying to re-take the lock.
+    fn disarm(mut self) {
+        self.game_id = None;
+    }
+}
+
+impl Drop for LaunchReservation {
+    fn drop(&mut self) {
+        let Some(game_id) = self.game_id.take() else {
+            return;
+        };
+        warn!("[LAUNCH] {game_id}: launch unwound before spawn, clearing its reservation");
+        PROCESS_MANAGER.lock().pending_launches.remove(&game_id);
+    }
+}
+
+/// Launch a game end to end: prepare under the lock, sync saves without it,
+/// then spawn and register under the lock again.
+///
+/// The lock split is the point. `launch_process` used to run the whole flow
+/// inside one `PROCESS_MANAGER.lock()`, including a save-conflict dialog that
+/// blocked on the user for up to five minutes. For that whole window
+/// `kill_game`, `is_game_running`, the installed-version list and every other
+/// game's save upload were stuck behind a modal nobody had noticed.
+pub fn run_launch(
+    game_id: String,
+    launch_process_index: usize,
+    streaming: bool,
+    config_override: Option<database::models::data::UserConfiguration>,
+    incognito: bool,
+    version_id: Option<String>,
+) -> Result<(), ProcessError> {
+    let (prepared, app_handle) = {
+        let mut manager = PROCESS_MANAGER.lock();
+        let prepared = manager.prepare_launch(
+            game_id,
+            launch_process_index,
+            streaming,
+            config_override,
+            incognito,
+            version_id,
+        )?;
+        (prepared, manager.app_handle.clone())
+    };
+
+    let reservation = LaunchReservation::new(prepared.game_id.clone());
+
+    let save_snapshot = pre_launch_save_sync(&app_handle, &prepared.sync);
+
+    // Take the lock before disarming so the reservation is never released by a
+    // `Drop` that would have to re-enter the lock this thread already holds.
+    let mut manager = PROCESS_MANAGER.lock();
+    reservation.disarm();
+    manager.finish_launch(prepared, save_snapshot)
+}
+
 impl ProcessManager<'_> {
-    /// Launch a game process for normal (non-streaming) play.
+    /// Resolve, build and reserve a launch, stopping just short of spawning.
     ///
     /// `incognito` suppresses every server-side side effect of the session:
     /// no `playSession` row, no playtime increment, no achievement-poll
     /// sync, no presence broadcast. The game still launches normally and
     /// the local Running status flips so the UI still tracks the process —
     /// the difference is purely in what reaches the server.
-    pub fn launch_process(
-        &mut self,
-        game_id: String,
-        launch_process_index: usize,
-        incognito: bool,
-        version_id: Option<String>,
-    ) -> Result<(), ProcessError> {
-        self.launch_process_inner(game_id, launch_process_index, false, None, incognito, version_id)
-    }
-
-    /// Launch a game process for streaming.
     ///
     /// When `streaming` is true, save-sync conflicts are auto-resolved to
-    /// `keep_local` instead of showing a UI dialog (which would appear on
-    /// the remote host PC where the user can't interact with it). If
-    /// `config_override` is provided it temporarily replaces the game's
-    /// local `user_configuration` so the receiver's settings (widescreen,
-    /// quality, …) are applied on the host.
-    pub fn launch_process_streaming(
-        &mut self,
-        game_id: String,
-        launch_process_index: usize,
-        config_override: Option<database::models::data::UserConfiguration>,
-    ) -> Result<(), ProcessError> {
-        // Streaming never goes incognito — the receiver expects credit for
-        // their play time. Incognito is a deliberate user-facing toggle
-        // and the streaming flow has no surface to expose it.
-        self.launch_process_inner(game_id, launch_process_index, true, config_override, false, None)
-    }
-
-    fn launch_process_inner(
+    /// `keep_local` instead of showing a UI dialog (which would appear on the
+    /// remote host PC where the user can't interact with it). If
+    /// `config_override` is provided it temporarily replaces the game's local
+    /// `user_configuration` so the receiver's settings (widescreen, quality, …)
+    /// are applied on the host. Streaming never goes incognito — the receiver
+    /// expects credit for their play time.
+    fn prepare_launch(
         &mut self,
         game_id: String,
         launch_process_index: usize,
@@ -111,8 +199,8 @@ impl ProcessManager<'_> {
         // install (unchanged legacy behaviour); `Some` selects a specific
         // install from the multi-version map (the frontend's per-version launch).
         version_id: Option<String>,
-    ) -> Result<(), ProcessError> {
-        if self.processes.contains_key(&game_id) {
+    ) -> Result<PreparedLaunch, ProcessError> {
+        if self.processes.contains_key(&game_id) || self.pending_launches.contains(&game_id) {
             return Err(ProcessError::AlreadyRunning);
         }
 
@@ -514,6 +602,52 @@ impl ProcessManager<'_> {
             &effective_cwd,
             emulator_rom_path.as_deref(),
         )?;
+        // Reserve the game id. The caller drops the PROCESS_MANAGER lock on
+        // the next line and runs the save sync without it, so until
+        // `finish_launch` inserts into `processes` this set is the only record
+        // that a launch is in flight.
+        self.pending_launches.insert(game_id.clone());
+
+        Ok(PreparedLaunch {
+            spawn_plan,
+            sync: SaveSyncRequest {
+                game_id: game_id.clone(),
+                target_platform: meta.target_platform,
+                effective_cwd,
+                emulator_rom_path,
+                streaming,
+            },
+            meta,
+            game_id,
+            log_path,
+            error_log_path,
+            incognito,
+        })
+    }
+
+    /// Spawn the prepared command and register the running process.
+    ///
+    /// The second half of [`run_launch`], run under a freshly taken
+    /// PROCESS_MANAGER lock once the cloud-save sync has finished.
+    fn finish_launch(
+        &mut self,
+        prepared: PreparedLaunch,
+        save_snapshot: Option<crate::process_manager::SaveSyncSnapshot>,
+    ) -> Result<(), ProcessError> {
+        let PreparedLaunch {
+            spawn_plan,
+            meta,
+            game_id,
+            log_path,
+            error_log_path,
+            incognito,
+            sync: _,
+        } = prepared;
+
+        // Drop the reservation now, before any fallible step: a spawn failure
+        // must not leave the game stuck reporting "already running".
+        self.pending_launches.remove(&game_id);
+
         let SpawnPlan {
             mut command,
             spawn_executable,
@@ -524,15 +658,6 @@ impl ProcessManager<'_> {
             emulator_info,
             retroarch_ra,
         } = spawn_plan;
-
-        // Pre-launch cloud-save sync (blocking, timeout-bounded). Returns a
-        // snapshot the exit path diffs against to know what to upload.
-        let save_snapshot = self.run_pre_launch_save_sync(
-            &game_id,
-            &meta.target_platform,
-            &effective_cwd,
-            streaming,
-        );
 
         // ── STEP 8: Spawn ──────────────────────────────────────────────────
         let _ = self.app_handle.emit("launch_trace", serde_json::json!({
@@ -724,78 +849,96 @@ impl ProcessManager<'_> {
         });
     }
 
-    /// Run the pre-launch cloud-save sync for whichever discovery strategy
-    /// applies (emulator vs PC/native). Returns the snapshot for the exit
-    /// path, or `None` when the game has no syncable saves.
-    fn run_pre_launch_save_sync(
-        &self,
-        game_id: &str,
-        target_platform: &Platform,
-        effective_cwd: &Option<String>,
-        streaming: bool,
-    ) -> Option<crate::process_manager::SaveSyncSnapshot> {
-        // Global cloud-save toggle (settings.cloud_saves_enabled). When the
-        // user has cloud sync disabled we skip the entire pre-launch path —
-        // no scan, no Ludusavi, no network. The returned `None` also wires
-        // through to the exit path so post-exit upload is skipped too.
-        if !database::borrow_db_checked().settings.cloud_saves_enabled {
-            log::info!(
-                "[SAVE-SYNC] cloud_saves_enabled=false — skipping pre-launch sync for {game_id}"
-            );
-            return None;
-        }
+}
 
-        if let Some(emu_dir) = effective_cwd {
-            let _ = self.app_handle.emit("launch_trace", serde_json::json!({
-                "step": "7c_save_sync_start", "game_id": game_id,
-            }));
-            let snap = save_sync_mod::sync_emulator_saves(
-                &self.app_handle,
-                game_id,
-                emu_dir,
-                streaming,
-            );
-            let _ = self.app_handle.emit("launch_trace", serde_json::json!({
-                "step": "7c_save_sync_done",
-                "game_id": game_id,
-                "has_snapshot": snap.is_some(),
-            }));
-            return snap;
-        }
+/// Run the pre-launch cloud-save sync for whichever discovery strategy
+/// applies (emulator vs PC/native). Returns the snapshot for the exit
+/// path, or `None` when the game has no syncable saves.
+///
+/// A free function taking only the `AppHandle`, not a `ProcessManager` method:
+/// this is the step that can block on a user-facing conflict dialog, and it
+/// must not run with the PROCESS_MANAGER lock held.
+fn pre_launch_save_sync(
+    app_handle: &tauri::AppHandle,
+    req: &SaveSyncRequest,
+) -> Option<crate::process_manager::SaveSyncSnapshot> {
+    let game_id = req.game_id.as_str();
 
-        // PC/native game — discover saves via Ludusavi keyed on the name.
-        let game_name = remote::cache::get_cached_object::<games::library::Game>(
-            &format!("game/{game_id}"),
-        )
-        .ok()
-        .map(|g| g.m_name)?;
-
-        // Only feed Ludusavi a `--wine-prefix` when we know one applies:
-        // Linux host + Windows target. The prefix is created at launch time
-        // (see process_handlers.rs), so on first sync it may not yet exist —
-        // in that case we omit it and let Ludusavi fall back to defaults.
-        let wine_prefix = compute_wine_prefix_for(game_id, target_platform);
-
-        let _ = self.app_handle.emit("launch_trace", serde_json::json!({
-            "step": "7d_pc_save_sync_start",
-            "game_id": game_id,
-            "game_name": &game_name,
-            "wine_prefix": wine_prefix.as_ref().map(|p| p.to_string_lossy().to_string()),
-        }));
-        let snap = save_sync_mod::sync_pc_saves(
-            &self.app_handle,
-            game_id,
-            &game_name,
-            wine_prefix,
-            streaming,
+    // Global cloud-save toggle (settings.cloud_saves_enabled). When the
+    // user has cloud sync disabled we skip the entire pre-launch path —
+    // no scan, no Ludusavi, no network. The returned `None` also wires
+    // through to the exit path so post-exit upload is skipped too.
+    if !database::borrow_db_checked().settings.cloud_saves_enabled {
+        log::info!(
+            "[SAVE-SYNC] cloud_saves_enabled=false — skipping pre-launch sync for {game_id}"
         );
-        let _ = self.app_handle.emit("launch_trace", serde_json::json!({
-            "step": "7d_pc_save_sync_done",
+        return None;
+    }
+
+    // Every cloud row is keyed by user id on the server, and every local save
+    // path is now keyed by it here. With nobody signed in there is no answer to
+    // "whose saves are these", and the only safe thing to do is not sync — no
+    // fallback path, no shared "unknown" bucket, because either of those is how
+    // one account's progress ends up in another account's library. The game
+    // still launches; its saves stay on this disk under the signed-out layout.
+    let Some(user_id) = remote::save_sync::current_user_id() else {
+        log::warn!("[SAVE-SYNC] Nobody is signed in — skipping pre-launch sync for {game_id}");
+        return None;
+    };
+
+    if let Some(emu_dir) = &req.effective_cwd {
+        let _ = app_handle.emit("launch_trace", serde_json::json!({
+            "step": "7c_save_sync_start", "game_id": game_id,
+        }));
+        let snap = save_sync_mod::sync_emulator_saves(
+            app_handle,
+            &user_id,
+            game_id,
+            emu_dir,
+            req.emulator_rom_path.as_deref(),
+            req.streaming,
+        );
+        let _ = app_handle.emit("launch_trace", serde_json::json!({
+            "step": "7c_save_sync_done",
             "game_id": game_id,
             "has_snapshot": snap.is_some(),
         }));
-        snap
+        return snap;
     }
+
+    // PC/native game — discover saves via Ludusavi keyed on the name.
+    let game_name = remote::cache::get_cached_object::<games::library::Game>(
+        &format!("game/{game_id}"),
+    )
+    .ok()
+    .map(|g| g.m_name)?;
+
+    // Only feed Ludusavi a `--wine-prefix` when we know one applies:
+    // Linux host + Windows target. The prefix is created at launch time
+    // (see process_handlers.rs), so on first sync it may not yet exist —
+    // in that case we omit it and let Ludusavi fall back to defaults.
+    let wine_prefix = compute_wine_prefix_for(game_id, &req.target_platform);
+
+    let _ = app_handle.emit("launch_trace", serde_json::json!({
+        "step": "7d_pc_save_sync_start",
+        "game_id": game_id,
+        "game_name": &game_name,
+        "wine_prefix": wine_prefix.as_ref().map(|p| p.to_string_lossy().to_string()),
+    }));
+    let snap = save_sync_mod::sync_pc_saves(
+        app_handle,
+        &user_id,
+        game_id,
+        &game_name,
+        wine_prefix,
+        req.streaming,
+    );
+    let _ = app_handle.emit("launch_trace", serde_json::json!({
+        "step": "7d_pc_save_sync_done",
+        "game_id": game_id,
+        "has_snapshot": snap.is_some(),
+    }));
+    snap
 }
 
 /// Compute the Wine prefix path to feed to Ludusavi, if applicable.
@@ -1024,11 +1167,22 @@ impl ProcessManager<'_> {
                 None
             })
         });
+        // Same identity the pre-launch scan used. RetroArch is told where to
+        // put saves, so this is the writer half of the per-user path: if it
+        // disagreed with the scanner the game would save into a tree cloud
+        // sync never looks at.
+        let save_user_id = remote::save_sync::current_user_id();
+        // Re-resolved every launch for the same reason the Switch-emulator
+        // path does it: the user can swap pads between sessions, and a
+        // fallback written for the pad they had last week is silently wrong.
+        let detected_pad = crate::gamepad::detect_primary_pad_family();
         let retroarch_info = remote::retroarch::configure_retroarch_for_game(
             emu_dir,
+            save_user_id.as_deref(),
             game_id,
             ra_creds.as_ref(),
             Some(user_configuration),
+            detected_pad,
             emulator_rom_path,
         );
 
@@ -1040,6 +1194,7 @@ impl ProcessManager<'_> {
             "cfg_exists": cfg_path.exists(),
             "retroarch_detected": retroarch_info.is_some(),
             "has_ra_credentials": ra_creds.is_some(),
+            "detected_pad": format!("{detected_pad:?}"),
         }));
 
         // The RetroArch AppImage overrides $HOME, so it reads config from

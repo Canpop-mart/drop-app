@@ -94,6 +94,13 @@ function handleCancel() {
   emit("cancel");
 }
 
+// `immediate` because a dialog can be mounted with `visible` already true: the
+// state driving it usually outlives this component, so remounting into an open
+// dialog is normal. Without it the dialog paints with A and B bound to nothing,
+// which in gamescope means no way to answer it at all — there is no mouse for
+// the buttons or the backdrop. Mounting with `visible` false is harmless: the
+// else branch releases lock id 0, which is not on the stack, and
+// `releaseInputLock` skips ids it does not hold.
 watch(
   () => props.visible,
   (v) => {
@@ -105,6 +112,7 @@ watch(
       focusNav.releaseInputLock(lockId);
     }
   },
+  { immediate: true },
 );
 
 function wireGamepad() {

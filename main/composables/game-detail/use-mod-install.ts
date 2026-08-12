@@ -22,7 +22,17 @@ export type InstallableMod = {
 /** One mod resolved to its latest version, ready to queue. */
 type PlannedMod = { id: string; name: string; version: VersionOption };
 
-export function useModInstall(parentGameId: string) {
+/**
+ * Asks the user whether to pull in prerequisite mods. Injectable because the
+ * default implementation is the desktop `createModal` stack, which Big Picture
+ * cannot navigate with a controller — BPM passes its own dialog instead.
+ */
+export type PrereqConfirm = (prereqNames: string[]) => Promise<boolean>;
+
+export function useModInstall(
+  parentGameId: string,
+  opts?: { confirmPrereqs?: PrereqConfirm },
+) {
   // The mod id currently being queued (drives per-row spinner), or null.
   const installingModId = ref<string | null>(null);
   const modError = ref<string | undefined>();
@@ -74,8 +84,8 @@ export function useModInstall(parentGameId: string) {
     return plan;
   }
 
-  /** Ask before pulling in prerequisite mods. Resolves to whether to proceed. */
-  function confirmPrereqs(prereqNames: string[]): Promise<boolean> {
+  /** Desktop default: ask through the app-wide modal stack. */
+  function confirmPrereqsViaModal(prereqNames: string[]): Promise<boolean> {
     const single = prereqNames.length === 1;
     return new Promise((resolve) =>
       createModal(
@@ -96,17 +106,28 @@ export function useModInstall(parentGameId: string) {
     );
   }
 
-  async function installMod(mod: InstallableMod) {
+  const confirmPrereqs: PrereqConfirm =
+    opts?.confirmPrereqs ?? confirmPrereqsViaModal;
+
+  /**
+   * Queue a mod (and anything it needs) for download.
+   *
+   * Returns how many downloads were queued — 0 when there was nothing to do,
+   * the user backed out of the prerequisites, or it failed. Callers use it to
+   * tell "it's on its way" apart from "nothing happened", which otherwise look
+   * identical: the install itself completes later, through the download queue.
+   */
+  async function installMod(mod: InstallableMod): Promise<number> {
     modError.value = undefined;
     installingModId.value = mod.id;
     try {
       const plan = await buildInstallPlan(mod.id);
-      if (plan.length === 0) return; // target + prerequisites already installed
+      if (plan.length === 0) return 0; // target + prerequisites already installed
 
       const prereqs = plan.filter((p) => p.id !== mod.id);
       if (prereqs.length > 0) {
         const proceed = await confirmPrereqs(prereqs.map((p) => p.name));
-        if (!proceed) return;
+        if (!proceed) return 0;
       }
 
       // Queue prerequisites first, then the target. Placement (overlay dir +
@@ -121,9 +142,11 @@ export function useModInstall(parentGameId: string) {
           launchOverride: step.version.launchOverride ?? null,
         });
       }
+      return plan.length;
     } catch (error) {
       console.error("[mod-install] installMod failed:", error);
       modError.value = String(error);
+      return 0;
     } finally {
       installingModId.value = null;
     }

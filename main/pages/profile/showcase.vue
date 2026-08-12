@@ -177,7 +177,7 @@ import {
   useServerApi,
   type FavoriteSearchRow,
 } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import { useProfileTheme } from "~/composables/use-profile-theme";
 
 useHead({ title: "Showcase" });
@@ -222,7 +222,7 @@ const addButtons = [
 ];
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 function openPicker(type: SlotType) {

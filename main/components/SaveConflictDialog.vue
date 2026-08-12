@@ -8,8 +8,11 @@
         </h3>
       </div>
       <p class="text-sm text-zinc-400 mt-1">
-        Some saves were modified both locally and in the cloud. Choose which
+        Some saves were changed both on this PC and in the cloud. Choose which
         version to keep for each file.
+      </p>
+      <p v-if="secondsLeft !== undefined" class="text-sm mt-2" :class="countdownClass">
+        {{ countdownText }}
       </p>
     </div>
 
@@ -92,20 +95,20 @@
       {{ submitError }}
     </div>
 
-    <template #buttons="{ close }">
+    <template #buttons>
       <button
         class="inline-flex justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
         :disabled="!allResolved || submitting"
         @click="submit"
       >
-        {{ submitting ? "Applying…" : "Continue Launch" }}
+        {{ submitting ? "Applying…" : "Continue launch" }}
       </button>
       <button
         class="inline-flex justify-center rounded-md bg-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-200 shadow-sm hover:bg-zinc-600 disabled:opacity-40 disabled:cursor-not-allowed"
         :disabled="submitting"
-        @click="keepAllLocal"
+        @click="emit('dismissed')"
       >
-        Keep All Local
+        Decide later
       </button>
     </template>
   </ModalTemplate>
@@ -121,11 +124,32 @@ import { invoke } from "@tauri-apps/api/core";
 import type { SaveConflict } from "~/types/save-sync";
 
 const props = defineProps<{
+  visible: boolean;
   gameId: string;
   conflicts: SaveConflict[];
+  /** Countdown to the backend's resolve timeout, driven by the host. */
+  secondsLeft?: number;
 }>();
 
-const open = defineModel<boolean>();
+const emit = defineEmits<{
+  resolved: [];
+  dismissed: [];
+}>();
+
+/**
+ * ModalTemplate lives in the drop-base submodule and closes itself on Esc or a
+ * backdrop click (`<Dialog @close="open = false">`), with no prop to opt out.
+ * Rather than patch the submodule, the close is intercepted here and turned
+ * into an explicit "decide later" answer: the launch stops waiting straight
+ * away, and neither copy of the save is touched. Dismissing this dialog is far
+ * too easy to do by accident for it to mean anything destructive.
+ */
+const open = computed({
+  get: () => props.visible,
+  set: (value) => {
+    if (!value && !submitting.value) emit("dismissed");
+  },
+});
 
 const choices = ref<string[]>([]);
 const submitting = ref(false);
@@ -151,10 +175,15 @@ const allResolved = computed(() =>
   choices.value.every((c) => c === "keep_local" || c === "keep_cloud"),
 );
 
-function keepAllLocal() {
-  choices.value = props.conflicts.map(() => "keep_local");
-  submit();
-}
+const countdownText = computed(() => {
+  const left = props.secondsLeft ?? 0;
+  if (left <= 0) return "Time's up. Starting the game without syncing saves.";
+  return `Starting without syncing saves in ${left}s.`;
+});
+
+const countdownClass = computed(() =>
+  (props.secondsLeft ?? 0) <= 10 ? "text-amber-300" : "text-zinc-500",
+);
 
 async function submit() {
   if (submitting.value) return;
@@ -172,7 +201,7 @@ async function submit() {
         resolutions,
       },
     });
-    open.value = false;
+    emit("resolved");
   } catch (e) {
     console.warn("[SAVE-SYNC] Failed to send conflict resolutions:", e);
     submitError.value =

@@ -18,16 +18,29 @@
       </button>
     </div>
 
-    <!-- Loading / empty / list states -->
-    <div
-      v-if="loading"
-      class="flex-1 flex items-center justify-center text-sm text-zinc-500"
-    >
-      Loading collections...
+    <!-- Loading / empty / list states. The skeleton is two shelf cards in the
+         shape of the real ones, held back ~180ms so a cached fetch doesn't
+         flash it. Nothing renders inside that window: pairing the list with a
+         plain `v-else` would show "No collections yet" mid-fetch. -->
+    <div v-if="showSkeleton" class="space-y-8 pb-8">
+      <div
+        v-for="i in 2"
+        :key="i"
+        class="rounded-xl bg-zinc-800/40 ring-1 ring-zinc-700/40 p-5"
+      >
+        <div class="h-4 w-44 rounded bg-zinc-800/60 animate-pulse mb-5" />
+        <div class="flex gap-4">
+          <div
+            v-for="j in 6"
+            :key="j"
+            class="h-40 w-28 shrink-0 rounded-lg bg-zinc-800/60 animate-pulse"
+          />
+        </div>
+      </div>
     </div>
 
     <div
-      v-else-if="shelves.length === 0"
+      v-else-if="!loading && shelves.length === 0"
       class="flex-1 flex flex-col items-center justify-center text-center"
     >
       <div class="rounded-2xl bg-zinc-800/50 p-6 mb-4">
@@ -46,7 +59,7 @@
       </button>
     </div>
 
-    <div v-else class="space-y-8 pb-8">
+    <div v-else-if="!loading" class="space-y-8 pb-8">
       <section
         v-for="shelf in shelves"
         :key="shelf.id"
@@ -199,6 +212,8 @@ const {
   deleteShelf,
   toggleShelfVisibility,
 } = useShelves();
+
+const showSkeleton = useDeferredLoading(() => loading.value);
 
 const newShelfModalOpen = ref(false);
 const newShelfName = ref("");

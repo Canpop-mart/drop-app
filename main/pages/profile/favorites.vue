@@ -113,7 +113,7 @@ import {
   useServerApi,
   type FavoriteSearchRow,
 } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 
 useHead({ title: "Favourite games" });
 
@@ -135,7 +135,7 @@ const saveError = ref<string | null>(null);
 const saveOk = ref(false);
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 function addGame(g: FavoriteSearchRow) {

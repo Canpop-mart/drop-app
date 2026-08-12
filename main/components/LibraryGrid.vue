@@ -16,6 +16,7 @@
       :update-available="entry.updateAvailable"
       :last-played="lastPlayedMap?.get(entry.game.id) ?? null"
       :hover-action="hoverActionFor(entry)"
+      :cloud-saved="backedUpGameIds.has(entry.game.id)"
       @select="$emit('select', entry.game.id)"
     />
   </div>
@@ -30,6 +31,7 @@
       :last-played="lastPlayedMap?.get(entry.game.id) ?? null"
       :hover-action="hoverActionFor(entry)"
       :boxart-theme="boxartTheme"
+      :cloud-saved="backedUpGameIds.has(entry.game.id)"
       @select="$emit('select', entry.game.id)"
     />
   </GameTileGrid>
@@ -46,6 +48,7 @@
  * live in the parent. Click events bubble up via `select` so the parent
  * decides what "open this game" means.
  */
+import { useCloudSaveBadges } from "~/composables/cloud-save-badges";
 import type { Game, GameStatus } from "~/types";
 
 export interface LibraryGridEntry {
@@ -94,4 +97,9 @@ function hoverActionFor(
   if (!props.showHoverAction) return null;
   return entry.installed ? "play" : "install";
 }
+
+// One library-wide lookup shared by every grid and shelf on the page, not one
+// request per tile. See `useCloudSaveBadges`.
+const { backedUpGameIds, ensureLoaded } = useCloudSaveBadges();
+onMounted(ensureLoaded);
 </script>

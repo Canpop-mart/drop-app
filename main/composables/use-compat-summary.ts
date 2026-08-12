@@ -48,11 +48,21 @@ async function fetchSummary(): Promise<CompatLibrarySummary> {
   return (await res.json()) as CompatLibrarySummary;
 }
 
-export const useCompatSummary = async () => {
-  const state = useState<CompatLibrarySummary | undefined>(
+/**
+ * The cached summary ref without triggering a fetch, so a consumer can render
+ * off it synchronously and let the data pop in later. `undefined` means
+ * "nobody has fetched yet", which is why callers pair this with a
+ * fire-and-forget `useCompatSummary()`.
+ */
+export function compatSummaryState() {
+  return useState<CompatLibrarySummary | undefined>(
     "compat-summary",
     () => undefined,
   );
+}
+
+export const useCompatSummary = async () => {
+  const state = compatSummaryState();
   if (state.value === undefined) {
     state.value = await fetchSummary();
   }
@@ -66,6 +76,6 @@ export const useCompatSummary = async () => {
  * page refresh.
  */
 export async function refreshCompatSummary(): Promise<void> {
-  const state = useState<CompatLibrarySummary | undefined>("compat-summary");
+  const state = compatSummaryState();
   state.value = await fetchSummary();
 }

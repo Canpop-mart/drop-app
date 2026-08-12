@@ -482,6 +482,22 @@ export interface CloudSaveListEntry {
   uploadedFrom?: string | null;
   clientModifiedAt: string;
   uploadedAt: string;
+  /**
+   * Display name of the account this row belongs to. PC saves are shared
+   * across every account on the server, so a row here is not necessarily
+   * yours. Empty against an older server that doesn't send the field.
+   */
+  ownedBy?: string;
+  /**
+   * Your own copy of this filename, when someone else's newer copy is what
+   * this row shows. Null when the row is already yours or you have no copy.
+   */
+  shadowedSaveId?: string | null;
+  /**
+   * Other accounts that also have a save with this filename. Non-empty means
+   * a second copy exists that this row is hiding.
+   */
+  alsoHeldBy?: string[];
 }
 
 export interface CloudSaveDownload {
@@ -491,32 +507,119 @@ export interface CloudSaveDownload {
   data: string;
 }
 
-// ── News types ──────────────────────────────────────────────────────────────
+/**
+ * One game's cloud saves rolled up into a line. The library-wide answer to
+ * "are my saves backed up", which used to need one request and one Ludusavi
+ * scan per game to work out.
+ *
+ * One row per game you can READ, not per game you have backed up: PC saves are
+ * shared across every account on a Drop server. Use `ownSaveCount` /
+ * `ownSaveBytes` from `~/composables/cloud-save-ownership` for anything that
+ * claims a backup is yours.
+ */
+export interface CloudSaveGameSummary {
+  gameId: string;
+  gameName: string;
+  /** Files after the server's collision collapse, i.e. what a listing shows. */
+  fileCount: number;
+  totalBytes: number;
+  /** Server-stamped, ISO 8601: when this game's newest save reached the server. */
+  lastUploadedAt: string;
+  /** Client mtime of the newest save, ISO 8601. */
+  lastModifiedAt: string;
+  /**
+   * How many counted files are another account's copy of a shared PC save.
+   * Non-zero means part of this total is not your own backup.
+   */
+  sharedCount: number;
+  /**
+   * How many counted files are yours. Absent on a server too old to report it,
+   * which is why nothing reads this field directly.
+   */
+  ownCount?: number | null;
+  /** Bytes of the counted files that are yours. Absent on an older server. */
+  ownBytes?: number | null;
+}
 
-export interface NewsArticle {
-  id: string;
-  title: string;
-  description: string;
-  content: string;
-  publishedAt: string;
-  imageObjectId?: string | null;
-  authorId?: string | null;
-  author?: {
-    id: string;
-    displayName: string;
-  };
-  tags?: Array<{ id: string; name: string }>;
+/** Cloud-save storage usage for the signed-in account. */
+export interface CloudSaveQuota {
+  usedBytes: number;
+  limitBytes: number;
+  /**
+   * Storage held by version history. The server deliberately does NOT count
+   * this against the cap, so it is reported alongside rather than inside
+   * `usedBytes`.
+   */
+  revisionBytes: number;
 }
 
 // ── Fetch helper ────────────────────────────────────────────────────────────
 
+/**
+ * Deadline for a single API attempt.
+ *
+ * This has to sit *above* the budget of the `server://` proxy underneath it
+ * (a 2s wait for a concurrency permit plus a 15s request deadline), not below
+ * it. When it was lower, the abort always fired first, and aborting a custom
+ * protocol request does not cancel the Rust task behind it: the abandoned
+ * request kept its slot while the retry queued a second one behind it, so
+ * timing out made the congestion worse instead of relieving it. Twenty seconds
+ * leaves the Rust side room to answer with a real status, which is also what
+ * makes the 504 retry below reachable.
+ */
+const API_TIMEOUT_MS = 20000;
+
+/**
+ * Pause before retrying a timed-out call. Re-firing instantly at a server that
+ * just failed to answer only adds to whatever is already saturating it.
+ */
+const API_RETRY_DELAY_MS = 500;
+
+/**
+ * True for methods that are safe to send twice. A dropped connection on a POST
+ * or DELETE could equally well mean the server already applied it, so those get
+ * the timeout but not the retry — an accidental duplicate favourite or comment
+ * is worse than one visible failure.
+ */
+function isRetryable(init?: RequestInit): boolean {
+  const method = (init?.method ?? "GET").toUpperCase();
+  return method === "GET" || method === "HEAD";
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const url = serverUrl(path);
-  const res = await fetch(url, init);
-  if (!res.ok) {
-    throw new Error(`API ${path} failed: ${res.status} ${res.statusText}`);
+  const attempts = isRetryable(init) ? 2 : 1;
+
+  for (let attempt = 1; ; attempt++) {
+    const last = attempt === attempts;
+    let res: Response;
+    try {
+      // A fresh signal per attempt — an AbortSignal that has already fired
+      // aborts the next request immediately.
+      res = await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      });
+    } catch (e) {
+      if (last) throw e;
+      await new Promise((r) => setTimeout(r, API_RETRY_DELAY_MS));
+      continue;
+    }
+
+    // 504 is what the server:// proxy now reports for an upstream timeout,
+    // which is exactly the transient case worth one more try. This is the only
+    // retry in the stack: the proxy itself sends once, so nothing here can
+    // re-send a request the server already applied.
+    if (res.status === 504 && !last) {
+      await new Promise((r) => setTimeout(r, API_RETRY_DELAY_MS));
+      continue;
+    }
+
+    if (!res.ok) {
+      throw new Error(`API ${path} failed: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
   }
-  return res.json();
 }
 
 /**
@@ -877,6 +980,22 @@ export function useServerApi() {
         invoke<CloudSaveListEntry[]>("list_cloud_saves", { gameId }),
 
       /**
+       * One row per game the signed-in user has cloud saves for. Cheap
+       * enough to call once for a whole library, and it needs no local
+       * disk scan, so it is the only way to answer "are my saves backed
+       * up" without waiting out a Ludusavi run per title.
+       */
+      summaries: () =>
+        invoke<CloudSaveGameSummary[]>("list_cloud_save_summaries"),
+
+      /**
+       * Storage used and the account's cap. The server has enforced this
+       * cap since the feature shipped; until now nothing read it, so the
+       * only way to learn it existed was to have an upload rejected.
+       */
+      quota: () => invoke<CloudSaveQuota>("cloud_save_quota"),
+
+      /**
        * Download one cloud save by its id. Returns base64-encoded bytes
        * wrapped in `{ data }` so existing call sites that destructure
        * `const { data } = await api.saves.download(...)` keep working.
@@ -898,32 +1017,13 @@ export function useServerApi() {
        * row (sets `deletedAt`) and records the deleting device so other
        * clients delete their local copy on next sync. A re-upload of the
        * same filename revives the row. Idempotent for already-deleted ids.
+       *
+       * A delete only ever removes YOUR copy. Resolves to `false` when the
+       * row belongs to another account and you have no copy of your own, so
+       * the caller can say that instead of reporting a success that changed
+       * nothing.
        */
-      delete: (id: string) => invoke<void>("delete_cloud_save", { id }),
-    },
-
-    news: {
-      list: (
-        params: {
-          limit?: number;
-          skip?: number;
-          order?: "asc" | "desc";
-          tags?: string;
-          search?: string;
-        } = {},
-      ) => {
-        const qs = new URLSearchParams();
-        if (params.limit) qs.set("limit", String(params.limit));
-        if (params.skip) qs.set("skip", String(params.skip));
-        if (params.order) qs.set("order", params.order);
-        if (params.tags) qs.set("tags", params.tags);
-        if (params.search) qs.set("search", params.search);
-        const query = qs.toString();
-        return apiFetch<NewsArticle[]>(
-          `api/v1/news${query ? `?${query}` : ""}`,
-        );
-      },
-      get: (id: string) => apiFetch<NewsArticle>(`api/v1/news/${id}`),
+      delete: (id: string) => invoke<boolean>("delete_cloud_save", { id }),
     },
   };
 }

@@ -270,11 +270,11 @@ function pollFrame() {
     // frame-to-frame change cleared AXIS_CHANGE_THRESHOLD (0.05). When a
     // stick decelerated back toward center, the sub-threshold steps near
     // rest were dropped, so a stick that settled on a small drift could
-    // leave the cache pinned at its last large value indefinitely. Consumers
-    // (focus-navigation's stick-scroll poll, iframe-controller's scroll
-    // poll) then ran `scrollBy` forever on phantom input, scrolling the
-    // page to the top. Always writing the current reading guarantees a
-    // settled stick reads ~0 within one frame.
+    // leave the cache pinned at its last large value indefinitely.
+    // Consumers (focus-navigation's stick-scroll poll) then ran `scrollBy`
+    // forever on phantom input, scrolling the page to the top. Always
+    // writing the current reading guarantees a settled stick reads ~0
+    // within one frame.
     //
     // AXIS_CHANGE_THRESHOLD now only gates dev-log noise, never the cache.
     for (const key in AXIS_NAMES) {

@@ -12,8 +12,8 @@
  * backups, and a small library of pure formatting helpers.
  *
  * Extracted verbatim — behaviour-identical — from the 3232-line
- * `pages/bigpicture/library/[id].vue`. The Saves tab is dev-mode gated by
- * the caller; this composable wires the data + actions behind it.
+ * `pages/bigpicture/library/[id].vue`. This composable wires the data +
+ * actions behind the Cloud Saves tab.
  *
  * Per-game-detail composable: NOT a singleton — call from a component
  * `setup()`.
@@ -21,6 +21,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { devLog } from "~/composables/dev-mode";
+import type { BackupResult } from "~/types/save-sync";
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -64,7 +65,7 @@ export interface MergedSave {
 }
 
 export type SyncConfirmAction = {
-  type: "upload" | "download";
+  type: "upload" | "download" | "delete";
   save: SaveFile | null;
   filename: string;
   saveType: string;
@@ -200,6 +201,23 @@ export function useBpmGameSaves(
     }
   }
 
+  /**
+   * Delete a local save — always behind a confirmation.
+   *
+   * The Delete button is registered as a gamepad action, so on a couch
+   * controller a single A-press on a focused row would otherwise unlink the
+   * file. Drop keeps a timestamped backup of anything it deletes, but the user
+   * still has to be told it is happening.
+   */
+  function requestDelete(save: SaveFile) {
+    confirmSyncAction.value = {
+      type: "delete",
+      save,
+      filename: save.filename,
+      saveType: save.save_type,
+    };
+  }
+
   function confirmSync() {
     if (!confirmSyncAction.value) return;
     const action = confirmSyncAction.value;
@@ -208,6 +226,8 @@ export function useBpmGameSaves(
       doUpload(action.save);
     } else if (action.type === "download") {
       doDownload(action.filename, action.saveType);
+    } else if (action.type === "delete" && action.save) {
+      deleteSave(action.save);
     }
   }
 
@@ -218,11 +238,14 @@ export function useBpmGameSaves(
       // through the JWT/cert-authed sync path, and records the manifest — the
       // same command the desktop panel uses. (The server keeps prior versions
       // via tombstones, so no manual client-side `.bak` re-upload is needed.)
-      await invoke("backup_saves", {
+      const result = await invoke<BackupResult>("backup_saves", {
         gameId,
         gameName: gameName.value ?? "",
         filenames: [save.filename],
       });
+      // The call can return 200 with the file rejected inside it. Without
+      // this the row just quietly redraws as not backed up.
+      if (result.errors.length > 0) onError(`Upload failed: ${result.errors[0]}`);
       await fetchCloudSaves();
     } catch (e) {
       console.error("[BPM:GAME] Cloud save upload failed:", e);
@@ -238,26 +261,11 @@ export function useBpmGameSaves(
 
     cloudSyncStatus.value[filename] = "downloading";
     try {
-      // Before overwriting the local file, back it up with `.bak`.
-      const localSave = gameSaves.value.find((s) => s.filename === filename);
-      if (localSave) {
-        try {
-          const localData = await invoke<string>("read_save_file", {
-            gameId,
-            filename: localSave.filename,
-            saveType: localSave.save_type,
-          });
-          await invoke("write_save_file", {
-            gameId,
-            filename: filename + ".bak",
-            saveType,
-            data: localData,
-          });
-        } catch {
-          // Backup failed — continue anyway.
-        }
-      }
-
+      // No hand-rolled backup here. `write_save_file` copies the existing
+      // file aside under a timestamped name and refuses to write if that
+      // copy fails. The old code read the save back out and wrote it to a
+      // fixed `<filename>.bak`, which clobbered the previous restore's
+      // backup, and it swallowed its own failures before overwriting anyway.
       const data = await invoke<string>("download_cloud_save", {
         id: cloudEntry.id,
       });
@@ -521,11 +529,12 @@ export function useBpmGameSaves(
       // through the JWT/cert-authed path. The `pc__` namespace prefix is the
       // sanitize-safe identity the scanner emits, so a save backed up here and
       // one backed up on desktop are the same cloud entry.
-      await invoke("backup_saves", {
+      const result = await invoke<BackupResult>("backup_saves", {
         gameId,
         gameName: gameName.value,
         filenames: [`pc__${group.name}`],
       });
+      if (result.errors.length > 0) onError(`Upload failed: ${result.errors[0]}`);
       await fetchCloudSaves();
       devLog("state", "[BPM:GAME] PC save uploaded:", group.name);
     } catch (e) {
@@ -577,7 +586,7 @@ export function useBpmGameSaves(
     gameSaves,
     savesLoading,
     fetchSaves,
-    deleteSave,
+    requestDelete,
     // Cloud saves
     cloudSaves,
     cloudSyncStatus,

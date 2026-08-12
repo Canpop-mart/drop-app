@@ -1,9 +1,31 @@
 <template>
-  <NuxtLoadingIndicator color="#2563eb" />
+  <!-- Thicker in Big Picture: 3px is invisible across a room on a TV. -->
+  <NuxtLoadingIndicator
+    color="#2563eb"
+    :height="bigPicture.isActive.value ? 8 : 3"
+  />
   <NuxtLayout class="select-none w-screen h-screen">
-    <NuxtPage />
+    <!-- An explicit Suspense keeps a page that suspends (any top-level await in
+         its setup) from suspending the whole app: without it Nuxt's root
+         Suspense has no pending slot, so the window went blank for the length
+         of the page's first fetch. The timeout is the same sub-200ms threshold
+         the loading skeletons use, so a fast page never flashes a placeholder. -->
+    <Suspense :timeout="LOADING_INDICATOR_DELAY_MS">
+      <NuxtPage />
+      <template #fallback>
+        <div class="h-full w-full px-8 py-8">
+          <div class="mx-auto max-w-7xl space-y-6">
+            <div class="h-7 w-48 rounded bg-white/5 animate-pulse" />
+            <div class="h-40 w-full rounded-2xl bg-white/5 animate-pulse" />
+            <div class="h-40 w-full rounded-2xl bg-white/5 animate-pulse" />
+          </div>
+        </div>
+      </template>
+    </Suspense>
     <ModalStack />
     <AchievementToast />
+    <SaveSyncToastHost />
+    <SaveSyncConflictHost />
   </NuxtLayout>
 </template>
 

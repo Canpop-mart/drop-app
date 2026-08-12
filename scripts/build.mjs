@@ -54,3 +54,8 @@ for (const view of views) {
     recursive: true,
   });
 }
+
+// Every view lives under its own prefix, so nothing owns the bundle root — and
+// a webview that probes for /favicon.ico there makes Tauri log an asset error
+// per window and per navigation. Ship one at the root as well.
+fs.copyFileSync("./src-tauri/icons/icon.ico", `${OUTPUT}/favicon.ico`);

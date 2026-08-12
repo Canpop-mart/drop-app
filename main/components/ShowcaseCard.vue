@@ -108,7 +108,7 @@
 
 <script setup lang="ts">
 import type { ShowcaseItem } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import { formatPlaytime } from "~/composables/use-recent-games";
 
 defineProps<{ item: ShowcaseItem }>();
@@ -120,7 +120,7 @@ const tintStyle = {
 };
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 </script>
 

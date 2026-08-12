@@ -27,7 +27,7 @@
         </h1>
         <p
           v-if="game?.mShortDescription"
-          class="text-lg text-zinc-400 max-w-2xl mb-6"
+          class="text-lg text-zinc-400 max-w-4xl mb-6"
           style="text-shadow: 0 1px 4px rgba(0,0,0,0.8)"
         >
           {{ game.mShortDescription }}
@@ -63,53 +63,41 @@
                 v-if="playMenuOpen"
                 class="absolute left-0 top-full mt-2 z-50 min-w-[280px] rounded-xl bg-zinc-900 border border-zinc-700/50 shadow-2xl overflow-hidden"
               >
-                <!-- Play locally -->
-                <button
-                  class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
-                  :class="playMenuFocus === 0 ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
-                  @click="selectPlayMenuAction(0)"
-                  @mouseenter="playMenuFocus = 0"
-                >
-                  <PlayIcon class="size-5" />
-                  <span class="font-medium">Play</span>
-                </button>
-                <!-- Play on another device that has the game — launches it
-                     there and streams it back here via Moonlight. -->
-                <template v-for="(device, i) in streamableDevices" :key="'stream-' + device.id">
+                <!-- One flat list: row 0 plays here, the rest are other
+                     devices. The index a row renders at is the index its
+                     action is looked up by, so there is no arithmetic to get
+                     wrong when a device joins or drops off the list. A device
+                     that is not reachable stays visible but disabled, so it is
+                     clear where it went. -->
+                <template v-for="(item, i) in playMenuItems" :key="item.key">
                   <button
                     class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
-                    :class="playMenuFocus === 1 + i ? 'bg-purple-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
-                    @click="selectPlayMenuAction(1 + i)"
-                    @mouseenter="playMenuFocus = 1 + i"
+                    :class="playMenuRowClass(item, i)"
+                    :disabled="item.disabled"
+                    @click="selectPlayMenuAction(i)"
+                    @mouseenter="!item.disabled && (playMenuFocus = i)"
                   >
-                    <SignalIcon class="size-5 text-purple-400" />
-                    <span class="font-medium">Play on {{ device.name }}</span>
-                    <span class="text-xs opacity-50 ml-auto">Stream · {{ device.platform }}</span>
-                  </button>
-                </template>
-                <!-- Install on other devices (only those that don't have the game) -->
-                <template v-for="(device, i) in installableDevices" :key="'install-' + device.id">
-                  <button
-                    class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
-                    :class="playMenuFocus === 1 + streamableDevices.length + i ? 'bg-green-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
-                    @click="selectPlayMenuAction(1 + streamableDevices.length + i)"
-                    @mouseenter="playMenuFocus = 1 + streamableDevices.length + i"
-                  >
-                    <ArrowDownTrayIcon class="size-5 text-green-400" />
-                    <span class="font-medium">Install on {{ device.name }}</span>
-                    <span class="text-xs opacity-50 ml-auto">{{ device.platform }}</span>
+                    <PlayIcon v-if="item.kind === 'play-local'" class="size-5" />
+                    <SignalIcon v-else-if="item.kind === 'stream'" class="size-5 text-purple-400" />
+                    <ArrowDownTrayIcon v-else class="size-5 text-green-400" />
+                    <span class="font-medium">{{ item.label }}</span>
+                    <span v-if="item.detail" class="text-xs opacity-50 ml-auto">{{ item.detail }}</span>
                   </button>
                 </template>
                 <!-- Divider + message if no other devices -->
                 <div
-                  v-if="streamableDevices.length === 0 && installableDevices.length === 0"
+                  v-if="playMenuItems.length === 1"
                   class="px-6 py-3 text-sm text-zinc-500 border-t border-zinc-800/50"
                 >
                   No other devices registered
                 </div>
               </div>
             </Transition>
-            <div v-if="playMenuOpen" class="fixed inset-0 z-40" @click="playMenuOpen = false" />
+            <!-- closePlayMenu(), not `playMenuOpen = false`: setting the flag
+                 raw skips unwiring the menu's gamepad handlers and releasing
+                 the input lock, which silences every non-bypass subscriber in
+                 the app for the rest of the session. -->
+            <div v-if="playMenuOpen" class="fixed inset-0 z-40" @click="closePlayMenu" />
           </div>
 
           <!-- ── Installed + PartiallyInstalled: Resume button ── -->
@@ -170,26 +158,28 @@
                offer to play it there and stream it back. This is the
                "play a PC game on the Deck without installing" path. -->
           <div
-            v-if="
-              status &&
-              status.type !== 'Installed' &&
-              status.type !== 'Running' &&
-              status.type !== 'Downloading' &&
-              status.type !== 'Queued' &&
-              streamableDevices.length > 0
-            "
-            :ref="(el: any) => registerAction(el, { onSelect: () => streaming.streamFromDevice(streamableDevices[0]) })"
+            v-if="showRemotePlayButton && onlineStreamTargets.length > 0"
+            :ref="(el: any) => registerAction(el, { onSelect: () => streaming.streamFromDevice(onlineStreamTargets[0]?.device) })"
             class="bp-focus-delegate inline-flex cursor-pointer"
           >
             <span class="bp-focus-ring inline-flex rounded-xl">
               <button
                 class="inline-flex items-center px-8 py-4 text-lg gap-3 bg-purple-600 hover:bg-purple-500 text-white font-semibold rounded-xl transition-all shadow-lg shadow-purple-600/20 hover:scale-105"
-                @click.stop="streaming.streamFromDevice(streamableDevices[0])"
+                @click.stop="streaming.streamFromDevice(onlineStreamTargets[0]?.device)"
               >
                 <SignalIcon class="size-6" />
-                Play on {{ streamableDevices[0].name }}
+                Play on {{ onlineStreamTargets[0].device.name }}
               </button>
             </span>
+          </div>
+          <!-- The game lives on a device that is switched off. Saying so beats
+               both a button that times out and a button that vanished. -->
+          <div
+            v-else-if="showRemotePlayButton && streamTargets.length > 0"
+            class="inline-flex items-center px-6 py-4 text-base gap-3 rounded-xl bg-zinc-800/60 text-zinc-400 border border-zinc-700/50"
+          >
+            <SignalIcon class="size-5 text-zinc-500" />
+            {{ streamTargets[0].device.name }} is offline
           </div>
 
           <!-- ── Not installed: Install button with device picker.
@@ -208,20 +198,20 @@
             class="relative inline-flex"
           >
             <div
-              :ref="(el: any) => registerAction(el, { onSelect: downloadGame, onContext: installableDevices.length > 0 ? togglePlayMenu : undefined })"
+              :ref="(el: any) => registerAction(el, { onSelect: downloadGame, onContext: hasRemoteInstallTargets ? togglePlayMenu : undefined })"
               class="bp-focus-delegate inline-flex cursor-pointer"
             >
               <span class="bp-focus-ring inline-flex rounded-xl">
                 <button
                   class="inline-flex items-center pl-8 py-4 text-lg gap-3 bg-green-600 hover:bg-green-500 text-white font-semibold transition-all shadow-lg"
-                  :class="installableDevices.length > 0 ? 'pr-4 rounded-l-xl' : 'pr-8 rounded-xl'"
+                  :class="hasRemoteInstallTargets ? 'pr-4 rounded-l-xl' : 'pr-8 rounded-xl'"
                   @click.stop="downloadGame"
                 >
                   <ArrowDownTrayIcon class="size-6" />
                   Install
                 </button>
                 <button
-                  v-if="installableDevices.length > 0"
+                  v-if="hasRemoteInstallTargets"
                   class="inline-flex items-center px-3 py-4 font-semibold rounded-r-xl transition-all shadow-lg border-l bg-green-600 hover:bg-green-500 text-white border-green-400/30"
                   @click.stop="togglePlayMenu"
                 >
@@ -229,36 +219,36 @@
                 </button>
               </span>
             </div>
-            <!-- Dropdown: install on other devices that don't have it -->
+            <!-- Dropdown: install on other devices that don't have it. Same
+                 flat-list rule as the play menu — row index is action index. -->
             <Transition name="dropdown-fade">
               <div
-                v-if="playMenuOpen && installableDevices.length > 0"
+                v-if="playMenuOpen && hasRemoteInstallTargets"
                 class="absolute left-0 top-full mt-2 z-50 min-w-[280px] rounded-xl bg-zinc-900 border border-zinc-700/50 shadow-2xl overflow-hidden"
               >
-                <button
-                  class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
-                  :class="playMenuFocus === 0 ? 'bg-green-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
-                  @click="selectInstallMenuAction(0)"
-                  @mouseenter="playMenuFocus = 0"
-                >
-                  <ArrowDownTrayIcon class="size-5" />
-                  <span class="font-medium">Install here</span>
-                </button>
-                <template v-for="(device, i) in installableDevices" :key="'ri-' + device.id">
+                <template v-for="(item, i) in installMenuItems" :key="item.key">
                   <button
                     class="flex items-center gap-3 w-full px-6 py-3.5 text-left text-base transition-colors"
-                    :class="playMenuFocus === 1 + i ? 'bg-green-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'"
-                    @click="selectInstallMenuAction(1 + i)"
-                    @mouseenter="playMenuFocus = 1 + i"
+                    :class="installMenuRowClass(item, i)"
+                    :disabled="item.disabled"
+                    @click="selectInstallMenuAction(i)"
+                    @mouseenter="!item.disabled && (playMenuFocus = i)"
                   >
-                    <ArrowDownTrayIcon class="size-5 text-green-400" />
-                    <span class="font-medium">Install on {{ device.name }}</span>
-                    <span class="text-xs opacity-50 ml-auto">{{ device.platform }}</span>
+                    <ArrowDownTrayIcon
+                      class="size-5"
+                      :class="item.kind === 'install-local' ? '' : 'text-green-400'"
+                    />
+                    <span class="font-medium">{{ item.label }}</span>
+                    <span v-if="item.detail" class="text-xs opacity-50 ml-auto">{{ item.detail }}</span>
                   </button>
                 </template>
               </div>
             </Transition>
-            <div v-if="playMenuOpen" class="fixed inset-0 z-40" @click="playMenuOpen = false" />
+            <!-- closePlayMenu(), not `playMenuOpen = false`: setting the flag
+                 raw skips unwiring the menu's gamepad handlers and releasing
+                 the input lock, which silences every non-bypass subscriber in
+                 the app for the rest of the session. -->
+            <div v-if="playMenuOpen" class="fixed inset-0 z-40" @click="closePlayMenu" />
           </div>
 
           <!-- Add to Library (without installing) — shows for Remote games not yet in library -->
@@ -360,6 +350,21 @@
             </button>
           </template>
 
+          <!-- Game Options. Start opens the same modal, but Start is a
+               controller-only accelerator advertised by one small glyph in
+               the context bar, and there was no on-screen target at all —
+               Configure, Uninstall, Remove from Library and Add to Shelf all
+               lived behind it. -->
+          <button
+            :ref="(el: any) => registerAction(el, { onSelect: () => (showOptions = true) })"
+            class="inline-flex items-center gap-1.5 px-4 py-3 text-sm bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 rounded-xl transition-colors backdrop-blur-sm"
+            title="Game options"
+            @click="showOptions = true"
+          >
+            <Cog6ToothIcon class="size-4 text-zinc-400" />
+            <span class="font-medium">Options</span>
+          </button>
+
           <!-- Stream status / stop button (when streaming is active) -->
           <button
             v-if="isStreaming"
@@ -400,7 +405,11 @@
     <!-- Friends tile — Server users who've played this game. Sits between
          the stats row and the tab strip, mirroring the desktop layout. -->
     <div v-if="game" class="px-8 pt-3">
-      <GameFriendsTile :game-id="gameId" :players="gamePlayers" />
+      <GameFriendsTile
+        :game-id="gameId"
+        :players="gamePlayers"
+        :register-action="registerAction"
+      />
     </div>
 
     <!-- Content tabs -->
@@ -467,9 +476,12 @@
             v-if="romHashResult.expected_hashes?.some((h) => h.patchUrl)"
             class="flex flex-wrap gap-2"
           >
+            <!-- No onSelect: focus-nav falls back to el.click() on the
+                 anchor, which is exactly what a mouse does. -->
             <a
               v-for="h in romHashResult.expected_hashes?.filter((h) => h.patchUrl)"
               :key="h.hash"
+              :ref="(el: any) => registerAction(el)"
               :href="h.patchUrl"
               target="_blank"
               class="inline-flex items-center gap-1 rounded bg-amber-500/20 px-2 py-0.5 text-xs text-amber-300 hover:bg-amber-500/30 transition-colors"
@@ -579,46 +591,57 @@
         </div>
       </div>
 
-      <!-- About — description + gallery, matching desktop's About tab. -->
-      <div v-else-if="activeTab === 'about'" class="max-w-3xl space-y-8">
-        <div>
+      <!-- About — description + gallery, matching desktop's About tab. Two
+           columns on a wide screen: the old single `max-w-3xl` column left the
+           description at roughly a third of a 1080p Big Picture shell. The
+           description caps in CHARACTERS, not viewport width, so it stays
+           readable rather than tracking the monitor. -->
+      <div
+        v-else-if="activeTab === 'about'"
+        :class="
+          hasGallery
+            ? 'grid gap-8 xl:grid-cols-[minmax(0,1fr)_480px]'
+            : 'space-y-8'
+        "
+      >
+        <div class="min-w-0">
           <div
             v-if="game?.mDescription"
-            class="prose prose-invert prose-zinc max-w-none text-zinc-300 leading-relaxed"
+            ref="descriptionEl"
+            class="bpm-description prose prose-lg prose-invert prose-zinc max-w-[75ch] text-zinc-300 leading-relaxed"
             v-html="renderedDescription"
+            @click="openDescriptionImage"
           />
           <p v-else class="text-zinc-500">No description available.</p>
         </div>
 
-        <div v-if="game?.mImageCarouselObjectIds?.length">
+        <div v-if="hasGallery" class="min-w-0">
           <h3 class="text-sm font-semibold mb-3" style="color: var(--bpm-muted)">
             GALLERY
           </h3>
-          <div class="grid grid-cols-2 gap-4">
-            <div
-              v-for="(imgId, idx) in game?.mImageCarouselObjectIds"
-              :key="idx"
-              class="aspect-video rounded-lg overflow-hidden bg-zinc-800"
-            >
-              <img
-                :src="objectUrl(imgId)"
-                class="w-full h-full object-cover"
-                loading="lazy"
-              />
-            </div>
-          </div>
+          <GameDetailGallery
+            :image-ids="game?.mImageCarouselObjectIds ?? []"
+            :game-name="game?.mName ?? ''"
+            :register-action="registerAction"
+          />
         </div>
       </div>
 
+      <!-- Mods — the same install / uninstall actions as the desktop Mods tab,
+           as a card grid. Hidden entirely for games with no mods. -->
+      <BpmModsTab
+        v-else-if="activeTab === 'mods'"
+        :mods="mods"
+        :game-name="game?.mName ?? ''"
+        :register-action="registerAction"
+      />
+
       <!-- Cloud Saves — cloud list (restore/delete) + local save management
-           (upload/download), matching desktop's single Cloud Saves tab. No
-           longer gated behind dev mode. -->
-      <div
-        v-else-if="activeTab === 'cloudsaves' && devMode.enabled.value"
-        class="space-y-6"
-      >
+           (upload/download), matching desktop's single Cloud Saves tab. -->
+      <div v-else-if="activeTab === 'cloudsaves'" class="space-y-6">
         <BpmCloudSavesPanel
           :game-id="gameId"
+          :game-name="game?.mName ?? ''"
           :register-action="registerAction"
         />
         <BpmGameSavesTab
@@ -649,6 +672,16 @@
         </div>
       </div>
     </div>
+
+    <!-- Description images open in the same viewer as the gallery. -->
+    <ImageLightbox
+      :open="descriptionLightboxOpen"
+      :srcs="descriptionImageSrcs"
+      :start-index="descriptionImageIndex"
+      :alt-prefix="`${game?.mName ?? 'Game'} image`"
+      gamepad
+      @close="descriptionLightboxOpen = false"
+    />
 
     <!-- Settings toast -->
     <Transition
@@ -685,7 +718,7 @@
     <!-- Launch error dialog -->
     <BigPictureDialog
       :visible="launchError !== null"
-      title="Launch Failed"
+      :title="launchErrorTitle"
       :message="launchError || ''"
       confirm-label="Dismiss"
       :show-cancel="false"
@@ -716,16 +749,14 @@
       @cancel="confirmRemoveFromLibrary = false"
     />
 
-    <!-- Cloud sync confirmation -->
+    <!-- Save action confirmation (cloud sync + local delete) -->
     <BigPictureDialog
       :visible="saves.confirmSyncAction.value !== null"
-      :title="saves.confirmSyncAction.value?.type === 'upload' ? 'Replace Cloud Save?' : 'Replace Local Save?'"
-      :message="saves.confirmSyncAction.value?.type === 'upload'
-        ? `This will replace the cloud version of '${saves.confirmSyncAction.value?.filename}' with your local copy. A backup of the current cloud version will be saved automatically.`
-        : `This will replace your local copy of '${saves.confirmSyncAction.value?.filename}' with the cloud version. A backup of your current local save will be created automatically.`"
-      :confirm-label="saves.confirmSyncAction.value?.type === 'upload' ? 'Replace Cloud Save' : 'Replace Local Save'"
+      :title="saveConfirmCopy.title"
+      :message="saveConfirmCopy.message"
+      :confirm-label="saveConfirmCopy.confirmLabel"
       cancel-label="Cancel"
-      :destructive="false"
+      :destructive="saveConfirmCopy.destructive"
       @confirm="saves.confirmSync"
       @cancel="saves.confirmSyncAction.value = null"
     />
@@ -856,14 +887,6 @@
       </Transition>
     </Teleport>
 
-    <!-- Cloud Save Conflict Resolution Dialog -->
-    <BpmSaveConflictDialog
-      :visible="saveConflictVisible"
-      :game-id="gameId"
-      :conflicts="saveConflicts"
-      @resolved="saveConflictVisible = false"
-    />
-
     <!-- RetroArch controller cheatsheet -->
     <BpmRetroArchCheatsheet
       :open="raCheatsheetOpen"
@@ -874,7 +897,6 @@
 
 <script setup lang="ts">
 import { devLog } from "~/composables/dev-mode";
-import BpmSaveConflictDialog from "~/components/bigpicture/BpmSaveConflictDialog.vue";
 import BpmRetroArchCheatsheet from "~/components/bigpicture/BpmRetroArchCheatsheet.vue";
 import { invoke } from "@tauri-apps/api/core";
 import { platform } from "@tauri-apps/plugin-os";
@@ -887,7 +909,7 @@ import {
   SignalIcon,
 } from "@heroicons/vue/24/solid";
 import { ChevronDownIcon } from "@heroicons/vue/20/solid";
-import { ClockIcon, WrenchIcon } from "@heroicons/vue/24/outline";
+import { ClockIcon, Cog6ToothIcon, WrenchIcon } from "@heroicons/vue/24/outline";
 import BigPictureDialog from "~/components/bigpicture/BigPictureDialog.vue";
 import BigPictureButtonPrompt from "~/components/bigpicture/BigPictureButtonPrompt.vue";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
@@ -897,11 +919,16 @@ import {
   type VersionOption,
 } from "~/composables/game";
 import { serverUrl } from "~/composables/use-server-fetch";
+import {
+  describeLaunchFailure,
+  isBenignLaunchError,
+} from "~/composables/launch-failure";
+import { objectImageUrl } from "~/composables/use-object";
 import { renderMarkdown } from "~/composables/render-markdown";
 import type { Game, GameStatus, GameVersion } from "~/types";
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
@@ -924,13 +951,14 @@ const status = computed<GameStatus | null>(() => statusRef.value?.value ?? null)
 const version = ref<GameVersion | null>(null);
 const versionOptions = ref<VersionOption[] | null>(null);
 const activeTab = ref("about");
-// Cloud saves is dev-gated, so its tab only shows when dev mode is on.
-const devMode = useDevMode();
 // Plain object — NOT reactive. Storing DOM refs in a reactive ref causes
 // infinite update loops when set from :ref callbacks during render.
 const tabRefs: Record<string, HTMLElement | null> = {};
 const tabIndicatorStyle = ref({ left: "0", width: "0" });
 const launchError = ref<string | null>(null);
+// Headline for the launch-error dialog. Every failure used to arrive under the
+// same "Launch Failed", which buried the one thing the user could act on.
+const launchErrorTitle = ref("Launch Failed");
 const diagnosticsRan = ref(false);
 
 // ── Streaming ─────────────────────────────────────────────────────────────
@@ -938,6 +966,10 @@ const diagnosticsRan = ref(false);
 // `use-bpm-game-streaming.ts` — decomposed out of this page. The composable
 // owns every interval and tears them down in `dispose()`.
 import { useBpmGameStreaming } from "~/composables/bigpicture/use-bpm-game-streaming";
+import {
+  nextEnabledIndex,
+  type PlayMenuItem,
+} from "~/composables/bigpicture/stream-targets";
 import type { ClientDevice } from "~/composables/useStreaming";
 
 const streaming = useBpmGameStreaming(
@@ -950,8 +982,11 @@ const {
   isStreaming,
   streamingPhase,
   streamingPhaseLabel,
-  streamableDevices,
-  installableDevices,
+  streamTargets,
+  installTargets,
+  onlineStreamTargets,
+  playMenuItems,
+  installMenuItems,
   stopStreaming,
 } = streaming;
 
@@ -959,17 +994,100 @@ const playMenuOpen = ref(false);
 const playMenuFocus = ref(0);
 let playMenuLockId = 0;
 
-// Total items in the installed-game dropdown:
-// [0] Play, [1..S] Stream from device, [S+1..S+I] Install on device
-const playMenuItemCount = computed(() => 1 + streamableDevices.value.length + installableDevices.value.length);
+/** The remote-play slot only exists while the game is not in play here. */
+const showRemotePlayButton = computed(() => {
+  const type = status.value?.type;
+  return (
+    !!type &&
+    type !== "Installed" &&
+    type !== "Running" &&
+    type !== "Downloading" &&
+    type !== "Queued"
+  );
+});
+const hasRemoteInstallTargets = computed(() => installTargets.value.length > 0);
 
-// Total items in the not-installed dropdown:
-// [0] Install here, [1..I] Install on device
-const installMenuItemCount = computed(() => 1 + installableDevices.value.length);
+/** Rows the menu currently renders — the one source both halves index into. */
+const activeMenuItems = computed(() =>
+  status.value?.type === "Installed" ? playMenuItems.value : installMenuItems.value,
+);
+
+/**
+ * Would the template draw a dropdown at all, `playMenuOpen` aside?
+ *
+ * This mirrors the two dropdown `v-if`s and is the one place that condition is
+ * written. Opening the menu refetches the device list and takes the global
+ * input lock before that fetch lands, so a fetch that fails or comes back with
+ * no remote targets can remove every row while the lock is still held: no menu
+ * on screen, and D-pad and A dead for the whole page. The same divergence
+ * happens if the game's status changes while the menu is open, since both
+ * dropdowns are gated on it too.
+ */
+const playMenuRenderable = computed(() => {
+  if (status.value?.type === "Installed") {
+    return status.value.install_type.type === "Installed";
+  }
+  return showRemotePlayButton.value && hasRemoteInstallTargets.value;
+});
+
+/**
+ * Whether the shoulder button has a menu to open. A one-row menu is nothing to
+ * open, and without the render check the button can take the input lock for a
+ * dropdown no branch of the template is drawing (a game mid-download, or one
+ * that only needs Setup).
+ */
+const playMenuAvailable = computed(
+  () => activeMenuItems.value.length > 1 && playMenuRenderable.value,
+);
+
+// Close for real (unwire + release the lock) the moment the menu stops being
+// drawn. Nothing else in the page watches `playMenuOpen`, so without this the
+// only way out is a B press the user has no reason to try.
+watch(playMenuRenderable, (renderable) => {
+  if (!renderable && playMenuOpen.value) closePlayMenu();
+});
+
+// The same refetch can shrink the list without emptying it. A focus index left
+// over from the longer list makes A land on a row that is not there, so bring
+// it back onto a real one.
+watch(activeMenuItems, (items) => {
+  if (!playMenuOpen.value) return;
+  if (playMenuFocus.value >= items.length) {
+    playMenuFocus.value = nextEnabledIndex(items, playMenuFocus.value, -1);
+  }
+});
+
+function menuRowClass(item: PlayMenuItem, index: number, activeClass: string) {
+  if (item.disabled) return "text-zinc-500 cursor-not-allowed";
+  return playMenuFocus.value === index
+    ? activeClass
+    : "text-zinc-300 hover:bg-zinc-800";
+}
+const ROW_ACTIVE_CLASS: Record<PlayMenuItem["kind"], string> = {
+  "play-local": "bg-blue-600 text-white",
+  "install-local": "bg-green-600 text-white",
+  stream: "bg-purple-600 text-white",
+  "install-remote": "bg-green-600 text-white",
+};
+function playMenuRowClass(item: PlayMenuItem, index: number) {
+  return menuRowClass(item, index, ROW_ACTIVE_CLASS[item.kind]);
+}
+function installMenuRowClass(item: PlayMenuItem, index: number) {
+  return menuRowClass(item, index, "bg-green-600 text-white");
+}
 
 function openPlayMenu() {
+  // A focus registration keeps the first `onContext` closure it was given for
+  // the element's whole life, so the Install button can still call this after
+  // its remote targets have gone. Taking the lock for a dropdown no branch of
+  // the template draws is what leaves the page with dead input.
+  if (!playMenuRenderable.value) return;
   playMenuOpen.value = true;
   playMenuFocus.value = 0;
+  // Re-read the device list on open: whether a device is reachable is the
+  // difference between a working entry and a dead one, and the list was
+  // fetched when the page mounted.
+  void streaming.loadDevices();
   playMenuLockId = focusNav.acquireInputLock();
   wirePlayMenuGamepad();
 }
@@ -988,44 +1106,60 @@ function closePlayMenu() {
   focusNav.releaseInputLock(playMenuLockId);
 }
 
-function selectPlayMenuAction(index: number) {
-  closePlayMenu();
-  if (index === 0) {
-    // Play locally
-    launchGame();
-  } else if (index <= streamableDevices.value.length) {
-    // Stream from device at index-1
-    streaming.streamFromDevice(streamableDevices.value[index - 1]);
-  } else {
-    // Install on device
-    const deviceIdx = index - 1 - streamableDevices.value.length;
-    streaming.installOnDevice(installableDevices.value[deviceIdx]);
+/**
+ * Run the row at `index`. The row carries its own action, so a device joining
+ * or leaving the list between render and press cannot shift one entry's press
+ * onto another entry's device.
+ */
+function runMenuItem(item: PlayMenuItem | undefined) {
+  if (!item || item.disabled) return;
+  switch (item.kind) {
+    case "play-local":
+      launchGame();
+      break;
+    case "install-local":
+      downloadGame();
+      break;
+    case "stream":
+      streaming.streamFromDevice(item.device as ClientDevice);
+      break;
+    case "install-remote":
+      streaming.installOnDevice(item.device as ClientDevice);
+      break;
   }
 }
 
-function selectInstallMenuAction(index: number) {
+function selectPlayMenuAction(index: number) {
+  const item = playMenuItems.value[index];
+  if (!item || item.disabled) return;
   closePlayMenu();
-  if (index === 0) {
-    downloadGame();
-  } else {
-    streaming.installOnDevice(installableDevices.value[index - 1]);
-  }
+  runMenuItem(item);
+}
+
+function selectInstallMenuAction(index: number) {
+  const item = installMenuItems.value[index];
+  if (!item || item.disabled) return;
+  closePlayMenu();
+  runMenuItem(item);
 }
 
 const _playMenuUnsubs: (() => void)[] = [];
 function wirePlayMenuGamepad() {
   unwirePlayMenuGamepad();
-  const maxIdx = status.value?.type === "Installed"
-    ? playMenuItemCount.value - 1
-    : installMenuItemCount.value - 1;
+  // Bounds are read at press time, not wire time: the device list can change
+  // while the menu is open, and a length captured here would go stale.
   const bypass = { bypassInputLock: true };
+  const move = (direction: 1 | -1) => {
+    if (!playMenuOpen.value) return;
+    playMenuFocus.value = nextEnabledIndex(
+      activeMenuItems.value,
+      playMenuFocus.value,
+      direction,
+    );
+  };
   _playMenuUnsubs.push(
-    gamepad.onButton(GamepadButton.DPadUp, () => {
-      if (playMenuOpen.value) playMenuFocus.value = Math.max(0, playMenuFocus.value - 1);
-    }, bypass),
-    gamepad.onButton(GamepadButton.DPadDown, () => {
-      if (playMenuOpen.value) playMenuFocus.value = Math.min(maxIdx, playMenuFocus.value + 1);
-    }, bypass),
+    gamepad.onButton(GamepadButton.DPadUp, () => move(-1), bypass),
+    gamepad.onButton(GamepadButton.DPadDown, () => move(1), bypass),
     gamepad.onButton(GamepadButton.South, () => {
       if (playMenuOpen.value) {
         if (status.value?.type === "Installed") {
@@ -1077,6 +1211,33 @@ const _unsubs: (() => void)[] = [];
 const renderedDescription = computed(() =>
   game.value?.mDescription ? renderMarkdown(game.value.mDescription) : "",
 );
+
+const hasGallery = computed(
+  () => (game.value?.mImageCarouselObjectIds?.length ?? 0) > 0,
+);
+
+// ── Description images ──────────────────────────────────────────────────
+// Markdown images land in a `v-html` sink as inert <img> tags, and they can't
+// be marked up on the way in: `sanitize.ts` runs DOMPurify with
+// ALLOW_DATA_ATTR:false, so a data-* hook would be stripped. Delegate off the
+// wrapper instead and read the rendered <img> list back out of the DOM.
+const descriptionEl = ref<HTMLElement | null>(null);
+const descriptionImageSrcs = ref<string[]>([]);
+const descriptionImageIndex = ref(0);
+const descriptionLightboxOpen = ref(false);
+
+function openDescriptionImage(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (!target || target.tagName !== "IMG") return;
+  const wrapper = descriptionEl.value;
+  if (!wrapper) return;
+  const images = Array.from(wrapper.querySelectorAll("img"));
+  const index = images.indexOf(target as HTMLImageElement);
+  if (index < 0) return;
+  descriptionImageSrcs.value = images.map((img) => img.currentSrc || img.src);
+  descriptionImageIndex.value = index;
+  descriptionLightboxOpen.value = true;
+}
 
 // ── Game type detection ─────────────────────────────────────────────────
 const isEmulatedGame = computed(() => {
@@ -1459,17 +1620,23 @@ function wireShelfGamepad() {
   unwireShelfGamepad();
   const totalItems = shelvesData.shelves.value.length + 2; // shelves + Create button + Done button
   const bypass = { bypassInputLock: true };
+  // These handlers bypass the input lock, so they keep firing when the
+  // on-screen keyboard opens on top of the picker — and the keyboard's own
+  // handlers bypass too. Without this guard one D-pad press moves the
+  // keyboard's cursor AND the row highlight behind it.
+  const pickerHasInput = () =>
+    showShelfPicker.value && !showNewShelfKeyboard.value;
   _shelfSubs.push(
     gamepad.onButton(GamepadButton.DPadUp, () => {
-      if (!showShelfPicker.value) return;
+      if (!pickerHasInput()) return;
       shelfFocusIdx.value = Math.max(0, shelfFocusIdx.value - 1);
     }, bypass),
     gamepad.onButton(GamepadButton.DPadDown, () => {
-      if (!showShelfPicker.value) return;
+      if (!pickerHasInput()) return;
       shelfFocusIdx.value = Math.min(totalItems - 1, shelfFocusIdx.value + 1);
     }, bypass),
     gamepad.onButton(GamepadButton.South, () => {
-      if (!showShelfPicker.value) return;
+      if (!pickerHasInput()) return;
       const idx = shelfFocusIdx.value;
       const shelfCount = shelvesData.shelves.value.length;
       if (idx < shelfCount) {
@@ -1481,7 +1648,7 @@ function wireShelfGamepad() {
       }
     }, bypass),
     gamepad.onButton(GamepadButton.East, () => {
-      if (!showShelfPicker.value) return;
+      if (!pickerHasInput()) return;
       showShelfPicker.value = false;
     }, bypass),
   );
@@ -1540,16 +1707,53 @@ function onAchievementIconError(event: Event) {
   img.parentNode?.insertBefore(fallback, img.nextSibling);
 }
 
-// Three tabs, matching the desktop game-detail page: About (description +
-// gallery), Community (achievements + leaderboard), and Cloud Saves.
-const tabs = computed(() => [
-  { label: "About", value: "about" },
-  { label: "Community", value: "community" },
-  // Cloud saves is dev-gated.
-  ...(devMode.enabled.value
-    ? [{ label: "Cloud Saves", value: "cloudsaves" }]
-    : []),
-]);
+// ── Mods ─────────────────────────────────────────────────────────────────
+// A mod is a Game (type=Mod) whose files overlay into this game's install dir.
+// The state and every action come from the shared game-detail layer via
+// `useBpmMods`; the tab markup is <BpmModsTab>, which takes this object.
+import { useBpmMods } from "~/composables/bigpicture/use-bpm-mods";
+import BpmModsTab from "~/components/bigpicture/game-detail/BpmModsTab.vue";
+import {
+  shouldShowModsTab,
+  resolveActiveTab,
+} from "~/composables/game-detail/mods-tab";
+
+const mods = useBpmMods(gameId);
+
+// Matching the desktop game-detail page: About (description + gallery),
+// Community (achievements + leaderboard), Mods, and Cloud Saves.
+//
+// Mods is hidden for games with no mods — an empty tab was just a dead end.
+// `shouldShowModsTab` owns the loading rule and is shared with desktop, so the
+// two surfaces can't drift on when the tab appears.
+const tabs = computed(() => {
+  const all = [
+    { label: "About", value: "about" },
+    { label: "Community", value: "community" },
+    { label: "Mods", value: "mods" },
+    { label: "Cloud Saves", value: "cloudsaves" },
+  ];
+  return all.filter((t) =>
+    t.value === "mods"
+      ? shouldShowModsTab({
+          installed: status.value?.type === "Installed",
+          loaded: mods.loaded.value,
+          availableCount: mods.available.value.length,
+          installedCount: mods.installedMods.value.length,
+        })
+      : true,
+  );
+});
+
+// Uninstalling the last mod (or the game) can pull the current tab out from
+// under the user, which otherwise leaves the panel area blank.
+watch(tabs, (visible) => {
+  activeTab.value = resolveActiveTab(
+    visible.map((t) => t.value),
+    activeTab.value,
+    "about",
+  );
+});
 
 interface AchievementItem {
   id: string;
@@ -1646,13 +1850,68 @@ const saves = useBpmGameSaves(
   (msg) => { launchError.value = msg; },
 );
 
-// Load saves when the Cloud Saves tab is selected.
+/**
+ * Copy for the save-action confirmation dialog. Delete is the destructive one:
+ * every Saves-tab button is a gamepad action, so a stray A-press on a focused
+ * row reaches it, and it unlinks a real save file.
+ */
+const saveConfirmCopy = computed(() => {
+  const action = saves.confirmSyncAction.value;
+  const name = action?.filename ?? "";
+  if (action?.type === "delete") {
+    return {
+      title: "Delete This Save?",
+      message: `This deletes '${name}' from this device. Drop keeps a timestamped backup next to it, but the game will no longer see this save.`,
+      confirmLabel: "Delete Save",
+      destructive: true,
+    };
+  }
+  if (action?.type === "upload") {
+    return {
+      title: "Replace Cloud Save?",
+      message: `This will replace the cloud version of '${name}' with your local copy. A backup of the current cloud version will be saved automatically.`,
+      confirmLabel: "Replace Cloud Save",
+      destructive: false,
+    };
+  }
+  return {
+    title: "Replace Local Save?",
+    message: `This will replace your local copy of '${name}' with the cloud version. A backup of your current local save will be created automatically.`,
+    confirmLabel: "Replace Local Save",
+    destructive: false,
+  };
+});
+
+// Load saves when the Cloud Saves tab is selected. Mods re-reads on open too,
+// so the grid reflects on-disk state even if an install-completion event was
+// missed while the page sat on another tab.
 watch(
   () => activeTab.value,
   (tab) => {
     if (tab === "cloudsaves") saves.loadAll();
+    if (tab === "mods") mods.refresh(status.value?.type === "Installed");
   },
 );
+
+// The available list drives the tab's visibility, so it's fetched on mount
+// regardless of install state. The on-disk ledger only exists once the base
+// game is installed, and `status` arrives after the game fetch resolves — so
+// the installed half is (re)read whenever the game becomes installed.
+onMounted(() => {
+  mods.refresh(status.value?.type === "Installed");
+});
+watch(
+  () => status.value?.type === "Installed",
+  (installed) => {
+    if (installed) mods.refreshInstalled();
+  },
+);
+
+// A completed mod install/uninstall emits update_library; re-read the ledgers
+// so the grid updates without leaving the page.
+useListen("update_library", () => {
+  if (status.value?.type === "Installed") mods.refreshInstalled();
+});
 
 // ── Recommended games ──────────────────────────────────────────────────
 interface RecommendedGame {
@@ -1762,11 +2021,9 @@ useListen<RomHashResult>(`ra_hash_check/${gameId}`, (event) => {
   romHashResult.value = event.payload;
 });
 
-// ── Cloud Save Conflict Resolution ──────────────────────────────────────
-import type { SaveConflict } from "~/types/save-sync";
-
-const saveConflictVisible = ref(false);
-const saveConflicts = ref<SaveConflict[]>([]);
+// Cloud save conflicts are handled app-wide by `SaveSyncConflictHost`
+// (mounted in app.vue), which picks the Big Picture dialog when BPM is
+// active. Quick-launch from the grid never had a listener here.
 
 // ── RetroArch controller cheatsheet ─────────────────────────────────────
 const raCheatsheetOpen = ref(false);
@@ -1777,13 +2034,6 @@ function closeRaCheatsheet() {
   raCheatsheetOpen.value = false;
 }
 
-useListen<{ gameId: string; conflicts: SaveConflict[] }>(
-  `save_sync_conflict/${gameId}`,
-  (event) => {
-    saveConflicts.value = event.payload.conflicts;
-    saveConflictVisible.value = true;
-  },
-);
 
 // On-demand hash check
 async function checkRomHash() {
@@ -1833,7 +2083,7 @@ onMounted(async () => {
       // closed on a single press.
       if (focusNav.contextHandled.value) return;
       if (showOptions.value) return;
-      if (streamableDevices.value.length === 0 && installableDevices.value.length === 0) return;
+      if (!playMenuAvailable.value) return;
       togglePlayMenu();
     }),
   );
@@ -1941,8 +2191,14 @@ onMounted(() => {
 onUnmounted(() => {
   for (const unsub of _unsubs) unsub();
   _unsubs.length = 0;
+  // Every overlay on this page can be open at unmount time, and each holds
+  // its own input lock. Missing one leaves the app's gamepad input locked.
   unwireOptionsGamepad();
+  unwirePlayMenuGamepad();
+  unwireShelfGamepad();
   if (showOptions.value) focusNav.releaseInputLock(optionsLockId);
+  if (playMenuOpen.value) focusNav.releaseInputLock(playMenuLockId);
+  if (showShelfPicker.value) focusNav.releaseInputLock(shelfLockId);
   window.removeEventListener("resize", _onResize);
   // Tear down every streaming interval owned by the composable.
   streaming.dispose();
@@ -1950,6 +2206,7 @@ onUnmounted(() => {
 
 function dismissLaunchError() {
   launchError.value = null;
+  launchErrorTitle.value = "Launch Failed";
 }
 
 const launchInFlight = ref(false);
@@ -2009,54 +2266,56 @@ async function launchGame() {
       index: 0,
     });
     if (result.result === "InstallRequired") {
-      // Auto-download the required dependency (e.g. runtime/tool).
+      // Auto-download the required dependency (e.g. the emulator). There is no
+      // install-directory picker in Big Picture, so this is the only way a pad
+      // user can get out of the dead end — but say *what* is being installed:
+      // "a required dependency" told nobody they were missing RetroArch.
       // Resolve the dependency's own platform rather than reusing the host
       // game's platform — Proton/Wine builds are Linux-only, and a Windows
       // game would otherwise ask for a "windows" build of the dep.
-      const [depGameId, depVersionId] = result.data;
+      const { gameId: depGameId, versionId: depVersionId, name } = result.data;
+      const depName = name ?? "the program it needs";
+      const gameName = game.value?.mName ?? "This game";
+      launchErrorTitle.value = "Emulator not installed";
       try {
         const depVersions = await invoke<VersionOption[]>(
           "fetch_game_version_options",
           { gameId: depGameId },
         );
-        const depPlatform =
-          depVersions?.find((v) => v.versionId === depVersionId)?.platform
-          ?? depVersions?.[0]?.platform
-          ?? "linux";
+        const depVersion =
+          depVersions?.find((v) => v.versionId === depVersionId)
+          ?? depVersions?.[0];
+        if (!depVersion) {
+          throw new Error("no downloadable versions on your Drop server");
+        }
         await invoke("download_game", {
           gameId: depGameId,
-          versionId: depVersionId,
+          versionId: depVersion.versionId,
           installDir: 0,
-          targetPlatform: depPlatform,
+          targetPlatform: depVersion.platform,
           enableUpdates: true,
         });
-        launchError.value = `A required dependency is being installed. Please try launching again once the download completes.`;
+        launchError.value = `${gameName} runs through ${depName}, which isn't installed. Drop is downloading ${depName} now. Press Play again once it finishes.`;
       } catch (depErr) {
-        launchError.value = `A required dependency needs to be installed first, but the download failed: ${depErr instanceof Error ? depErr.message : String(depErr)}`;
+        launchError.value = `${gameName} runs through ${depName}, which isn't installed, and Drop couldn't start the download: ${depErr instanceof Error ? depErr.message : String(depErr)}. Install ${depName} from your library on the desktop app.`;
       }
     }
     // LaunchResult is `Success | InstallRequired`. Anything other than
     // those two would surface as a thrown error from `invoke("launch_game")`,
     // caught below — no need to second-guess the discriminator.
   } catch (e) {
-    const errMsg = e instanceof Error ? e.message : String(e);
-    console.error("[BPM:GAME] Launch error:", errMsg);
+    console.error("[BPM:GAME] Launch error:", e);
+    // Benign — Drop already has this game running. Clear any error the user
+    // might be staring at so the "Stop" state is all they see.
+    if (isBenignLaunchError(e)) {
+      launchError.value = null;
+      return;
+    }
     // Auto-run diagnostics on any launch failure for debug logs
     runDiagnostics();
-    // Provide user-friendly hints for common errors
-    if (errMsg.includes("exec format error") || errMsg.includes("os error 8")) {
-      launchError.value = "This game appears to be a Windows executable that can't run natively on Linux. Check that Proton is configured in Settings and the game's platform is set correctly.";
-    } else if (errMsg.includes("NoCompat") || errMsg.includes("compatibility layer")) {
-      launchError.value = "No Proton compatibility layer found. Set a default Proton path in Settings or add an override for this game.";
-    } else if (errMsg.includes("InvalidPlatform")) {
-      launchError.value = "This game can't be played on the current platform. It may need a compatibility layer like Proton.";
-    } else if (errMsg.includes("AlreadyRunning") || errMsg.includes("already running")) {
-      // Benign — Drop already has this game running. Clear any error the
-      // user might be staring at so the "Stop" state is all they see.
-      launchError.value = null;
-    } else {
-      launchError.value = `Launch error: ${errMsg}`;
-    }
+    const failure = describeLaunchFailure(e, game.value?.mName);
+    launchErrorTitle.value = failure.title;
+    launchError.value = failure.message;
   } finally {
     launchInFlight.value = false;
   }
@@ -2064,13 +2323,17 @@ async function launchGame() {
 
 async function killGame() {
   try {
-    await invoke("kill_game", { id: gameId });
+    // `game_id`, not `id` — the wrong key failed argument deserialisation and
+    // Stop looked like it was ignored.
+    await invoke("kill_game", { gameId });
     // If we were streaming, stop everything (heartbeats, Sunshine, server sessions)
     if (streaming.hasActiveStream) {
       await stopStreaming();
     }
   } catch (e) {
     console.error("Failed to stop game:", e);
+    launchErrorTitle.value = "Couldn't stop the game";
+    launchError.value = `Drop couldn't stop ${game.value?.mName ?? "this game"}: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
@@ -2194,5 +2457,11 @@ async function checkForUpdates() {
 .dropdown-fade-leave-to {
   opacity: 0;
   transform: translateY(-4px) scale(0.98);
+}
+
+/* Description images are clickable (delegated to the wrapper), so they need
+   to look it. :deep because they come from a v-html sink. */
+.bpm-description :deep(img) {
+  cursor: zoom-in;
 }
 </style>

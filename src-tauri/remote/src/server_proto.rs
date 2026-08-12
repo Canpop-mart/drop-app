@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use database::borrow_db_checked;
 use http::{
     HeaderValue, Request, Response, StatusCode, Uri,
@@ -6,12 +8,51 @@ use http::{
 use log::{error, warn};
 use tauri::UriSchemeResponder;
 
-use crate::utils::{DROP_CLIENT_ASYNC, bounded_bytes};
+use crate::{
+    error::RemoteAccessError,
+    requests::send_with_retry_raw,
+    utils::{DROP_CLIENT_ASYNC, SERVER_PROTO_SEM, bounded_bytes},
+};
 
 /// Cap for `server://` proxied responses. The proxy is used for arbitrary
 /// HTML/JS content from the drop server, so we give it plenty of room
 /// (128 MiB) without letting a malicious server drain memory.
 const SERVER_PROTO_CAP: u64 = 128 * 1024 * 1024;
+
+/// Deadline for one proxied request.
+///
+/// Stated here rather than inherited from `DROP_CLIENT_ASYNC` because it is one
+/// half of a budget that has to stay nested inside the frontend's
+/// `API_TIMEOUT_MS`: this layer must always be the one that gives up first, so
+/// the webview receives a real 504 instead of aborting a request that keeps
+/// running. Tauri gives a custom-protocol handler no cancellation signal, so an
+/// abort on the webview side does not stop this task or release its permit.
+const SERVER_PROTO_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How long a proxied request will wait for a concurrency permit before giving
+/// up on the queue and sending anyway.
+///
+/// The cap exists to be kind to a home NAS, not to hold up a page. Everything
+/// here is user-blocking, so when the pool is full the right answer is one extra
+/// socket, not an unbounded wait: the alternative is a stalled iframe with no
+/// feedback at all. Counts against `SERVER_PROTO_TIMEOUT`'s share of the budget,
+/// hence seconds rather than tens of seconds.
+const SERVER_PROTO_QUEUE_WAIT: Duration = Duration::from_secs(2);
+
+/// Attempts for a *safe* proxied request.
+///
+/// One. This proxy carries every mutating call in the app (profile PATCH,
+/// showcase PUT, favourites add/remove, request submissions, votes), and
+/// `send_with_retry_raw` retries transport timeouts and 5xx for whatever method
+/// it is handed. A 15s timeout on a POST the server already applied would
+/// silently re-send it, which is exactly the duplicate the frontend refuses to
+/// risk by not retrying mutations itself.
+///
+/// It is also one for GETs, because the frontend already retries those once. Two
+/// retry layers whose budgets are not nested is what produced the original
+/// failure: the outer deadline fired first, abandoned a task that kept its
+/// permit, and queued a second request behind the corpse.
+const SERVER_PROTO_SAFE_ATTEMPTS: u32 = 1;
 
 pub async fn handle_server_proto_offline_wrapper(
     request: Request<Vec<u8>>,
@@ -53,7 +94,32 @@ pub async fn handle_server_proto_wrapper(request: Request<Vec<u8>>, responder: U
     }
 }
 
+/// Pick the status the webview should see for a proxy failure.
+///
+/// A transport error carries no HTTP status at all, so the old
+/// `e.status().unwrap_or(BAD_REQUEST)` reported every single timeout as an
+/// empty-bodied 400 — which reads as a client bug and surfaced to the user as
+/// "API <path> failed: 400 Bad Request". These are all upstream conditions, so
+/// they belong in the gateway range.
+///
+/// Only reached when there is no response at all. A response the server actually
+/// produced — including a 5xx — is copied through with its own status, headers
+/// and body, so this never masks something the server said.
+fn proxy_failure_status(error: &RemoteAccessError) -> StatusCode {
+    match error {
+        RemoteAccessError::Timeout => StatusCode::GATEWAY_TIMEOUT,
+        RemoteAccessError::FetchError(e) if e.is_timeout() => StatusCode::GATEWAY_TIMEOUT,
+        RemoteAccessError::FetchErrorLegacy(e) if e.is_timeout() => StatusCode::GATEWAY_TIMEOUT,
+        RemoteAccessError::Unauthorized => StatusCode::UNAUTHORIZED,
+        // A connect failure is "the upstream did not give me an answer at all".
+        _ => StatusCode::BAD_GATEWAY,
+    }
+}
+
 async fn handle_server_proto(request: Request<Vec<u8>>) -> Result<Response<Vec<u8>>, StatusCode> {
+    // Scoped tight: `borrow_db_checked` is a blocking std RwLock read and this
+    // runs on a tokio worker, so the guard must not outlive the two fields we
+    // need from it and must never be held across an await.
     let (remote_uri, web_token) = {
         let db_handle = borrow_db_checked();
         let auth = match db_handle.auth.as_ref() {
@@ -110,17 +176,50 @@ async fn handle_server_proto(request: Request<Vec<u8>>) -> Result<Response<Vec<u
         }
     }
 
-    let response = match DROP_CLIENT_ASYNC
-        .request(parts.method, new_uri_string)
-        .headers(headers)
-        .body(body)
-        .send()
+    // A pool of our own, never shared with decorative images, and with a bound
+    // on the wait rather than the unbounded FIFO queue this used to join. The
+    // permit is held across the body read so it covers the whole socket
+    // lifetime, released on early return and on panic, and nothing in this scope
+    // waits on a second permit.
+    let _permit = match tokio::time::timeout(SERVER_PROTO_QUEUE_WAIT, SERVER_PROTO_SEM.acquire())
         .await
+    {
+        Ok(Ok(permit)) => Some(permit),
+        Ok(Err(e)) => {
+            error!("server:// semaphore closed: {e}");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        Err(_) => {
+            warn!(
+                "server:// queue still full after {SERVER_PROTO_QUEUE_WAIT:?}; sending {new_uri_string} unguarded"
+            );
+            None
+        }
+    };
+
+    // `build_request` runs once per attempt, so the method, headers and body
+    // are cloned rather than moved. Bodies through this proxy are page loads
+    // and small JSON posts, not uploads.
+    let method = parts.method;
+    // Mutating methods never get a second attempt - see SERVER_PROTO_SAFE_ATTEMPTS.
+    let attempts = if method.is_safe() {
+        SERVER_PROTO_SAFE_ATTEMPTS
+    } else {
+        1
+    };
+    let response = match send_with_retry_raw(&method, &new_uri_string, attempts, || {
+        DROP_CLIENT_ASYNC
+            .request(method.clone(), &new_uri_string)
+            .timeout(SERVER_PROTO_TIMEOUT)
+            .headers(headers.clone())
+            .body(body.clone())
+    })
+    .await
     {
         Ok(response) => response,
         Err(e) => {
-            warn!("Could not send response. Got {e:?} when sending");
-            return Err(e.status().unwrap_or(StatusCode::BAD_REQUEST));
+            warn!("server:// proxy request failed: {e}");
+            return Err(proxy_failure_status(&e));
         }
     };
 
@@ -158,4 +257,33 @@ async fn handle_server_proto(request: Request<Vec<u8>>) -> Result<Response<Vec<u
     };
 
     Ok(client_http_response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_timeout_is_a_gateway_timeout_not_a_bad_request() {
+        assert_eq!(
+            proxy_failure_status(&RemoteAccessError::Timeout),
+            StatusCode::GATEWAY_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn an_unreachable_server_is_a_bad_gateway() {
+        assert_eq!(
+            proxy_failure_status(&RemoteAccessError::ServerUnavailable("HTTP 503".into())),
+            StatusCode::BAD_GATEWAY
+        );
+    }
+
+    #[test]
+    fn a_rejected_token_still_reads_as_unauthorized() {
+        assert_eq!(
+            proxy_failure_status(&RemoteAccessError::Unauthorized),
+            StatusCode::UNAUTHORIZED
+        );
+    }
 }

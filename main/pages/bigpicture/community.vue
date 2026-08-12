@@ -1,94 +1,77 @@
 <template>
+  <!-- One continuous page, matching the desktop Community layout. This used
+       to be four tabs; two of them (Players, Shared Shelves) are gone, and
+       with only Activity and Leaderboard left a tab bar cost a button press
+       to reach half the page for no benefit.
+       Scrolling belongs to the BPM layout's [data-bp-scroll] container, so
+       nothing here declares its own. -->
   <div
-    class="flex flex-col h-full"
+    class="min-h-full px-8 py-6 space-y-5"
     :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }"
   >
-    <!-- Tab navigation -->
-    <div
-      class="flex items-center gap-2 px-8 py-4 border-b"
-      :style="{ borderColor: 'var(--bpm-border)' }"
-    >
-      <button
-        v-for="tab in tabs"
-        :key="tab.value"
-        :ref="
-          (el: any) =>
-            registerTab(el, { onSelect: () => (activeTab = tab.value) })
-        "
-        class="px-4 py-2 text-sm rounded-lg font-medium transition-colors"
-        :class="[
-          activeTab === tab.value
-            ? 'bg-blue-600/20 text-blue-400'
-            : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50',
-        ]"
-        @click="activeTab = tab.value"
+    <!-- Every section below loads, fails and retries on its own. This page
+         used to await one Promise.all of eight requests behind a single
+         `loading` flag with `.catch(() => [])` per call, so one slow or dead
+         endpoint held the whole page in skeletons and then rendered it as if
+         the server were simply empty. -->
+    <!-- Header stats strip — collapses the old 4-tile grid into a slim
+         inline row, freeing the recap card to be the page's only loud
+         element. The player count stays a focusable button: it used to
+         switch to the Players tab, and now jumps down to the leaderboard,
+         so remote / keyboard users keep that affordance. -->
+      <div
+        class="flex items-center justify-end gap-2 text-sm text-zinc-400 font-medium"
       >
-        {{ tab.label }}
-      </button>
-    </div>
-
-    <!-- Loading -->
-    <div v-if="loading" class="flex-1 overflow-y-auto px-8 py-6">
-      <div class="h-28 rounded-2xl bg-zinc-800/50 animate-pulse mb-5" />
-      <div class="grid grid-cols-2 gap-4 mb-5">
-        <div class="h-16 rounded-xl bg-zinc-800/50 animate-pulse" />
-        <div class="h-16 rounded-xl bg-zinc-800/50 animate-pulse" />
-      </div>
-      <div class="space-y-3">
         <div
-          v-for="i in 6"
-          :key="i"
-          class="h-16 rounded-xl bg-zinc-800/50 animate-pulse"
+          v-if="statsLoading"
+          class="h-5 w-72 rounded bg-zinc-800/50 animate-pulse"
         />
-      </div>
-    </div>
-
-    <!-- ═══ Activity tab ═══ -->
-    <div
-      v-else-if="activeTab === 'activity'"
-      class="flex-1 overflow-y-auto px-8 py-6 space-y-5"
-    >
-      <!-- Header stats strip — collapses the old 4-tile grid into a slim
-           inline row, freeing the recap card to be the page's only loud
-           element. The "Players" tile (which doubled as a tab-switcher
-           shortcut) becomes a tappable focusable item so BPM remote /
-           keyboard users keep that affordance. -->
-      <div class="flex items-center justify-end gap-2 text-sm text-zinc-400 font-medium">
         <button
-          :ref="
-            (el: any) =>
-              registerContent(el, { onSelect: () => (activeTab = 'players') })
-          "
-          class="flex items-center gap-1.5 rounded-md px-2 py-1 -my-1 hover:bg-zinc-800/60 focus:bg-zinc-800/60 transition-colors"
-          @click="activeTab = 'players'"
+          v-else-if="statsError"
+          :ref="(el: any) => registerContent(el, { onSelect: loadStats })"
+          class="flex items-center gap-1.5 rounded-md px-2 py-1 -my-1 text-zinc-500 hover:bg-zinc-800/60 focus:bg-zinc-800/60 transition-colors"
+          @click="loadStats"
         >
-          <span class="size-1.5 rounded-full bg-green-500 pulse-dot" />
-          <span class="text-zinc-200 tabular-nums">{{
-            stats.totalUsers.toLocaleString()
-          }}</span>
-          players
+          <ArrowPathIcon class="size-4" />
+          Server stats unavailable · Retry
         </button>
-        <span class="text-zinc-700">·</span>
-        <span>
-          <span class="text-zinc-200 tabular-nums">{{
-            stats.totalGames.toLocaleString()
-          }}</span>
-          games
-        </span>
-        <span class="text-zinc-700">·</span>
-        <span>
-          <span class="text-zinc-200 tabular-nums"
-            >{{ stats.totalPlaytimeHours.toLocaleString() }}h</span
+        <template v-else>
+          <button
+            :ref="
+              (el: any) =>
+                registerContent(el, { onSelect: scrollToLeaderboard })
+            "
+            class="flex items-center gap-1.5 rounded-md px-2 py-1 -my-1 hover:bg-zinc-800/60 focus:bg-zinc-800/60 transition-colors"
+            @click="scrollToLeaderboard"
           >
-          played
-        </span>
-        <span class="text-zinc-700">·</span>
-        <span>
-          <span class="text-zinc-200 tabular-nums">{{
-            stats.totalAchievementUnlocks.toLocaleString()
-          }}</span>
-          unlocks
-        </span>
+            <span class="size-1.5 rounded-full bg-green-500 pulse-dot" />
+            <span class="text-zinc-200 tabular-nums">{{
+              stats.totalUsers.toLocaleString()
+            }}</span>
+            players
+          </button>
+          <span class="text-zinc-700">·</span>
+          <span>
+            <span class="text-zinc-200 tabular-nums">{{
+              stats.totalGames.toLocaleString()
+            }}</span>
+            games
+          </span>
+          <span class="text-zinc-700">·</span>
+          <span>
+            <span class="text-zinc-200 tabular-nums"
+              >{{ stats.totalPlaytimeHours.toLocaleString() }}h</span
+            >
+            played
+          </span>
+          <span class="text-zinc-700">·</span>
+          <span>
+            <span class="text-zinc-200 tabular-nums">{{
+              stats.totalAchievementUnlocks.toLocaleString()
+            }}</span>
+            unlocks
+          </span>
+        </template>
       </div>
 
       <!-- HERO: weekly recap is the only loud card. Layout mirrors the
@@ -96,7 +79,17 @@
            kicker / headline / meta), just with BPM focus delegate
            wiring and slightly larger touch targets for the 10-foot UI. -->
       <div
-        v-if="weeklyRecap.length > 0"
+        v-if="recapLoading"
+        class="h-28 rounded-2xl bg-zinc-800/50 animate-pulse"
+      />
+      <BigPictureSectionError
+        v-else-if="recapError"
+        :ref="(el: any) => registerContent(el, { onSelect: loadWeeklyRecap })"
+        detail="This week's recap didn't load."
+        @retry="loadWeeklyRecap"
+      />
+      <div
+        v-else-if="weeklyRecap.length > 0"
         :ref="(el: any) => registerContent(el, { onSelect: onRecapSelect })"
         class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-900/40 via-zinc-900/60 to-blue-900/30 ring-1 ring-blue-500/20 cursor-pointer"
         @click="onRecapSelect"
@@ -157,8 +150,10 @@
           <button
             v-for="(_, i) in weeklyRecap"
             :key="i"
+            :ref="(el: any) => registerContent(el, { onSelect: () => (recapIndex = i) })"
             class="size-2 rounded-full transition-all"
             :class="i === recapIndex ? 'bg-blue-300 w-5' : 'bg-blue-300/30'"
+            :aria-label="`Show recap ${i + 1}`"
             @click.stop="recapIndex = i"
           />
         </div>
@@ -298,7 +293,26 @@
       </div>
 
       <!-- Activity feed (clustered) -->
-      <div class="space-y-2">
+      <div v-if="activityLoading" class="space-y-3">
+        <div
+          v-for="i in 6"
+          :key="i"
+          class="h-20 rounded-xl bg-zinc-800/50 animate-pulse"
+        />
+      </div>
+      <BigPictureSectionError
+        v-else-if="activityError"
+        :ref="(el: any) => registerContent(el, { onSelect: loadActivity })"
+        detail="The activity feed didn't load."
+        @retry="loadActivity"
+      />
+      <p
+        v-else-if="clusteredActivity.length === 0"
+        class="text-zinc-500 text-center py-12 text-sm"
+      >
+        No recent activity to show.
+      </p>
+      <div v-else class="space-y-2">
         <div
           v-for="cluster in clusteredActivity"
           :key="cluster.key"
@@ -409,7 +423,10 @@
         </div>
       </div>
 
-      <div v-if="activity.length >= 30" class="flex justify-center py-6">
+      <div
+        v-if="activity.length >= 30"
+        class="flex flex-col items-center gap-2 py-6"
+      >
         <button
           :ref="
             (el: any) => registerContent(el, { onSelect: loadMoreActivity })
@@ -417,112 +434,41 @@
           class="px-6 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm font-medium hover:bg-zinc-700 transition-colors"
           @click="loadMoreActivity"
         >
-          Load More
+          {{ moreActivityError ? "Try again" : "Load More" }}
         </button>
-      </div>
-    </div>
-
-    <!-- ═══ Players tab ═══ -->
-    <div
-      v-else-if="activeTab === 'players'"
-      class="flex-1 overflow-y-auto px-8 py-6"
-    >
-      <div class="space-y-2">
-        <div
-          v-for="entry in leaderboard"
-          :key="entry.user.id"
-          :ref="
-            (el: any) =>
-              registerContent(el, {
-                onSelect: () => viewProfile(entry.user.id),
-              })
-          "
-          class="flex items-center gap-4 bg-zinc-900/40 rounded-xl p-4 cursor-pointer"
-        >
-          <div
-            class="size-12 rounded-full bg-zinc-800 flex-shrink-0 overflow-hidden"
-          >
-            <img
-              v-if="entry.user.profilePictureObjectId"
-              :src="objectUrl(entry.user.profilePictureObjectId)"
-              class="w-full h-full object-cover"
-            />
-            <div
-              v-else
-              class="w-full h-full flex items-center justify-center text-zinc-500 text-lg font-bold"
-            >
-              {{ entry.user.displayName[0] }}
-            </div>
-          </div>
-
-          <div class="flex-1 min-w-0">
-            <p
-              class="text-sm font-medium text-zinc-200 truncate flex items-center gap-1"
-            >
-              <span class="truncate">{{ entry.user.displayName }}</span>
-              <span
-                v-if="mvp && entry.user.id === mvp.userId"
-                :title="mvpTooltip"
-                class="text-yellow-400 shrink-0"
-                aria-label="Today's MVP"
-                >👑</span
-              >
-            </p>
-            <!--
-              Two states: online (green dot + game name) vs offline
-              (@username). We prefer the online line because it's the
-              actionable signal — the row tap target already goes to the
-              profile, so the in-game name is a soft hint, not a button.
-            -->
-            <p
-              v-if="nowPlayingByUser.get(entry.user.id)"
-              class="text-xs text-zinc-400 flex items-center gap-1.5 min-w-0"
-            >
-              <span class="size-1.5 rounded-full bg-green-500 pulse-dot shrink-0" />
-              <span class="truncate">
-                {{ nowPlayingByUser.get(entry.user.id)!.game.name }}
-              </span>
-            </p>
-            <p v-else class="text-xs text-zinc-600">@{{ entry.user.username }}</p>
-          </div>
-
-          <div class="flex gap-6 text-right">
-            <div>
-              <p class="text-sm font-medium text-zinc-200">
-                {{ entry.playtimeHours.toLocaleString() }}h
-              </p>
-              <p class="text-xs text-zinc-600">Playtime</p>
-            </div>
-            <div>
-              <p class="text-sm font-medium text-zinc-200">
-                {{ entry.gamesPlayed }}
-              </p>
-              <p class="text-xs text-zinc-600">Games</p>
-            </div>
-            <div>
-              <p class="text-sm font-medium text-zinc-200">
-                {{ entry.achievements }}
-              </p>
-              <p class="text-xs text-zinc-600">Achievements</p>
-            </div>
-          </div>
-        </div>
-
-        <p
-          v-if="leaderboard.length === 0"
-          class="text-zinc-500 text-center py-12 text-sm"
-        >
-          No players found.
+        <p v-if="moreActivityError" class="text-xs text-zinc-500">
+          Couldn't reach the server.
         </p>
       </div>
-    </div>
 
-    <!-- ═══ Leaderboard tab ═══ -->
-    <div
-      v-else-if="activeTab === 'leaderboard'"
-      class="flex-1 overflow-y-auto px-8 py-6"
-    >
-      <div class="space-y-2">
+    <!-- ═══ Leaderboard ═══ -->
+    <div ref="leaderboardSection" class="pt-4">
+      <h2
+        class="text-lg font-semibold font-display mb-3"
+        style="color: var(--bpm-text)"
+      >
+        Leaderboard
+      </h2>
+      <div v-if="leaderboardLoading" class="space-y-3">
+        <div
+          v-for="i in 8"
+          :key="i"
+          class="h-20 rounded-xl bg-zinc-800/50 animate-pulse"
+        />
+      </div>
+      <BigPictureSectionError
+        v-else-if="leaderboardError"
+        :ref="(el: any) => registerContent(el, { onSelect: loadLeaderboard })"
+        detail="The leaderboard didn't load."
+        @retry="loadLeaderboard"
+      />
+      <p
+        v-else-if="leaderboard.length === 0"
+        class="text-zinc-500 text-center py-12 text-sm"
+      >
+        No players ranked yet.
+      </p>
+      <div v-else class="space-y-2">
         <div
           v-for="entry in leaderboard"
           :key="entry.user.id"
@@ -615,101 +561,6 @@
         </div>
       </div>
     </div>
-
-    <!-- ═══ Shared Shelves tab ═══ -->
-    <div
-      v-else-if="activeTab === 'shelves'"
-      class="flex-1 overflow-y-auto px-8 py-6"
-    >
-      <div v-if="sharedShelves.length > 0" class="space-y-8">
-        <div v-for="shelf in sharedShelves" :key="shelf.id">
-          <div class="flex items-center gap-3 mb-3">
-            <div
-              class="size-8 rounded-full bg-zinc-800 overflow-hidden flex-shrink-0"
-            >
-              <img
-                v-if="shelf.user.profilePictureObjectId"
-                :src="objectUrl(shelf.user.profilePictureObjectId)"
-                class="w-full h-full object-cover"
-              />
-              <div
-                v-else
-                class="w-full h-full flex items-center justify-center text-zinc-500 text-sm font-bold"
-              >
-                {{ shelf.user.displayName[0] }}
-              </div>
-            </div>
-            <div>
-              <h3
-                class="text-base font-semibold"
-                style="color: var(--bpm-text)"
-              >
-                {{ shelf.name }}
-              </h3>
-              <p class="text-xs" style="color: var(--bpm-muted)">
-                by {{ shelf.user.displayName }} &middot;
-                {{ shelf.entries.length }} game{{
-                  shelf.entries.length !== 1 ? "s" : ""
-                }}
-              </p>
-            </div>
-          </div>
-          <div
-            class="flex gap-4 overflow-x-auto pb-3 px-1"
-            style="scrollbar-width: thin"
-          >
-            <div
-              v-for="entry in shelf.entries"
-              :key="entry.gameId"
-              class="flex-shrink-0"
-              style="width: 9rem"
-              :ref="
-                (el: any) =>
-                  registerContent(el, {
-                    onSelect: () => goToGame(entry.gameId),
-                  })
-              "
-            >
-              <div
-                class="rounded-lg overflow-hidden cursor-pointer transition-transform hover:scale-105"
-                style="aspect-ratio: 3/4"
-              >
-                <img
-                  v-if="entry.game.mCoverObjectId"
-                  :src="objectUrl(entry.game.mCoverObjectId)"
-                  class="w-full h-full object-cover"
-                  loading="lazy"
-                />
-                <div
-                  v-else
-                  class="w-full h-full flex items-center justify-center text-lg font-bold"
-                  style="
-                    background-color: var(--bpm-surface);
-                    color: var(--bpm-accent-hex);
-                  "
-                >
-                  {{ entry.game.mName[0] }}
-                </div>
-              </div>
-              <p class="text-xs mt-1 truncate" style="color: var(--bpm-text)">
-                {{ entry.game.mName }}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div v-else class="flex items-center justify-center py-24">
-        <div class="text-center">
-          <h3 class="text-xl font-semibold mb-2" style="color: var(--bpm-text)">
-            No shared shelves yet
-          </h3>
-          <p class="text-sm" style="color: var(--bpm-muted)">
-            Make a shelf public from the Library &rarr; Shelves tab to share it
-            with the community
-          </p>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -737,7 +588,9 @@ import {
   MoonIcon,
   TagIcon,
 } from "@heroicons/vue/24/solid";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { ArrowPathIcon } from "@heroicons/vue/24/outline";
+import BigPictureSectionError from "~/components/bigpicture/BigPictureSectionError.vue";
+import { objectImageUrl } from "~/composables/use-object";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { clusterActivity } from "~/composables/use-community-clusters";
@@ -760,9 +613,31 @@ const focusNav = useFocusNavigation();
 const registerTab = useBpFocusableGroup("content");
 const registerContent = useBpFocusableGroup("content");
 
-const loading = ref(true);
-const activeTab = ref("activity");
 const activityFilter = ref("all");
+
+// The player count in the header strip used to switch to a Players tab.
+// The tabs are gone, so it jumps to the leaderboard section instead.
+const leaderboardSection = ref<HTMLElement | null>(null);
+function scrollToLeaderboard() {
+  leaderboardSection.value?.scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
+}
+
+// One loading + error pair per section. The old single `loading` flag meant
+// the slowest of eight requests decided when anything appeared, and the
+// per-call `.catch(() => [])` threw the failures away before they could even
+// be logged, so a dead endpoint looked exactly like an empty server.
+const statsLoading = ref(true);
+const statsError = ref(false);
+const activityLoading = ref(true);
+const activityError = ref(false);
+const leaderboardLoading = ref(true);
+const leaderboardError = ref(false);
+const recapLoading = ref(true);
+const recapError = ref(false);
+const moreActivityError = ref(false);
 
 const stats = ref<CommunityStats>({
   totalGames: 0,
@@ -854,13 +729,6 @@ let recapTimer: ReturnType<typeof setInterval> | null = null;
 
 const rankColors = ["text-yellow-400", "text-zinc-300", "text-amber-600"];
 
-const tabs = [
-  { label: "Activity", value: "activity" },
-  { label: "Players", value: "players" },
-  { label: "Leaderboard", value: "leaderboard" },
-  { label: "Shared Shelves", value: "shelves" },
-];
-
 const activityFilters = [
   { label: "All", value: "all" },
   { label: "Sessions", value: "session" },
@@ -909,7 +777,7 @@ function onRecapSelect() {
 }
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 function goToGame(gameId?: string) {
@@ -946,32 +814,17 @@ function formatTimeAgo(timestamp: string): string {
 
 async function loadMoreActivity() {
   if (activity.value.length === 0) return;
+  moreActivityError.value = false;
   const lastTimestamp = activity.value[activity.value.length - 1].timestamp;
-  const more = await api.community.activity(30, lastTimestamp);
-  activity.value.push(...more);
+  try {
+    const more = await api.community.activity(30, lastTimestamp);
+    activity.value.push(...more);
+  } catch (e) {
+    // Unhandled before, so a failed page-two looked like a dead button.
+    console.warn("[bpm/community] load-more activity failed:", e);
+    moreActivityError.value = true;
+  }
 }
-
-// Shared shelves data
-interface SharedShelf {
-  id: string;
-  name: string;
-  user: {
-    id: string;
-    username: string;
-    displayName: string;
-    profilePictureObjectId: string | null;
-  };
-  entries: Array<{
-    gameId: string;
-    game: {
-      id: string;
-      mName: string;
-      mCoverObjectId: string | null;
-      mIconObjectId: string | null;
-    };
-  }>;
-}
-const sharedShelves = ref<SharedShelf[]>([]);
 
 function startRecapTimer() {
   if (recapTimer) clearInterval(recapTimer);
@@ -982,44 +835,97 @@ function startRecapTimer() {
   }
 }
 
-onMounted(async () => {
+// Controller focus has to land on something once content exists, but with
+// independent sections there is no single "everything arrived" moment — so the
+// first section to settle claims it.
+let focusClaimed = false;
+function claimFocus() {
+  if (focusClaimed) return;
+  focusClaimed = true;
+  nextTick(() => focusNav.autoFocusContent("content"));
+}
+
+async function loadStats() {
+  statsLoading.value = true;
+  statsError.value = false;
   try {
-    const [
-      statsData,
-      activityData,
-      leaderboardData,
-      shelvesData,
-      nowPlayingData,
-      recapData,
-      mvpData,
-      weeklyChallengeData,
-    ] = await Promise.all([
-      api.community.stats().catch(() => stats.value),
-      api.community.activity().catch(() => []),
-      api.community.leaderboard().catch(() => ({ playtime: [] })),
-      fetch(serverUrl("api/v1/community/shelves"))
-        .then((r) => (r.ok ? r.json() : []))
-        .catch(() => []),
-      api.community.nowPlaying().catch(() => []),
-      api.community.weeklyRecap().catch(() => []),
-      api.community.mvpToday().catch(() => null),
-      api.community.weeklyChallenge().catch(() => null),
-    ]);
-    stats.value = statsData;
-    activity.value = activityData;
-    leaderboard.value = leaderboardData.playtime;
-    sharedShelves.value = shelvesData;
-    nowPlaying.value = nowPlayingData;
-    weeklyRecap.value = recapData;
-    mvp.value = mvpData;
-    weeklyChallenge.value = weeklyChallengeData;
+    stats.value = await api.community.stats();
+  } catch (e) {
+    console.warn("[bpm/community] stats failed:", e);
+    statsError.value = true;
+  } finally {
+    statsLoading.value = false;
+  }
+}
+
+async function loadActivity() {
+  activityLoading.value = true;
+  activityError.value = false;
+  try {
+    activity.value = await api.community.activity();
+  } catch (e) {
+    console.warn("[bpm/community] activity failed:", e);
+    activityError.value = true;
+  } finally {
+    activityLoading.value = false;
+    claimFocus();
+  }
+}
+
+async function loadLeaderboard() {
+  leaderboardLoading.value = true;
+  leaderboardError.value = false;
+  try {
+    leaderboard.value = (await api.community.leaderboard()).playtime;
+  } catch (e) {
+    console.warn("[bpm/community] leaderboard failed:", e);
+    leaderboardError.value = true;
+  } finally {
+    leaderboardLoading.value = false;
+    claimFocus();
+  }
+}
+
+async function loadWeeklyRecap() {
+  recapLoading.value = true;
+  recapError.value = false;
+  try {
+    weeklyRecap.value = await api.community.weeklyRecap();
     startRecapTimer();
   } catch (e) {
-    console.error("Failed to load community data:", e);
+    console.warn("[bpm/community] weekly-recap failed:", e);
+    recapError.value = true;
   } finally {
-    loading.value = false;
-    nextTick(() => focusNav.autoFocusContent("content"));
+    recapLoading.value = false;
+    claimFocus();
   }
+}
+
+// Presence and the two decorations below are soft signals: they garnish rows
+// that render fine without them, so they get a log and no error surface.
+function loadNowPlaying() {
+  api.community
+    .nowPlaying()
+    .then((n) => (nowPlaying.value = n))
+    .catch((e) => console.warn("[bpm/community] now-playing failed:", e));
+}
+
+onMounted(() => {
+  loadStats();
+  loadActivity();
+  loadLeaderboard();
+  loadWeeklyRecap();
+  loadNowPlaying();
+
+  api.community
+    .mvpToday()
+    .then((m) => (mvp.value = m))
+    .catch((e) => console.warn("[bpm/community] mvp-today failed:", e));
+
+  api.community
+    .weeklyChallenge()
+    .then((w) => (weeklyChallenge.value = w))
+    .catch((e) => console.warn("[bpm/community] weekly-challenge failed:", e));
 });
 
 onUnmounted(() => {

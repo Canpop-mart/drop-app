@@ -34,8 +34,10 @@ mod launch;
 mod launch_emulator;
 mod save_sync;
 
+pub use launch::run_launch;
+
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io,
     path::PathBuf,
     process::Command,
@@ -109,9 +111,26 @@ pub struct RetroArchRaSession {
 pub struct SaveSyncSnapshot {
     /// RetroArch emulator root (`None` for PC-only games).
     pub emu_root: Option<PathBuf>,
+    /// The account the pre-launch sync ran as. Carried rather than re-read on
+    /// exit so a sign-out mid-session cannot make the exit path re-scan a
+    /// different tree than the one it took `pre_hashes` from.
+    pub user_id: String,
     pub game_id: String,
     /// Game display name (needed for the Ludusavi re-scan on exit).
     pub game_name: Option<String>,
+    /// Whether the pre-launch sync actually completed.
+    ///
+    /// The exit path uploads every file whose hash differs from `pre_hashes`.
+    /// When the sync-check or the download failed or timed out, `pre_hashes`
+    /// is just "whatever was on this disk" — not a baseline agreed with the
+    /// cloud — so uploading against it overwrites the cloud row another
+    /// machine wrote. One slow connection on one device must not be able to
+    /// eat another device's save, so the exit path refuses to upload at all
+    /// when this is false.
+    pub synced_ok: bool,
+    /// Base title id of the launched Switch game, so the exit re-scan is
+    /// scoped to exactly the same NAND directory the pre-launch scan used.
+    pub switch_title_id: Option<String>,
     pub pre_hashes: HashMap<String, String>,
     /// Map of filename → original disk path (for PC saves from Ludusavi).
     pub pc_save_paths: HashMap<String, PathBuf>,
@@ -135,6 +154,15 @@ pub struct ProcessManager<'a> {
     current_platform: Platform,
     log_output_dir: PathBuf,
     pub(crate) processes: HashMap<String, RunningProcess>,
+    /// Games between [`ProcessManager::prepare_launch`] and
+    /// [`ProcessManager::finish_launch`].
+    ///
+    /// The lock is deliberately released in between so the cloud-save sync (up
+    /// to a 45s conflict dialog) cannot block `kill_game`, `is_game_running` or
+    /// another game's sync. During that window the game is not yet in
+    /// `processes`, so this set is what stops a second Play press launching it
+    /// twice.
+    pub(crate) pending_launches: HashSet<String>,
     game_launchers: Vec<(
         (Platform, Platform),
         &'a (dyn ProcessHandler + Sync + Send + 'static),
@@ -153,6 +181,7 @@ impl ProcessManager<'_> {
             current_platform: Platform::Linux,
 
             processes: HashMap::new(),
+            pending_launches: HashSet::new(),
             log_output_dir: DATA_ROOT_DIR.join("logs"),
             game_launchers: vec![
                 // (current platform, target platform) -> handler
@@ -210,6 +239,17 @@ impl ProcessManager<'_> {
     /// Whether a game process is currently tracked as running.
     pub fn is_game_running(&self, game_id: &str) -> bool {
         self.processes.contains_key(game_id)
+    }
+
+    /// Whether ANY game is running or part-way through launching.
+    ///
+    /// The save-scope migration renames save directories out from under
+    /// whatever is using them, so it needs "is anything at all playing", not
+    /// "is this one game playing". `pending_launches` counts: a game in that
+    /// set has had its RetroArch config written (pointing at the old path) and
+    /// is about to spawn.
+    pub fn any_game_active(&self) -> bool {
+        !self.processes.is_empty() || !self.pending_launches.is_empty()
     }
 
     /// Per-launch log directory for a game.

@@ -64,34 +64,45 @@
       </div>
     </div>
 
-    <!-- Loading / empty states. -->
+    <!-- Loading / empty states. The skeleton mirrors the sections layout
+         below (hero, one shelf, the grid) so the page doesn't visibly
+         re-flow when the real data lands, and it waits out the ~180ms
+         threshold so a cached library never flashes a placeholder. -->
     <div
-      v-if="loading"
-      class="flex-1 flex items-center justify-center text-sm text-zinc-500"
+      v-if="showSkeleton"
+      class="flex-1 px-8 xl:px-12 py-8 space-y-12 pb-16"
     >
-      Loading your library...
-    </div>
-
-    <div
-      v-else-if="entries.length === 0"
-      class="flex-1 flex flex-col items-center justify-center text-center px-8"
-    >
-      <div class="rounded-2xl bg-zinc-800/50 p-6 mb-4">
-        <RocketLaunchIcon class="size-10 text-zinc-500" />
+      <div class="h-64 w-full rounded-2xl bg-zinc-800/50 animate-pulse" />
+      <div class="space-y-4">
+        <div class="h-4 w-40 rounded bg-zinc-800/50 animate-pulse" />
+        <div class="flex gap-4">
+          <div
+            v-for="i in 6"
+            :key="i"
+            class="h-52 w-36 shrink-0 rounded-xl bg-zinc-800/50 animate-pulse"
+          />
+        </div>
       </div>
-      <p class="text-sm text-zinc-400 max-w-md">
-        Your library is empty. Visit the
-        <NuxtLink to="/store" class="text-blue-400 hover:text-blue-300">
-          store
-        </NuxtLink>
-        to add games.
-      </p>
+      <div class="space-y-4">
+        <div class="h-4 w-28 rounded bg-zinc-800/50 animate-pulse" />
+        <div
+          class="grid gap-4 grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8"
+        >
+          <div
+            v-for="i in 16"
+            :key="i"
+            class="aspect-[3/4] rounded-xl bg-zinc-800/50 animate-pulse"
+          />
+        </div>
+      </div>
     </div>
 
     <!-- Populated. Sections-mode is the calm home: hero → a few shelves →
          one All games grid. Filter-mode collapses to a single flat result
-         list so a search gets a clean answer. -->
-    <div v-else class="flex-1 px-8 xl:px-12 py-8 space-y-12 pb-16">
+         list so a search gets a clean answer. A failed library no longer
+         short-circuits this whole block: the sections that have their own
+         data source still render, and the grid says what went wrong. -->
+    <div v-else-if="!loading" class="flex-1 px-8 xl:px-12 py-8 space-y-12 pb-16">
       <section v-if="filterMode === 'flat'">
         <p class="text-xs uppercase tracking-widest text-zinc-500 mb-4">
           {{ displayedEntries.length }} result{{
@@ -101,8 +112,14 @@
             for "{{ searchInput.trim() }}"
           </template>
         </p>
+        <SectionError
+          v-if="libraryError"
+          title="Couldn't load your library"
+          detail="Nothing can be searched until it loads."
+          @retry="retryLibrary"
+        />
         <LibraryGrid
-          v-if="displayedEntries.length > 0"
+          v-else-if="displayedEntries.length > 0"
           :entries="displayedEntries"
           :compact="density === 'compact'"
           :last-played-map="lastPlayedMap"
@@ -115,16 +132,24 @@
       </section>
 
       <template v-else>
-        <!-- Continue playing — a tall, cinematic banner hero. -->
-        <section v-if="continuePlaying">
+        <!-- Continue playing — a tall, cinematic banner hero. Driven by the
+             playtime feed, not the library, so a library outage downgrades it
+             to cover art rather than removing it. -->
+        <section v-if="recentError">
+          <SectionError
+            title="Couldn't load what you were playing"
+            @retry="loadRecentPlaytime"
+          />
+        </section>
+        <section v-else-if="continuePlaying">
           <div
             class="group relative flex min-h-[300px] cursor-pointer items-end overflow-hidden rounded-3xl ring-1 ring-zinc-800/60"
-            @click="goToGame(continuePlaying.entry.game.id)"
+            @click="goToGame(heroGameId)"
           >
             <img
-              v-if="continuePlaying.entry.game.mBannerObjectId"
-              :src="useObject(continuePlaying.entry.game.mBannerObjectId)"
-              :alt="continuePlaying.entry.game.mName"
+              v-if="heroImageUrl"
+              :src="heroImageUrl"
+              :alt="heroName"
               class="absolute inset-0 h-full w-full object-cover transition-transform duration-[1200ms] ease-out group-hover:scale-105"
             />
             <div
@@ -151,7 +176,7 @@
                 <h2
                   class="truncate font-display text-4xl font-bold leading-none text-white drop-shadow-lg sm:text-5xl"
                 >
-                  {{ continuePlaying.entry.game.mName }}
+                  {{ heroName }}
                 </h2>
                 <p class="mt-3 text-sm text-zinc-300">
                   Last played
@@ -166,7 +191,7 @@
                     total
                   </template>
                   <span
-                    v-if="continuePlaying.entry.updateAvailable"
+                    v-if="continuePlaying.entry?.updateAvailable"
                     class="ml-2 inline-flex items-center rounded bg-blue-500/30 px-1.5 py-0.5 text-[10px] font-bold uppercase text-blue-200"
                   >
                     Update
@@ -174,17 +199,20 @@
                 </p>
               </div>
 
+              <!-- Without a library entry we don't know whether the game is
+                   installed, so the action drops to a neutral "Open" rather
+                   than guessing between Play and Install. -->
               <button
                 class="inline-flex shrink-0 items-center gap-2 rounded-xl px-7 py-3.5 text-base font-semibold shadow-lg transition-colors"
                 :class="
-                  continuePlaying.entry.installed
+                  continuePlaying.entry?.installed
                     ? 'bg-blue-600 text-white shadow-blue-600/30 hover:bg-blue-500'
                     : 'bg-white/10 text-white ring-1 ring-white/25 backdrop-blur-sm hover:bg-white/20'
                 "
-                @click.stop="goToGame(continuePlaying.entry.game.id)"
+                @click.stop="goToGame(heroGameId)"
               >
                 <svg
-                  v-if="continuePlaying.entry.installed"
+                  v-if="continuePlaying.entry?.installed"
                   class="size-5"
                   viewBox="0 0 24 24"
                   fill="currentColor"
@@ -192,7 +220,7 @@
                   <path d="M8 5v14l11-7z" />
                 </svg>
                 <svg
-                  v-else
+                  v-else-if="continuePlaying.entry"
                   class="size-5"
                   viewBox="0 0 24 24"
                   fill="none"
@@ -205,7 +233,7 @@
                     d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"
                   />
                 </svg>
-                {{ continuePlaying.entry.installed ? "Play" : "Install" }}
+                {{ heroActionLabel }}
               </button>
             </div>
           </div>
@@ -221,8 +249,13 @@
         />
 
         <!-- Collections — visual cards you click into; scrolls like a shelf. -->
+        <SectionError
+          v-if="shelvesError"
+          title="Couldn't load your collections"
+          @retry="loadShelves"
+        />
         <LibraryRow
-          v-if="collectionShelves.length > 0"
+          v-else-if="collectionShelves.length > 0"
           title="Collections"
           :count="collectionShelves.length"
         >
@@ -244,8 +277,18 @@
              etc.) that back them. Console cards open a console-themed page;
              emulator cards open a management view (open folder, add a core,
              uninstall). Hidden when there are neither. -->
+        <SectionError
+          v-if="consolesError || emulatorsError"
+          title="Couldn't load your consoles"
+          :detail="
+            consolesError
+              ? 'The console groupings didn\'t load.'
+              : 'The installed emulator list didn\'t load.'
+          "
+          @retry="retryConsoles"
+        />
         <LibraryRow
-          v-if="consoleRows.length > 0 || emulatorHosts.length > 0"
+          v-else-if="consoleRows.length > 0 || emulatorHosts.length > 0"
           title="Consoles"
           :count="consoleRows.length + emulatorHosts.length"
         >
@@ -370,7 +413,32 @@
             </Menu>
           </div>
 
+          <!-- The grid is the one section that genuinely cannot exist without
+               the library, so this is where the failure gets reported. It used
+               to render the "your library is empty, visit the store" pitch. -->
+          <SectionError
+            v-if="libraryError"
+            title="Couldn't load your library"
+            :detail="libraryError"
+            @retry="retryLibrary"
+          />
+          <div
+            v-else-if="entries.length === 0"
+            class="flex flex-col items-center justify-center py-16 text-center"
+          >
+            <div class="rounded-2xl bg-zinc-800/50 p-6 mb-4">
+              <RocketLaunchIcon class="size-10 text-zinc-500" />
+            </div>
+            <p class="text-sm text-zinc-400 max-w-md">
+              Your library is empty. Visit the
+              <NuxtLink to="/store" class="text-blue-400 hover:text-blue-300">
+                store
+              </NuxtLink>
+              to add games.
+            </p>
+          </div>
           <LibraryGrid
+            v-else
             v-show="!allGamesCollapsed"
             :entries="allGamesEntries"
             :compact="density === 'compact'"
@@ -614,7 +682,19 @@ const consoleGroups = ref<ConsoleGroup[]>([]);
 const emulatorHosts = ref<EmulatorHost[]>([]);
 const recentPlaytime = ref<RecentPlaytimeEntry[]>([]);
 const loading = ref(true);
+const showSkeleton = useDeferredLoading(() => loading.value);
 const searchInput = ref("");
+
+// Every shelf on this page resolves its own data against `entries`, so a failed
+// library fetch used to blank the hero, the collections row and the console
+// rows along with the grid — and the page then said "Your library is empty".
+// Each source now carries its own failure flag so the sections that can still
+// render do, and the ones that cannot say why.
+const libraryError = ref<string | null>(null);
+const recentError = ref(false);
+const consolesError = ref(false);
+const emulatorsError = ref(false);
+const shelvesError = ref(false);
 
 // Filter / sort / view state persists across navigation (see composable).
 // Local `ref`s here would reset every time you open a game and come back.
@@ -678,7 +758,48 @@ const recentEntries = computed<
   return out;
 });
 
-const continuePlaying = computed(() => recentEntries.value[0] ?? null);
+/**
+ * The hero, decoupled from the library fetch. It prefers a full library entry
+ * (which is what knows the banner art and whether the game is installed), but
+ * when the library is unavailable the playtime feed on its own still knows what
+ * you were last playing, so the hero degrades to cover art and an "Open" action
+ * instead of disappearing along with the grid.
+ */
+const continuePlaying = computed<{
+  entry: LibraryEntry | null;
+  recent: RecentPlaytimeEntry;
+} | null>(() => {
+  const joined = recentEntries.value[0];
+  if (joined) return joined;
+  const first = recentPlaytime.value[0];
+  if (libraryError.value && first) return { entry: null, recent: first };
+  return null;
+});
+
+// Hero display fields, resolved from whichever source is available.
+const heroGameId = computed(
+  () =>
+    continuePlaying.value?.entry?.game.id ??
+    continuePlaying.value?.recent.gameId ??
+    "",
+);
+const heroName = computed(
+  () =>
+    continuePlaying.value?.entry?.game.mName ??
+    continuePlaying.value?.recent.gameName ??
+    "",
+);
+const heroImageUrl = computed(() => {
+  const banner = continuePlaying.value?.entry?.game.mBannerObjectId;
+  if (banner) return useObject(banner);
+  const cover = continuePlaying.value?.recent.coverObjectId;
+  return cover ? useObject(cover) : "";
+});
+const heroActionLabel = computed(() => {
+  const entry = continuePlaying.value?.entry;
+  if (!entry) return "Open";
+  return entry.installed ? "Play" : "Install";
+});
 
 // Games with an update available — their own shelf when non-empty.
 const updatesEntries = computed<LibraryEntry[]>(() =>
@@ -959,22 +1080,27 @@ async function load(hardRefresh = false, silent = false) {
     });
     built.sort((a, b) => a.game.mName.localeCompare(b.game.mName));
     entries.value = built;
+    libraryError.value = null;
   } catch (e) {
     console.warn("[library] fetch failed:", e);
     // On a silent background revalidation, keep the already-rendered grid
     // rather than blanking it if the refresh fails.
-    if (!silent) entries.value = [];
+    if (!silent) {
+      entries.value = [];
+      libraryError.value = e instanceof Error ? e.message : String(e);
+    }
   } finally {
     if (!silent) loading.value = false;
   }
 }
 
 async function loadRecentPlaytime() {
+  recentError.value = false;
   try {
     recentPlaytime.value = await api.playtime.recent();
   } catch (e) {
-    // Soft-fail — the hero/shelf hide automatically when the list is empty.
     console.warn("[library] recent playtime fetch failed:", e);
+    recentError.value = true;
     recentPlaytime.value = [];
   }
 }
@@ -982,6 +1108,7 @@ async function loadRecentPlaytime() {
 // Only fetch console groupings when the toggle is on (and only once they're
 // needed). Soft-fails: the rows just don't appear if the server can't answer.
 async function loadConsoles() {
+  consolesError.value = false;
   if (!consoleSections.enabled.value) {
     consoleGroups.value = [];
     return;
@@ -990,19 +1117,40 @@ async function loadConsoles() {
     consoleGroups.value = (await api.emulation.consoles()).consoles;
   } catch (e) {
     console.warn("[library] console grouping fetch failed:", e);
+    consolesError.value = true;
     consoleGroups.value = [];
   }
 }
 
-// Installed emulator hosts for the Emulators section. Soft-fails: the section
-// just doesn't appear if the command can't answer.
+// Installed emulator hosts for the Emulators section. Independent of both the
+// library and the console grouping — it reads local installs, so it still has
+// something to show when the server is unreachable.
 async function loadEmulators() {
+  emulatorsError.value = false;
   try {
     emulatorHosts.value = await listInstalledEmulators();
   } catch (e) {
     console.warn("[library] emulator hosts fetch failed:", e);
+    emulatorsError.value = true;
     emulatorHosts.value = [];
   }
+}
+
+function retryLibrary() {
+  load(true);
+}
+
+function loadShelves() {
+  shelvesError.value = false;
+  return fetchShelves().catch((e) => {
+    console.warn("[library] shelves fetch failed:", e);
+    shelvesError.value = true;
+  });
+}
+
+function retryConsoles() {
+  loadConsoles();
+  loadEmulators();
 }
 
 // React to the toggle being flipped on the settings page while we're mounted.
@@ -1020,8 +1168,6 @@ onMounted(() => {
   loadRecentPlaytime();
   loadConsoles();
   loadEmulators();
-  fetchShelves().catch((e) =>
-    console.warn("[library] shelves fetch failed:", e),
-  );
+  loadShelves();
 });
 </script>

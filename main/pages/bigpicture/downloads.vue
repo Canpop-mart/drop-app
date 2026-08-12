@@ -215,7 +215,7 @@ import {
   formatKilobytes,
 } from "~/composables/downloads";
 import { useGame } from "~/composables/game";
-import { serverUrl } from "~/composables/use-server-fetch";
+import { objectImageUrl } from "~/composables/use-object";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
@@ -232,7 +232,7 @@ const isPaused = computed(() => queueState.value?.status === "Paused");
 const gameNames = ref<Record<string, { name: string; coverUrl?: string }>>({});
 
 function objectUrl(id: string): string {
-  return serverUrl(`api/v1/object/${id}`);
+  return objectImageUrl(id);
 }
 
 async function loadGameName(id: string) {

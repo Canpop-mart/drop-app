@@ -9,7 +9,7 @@
       <label class="block text-sm font-medium text-zinc-100 mb-2">
         Controller Layout
       </label>
-      <div class="grid grid-cols-3 gap-2">
+      <div class="grid grid-cols-2 gap-2">
         <button
           v-for="opt in CONTROLLER_OPTIONS"
           :key="String(opt.value)"
@@ -20,6 +20,10 @@
           {{ opt.label }}
         </button>
       </div>
+      <p class="mt-2 text-xs text-zinc-500">
+        Auto detects your controller. Pick one here if the face buttons come out
+        in the wrong order or the in-game shortcuts do nothing.
+      </p>
     </div>
 
     <!-- Quality preset -->

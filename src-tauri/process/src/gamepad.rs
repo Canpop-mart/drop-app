@@ -160,6 +160,45 @@ pub fn resolve_primary_pad() -> Option<remote::switchemu::PadIdentity> {
     None
 }
 
+/// Which button layout the first connected pad uses, for the RetroArch
+/// fallback bindings.
+///
+/// Separate from [`resolve_primary_pad`] because it needs different facts: the
+/// Switch-emulator writer needs an SDL GUID and refuses to write without one,
+/// while RetroArch only needs to know *which family* the pad belongs to and has
+/// a usable default when it can't tell. A pad that exposes no GUID at all —
+/// which is the normal case on Windows Gaming Input — still has a vendor id and
+/// a product name, so it is placeable here even though it is unusable there.
+///
+/// Returns [`PadFamily::Unknown`] when nothing is connected or the input
+/// backend is unavailable, which the config writer treats as Xbox but logs as a
+/// guess.
+pub fn detect_primary_pad_family() -> remote::retroarch::PadFamily {
+    use remote::retroarch::{detect_pad_family, PadFamily};
+
+    let Ok(gilrs) = Gilrs::new() else {
+        warn!("[GAMEPAD] Input backend unavailable — assuming a default pad layout");
+        return PadFamily::Unknown;
+    };
+
+    for (_id, gp) in gilrs.gamepads() {
+        if !gp.is_connected() {
+            continue;
+        }
+        let family = detect_pad_family(gp.vendor_id(), gp.name());
+        info!(
+            "[GAMEPAD] Pad layout for '{}' (vendor={:?} product={:?}): {family:?}",
+            gp.name(),
+            gp.vendor_id(),
+            gp.product_id()
+        );
+        return family;
+    }
+
+    info!("[GAMEPAD] No controller connected — using the default pad layout");
+    PadFamily::Unknown
+}
+
 // ── Dead zone ────────────────────────────────────────────────────────────────
 
 const STICK_DEAD_ZONE: f32 = 0.15;

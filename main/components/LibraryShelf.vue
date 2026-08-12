@@ -67,6 +67,7 @@
           :update-available="entry.updateAvailable"
           :last-played="lastPlayedMap?.get(entry.game.id) ?? null"
           :hover-action="entry.installed ? 'play' : 'install'"
+          :cloud-saved="backedUpGameIds.has(entry.game.id)"
           @select="emit('select', entry.game.id)"
         />
       </div>
@@ -77,6 +78,7 @@
 <script setup lang="ts">
 import { ChevronLeftIcon, ChevronRightIcon } from "@heroicons/vue/24/outline";
 import GameTile from "~/components/GameTile.vue";
+import { useCloudSaveBadges } from "~/composables/cloud-save-badges";
 
 interface ShelfEntry {
   game: { id: string; mName: string; mCoverObjectId: string | null };
@@ -94,6 +96,11 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{ (e: "select", gameId: string): void }>();
+
+// Shared with every other shelf and grid on the page: one request, not one
+// per tile. See `useCloudSaveBadges`.
+const { backedUpGameIds, ensureLoaded } = useCloudSaveBadges();
+onMounted(ensureLoaded);
 
 // ── Horizontal scroll state + arrow paging (one shelf owns its own row) ──
 const scrollEl = ref<HTMLElement | null>(null);

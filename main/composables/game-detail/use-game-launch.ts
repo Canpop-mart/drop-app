@@ -14,6 +14,10 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import {
+  describeLaunchFailure,
+  isBenignLaunchError,
+} from "~/composables/launch-failure";
 import { InstalledType } from "~/types";
 import type { Game, GameStatus } from "~/types";
 import type { LaunchResult } from "~/composables/game";
@@ -26,7 +30,7 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
 
   // ── Dependency-required modal ───────────────────────────────────────────
   const dependencyRequiredModal = ref<
-    { gameId: string; versionId: string } | undefined
+    { gameId: string; versionId: string; name: string | null } | undefined
   >(undefined);
 
   // Guards against duplicate `launch_game` invocations from double-clicks /
@@ -74,15 +78,24 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
   // install (unchanged single-version behaviour).
   const pendingLaunchVersion = ref<string | undefined>(undefined);
 
+  /**
+   * Show why the game didn't start. Launch failures go through
+   * `describeLaunchFailure` so this surface and Big Picture explain the same
+   * failure the same way; "stop" keeps the plain wrapper, since a kill that
+   * fails has no catalogue of causes to draw on.
+   */
   function notifyLaunchFailure(action: "run" | "stop", err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
+    const { title, message } =
+      action === "run"
+        ? describeLaunchFailure(err, game.mName)
+        : {
+            title: `Couldn't stop "${game.mName}"`,
+            message: `Drop failed to stop "${game.mName}": ${errMsg}`,
+          };
     createModal(
       ModalType.Notification,
-      {
-        title: `Couldn't ${action} "${game.mName}"`,
-        description: `Drop failed to ${action} "${game.mName}": ${errMsg}`,
-        buttonText: "Close",
-      },
+      { title, description: message, buttonText: "Close" },
       (_e, c) => c(),
     );
   }
@@ -150,8 +163,9 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
       });
       if (result.result === "InstallRequired") {
         dependencyRequiredModal.value = {
-          gameId: result.data[0],
-          versionId: result.data[1],
+          gameId: result.data.gameId,
+          versionId: result.data.versionId,
+          name: result.data.name,
         };
       } else if (useIncognito) {
         // Latch the overlay only once the backend has accepted the launch
@@ -160,14 +174,9 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
         incognitoActive.value = true;
       }
     } catch (e) {
-      const errMsg = e instanceof Error ? e.message : String(e);
-      if (
-        errMsg.includes("AlreadyRunning") ||
-        errMsg.includes("already running")
-      ) {
-        // Benign — the first invoke already started the game.
-        return;
-      }
+      // Benign — the first invoke already started the game.
+      if (isBenignLaunchError(e)) return;
+      console.error("[LAUNCH] launch_game rejected:", e);
       notifyLaunchFailure("run", e);
     } finally {
       launchInFlight.value = false;
