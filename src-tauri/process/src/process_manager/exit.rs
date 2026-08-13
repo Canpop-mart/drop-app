@@ -81,9 +81,20 @@ impl ProcessManager<'_> {
 
         // RetroAchievements expiry check. Runs before the DB write below —
         // it takes the write lock itself, and the lock is not reentrant.
-        if let Some(ra) = &process.retroarch_ra {
+        if let Some(ra) = &process.retroarch {
             check_ra_credentials(&self.app_handle, ra);
         }
+
+        // Read RetroArch's own log for a fatal video-driver failure before the
+        // suspicious-exit report below, so the report can carry it.
+        let retroarch_video_failure = process
+            .retroarch
+            .as_ref()
+            .filter(|_| !manually_killed)
+            .and_then(|ra| {
+                remote::retroarch::detect_fatal_video_error(&ra.emu_root, ra.launched_at)
+                    .map(|line| (line, ra.video_driver.clone()))
+            });
 
         // Stop the periodic playtime heartbeat and achievement polling.
         process.playtime_heartbeat_cancel.notify_one();
@@ -133,9 +144,15 @@ impl ProcessManager<'_> {
         let crashed = result.as_ref().map_or(true, |r| !r.success());
         if !manually_killed && (elapsed.as_secs() <= SUSPICIOUS_EXIT_SECS || crashed) {
             warn!("[EXIT] {game_id} likely failed to launch ({exit_kind})");
+            if let Some((line, driver)) = &retroarch_video_failure {
+                warn!(
+                    "[EXIT] {game_id}: RetroArch could not start its video driver \
+                     (video_driver={driver:?}): {line}"
+                );
+            }
             // Legacy string-payload event (desktop modal listener).
             let _ = self.app_handle.emit("launch_external_error", &game_id);
-            // Detailed event for the BPM error dialog.
+            // Detailed event for the launch-failure dialogs on both surfaces.
             let _ = self.app_handle.emit(
                 "launch_external_error_detail",
                 serde_json::json!({
@@ -143,6 +160,12 @@ impl ProcessManager<'_> {
                     "exitCode": result.as_ref().ok().and_then(|s| s.code()),
                     "elapsedSecs": elapsed.as_secs(),
                     "ioError": result.as_ref().err().map(|e| e.to_string()),
+                    "retroarchVideoError": retroarch_video_failure
+                        .as_ref()
+                        .map(|(line, _)| line.clone()),
+                    "retroarchVideoDriver": retroarch_video_failure
+                        .as_ref()
+                        .and_then(|(_, driver)| driver.clone()),
                 }),
             );
         }
@@ -202,8 +225,13 @@ impl ProcessManager<'_> {
 /// and re-pinned to whatever token is current, which no re-link could clear.
 fn check_ra_credentials(
     app_handle: &tauri::AppHandle,
-    ra: &crate::process_manager::RetroArchRaSession,
+    ra: &crate::process_manager::RetroArchSession,
 ) {
+    // No token injected means no token to be rejected — a session for a user
+    // who never linked an account must not latch the expiry flag.
+    let Some(connect_token) = &ra.connect_token else {
+        return;
+    };
     let Some(line) = remote::retroarch::detect_ra_login_failure(&ra.emu_root, ra.launched_at)
     else {
         return;
@@ -213,7 +241,7 @@ fn check_ra_credentials(
         "[EXIT] RetroAchievements rejected the Connect token — it has expired \
          and cannot be refreshed. RetroArch said: {line}"
     );
-    remote::retroarch::mark_credentials_expired(&ra.connect_token);
+    remote::retroarch::mark_credentials_expired(connect_token);
     let _ = app_handle.emit(
         "ra_credentials_expired",
         serde_json::json!({ "reason": line }),

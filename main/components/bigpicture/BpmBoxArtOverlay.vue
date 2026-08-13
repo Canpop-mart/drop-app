@@ -6,7 +6,7 @@
       :src="templateSrc"
       alt=""
       class="template-img"
-      :class="templateBlend"
+      :class="blendClass"
     />
 
     <!-- Fallback CSS overlay for themes without a template image (Steam). -->
@@ -17,7 +17,18 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * The console frame that rides on top of a cover.
+ *
+ * Which PNG, how it composites, and where its art window is all live in
+ * `boxart-templates.ts`, because the tile underneath needs the same geometry to
+ * place the cover — see `boxArtWindowStyle`.
+ */
 import { computed } from "vue";
+import {
+  boxArtTemplate,
+  boxArtTemplateSrc,
+} from "~/composables/bigpicture/boxart-templates";
 
 interface Props {
   themeId: string;
@@ -25,36 +36,17 @@ interface Props {
 
 const props = defineProps<Props>();
 
-// Themes that have real PNG front-cover templates (relative to public/)
-const templateFiles: Record<string, string> = {
-  gamecube: "img/boxart/templates/gamecube.png",
-  psp: "img/boxart/templates/psp.png",
-  gameboy: "img/boxart/templates/gameboy.png",
-  snes: "img/boxart/templates/snes.png",
-  ps2: "img/boxart/templates/ps2.png",
-  wii: "img/boxart/templates/wii.png",
-  ds: "img/boxart/templates/ds.png",
-  xbox: "img/boxart/templates/xbxo360.png",
-  dreamcast: "img/boxart/templates/dreamcast.png",
-  ps1: "img/boxart/templates/ps1.png",
-  switch: "img/boxart/templates/switch.png",
-  n64: "img/boxart/templates/n64.png",
-};
+const templateSrc = computed(() => boxArtTemplateSrc(props.themeId));
 
-const templateSrc = computed(() => {
-  const file = templateFiles[props.themeId];
-  return file ? usePublicUrl(file) : null;
-});
-
-// White-bg templates use "multiply" (white disappears, colored elements show)
-// Dark-bg templates use "screen" (black disappears, light elements show)
-// DS needs no blend — it's a cart frame that should sit fully on top
-const noBlend = new Set(["ds", "ps1", "switch", "n64"]);
-const screenBlend = new Set(["psp"]);
-const templateBlend = computed(() => {
-  if (noBlend.has(props.themeId)) return "";
-  if (screenBlend.has(props.themeId)) return "blend-screen";
-  return "blend-multiply";
+const blendClass = computed(() => {
+  switch (boxArtTemplate(props.themeId)?.blend) {
+    case "multiply":
+      return "blend-multiply";
+    case "screen":
+      return "blend-screen";
+    default:
+      return "";
+  }
 });
 </script>
 

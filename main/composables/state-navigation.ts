@@ -3,6 +3,10 @@ import { AppStatus, type AppState } from "~/types";
 import { useListen } from "./useListen";
 import { devLog } from "./dev-mode";
 import type { VersionOption } from "./game";
+import {
+  describeExternalLaunchFailure,
+  type ExternalLaunchDetail,
+} from "./launch-failure";
 
 export function setupHooks() {
   const router = useRouter();
@@ -122,19 +126,26 @@ export function setupHooks() {
   // `stream-host-error` is handled in plugins/streaming-host-errors.client.ts,
   // not here: the poller that raises it runs whether or not a page is mounted.
 
-  // This is for errors that (we think) aren't our fault
-  useListen<string>("launch_external_error", (event) => {
+  // A game that spawned and then died on its own. The detail event is used
+  // rather than the bare-id `launch_external_error` because it carries what the
+  // emulator said: RetroArch logs a failed video-driver init and quits during
+  // startup, and without this the desktop modal asked "did something go wrong?"
+  // about a cause Drop already knew.
+  useListen<ExternalLaunchDetail>("launch_external_error_detail", (event) => {
+    if (!event.payload) return;
+    const failure = describeExternalLaunchFailure(event.payload);
     createModal(
       ModalType.Confirmation,
       {
-        title: "Did something go wrong?",
-        description:
-          "Drop detected that something might've gone wrong with launching your game. Do you want to open the log directory?",
+        title: failure.identified ? failure.title : "Did something go wrong?",
+        description: failure.identified
+          ? `${failure.message} Open the log directory?`
+          : "Drop detected that something might've gone wrong with launching your game. Do you want to open the log directory?",
         buttonText: "Open",
       },
       async (e, c) => {
         if (e == "confirm") {
-          await invoke("open_process_logs", { gameId: event.payload });
+          await invoke("open_process_logs", { gameId: event.payload.gameId });
         }
         c();
       },

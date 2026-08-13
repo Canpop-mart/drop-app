@@ -325,6 +325,10 @@ impl ProcessHandler for UMUCompatLauncher {
     }
 
     fn modify_command(&self, _command: &mut Command) {}
+
+    fn runs_under_proton(&self) -> bool {
+        true
+    }
 }
 
 /// Map UI runtime "sets" (vcpp / directx / dotnet) to winetricks verbs plus a
@@ -498,4 +502,9 @@ impl ProcessHandler for AsahiMuvmLauncher {
     }
 
     fn modify_command(&self, _command: &mut Command) {}
+
+    /// The same umu/Proton command as [`UMUCompatLauncher`], wrapped in `muvm`.
+    fn runs_under_proton(&self) -> bool {
+        true
+    }
 }

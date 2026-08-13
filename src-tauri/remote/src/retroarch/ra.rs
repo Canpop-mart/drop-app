@@ -20,7 +20,6 @@
 
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -144,11 +143,6 @@ const RA_LOGIN_FAILURE_MARKERS: &[&str] = &[
     "Load failed (-28): Login required",
 ];
 
-/// How much of a RetroArch log to read before giving up. Drop turns on
-/// verbose file logging, so a long session's log can reach hundreds of MB —
-/// the login result is written during content load, well inside this bound.
-const MAX_LOG_SCAN_BYTES: u64 = 4 * 1024 * 1024;
-
 /// Scans the newest `emu_root/logs/retroarch__*.log` for an RA login
 /// rejection, returning the offending log line.
 ///
@@ -165,89 +159,21 @@ const MAX_LOG_SCAN_BYTES: u64 = 4 * 1024 * 1024;
 /// still fine", because guessing expiry would lock a working account out of
 /// auto-login.
 pub fn detect_ra_login_failure(emu_root: &Path, launched_at: SystemTime) -> Option<String> {
-    let log_path = newest_retroarch_log(emu_root, launched_at)?;
+    let log_path = super::logs::newest_retroarch_log(emu_root, launched_at)?;
 
-    let file = match std::fs::File::open(&log_path) {
-        Ok(f) => f,
-        Err(e) => {
-            debug!("[RA-AUTH] Could not open {}: {e}", log_path.display());
-            return None;
-        }
-    };
-
-    // Scanned as bytes, not `lines()`: RetroArch writes the content path
-    // during load, ahead of the RCHEEVOS result, so a ROM filename in
-    // Shift-JIS or Latin-1 would abort a UTF-8 line iterator before it ever
-    // reached the answer. Lossy-decoding each line keeps the markers (pure
-    // ASCII) findable whatever the rest of the line holds.
-    let mut reader = BufReader::new(file.take(MAX_LOG_SCAN_BYTES));
-    let mut raw = Vec::new();
-    loop {
-        raw.clear();
-        match reader.read_until(b'\n', &mut raw) {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(e) => {
-                debug!("[RA-AUTH] Read error scanning {}: {e}", log_path.display());
-                break;
-            }
-        }
-        let line = String::from_utf8_lossy(&raw);
-        if RA_LOGIN_FAILURE_MARKERS.iter().any(|m| line.contains(m)) {
-            let line = line.trim().to_string();
+    match super::logs::first_line_matching(&log_path, RA_LOGIN_FAILURE_MARKERS) {
+        Some(line) => {
             info!(
                 "[RA-AUTH] RetroAchievements login rejection found in {}: {line}",
                 log_path.display()
             );
-            return Some(line);
+            Some(line)
+        }
+        None => {
+            debug!("[RA-AUTH] No RA login failure in {}", log_path.display());
+            None
         }
     }
-
-    debug!("[RA-AUTH] No RA login failure in {}", log_path.display());
-    None
-}
-
-/// Most recently modified `retroarch__*.log` under `emu_root/logs/` that was
-/// touched at or after `launched_at`.
-///
-/// `log_to_file_timestamp` gives one file per launch, so the newest file is
-/// the session that just ended — but only if that session wrote one at all.
-/// Drop's `log_dir` only reaches RetroArch when `--appendconfig` was injected
-/// (or the AppImage-home copy applied), so a script-wrapped plain install
-/// leaves the directory untouched. Rejecting everything older than the launch
-/// makes that case yield `None` instead of re-reading some earlier session's
-/// rejection and pinning it on the current token.
-fn newest_retroarch_log(emu_root: &Path, launched_at: SystemTime) -> Option<PathBuf> {
-    let logs_dir = emu_root.join("logs");
-    let entries = match std::fs::read_dir(&logs_dir) {
-        Ok(e) => e,
-        Err(e) => {
-            debug!("[RA-AUTH] No RetroArch log dir at {}: {e}", logs_dir.display());
-            return None;
-        }
-    };
-
-    let newest = entries
-        .flatten()
-        .filter(|entry| {
-            let name = entry.file_name().to_string_lossy().to_lowercase();
-            name.starts_with("retroarch__") && name.ends_with(".log")
-        })
-        .filter_map(|entry| {
-            let modified = entry.metadata().ok()?.modified().ok()?;
-            (modified >= launched_at).then(|| (modified, entry.path()))
-        })
-        .max_by_key(|(modified, _)| *modified)
-        .map(|(_, path)| path);
-
-    if newest.is_none() {
-        debug!(
-            "[RA-AUTH] No RetroArch log in {} written by this session — \
-             not reading older logs",
-            logs_dir.display()
-        );
-    }
-    newest
 }
 
 /// Whether `token` is the exact Connect token RetroArch already rejected.

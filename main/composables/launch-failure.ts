@@ -137,3 +137,56 @@ export function describeLaunchFailure(
     identified: false,
   };
 }
+
+/**
+ * Payload of the `launch_external_error_detail` event, emitted when a game
+ * exits almost immediately or with a non-zero code without the user killing it.
+ *
+ * The RetroArch fields are populated from RetroArch's own log. It reports a
+ * failed video-driver init only there and then exits during startup, so
+ * without this the game simply never appears and Drop says nothing at all.
+ */
+export type ExternalLaunchDetail = {
+  gameId: string;
+  exitCode: number | null;
+  elapsedSecs: number;
+  ioError: string | null;
+  /** The line RetroArch logged when its video driver failed to start. */
+  retroarchVideoError?: string | null;
+  /** The `video_driver` Drop had configured for that launch. */
+  retroarchVideoDriver?: string | null;
+};
+
+/**
+ * Turns a `launch_external_error_detail` payload into the same shape as
+ * {@link describeLaunchFailure}, so a game that died after spawning explains
+ * itself as well as one that never spawned.
+ */
+export function describeExternalLaunchFailure(
+  detail: ExternalLaunchDetail,
+  gameName?: string,
+): LaunchFailure {
+  const named = gameName ? `"${gameName}"` : "This game";
+
+  if (detail.retroarchVideoError) {
+    // The driver is named because it is the one fact that turns "the game did
+    // nothing" into something reportable, and RetroArch's own menu is out of
+    // reach here: it quits during startup, before any window exists.
+    const driver = detail.retroarchVideoDriver
+      ? ` The video driver it tried was "${detail.retroarchVideoDriver}".`
+      : "";
+    return {
+      title: "The emulator's video driver failed",
+      message:
+        `RetroArch could not open a video output, so it quit before ${named} appeared.${driver} ` +
+        `RetroArch reported: ${detail.retroarchVideoError} ${LOG_HINT}`,
+      identified: true,
+    };
+  }
+
+  return {
+    title: "Launch failed",
+    message: `${named} started and then exited straight away, and Drop couldn't tell why. ${LOG_HINT}`,
+    identified: false,
+  };
+}

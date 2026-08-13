@@ -2842,36 +2842,24 @@ pub async fn watch_moonlight_session(session_id: String) -> Result<(), String> {
 
 // ── Device listing & remote install ──────────────────────────────────
 
-/// List all registered client devices for the current user.
-/// Filters out the current device (by `isSelf` from server, plus a hostname
-/// fallback to catch stale client registrations).
+/// List every client device registered to the current user, unfiltered.
+///
+/// This used to drop the current device here, both by the server's `isSelf`
+/// flag and by matching `{hostname} (Desktop)` against the row's name. Two
+/// problems with that. The hostname match is a guess — renaming a Steam Deck,
+/// or pairing it before a hostname change, defeats it — and it duplicated a
+/// rule the frontend also had, so which one applied depended on where you
+/// looked. Deciding twice, differently, is how the Deck ended up offering
+/// itself as a remote target.
+///
+/// `main/composables/bigpicture/stream-targets.ts` now owns that decision on
+/// its own, comparing `id` against the client id from `fetch_system_data`,
+/// which is exact and testable. This command just reports what the server said.
 #[tauri::command]
 pub async fn list_devices(game_id: Option<String>) -> Result<Vec<streaming_sessions::ClientDevice>, String> {
-    let mut devices = streaming_sessions::list_devices(game_id.as_deref())
+    streaming_sessions::list_devices(game_id.as_deref())
         .await
-        .map_err(|e| e.to_string())?;
-
-    // The server marks the current client as `isSelf`, but stale registrations
-    // of the same machine (e.g. after re-auth) won't have that flag.  Also
-    // filter out any device whose name matches this machine's hostname pattern.
-    let local_name = format!(
-        "{} (Desktop)",
-        gethostname::gethostname().to_string_lossy()
-    )
-    .to_lowercase();
-    let local_platform = std::env::consts::OS.to_lowercase();
-
-    devices.retain(|d| {
-        if d.is_self {
-            return false;
-        }
-        // Catch stale registrations of the same machine
-        let same_host = d.name.to_lowercase() == local_name
-            && d.platform.to_lowercase() == local_platform;
-        !same_host
-    });
-
-    Ok(devices)
+        .map_err(|e| e.to_string())
 }
 
 /// Request a remote install of a game on another device.

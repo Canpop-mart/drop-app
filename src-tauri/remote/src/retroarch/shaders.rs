@@ -21,22 +21,28 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::cfg::path_to_cfg;
+use super::cfg::{path_to_cfg, PathStyle};
 use super::discovery::find_appimage_config_dir;
 
 /// Enables the CRT shader: writes the bundled shader, picks the best
 /// available preset, and wires up reliable auto-apply. Returns the chosen
 /// shader path (for the frontend), or `None` if nothing could be set up.
+///
+/// `style` spells the two config values (`video_shader_dir`, `video_shader`)
+/// and the preset's absolute fallback for the RetroArch build that will read
+/// them — under Proton those must be `Z:\…`, or RetroArch resolves them against
+/// the wrong drive and the preset never loads.
 pub fn apply_crt_shader(
     overrides: &mut HashMap<&str, String>,
     emu_root: &Path,
     prefer_high_res_capable: bool,
+    style: PathStyle,
 ) -> Option<String> {
     overrides.insert("video_shader_enable", "true".into());
 
     let shader_dir = emu_root.join("shaders");
     overrides.insert("auto_shaders_enable", "true".into());
-    overrides.insert("video_shader_dir", path_to_cfg(&shader_dir));
+    overrides.insert("video_shader_dir", path_to_cfg(&shader_dir, style));
 
     // Clear stale per-core/per-content presets that would outrank our global.
     remove_auto_shader_presets(emu_root);
@@ -75,8 +81,8 @@ pub fn apply_crt_shader(
     info!("[RETROARCH] Selected CRT shader: {}", preset_path.display());
 
     let raw = preset_path.to_string_lossy().into_owned();
-    overrides.insert("video_shader", path_to_cfg(&preset_path));
-    write_auto_shader_preset(emu_root, &preset_path);
+    overrides.insert("video_shader", path_to_cfg(&preset_path, style));
+    write_auto_shader_preset(emu_root, &preset_path, style);
 
     Some(raw)
 }
@@ -177,19 +183,27 @@ fn relative_preset_path(base: &Path, target: &Path) -> Option<String> {
 /// needed); for system shaders the modern `#reference` directive is used with
 /// the bundled shader as the other-format fallback. Every path is written
 /// relative to the presets dir — see [`relative_preset_path`].
-fn write_auto_shader_preset(emu_root: &Path, shader_preset_path: &Path) {
+fn write_auto_shader_preset(emu_root: &Path, shader_preset_path: &Path, style: PathStyle) {
     let presets_dir = emu_root.join("shaders").join("presets");
     if let Err(e) = fs::create_dir_all(&presets_dir) {
         warn!("[RETROARCH] Failed to create auto-shader presets dir: {e}");
         return;
     }
 
-    // Absolute is only a last resort: it is what broke under Proton, but a
-    // path with no common prefix (a shader outside the emulator dir) has no
-    // relative form to write.
+    // Absolute is only a last resort: a path with no common prefix (a shader
+    // outside the emulator dir) has no relative form to write. That fallback
+    // is the one place inside a preset that can carry a host absolute path, so
+    // it takes the same Wine conversion the cfg values do; the relative form
+    // is left exactly as it is, because RetroArch resolves it against the
+    // preset's own directory and that already works under Proton.
     let as_preset_path = |target: &Path| {
-        relative_preset_path(&presets_dir, target)
-            .unwrap_or_else(|| target.to_string_lossy().replace('\\', "/"))
+        relative_preset_path(&presets_dir, target).unwrap_or_else(|| {
+            let abs = target.to_string_lossy().replace('\\', "/");
+            match style {
+                PathStyle::Native => abs,
+                PathStyle::Wine => super::cfg::to_wine_path(&abs),
+            }
+        })
     };
 
     let is_slang = shader_preset_path.extension().and_then(|e| e.to_str()) == Some("slangp");

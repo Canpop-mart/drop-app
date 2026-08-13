@@ -656,7 +656,7 @@ impl ProcessManager<'_> {
             is_script,
             working_dir: command_working_dir,
             emulator_info,
-            retroarch_ra,
+            retroarch,
         } = spawn_plan;
 
         // ── STEP 8: Spawn ──────────────────────────────────────────────────
@@ -707,7 +707,7 @@ impl ProcessManager<'_> {
             launch_process_handle,
             emulator_info,
             save_snapshot,
-            retroarch_ra,
+            retroarch,
             incognito,
         );
         Ok(())
@@ -728,7 +728,7 @@ impl ProcessManager<'_> {
         launch_process_handle: Arc<SharedChild>,
         emulator_info: Option<remote::goldberg::EmulatorInfo>,
         save_snapshot: Option<crate::process_manager::SaveSyncSnapshot>,
-        retroarch_ra: Option<crate::process_manager::RetroArchRaSession>,
+        retroarch: Option<crate::process_manager::RetroArchSession>,
         incognito: bool,
     ) {
         let game_id = meta.id.clone();
@@ -836,7 +836,7 @@ impl ProcessManager<'_> {
                 playtime_heartbeat_cancel,
                 achievement_poll_cancel: Some(achievement_cancel),
                 save_snapshot,
-                retroarch_ra,
+                retroarch,
             },
         );
 
@@ -981,8 +981,8 @@ pub(crate) struct SpawnPlan {
     pub is_script: bool,
     pub working_dir: String,
     pub emulator_info: Option<remote::goldberg::EmulatorInfo>,
-    /// Present when this is a RetroArch launch with RA credentials injected.
-    pub retroarch_ra: Option<crate::process_manager::RetroArchRaSession>,
+    /// Present when this launch was a configured RetroArch install.
+    pub retroarch: Option<crate::process_manager::RetroArchSession>,
 }
 
 impl ProcessManager<'_> {
@@ -1099,8 +1099,12 @@ impl ProcessManager<'_> {
             );
         }
 
-        // RetroArch config injection for emulator launches.
-        let retroarch_ra = effective_cwd.as_ref().and_then(|emu_dir| {
+        // RetroArch config injection for emulator launches. `runs_under_proton`
+        // is the same handler property that decided to build a umu command, so
+        // the config writer spells its paths for whichever filesystem RetroArch
+        // will actually see.
+        let under_proton = process_handler.runs_under_proton();
+        let retroarch = effective_cwd.as_ref().and_then(|emu_dir| {
             self.configure_retroarch(
                 &mut command,
                 game_id,
@@ -1108,6 +1112,7 @@ impl ProcessManager<'_> {
                 user_configuration,
                 emulator_rom_path,
                 is_script,
+                under_proton,
             )
         });
 
@@ -1126,7 +1131,7 @@ impl ProcessManager<'_> {
             is_script,
             working_dir: working_dir_owned,
             emulator_info,
-            retroarch_ra,
+            retroarch,
         })
     }
 
@@ -1134,9 +1139,14 @@ impl ProcessManager<'_> {
     /// (tight timeout — nice-to-have), patch `retroarch.cfg`, and inject
     /// `--appendconfig` so the AppImage actually reads our config.
     ///
-    /// Returns the RA session details when this really is RetroArch and
-    /// credentials were injected, so the exit path can check whether
-    /// RetroAchievements rejected them.
+    /// Returns the session details when this really is RetroArch, so the exit
+    /// path can read RetroArch's own log for the two failures it reports
+    /// nowhere else: a rejected RetroAchievements token, and a video driver
+    /// that would not start.
+    ///
+    /// `under_proton` comes from the launch handler that built this command —
+    /// see [`crate::process_manager::ProcessHandler::runs_under_proton`].
+    #[allow(clippy::too_many_arguments)]
     fn configure_retroarch(
         &self,
         command: &mut Command,
@@ -1145,7 +1155,8 @@ impl ProcessManager<'_> {
         user_configuration: &database::models::data::UserConfiguration,
         emulator_rom_path: Option<&str>,
         is_script: bool,
-    ) -> Option<crate::process_manager::RetroArchRaSession> {
+        under_proton: bool,
+    ) -> Option<crate::process_manager::RetroArchSession> {
         // Taken before anything else so it can never be later than the log
         // this launch is about to write. The exit path uses it to ignore logs
         // from earlier sessions.
@@ -1184,6 +1195,7 @@ impl ProcessManager<'_> {
             Some(user_configuration),
             detected_pad,
             emulator_rom_path,
+            under_proton,
         );
 
         let cfg_path = std::path::Path::new(emu_dir).join("retroarch.cfg");
@@ -1195,11 +1207,27 @@ impl ProcessManager<'_> {
             "retroarch_detected": retroarch_info.is_some(),
             "has_ra_credentials": ra_creds.is_some(),
             "detected_pad": format!("{detected_pad:?}"),
+            "under_proton": under_proton,
+            "video_driver": retroarch_info.as_ref().and_then(|i| i.video_driver.clone()),
+            // The Big Picture game page reads this key to show "no PS2 BIOS"
+            // and friends before the game fails. It has been reading a field
+            // that was never emitted, so the warnings only ever reached the
+            // client log.
+            "bios_warnings": retroarch_info
+                .as_ref()
+                .map(|i| i.bios_warnings.clone())
+                .unwrap_or_default(),
         }));
 
         // The RetroArch AppImage overrides $HOME, so it reads config from
         // its own .home dir, not the file we wrote. --appendconfig layers
         // our settings on top of its defaults.
+        //
+        // The path stays native even under Proton. Argument paths are not the
+        // broken case: the Deck's own launch log shows `-L <unix core path>`
+        // loading the core and the ROM reaching it, while only the paths
+        // *inside* the config file came out doubled. Rewriting what already
+        // works would be a guess.
         if retroarch_info.is_some() && cfg_path.exists() {
             if is_script {
                 warn!("[LAUNCH] RetroArch is script-wrapped — cannot inject --appendconfig");
@@ -1213,16 +1241,17 @@ impl ProcessManager<'_> {
             command.arg("--verbose");
         }
 
-        // Only worth watching for an RA rejection when we actually handed
-        // RetroArch a token to be rejected.
-        match (retroarch_info.is_some(), ra_creds) {
-            (true, Some(creds)) => Some(crate::process_manager::RetroArchRaSession {
-                emu_root: std::path::PathBuf::from(emu_dir),
-                connect_token: creds.connect_token,
-                launched_at,
-            }),
-            _ => None,
-        }
+        // Kept for every RetroArch launch, not only the ones with credentials:
+        // the video-init failure the exit path looks for has nothing to do
+        // with RetroAchievements, and a game that never draws a frame is the
+        // case most worth reporting.
+        let info = retroarch_info?;
+        Some(crate::process_manager::RetroArchSession {
+            emu_root: std::path::PathBuf::from(emu_dir),
+            launched_at,
+            video_driver: info.video_driver,
+            connect_token: ra_creds.map(|creds| creds.connect_token),
+        })
     }
 
     /// Configure a yuzu-family Switch emulator (Eden, yuzu, Citron, Sudachi,

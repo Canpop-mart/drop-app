@@ -19,7 +19,9 @@
 //! `process` and root crates keep working unchanged.
 //!
 //! * [`discovery`]  — detecting a RetroArch install + AppImage paths.
-//! * [`cfg`]        — the `key = "value"` config-file patch primitives.
+//! * [`cfg`]        — the `key = "value"` config-file patch primitives and the
+//!   host-path → Wine-path conversion Proton installs need.
+//! * [`logs`]       — reading RetroArch's own log after a session.
 //! * [`cores`]      — the data-driven ROM-extension → libretro-core table and
 //!   ROM→core resolution (incl. ISO disc-header sniffing).
 //! * [`bios`]       — BIOS/firmware detection and auto-placement.
@@ -36,6 +38,7 @@ pub mod cfg;
 pub mod controllers;
 pub mod cores;
 pub mod discovery;
+pub mod logs;
 pub mod presets;
 pub mod ra;
 pub mod shaders;
@@ -48,8 +51,10 @@ use std::path::{Path, PathBuf};
 
 // Re-export the public surface so existing `remote::retroarch::*` call sites
 // in the `process` crate and the root crate keep compiling without edits.
+pub use cfg::PathStyle;
 pub use controllers::{detect_pad_family, PadFamily};
 pub use cores::{resolve_core_for_rom, EXTENSION_CORE_MAP};
+pub use logs::detect_fatal_video_error;
 pub use ra::{
     check_rom_hash, detect_ra_login_failure, fetch_ra_credentials, hash_rom,
     mark_credentials_expired, RACredentials, RAHashEntry, RAHashesResponse, RomHashStatus,
@@ -77,6 +82,10 @@ pub struct RetroArchInfo {
     pub bios_warnings: Vec<String>,
     /// CRT shader path if enabled and found, `None` otherwise.
     pub crt_shader_path: Option<String>,
+    /// The `video_driver` value Drop settled on for this launch, unquoted.
+    /// `None` when Drop left the choice to RetroArch. Carried so the exit path
+    /// can name the driver if RetroArch dies on video init.
+    pub video_driver: Option<String>,
 }
 
 /// Detects whether the emulator at `emulator_install_dir` is RetroArch and,
@@ -96,6 +105,14 @@ pub struct RetroArchInfo {
 /// anything when the user's per-game controller setting is "Auto"; an explicit
 /// choice always wins, so a misdetected pad stays correctable by hand.
 ///
+/// `under_proton` says this launch runs the **Windows** `retroarch.exe` through
+/// umu/Proton rather than a build native to this machine. The caller knows it
+/// because it is the same condition that made it build a umu command
+/// (`ProcessHandler::runs_under_proton`). It changes two things, and nothing
+/// else: every path written into a config file is spelled for Wine
+/// ([`cfg::PathStyle`]), and the Gamescope video driver becomes the one that
+/// works through Proton rather than RetroArch's native-Linux Vulkan.
+///
 /// Returns `Some(RetroArchInfo)` if RetroArch was detected and configured, or
 /// `None` if this is not a RetroArch install.
 #[allow(clippy::too_many_arguments)]
@@ -107,8 +124,14 @@ pub fn configure_retroarch_for_game(
     user_config: Option<&UserConfiguration>,
     detected_pad: PadFamily,
     rom_path: Option<&str>,
+    under_proton: bool,
 ) -> Option<RetroArchInfo> {
     let emu_root = PathBuf::from(emulator_install_dir);
+    let style = if under_proton {
+        PathStyle::Wine
+    } else {
+        PathStyle::Native
+    };
 
     if !discovery::is_retroarch(&emu_root) {
         warn!(
@@ -125,7 +148,10 @@ pub fn configure_retroarch_for_game(
         return None;
     }
 
-    info!("[RETROARCH] Detected RetroArch in {emulator_install_dir}, configuring for game {game_id}");
+    info!(
+        "[RETROARCH] Detected RetroArch in {emulator_install_dir}, configuring for game {game_id} \
+         (under_proton={under_proton}, path style {style:?})"
+    );
 
     // Absolute paths for every directory RetroArch needs.
     let cores_dir = emu_root.join("cores");
@@ -161,17 +187,28 @@ pub fn configure_retroarch_for_game(
         .and_then(|rp| Path::new(rp).extension())
         .and_then(|e| e.to_str())
         .map(str::to_lowercase);
-    let bios_warnings = bios::check_and_place_bios(&system_dir, current_rom_ext.as_deref());
+    // Which core will really load this ROM, so the BIOS check can scope its
+    // warnings to that system. Extension alone is not enough: a PS1 disc is
+    // .cue/.bin/.chd, and so are the PS2, Sega CD and Saturn rows, so a game
+    // that launches fine would report three missing BIOSes to the frontend.
+    let resolved_core: Option<String> = rom_path
+        .and_then(|rp| cores::resolve_core_for_rom(&emu_root, rp))
+        .and_then(|core| core.file_name().map(|n| n.to_string_lossy().to_lowercase()));
+    let bios_warnings = bios::check_and_place_bios(
+        &system_dir,
+        current_rom_ext.as_deref(),
+        resolved_core.as_deref(),
+    );
 
     // ── retroarch.cfg overrides ──────────────────────────────────────────
     let mut overrides: HashMap<&str, String> = HashMap::new();
     let remaps_dir = emu_root.join("config").join("remaps");
     let core_opts_file = emu_root.join("retroarch-core-options.cfg");
 
-    apply_path_overrides(&mut overrides, &cores_dir, &system_dir, &assets_dir, &emu_root);
-    apply_save_overrides(&mut overrides, &savefile_dir, &savestate_dir, &saves_base);
-    apply_baseline_overrides(&mut overrides, &remaps_dir, &core_opts_file, &logs_dir);
-    apply_video_input_overrides(&mut overrides);
+    apply_path_overrides(&mut overrides, &cores_dir, &system_dir, &assets_dir, &emu_root, style);
+    apply_save_overrides(&mut overrides, &savefile_dir, &savestate_dir, &saves_base, style);
+    apply_baseline_overrides(&mut overrides, &remaps_dir, &core_opts_file, &logs_dir, style);
+    apply_video_input_overrides(&mut overrides, under_proton);
 
     // Emulated controller device type, scoped to the ROM's platform.
     if let Some(rp) = rom_path {
@@ -203,6 +240,7 @@ pub fn configure_retroarch_for_game(
             rom_path,
             detected_pad,
             &mut crt_shader_path,
+            style,
         );
     } else {
         // No per-game config at all (a ROM imported by a disk scan, before its
@@ -214,6 +252,9 @@ pub fn configure_retroarch_for_game(
     }
 
     log_diagnostic_overrides(&overrides);
+    // Read after every override pass, so this is the driver RetroArch will
+    // really try — including the Dolphin + CRT override written above.
+    let video_driver = resolved_video_driver(&overrides);
 
     // ── Write the main config (used by --appendconfig) ───────────────────
     // Both write sites share one deletion list. A key dropped from only one of
@@ -299,6 +340,7 @@ pub fn configure_retroarch_for_game(
         savestate_directory: savestate_dir.to_string_lossy().to_string(),
         bios_warnings,
         crt_shader_path,
+        video_driver,
     })
 }
 
@@ -316,11 +358,12 @@ fn apply_path_overrides(
     system_dir: &Path,
     assets_dir: &Path,
     emu_root: &Path,
+    style: PathStyle,
 ) {
-    overrides.insert("libretro_directory", cfg::path_to_cfg(cores_dir));
-    overrides.insert("system_directory", cfg::path_to_cfg(system_dir));
-    overrides.insert("assets_directory", cfg::path_to_cfg(assets_dir));
-    overrides.insert("rgui_browser_directory", cfg::path_to_cfg(emu_root));
+    overrides.insert("libretro_directory", cfg::path_to_cfg(cores_dir, style));
+    overrides.insert("system_directory", cfg::path_to_cfg(system_dir, style));
+    overrides.insert("assets_directory", cfg::path_to_cfg(assets_dir, style));
+    overrides.insert("rgui_browser_directory", cfg::path_to_cfg(emu_root, style));
 }
 
 /// Per-game save isolation. Drop manages save paths itself, so RetroArch's own
@@ -330,10 +373,14 @@ fn apply_save_overrides(
     savefile_dir: &Path,
     savestate_dir: &Path,
     saves_base: &Path,
+    style: PathStyle,
 ) {
-    overrides.insert("savefile_directory", cfg::path_to_cfg(savefile_dir));
-    overrides.insert("savestate_directory", cfg::path_to_cfg(savestate_dir));
-    overrides.insert("screenshot_directory", cfg::path_to_cfg(&saves_base.join("screenshots")));
+    overrides.insert("savefile_directory", cfg::path_to_cfg(savefile_dir, style));
+    overrides.insert("savestate_directory", cfg::path_to_cfg(savestate_dir, style));
+    overrides.insert(
+        "screenshot_directory",
+        cfg::path_to_cfg(&saves_base.join("screenshots"), style),
+    );
     for key in [
         "sort_savefiles_enable",
         "sort_savestates_enable",
@@ -353,6 +400,7 @@ fn apply_baseline_overrides(
     remaps_dir: &Path,
     core_opts_file: &Path,
     logs_dir: &Path,
+    style: PathStyle,
 ) {
     overrides.insert("input_autodetect_enable", "true".into());
     overrides.insert("pause_nonactive", "false".into());
@@ -363,12 +411,12 @@ fn apply_baseline_overrides(
     // Core-specific input remaps (Nintendo A<->B swap etc.).
     overrides.insert("input_remap_binds_enable", "true".into());
     overrides.insert("input_autoload_remaps", "true".into());
-    overrides.insert("remaps_directory", cfg::path_to_cfg(remaps_dir));
+    overrides.insert("remaps_directory", cfg::path_to_cfg(remaps_dir, style));
 
     // global_core_options stops RetroArch writing per-core .opt files that
     // would outrank our core_options_path after the first launch.
     overrides.insert("global_core_options", "true".into());
-    overrides.insert("core_options_path", cfg::path_to_cfg(core_opts_file));
+    overrides.insert("core_options_path", cfg::path_to_cfg(core_opts_file, style));
 
     // Permanent file logging. RetroArch ships with log_to_file off and a
     // malformed relative log_dir (":\logs"), so when an emulated game takes the
@@ -382,7 +430,7 @@ fn apply_baseline_overrides(
     overrides.insert("log_to_file_timestamp", "true".into());
     overrides.insert("log_verbosity", "true".into());
     overrides.insert("frontend_log_level", "0".into()); // 0 = DEBUG
-    overrides.insert("log_dir", cfg::path_to_cfg(logs_dir));
+    overrides.insert("log_dir", cfg::path_to_cfg(logs_dir, style));
 }
 
 /// True when Drop is running inside Gamescope (Steam Deck Game Mode).
@@ -401,24 +449,71 @@ fn in_gamescope() -> bool {
     }
 }
 
+/// The Gamescope video driver for a **native** RetroArch build.
+///
+/// Forced because the AppImage's bundled Mesa was too old for RDNA2
+/// auto-detection.
+const GAMESCOPE_NATIVE_VIDEO_DRIVER: &str = "vulkan";
+
+/// The Gamescope video driver for the **Windows** RetroArch running under
+/// Proton.
+///
+/// `vulkan` here is not RetroArch talking to Mesa — it is RetroArch's Win32
+/// Vulkan backend asking winevulkan for a `VK_KHR_win32_surface` inside a
+/// nested Wayland compositor, and on the Deck that is exactly what failed:
+///
+/// ```text
+/// [ERROR] [Vulkan] Failed to set video mode.
+/// [ERROR] [Video] Cannot open video driver. Exiting...
+/// ```
+///
+/// `d3d11` is RetroArch's own compiled-in default on Windows and reaches the
+/// GPU through DXVK, the path Proton is built around and the one every DX11
+/// title in Game Mode already uses. `gl`/`glcore` are deliberately not chosen
+/// here: under Proton they run Wine's opengl32 straight into Mesa radeonsi,
+/// which on this hardware has faulted the driver badly enough to reset the GPU
+/// and kill the whole gamescope session.
+///
+/// If this turns out to be wrong for some core, the failure is no longer
+/// silent — [`logs::detect_fatal_video_error`] reads RetroArch's own log on
+/// exit and the launch-failure dialog names the driver that was tried.
+const GAMESCOPE_PROTON_VIDEO_DRIVER: &str = "d3d11";
+
 /// Fullscreen video + input-driver settings, with a Gamescope/Steam-Deck
-/// special case (borderless fullscreen, forced Vulkan, SDL2 input).
-fn apply_video_input_overrides(overrides: &mut HashMap<&str, String>) {
+/// special case (borderless fullscreen, forced video driver, SDL2 input).
+fn apply_video_input_overrides(overrides: &mut HashMap<&str, String>, under_proton: bool) {
     if in_gamescope() {
         // Gamescope composites everything as fullscreen. Borderless fullscreen
         // avoids exclusive-mode / resolution-switching failures in a nested
-        // compositor. Vulkan is forced because the AppImage's bundled Mesa was
-        // too old for RDNA2 auto-detection; SDL2 input auto-maps the Deck pad.
+        // compositor. SDL2 input auto-maps the Deck pad.
         // Note this is *not* the last word on video_driver — apply_user_config
         // runs later and overwrites it with glcore for Dolphin + CRT.
+        let driver = if under_proton {
+            GAMESCOPE_PROTON_VIDEO_DRIVER
+        } else {
+            GAMESCOPE_NATIVE_VIDEO_DRIVER
+        };
         overrides.insert("video_fullscreen", "true".into());
         overrides.insert("video_windowed_fullscreen", "true".into());
-        overrides.insert("video_driver", "\"vulkan\"".into());
+        overrides.insert("video_driver", format!("\"{driver}\""));
         overrides.insert("input_joypad_driver", "sdl2".into());
-        info!("[RETROARCH] Gamescope detected — borderless fullscreen + vulkan + SDL2 input");
+        info!(
+            "[RETROARCH] Gamescope detected — borderless fullscreen + {driver} + SDL2 input \
+             (under_proton={under_proton})"
+        );
     } else {
         overrides.insert("video_fullscreen", "true".into());
     }
+}
+
+/// Reads back the `video_driver` Drop settled on, unquoted, for the exit path
+/// to quote in a failure message. `None` means Drop wrote no driver and left
+/// the choice to RetroArch.
+fn resolved_video_driver(overrides: &HashMap<&str, String>) -> Option<String> {
+    overrides
+        .get("video_driver")
+        .map(|v| v.trim_matches('"').to_owned())
+        .filter(|v| !v.is_empty())
 }
 
 /// Sets the emulated controller device type based on the ROM platform.
@@ -507,6 +602,7 @@ fn apply_user_config(
     rom_path: Option<&str>,
     detected_pad: PadFamily,
     crt_shader_path: &mut Option<String>,
+    style: PathStyle,
 ) {
     // Controller layout.
     if let Some(controller) = &cfg.controller_type {
@@ -549,7 +645,7 @@ fn apply_user_config(
         if high_res_3d {
             info!("[RETROARCH] High-res 3D core for ROM {rom_path:?} — using resolution-tolerant CRT shader");
         }
-        *crt_shader_path = shaders::apply_crt_shader(overrides, emu_root, high_res_3d);
+        *crt_shader_path = shaders::apply_crt_shader(overrides, emu_root, high_res_3d, style);
         info!("[RETROARCH] CRT shader enabled, path: {crt_shader_path:?}");
 
         // Dolphin's libretro HW backend renders into whatever context the

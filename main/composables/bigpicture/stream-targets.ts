@@ -6,25 +6,32 @@
  * need is passed in, so `tests/stream-targets.test.ts` can pin the behaviour
  * for every self / installed / reachable combination.
  *
- * Three rules decide what the user is allowed to see:
+ * Four rules decide what the user is allowed to see:
  *
- *  1. The machine you are sitting at is never a remote target. The server's
- *     `isSelf` only marks the registration you are authenticated as, so a
- *     second registration of the same physical machine (a re-pair makes a new
- *     client row, the old one stays) is not covered by it. `isOwnDevice` adds
- *     the local machine's own identity as a second check.
+ *  1. The machine you are sitting at is never a remote target. This is an
+ *     identity check, not a guess: the client stores the registration id it
+ *     authenticates as (`DatabaseAuth.client_id`, handed back by the handshake
+ *     and read through the `fetch_system_data` command), and that id is the
+ *     primary key of the very row the device list returns. Comparing the two
+ *     is exact. See `isOwnDevice`.
  *  2. "Play on X" requires the game to be installed on X. That is `hasGame`,
  *     which the server derives from the install list X last reported.
  *  3. Both remote actions require X to be reachable. A stream is push-based:
  *     the request sits on the server until X's poller picks it up, and the
  *     server expires it after two minutes. A device that is powered off can
  *     neither host a stream nor start a remote install, so offering either is
- *     offering something that cannot happen.
+ *     offering something that cannot happen. Unreachable devices stay listed
+ *     and disabled, so it is clear where they went.
+ *  4. A registration nobody has signed in on for a month is dropped entirely.
+ *     Re-pairing mints a new registration and abandons the old one, and the
+ *     server has no route to delete a client, so those rows accumulate forever
+ *     and the account's device list slowly fills with machines that will never
+ *     answer. See `DEVICE_FORGET_WINDOW_MS`.
  *
- * `lastConnected` is the liveness signal. Every authenticated request bumps it
- * (debounced to once a minute server-side) and a signed-in client polls for
- * pending stream requests every ten seconds, so a device that is running Drop
- * is always inside the window below and one that is off is not.
+ * `lastConnected` is the liveness signal for rules 3 and 4. Every authenticated
+ * request bumps it (debounced to once a minute server-side) and a signed-in
+ * client polls for pending stream requests every ten seconds, so a device that
+ * is running Drop is always inside the window below and one that is off is not.
  */
 
 /** The device shape this module needs. Matches `ClientDevice`. */
@@ -39,14 +46,14 @@ export interface DeviceLike {
   hasGame?: boolean;
 }
 
-/** What this client knows about the machine it is running on. */
+/** Who this client is on the server. */
 export interface LocalIdentity {
-  /** `platform()` from the OS plugin: "windows", "linux", "macos". */
-  platform: string;
-  /** OS hostname, or null when it could not be read. */
-  hostname: string | null;
-  /** The name this client pushes to the server for itself, if known. */
-  displayName: string | null;
+  /**
+   * The registration id this client authenticates as, or null when it could
+   * not be read (signed out, or the command failed). Same value as the `id`
+   * column of the matching row in the device list.
+   */
+  clientId: string | null;
 }
 
 /** A device paired with the reachability verdict used to judge it. */
@@ -66,14 +73,21 @@ export interface DeviceTarget {
  */
 export const DEVICE_ONLINE_WINDOW_MS = 10 * 60 * 1000;
 
-/** Registration names Drop gives a machine before anything renames it. */
-function hostnameDeviceName(hostname: string): string {
-  return `${hostname} (Desktop)`;
-}
-
-function normalise(value: string | null | undefined): string {
-  return (value ?? "").trim().toLowerCase();
-}
+/**
+ * How long a registration survives without being signed in on.
+ *
+ * Re-pairing a machine creates a new registration and leaves the old one
+ * behind, and nothing ever deletes it: the server implements `removeClient`
+ * but exposes no route to it, so the client cannot offer to clear one and must
+ * not pretend otherwise. Time is the only honest signal it has.
+ *
+ * A month is deliberately generous. A console booted once a fortnight still
+ * appears, greyed out, and any device that comes back reappears the moment it
+ * signs in — nothing is lost, only hidden. Past that a registration is far more
+ * likely to be an abandoned pairing than a machine the user is about to wake up
+ * to receive a game.
+ */
+export const DEVICE_FORGET_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Has this device talked to the server recently enough to act on a request? */
 export function isDeviceOnline(
@@ -88,71 +102,54 @@ export function isDeviceOnline(
 }
 
 /**
- * Is this registration the machine we are running on?
+ * Has this registration been quiet long enough to stop listing it?
  *
- * `isSelf` is authoritative when true but misses stale registrations of this
- * same machine, so two local names are checked as well:
+ * The unreadable-timestamp case is the mirror image of `isDeviceOnline`: there
+ * it is not evidence of life, here it is not evidence of death. A device whose
+ * timestamp the server mangled stays in the list, greyed out, rather than
+ * disappearing with no way for the user to find out why.
+ */
+export function isDeviceForgotten(
+  device: DeviceLike,
+  nowMs: number,
+  forgetMs: number = DEVICE_FORGET_WINDOW_MS,
+): boolean {
+  const seen = Date.parse(device.lastConnected);
+  if (Number.isNaN(seen)) return false;
+  return nowMs - seen > forgetMs;
+}
+
+/**
+ * Is this registration the one we are signed in as?
  *
- *  - `{hostname} (Desktop)` is what auth registers, and it names one machine,
- *    so it is trusted on its own.
- *  - The display name is not: renaming a device pushes the same account name
- *    to every device the user owns, so matching on it alone would hide a real
- *    Steam Deck. It only counts as us when the entry is also unreachable,
- *    which is exactly the shape of a dead registration this machine left
- *    behind.
+ * Two spellings of one fact. `local.clientId` is the id this client holds and
+ * authenticates with; `device.isSelf` is the server having compared that same
+ * id to the row it was building. Either is conclusive, so the check is an
+ * equality test and nothing else.
  *
- * Both name checks require the platform to match, so the Linux half of a
- * dual-boot box is never mistaken for the Windows half. Being the same
- * hardware, it cannot be running at the same time, and rule 3 covers it.
+ * Names are not consulted, and must not be: `use-display-name` pushes the
+ * account's display name onto whichever device opens a multiplayer screen, so
+ * every machine on an account ends up sharing one name. Any rule keyed on the
+ * name either hides a real device or offers this one, depending on which way it
+ * guesses. On the Steam Deck it guessed wrong in both directions at once.
+ *
+ * This only ever identifies the *current* registration. An earlier one left
+ * behind by a re-pair has a different id and is indistinguishable from a second
+ * machine, which is what `DEVICE_FORGET_WINDOW_MS` is for.
  */
 export function isOwnDevice(
   device: DeviceLike,
   local: LocalIdentity | null,
-  online: boolean,
 ): boolean {
   if (device.isSelf) return true;
-  if (!local) return false;
-  if (normalise(device.platform) !== normalise(local.platform)) return false;
-
-  const name = normalise(device.name);
-  if (local.hostname && name === normalise(hostnameDeviceName(local.hostname))) {
-    return true;
-  }
-  if (local.displayName && name === normalise(local.displayName) && !online) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * Collapse repeat registrations of one machine.
- *
- * Same name and platform means the same device registered more than once.
- * The survivor is the one most worth offering: reachable first, then the one
- * that has the game, then the most recently seen.
- */
-function dedupe(targets: DeviceTarget[]): DeviceTarget[] {
-  const byKey = new Map<string, DeviceTarget>();
-  for (const target of targets) {
-    const key = `${normalise(target.device.name)}::${normalise(target.device.platform)}`;
-    const existing = byKey.get(key);
-    if (!existing || beatsExisting(target, existing)) byKey.set(key, target);
-  }
-  return [...byKey.values()];
-}
-
-function beatsExisting(candidate: DeviceTarget, existing: DeviceTarget): boolean {
-  if (candidate.online !== existing.online) return candidate.online;
-  const candidateHas = candidate.device.hasGame === true;
-  const existingHas = existing.device.hasGame === true;
-  if (candidateHas !== existingHas) return candidateHas;
-  return candidate.device.lastConnected > existing.device.lastConnected;
+  return local?.clientId ? device.id === local.clientId : false;
 }
 
 export interface PartitionInput {
   local: LocalIdentity | null;
   nowMs: number;
   windowMs?: number;
+  forgetMs?: number;
 }
 
 export interface DevicePartition {
@@ -168,22 +165,36 @@ export interface DevicePartition {
  * `hasGame === undefined` means the server was never asked about this game for
  * that device, so it lands in neither list: guessing produces either a "Play
  * on X" that fails or an "Install on X" for a game X already has.
+ *
+ * Order is the server's — most recently connected first — and is kept, so the
+ * device you used last is the first one offered.
+ *
+ * Registrations are no longer collapsed by name. That used to fold repeat
+ * pairings of one machine into a single row, but `use-display-name` gives every
+ * device on an account the same name, so the key stopped meaning "same machine"
+ * and started hiding real ones. Showing a duplicate is a smaller lie than
+ * hiding a Steam Deck, and the forget window clears the pairings that dedupe
+ * was really aimed at.
  */
 export function partitionDevices(
   devices: DeviceLike[],
-  { local, nowMs, windowMs = DEVICE_ONLINE_WINDOW_MS }: PartitionInput,
+  {
+    local,
+    nowMs,
+    windowMs = DEVICE_ONLINE_WINDOW_MS,
+    forgetMs = DEVICE_FORGET_WINDOW_MS,
+  }: PartitionInput,
 ): DevicePartition {
   const others: DeviceTarget[] = [];
   for (const device of devices) {
-    const online = isDeviceOnline(device, nowMs, windowMs);
-    if (isOwnDevice(device, local, online)) continue;
-    others.push({ device, online });
+    if (isOwnDevice(device, local)) continue;
+    if (isDeviceForgotten(device, nowMs, forgetMs)) continue;
+    others.push({ device, online: isDeviceOnline(device, nowMs, windowMs) });
   }
 
-  const unique = dedupe(others);
   return {
-    stream: unique.filter((t) => t.device.hasGame === true),
-    install: unique.filter((t) => t.device.hasGame === false),
+    stream: others.filter((t) => t.device.hasGame === true),
+    install: others.filter((t) => t.device.hasGame === false),
   };
 }
 

@@ -11,18 +11,34 @@
          height. Sources disagree wildly (Steam writes 2:3, IGDB 264x374,
          manual import falls back to the 512x512 square icon), so the image
          is cropped rather than stretched: `object-top` keeps the title
-         artwork, which sits at the top of nearly every box art. -->
+         artwork, which sits at the top of nearly every box art.
+
+         A closed box-art frame (the DS cartridge, the Switch case) has a hole
+         cut in it, and `coverWindowStyle` shrinks the cover into that hole so
+         the artwork lands where the frame expects it. The tile itself stays
+         3:4 either way. -->
     <div
       class="bp-focus-ring relative bg-zinc-800 rounded-xl overflow-hidden aspect-[3/4]"
     >
-      <img
+      <!-- The wrapper is what gets positioned; the cover fills it. An
+           absolutely positioned <img> is a replaced element, so with only
+           insets and no width/height it takes its intrinsic size and drops the
+           right/bottom offsets, and `object-fit` never applies. Percentages on
+           the img resolve against this wrapper instead, so the cover lands
+           exactly in the box the insets describe. -->
+      <div
         v-if="imageObjectId"
-        :src="objectUrl(imageObjectId)"
-        :alt="game.mName"
-        class="w-full h-full object-cover object-top"
-        loading="lazy"
-        decoding="async"
-      />
+        class="absolute inset-0"
+        :style="coverWindowStyle ?? undefined"
+      >
+        <img
+          :src="objectUrl(imageObjectId)"
+          :alt="game.mName"
+          class="w-full h-full object-cover object-top"
+          loading="lazy"
+          decoding="async"
+        />
+      </div>
       <div
         v-if="!imageObjectId"
         class="absolute inset-0 flex items-center justify-center"
@@ -70,6 +86,7 @@
 <script setup lang="ts">
 import type { Game, GameStatus } from "~/types";
 import { objectImageUrl } from "~/composables/use-object";
+import { boxArtWindowStyle } from "~/composables/bigpicture/boxart-templates";
 import BpmBoxArtOverlay from "~/components/bigpicture/BpmBoxArtOverlay.vue";
 
 function objectUrl(id: string): string {
@@ -88,6 +105,9 @@ const props = defineProps<{
 const imageObjectId = computed(
   () => props.game.mCoverObjectId || props.game.mIconObjectId || "",
 );
+
+// Null for an open frame or no frame at all, which leaves the cover full-bleed.
+const coverWindowStyle = computed(() => boxArtWindowStyle(props.overlayThemeId));
 
 const isInstalled = computed(() => props.status.type === "Installed");
 

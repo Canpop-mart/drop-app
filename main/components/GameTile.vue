@@ -18,14 +18,31 @@
         coverUrl ? 'bg-zinc-800' : fallbackBgClass,
       ]"
     >
-      <img
+      <!-- A closed box-art frame (the DS cartridge, the Switch case) has an
+           art window cut in it; `coverWindowStyle` shrinks the cover into that
+           window so it lands where the frame expects it. Every other frame is
+           open and the cover fills the tile as before.
+
+           The wrapper is what gets positioned, and the cover fills it. An
+           absolutely positioned <img> is a replaced element, so with only
+           insets and no width/height it takes its intrinsic size and drops the
+           right/bottom offsets, and `object-fit` never applies. Percentages on
+           the img resolve against this wrapper instead, so the cover lands
+           exactly in the box the insets describe. -->
+      <div
         v-if="coverUrl"
-        :src="coverUrl"
-        :alt="name"
-        class="w-full h-full object-cover"
-        loading="lazy"
-        decoding="async"
-      />
+        class="absolute inset-0"
+        :style="coverWindowStyle ?? undefined"
+      >
+        <img
+          :src="coverUrl"
+          :alt="name"
+          class="w-full h-full object-cover"
+          :class="coverWindowStyle ? 'object-top' : undefined"
+          loading="lazy"
+          decoding="async"
+        />
+      </div>
       <!-- Styled fallback when there's no cover. Big initial on a
            gradient that's derived from the game name so it's stable
            per-title instead of looking like a broken-image placeholder. -->
@@ -192,6 +209,7 @@
  * pipeline.
  */
 import { CloudIcon } from "@heroicons/vue/24/solid";
+import { boxArtWindowStyle } from "~/composables/bigpicture/boxart-templates";
 import BpmBoxArtOverlay from "~/components/bigpicture/BpmBoxArtOverlay.vue";
 
 const props = defineProps<{
@@ -272,6 +290,11 @@ function hashStringToIndex(s: string, modulo: number): number {
   }
   return Math.abs(h) % modulo;
 }
+
+// Only the non-compact tile draws a frame, so only it insets the cover.
+const coverWindowStyle = computed(() =>
+  props.compact ? null : boxArtWindowStyle(props.boxartTheme),
+);
 
 const fallbackBgClass = computed(
   () => fallbackBgClasses[hashStringToIndex(props.name, fallbackBgClasses.length)],

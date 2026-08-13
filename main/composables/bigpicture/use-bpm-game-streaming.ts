@@ -22,9 +22,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import { hostname, platform } from "@tauri-apps/plugin-os";
 import { devLog } from "~/composables/dev-mode";
-import { useDisplayName } from "~/composables/use-display-name";
 import { useRemoteSessions } from "~/composables/use-remote-sessions";
 import { useStreaming } from "~/composables/useStreaming";
 import type { ClientDevice } from "~/composables/useStreaming";
@@ -34,7 +32,38 @@ import {
   partitionDevices,
   type LocalIdentity,
 } from "~/composables/bigpicture/stream-targets";
-import type { GameVersion, Settings } from "~/types";
+import type { GameVersion } from "~/types";
+
+/** `SystemData` from `src-tauri/database/src/debug.rs`. */
+interface SystemData {
+  clientId: string;
+  baseUrl: string;
+  dataDir: string;
+  logLevel: string;
+}
+
+/**
+ * The registration id this client authenticates as.
+ *
+ * Written once at pairing and never again while the app runs, so it is read
+ * once per session and shared by every game page. An empty string means the
+ * client has no auth yet, which is not an id.
+ */
+let cachedClientId: string | null = null;
+
+async function localClientId(): Promise<string | null> {
+  if (cachedClientId) return cachedClientId;
+  try {
+    const data = await invoke<SystemData>("fetch_system_data");
+    cachedClientId = data.clientId?.trim() || null;
+  } catch (e) {
+    // Without it the server's own isSelf flag still rules. Worth saying out
+    // loud: it is the difference between an exact match and one fewer check.
+    console.warn("[BPM:STREAM] Could not read this client's id:", e);
+    cachedClientId = null;
+  }
+  return cachedClientId;
+}
 
 /** Granular streaming phase, drives the loading indicator label. */
 export type StreamingPhase =
@@ -108,33 +137,15 @@ export function useBpmGameStreaming(
   // The rules live in `stream-targets.ts`, which is pure and tested. This
   // section is only the plumbing: who we are, what time it is, and one fetch.
 
-  const { accountName } = useDisplayName();
   const localIdentity = ref<LocalIdentity | null>(null);
 
   /**
-   * This machine's own identity, used to recognise leftover registrations of
-   * it that the server's `isSelf` cannot see. Read once and cached: none of
-   * these change while the app is running, except the display name, which is
-   * re-read on every device load because Settings can change it.
+   * Who this client is on the server, so its own row can be recognised by id.
+   * Nothing about names or hardware: those are shared across an account and
+   * were what made the old rules mistake this Steam Deck for a remote PC.
    */
   async function resolveLocalIdentity(): Promise<LocalIdentity | null> {
-    let host = localIdentity.value?.hostname ?? null;
-    if (!host) {
-      try {
-        host = (await hostname())?.trim() || null;
-      } catch {
-        // Some sandboxes refuse the call. The isSelf flag still applies.
-        host = null;
-      }
-    }
-    let displayName: string | null = null;
-    try {
-      const settings = await invoke<Settings>("fetch_settings");
-      displayName = settings.displayName?.trim() || accountName() || null;
-    } catch {
-      displayName = accountName() || null;
-    }
-    localIdentity.value = { platform: platform(), hostname: host, displayName };
+    localIdentity.value = { clientId: await localClientId() };
     return localIdentity.value;
   }
 

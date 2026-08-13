@@ -85,26 +85,34 @@ pub struct RunningProcess {
     pub(crate) achievement_poll_cancel: Option<Arc<Notify>>,
     /// Pre-launch save hashes — used to detect which saves changed.
     pub(crate) save_snapshot: Option<SaveSyncSnapshot>,
-    /// Set only when this launch is RetroArch *and* Drop injected RA
-    /// credentials — the exit path needs both to tell an expired token apart
-    /// from "this user never linked an account".
-    pub(crate) retroarch_ra: Option<RetroArchRaSession>,
+    /// Set whenever this launch was a configured RetroArch install, so the
+    /// exit path can read RetroArch's own log.
+    pub(crate) retroarch: Option<RetroArchSession>,
 }
 
-/// The RetroAchievements credentials Drop injected for a RetroArch launch,
-/// kept so the exit path can check RetroArch's log for a rejection and record
-/// exactly which token died.
-pub struct RetroArchRaSession {
-    /// RetroArch install root — its `logs/` dir is where the answer is.
+/// What the exit path needs to read RetroArch's log for the session that just
+/// ended.
+///
+/// RetroArch states two things nowhere else: that RetroAchievements refused
+/// the Connect token, and that the video driver failed to initialise. The
+/// second kills RetroArch during startup with no window ever shown, which from
+/// outside looks exactly like the Play button doing nothing.
+pub struct RetroArchSession {
+    /// RetroArch install root — its `logs/` dir is where the answers are.
     pub emu_root: PathBuf,
-    /// The Connect token written into `retroarch.cfg` for this launch.
-    pub connect_token: String,
     /// Wall clock at launch, used as the lower bound when picking the log to
     /// read on exit. `SystemTime` rather than `RunningProcess::start`'s
     /// `Instant` because it is compared against file mtimes. A session that
     /// wrote no log of its own (script-wrapped RetroArch never receives
     /// Drop's `log_dir`) must not inherit an older session's rejection.
     pub launched_at: std::time::SystemTime,
+    /// The `video_driver` Drop wrote for this launch, so a video failure can
+    /// name the driver that was tried instead of leaving the user guessing.
+    pub video_driver: Option<String>,
+    /// The Connect token written into `retroarch.cfg`, present only when Drop
+    /// injected RA credentials. `None` means "this user never linked an
+    /// account", which must not be reported as an expiry.
+    pub connect_token: Option<String>,
 }
 
 /// Snapshot of save state taken before game launch, used for post-exit sync.
@@ -398,4 +406,22 @@ pub trait ProcessHandler: Send + 'static {
     /// Apply handler-specific tweaks to the spawnable `Command` (e.g.
     /// `CREATE_NO_WINDOW` on Windows).
     fn modify_command(&self, command: &mut Command);
+
+    /// Whether this handler runs the target through Wine — i.e. it builds a
+    /// umu/Proton command and the program will see a Wine filesystem, not this
+    /// machine's.
+    ///
+    /// Anything Drop writes for that program to read has to be spelled for
+    /// Wine. RetroArch is the case that made this matter: its `retroarch.cfg`
+    /// carried Unix-absolute paths that Wine resolves against the current
+    /// drive, so the shader, system and log directories all pointed at
+    /// directories that could not exist.
+    ///
+    /// Default `false`. Note [`crate::process_handlers::UMUNativeLauncher`]
+    /// keeps the default on purpose: it runs a *native Linux* binary inside
+    /// umu's Steam Runtime container (`UMU_NO_PROTON=1`), so there is no Wine
+    /// filesystem and native paths stay correct.
+    fn runs_under_proton(&self) -> bool {
+        false
+    }
 }

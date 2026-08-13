@@ -20,11 +20,20 @@
             </div>
             <div class="flex-1 min-w-0">
               <h2 class="text-xl font-semibold font-display text-zinc-100">
-                {{ gameName ? `${gameName} failed to start` : "Launch failed" }}
+                {{
+                  failure?.identified
+                    ? failure.title
+                    : gameName
+                      ? `${gameName} failed to start`
+                      : "Launch failed"
+                }}
               </h2>
               <p class="text-zinc-400 text-sm mt-1">
-                The game exited unexpectedly after launch. The log below may
-                help diagnose the problem.
+                {{
+                  failure?.identified
+                    ? failure.message
+                    : "The game exited unexpectedly after launch. The log below may help diagnose the problem."
+                }}
               </p>
             </div>
           </div>
@@ -146,6 +155,10 @@ import { useFocusNavigation } from "~/composables/focus-navigation";
 import { useDeckMode } from "~/composables/deck-mode";
 import { useListen } from "~/composables/useListen";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  describeExternalLaunchFailure,
+  type ExternalLaunchDetail,
+} from "~/composables/launch-failure";
 
 // Under gamescope the physical X button reports as North and physical Y
 // reports as West — invert which logical button triggers "copy" vs "report"
@@ -157,12 +170,7 @@ const _reportBtn = _isGS.value ? GamepadButton.West : GamepadButton.North;
 type FocusableButton = "dismiss" | "view" | "copy" | "report";
 const BUTTON_ORDER: FocusableButton[] = ["dismiss", "view", "copy", "report"];
 
-interface LaunchErrorDetail {
-  gameId: string;
-  exitCode: number | null;
-  elapsedSecs: number;
-  ioError: string | null;
-}
+type LaunchErrorDetail = ExternalLaunchDetail;
 
 interface LaunchLogTail {
   path: string;
@@ -174,6 +182,14 @@ const visible = ref(false);
 const logOpen = ref(false);
 const detail = ref<LaunchErrorDetail | null>(null);
 const gameName = ref<string | null>(null);
+// Shared with the desktop modal so both surfaces name the same cause. Until
+// this existed the dialog only ever said "the game exited unexpectedly", even
+// when RetroArch's log stated exactly which driver had failed.
+const failure = computed(() =>
+  detail.value
+    ? describeExternalLaunchFailure(detail.value, gameName.value ?? undefined)
+    : null,
+);
 const logTail = ref("");
 const logPath = ref("");
 const logTruncated = ref(false);

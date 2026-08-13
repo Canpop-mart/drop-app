@@ -92,6 +92,15 @@ const PROTECTED_DATA_DIRS: &[&str] = &[
                   // the player's Switch saves and reset their controller layout.
     "bis",        // Ryujinx internal storage when not in portable mode
     "keys",       // Switch prod.keys/title.keys — user-supplied, never in a manifest
+    "system",     // RetroArch BIOS/firmware. Two ways in and neither is in a
+                  // manifest: the user drops a BIOS straight into system/ (which
+                  // is what bios.rs is written around), and Drop itself copies
+                  // that BIOS into the subdirectory the core reads —
+                  // system/pcsx2/bios/ for PCSX2, system/dc/ for Flycast. Both
+                  // were being hard-unlinked on every re-download, resumed
+                  // download, validation repair, or second ROM installed against
+                  // the same emulator, which reads to the player as "PS2 games
+                  // stopped working again".
     "mlc01",      // Cemu NAND (saves + updates + DLC)
     "drop-saves",    // RetroArch per-game saves/states (Drop-managed)
     "drop-goldberg", // Goldberg/GBE per-AppID earned achievements + saves

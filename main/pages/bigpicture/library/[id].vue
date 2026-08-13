@@ -59,9 +59,18 @@
             </div>
             <!-- Dropdown menu -->
             <Transition name="dropdown-fade">
+              <!-- `w-max` is load-bearing. This menu is absolutely positioned
+                   inside an `inline-flex` wrapper that is only as wide as the
+                   Play button, and an auto-width absolute box is capped by its
+                   containing block: `min-w-[280px]` was not a floor the menu
+                   grew from, it was the only width the menu could ever have.
+                   Rows wider than that were sliced off mid-character by
+                   `overflow-hidden`, which is where "Install on <art" came
+                   from. Sizing to content fixes it; the max-width keeps a long
+                   device name from running off the screen instead. -->
               <div
                 v-if="playMenuOpen"
-                class="absolute left-0 top-full mt-2 z-50 min-w-[280px] rounded-xl bg-zinc-900 border border-zinc-700/50 shadow-2xl overflow-hidden"
+                class="absolute left-0 top-full mt-2 z-50 w-max min-w-[280px] max-w-[min(90vw,32rem)] rounded-xl bg-zinc-900 border border-zinc-700/50 shadow-2xl overflow-hidden"
               >
                 <!-- One flat list: row 0 plays here, the rest are other
                      devices. The index a row renders at is the index its
@@ -77,11 +86,11 @@
                     @click="selectPlayMenuAction(i)"
                     @mouseenter="!item.disabled && (playMenuFocus = i)"
                   >
-                    <PlayIcon v-if="item.kind === 'play-local'" class="size-5" />
-                    <SignalIcon v-else-if="item.kind === 'stream'" class="size-5 text-purple-400" />
-                    <ArrowDownTrayIcon v-else class="size-5 text-green-400" />
-                    <span class="font-medium">{{ item.label }}</span>
-                    <span v-if="item.detail" class="text-xs opacity-50 ml-auto">{{ item.detail }}</span>
+                    <PlayIcon v-if="item.kind === 'play-local'" class="size-5 shrink-0" />
+                    <SignalIcon v-else-if="item.kind === 'stream'" class="size-5 shrink-0 text-purple-400" />
+                    <ArrowDownTrayIcon v-else class="size-5 shrink-0 text-green-400" />
+                    <span class="font-medium min-w-0 truncate">{{ item.label }}</span>
+                    <span v-if="item.detail" class="text-xs opacity-50 ml-auto shrink-0">{{ item.detail }}</span>
                   </button>
                 </template>
                 <!-- Divider + message if no other devices -->
@@ -222,9 +231,10 @@
             <!-- Dropdown: install on other devices that don't have it. Same
                  flat-list rule as the play menu — row index is action index. -->
             <Transition name="dropdown-fade">
+              <!-- Same width rule as the play menu above. -->
               <div
                 v-if="playMenuOpen && hasRemoteInstallTargets"
-                class="absolute left-0 top-full mt-2 z-50 min-w-[280px] rounded-xl bg-zinc-900 border border-zinc-700/50 shadow-2xl overflow-hidden"
+                class="absolute left-0 top-full mt-2 z-50 w-max min-w-[280px] max-w-[min(90vw,32rem)] rounded-xl bg-zinc-900 border border-zinc-700/50 shadow-2xl overflow-hidden"
               >
                 <template v-for="(item, i) in installMenuItems" :key="item.key">
                   <button
@@ -235,11 +245,11 @@
                     @mouseenter="!item.disabled && (playMenuFocus = i)"
                   >
                     <ArrowDownTrayIcon
-                      class="size-5"
+                      class="size-5 shrink-0"
                       :class="item.kind === 'install-local' ? '' : 'text-green-400'"
                     />
-                    <span class="font-medium">{{ item.label }}</span>
-                    <span v-if="item.detail" class="text-xs opacity-50 ml-auto">{{ item.detail }}</span>
+                    <span class="font-medium min-w-0 truncate">{{ item.label }}</span>
+                    <span v-if="item.detail" class="text-xs opacity-50 ml-auto shrink-0">{{ item.detail }}</span>
                   </button>
                 </template>
               </div>

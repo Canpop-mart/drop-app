@@ -12,10 +12,64 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-/// Converts a path to RetroArch config format: forward slashes (even on
-/// Windows) wrapped in double quotes.
-pub fn path_to_cfg(path: &Path) -> String {
+/// How paths written into a config file must be spelled for the RetroArch
+/// build that will read them.
+///
+/// Drop's emulator installs are frequently the **Windows** `retroarch.exe`
+/// running under Proton/umu on Linux. That build resolves every path through
+/// Wine, where a Unix-absolute path is not absolute at all: a leading `/` means
+/// "root of the *current* drive". On the Steam Deck the prefix maps
+/// `x: -> /home/deck`, and the current drive resolves to X:, so
+/// `/home/deck/foo` becomes `X:\home\deck\foo` = `/home/deck/home/deck/foo` —
+/// a doubled path that cannot exist. That is why the CRT filter, the system
+/// directory and the shader presets all silently failed on the Deck while the
+/// identical config worked on native Windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PathStyle {
+    /// The RetroArch build shares this machine's filesystem view — native
+    /// Windows reading Windows paths, native Linux reading Unix paths.
+    #[default]
+    Native,
+    /// Windows RetroArch under Proton/Wine: Unix-absolute paths are rewritten
+    /// through the prefix's `Z:` drive.
+    Wine,
+}
+
+/// Rewrites a host path so Wine resolves it to the same file.
+///
+/// `Z:` is used rather than any of the other drives a prefix happens to
+/// define. Every Wine prefix maps `z: -> /`, so `/home/deck/foo` is always
+/// `Z:\home\deck\foo`; picking a narrower drive (the Deck's `x: -> /home/deck`)
+/// would depend on drive letters that differ per prefix and per distro.
+/// Confirmed against the Deck's own `dosdevices` listing, which has
+/// `c:`, `s: -> /home`, `x: -> /home/deck` and `z: -> /` — only `z:` is
+/// guaranteed to be there and to cover every absolute path.
+///
+/// Anything that is not Unix-absolute is returned unchanged:
+/// * an already-Windows path (`C:\games`, `Z:\home\deck`) is already correct,
+/// * a relative path resolves against RetroArch's own directory, which is what
+///   the caller wanted (shader presets rely on this).
+pub fn to_wine_path(path: &str) -> String {
+    if !path.starts_with('/') {
+        return path.to_owned();
+    }
+    format!("Z:{}", path.replace('/', "\\"))
+}
+
+/// Converts a path to a RetroArch config value: wrapped in double quotes and
+/// spelled for the build that will read it.
+///
+/// [`PathStyle::Native`] keeps forward slashes, which RetroArch accepts on
+/// every platform. [`PathStyle::Wine`] keeps backslashes after the drive letter
+/// because that is the spelling Wine itself emits, and RetroArch's
+/// `path_is_absolute` recognises both `":/"` and `":\\"`, so nothing downstream
+/// re-resolves it.
+pub fn path_to_cfg(path: &Path, style: PathStyle) -> String {
     let s = path.to_string_lossy().replace('\\', "/");
+    let s = match style {
+        PathStyle::Native => s,
+        PathStyle::Wine => to_wine_path(&s),
+    };
     format!("\"{s}\"")
 }
 
@@ -95,4 +149,73 @@ pub fn patch_retroarch_cfg_with_deletions(
     fs::write(cfg_path, &content)?;
     debug!("[RETROARCH] Wrote config to {}", cfg_path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{path_to_cfg, to_wine_path, PathStyle};
+    use std::path::Path;
+
+    /// The exact case from the Deck: a Unix-absolute path handed to a Windows
+    /// RetroArch is drive-relative, so it must go through `Z:`.
+    #[test]
+    fn unix_absolute_becomes_a_z_drive_path() {
+        assert_eq!(
+            to_wine_path("/home/deck/.local/share/drop/games/emu/1/system"),
+            r"Z:\home\deck\.local\share\drop\games\emu\1\system"
+        );
+    }
+
+    #[test]
+    fn windows_paths_are_left_alone() {
+        assert_eq!(to_wine_path(r"C:\games\emu\system"), r"C:\games\emu\system");
+        assert_eq!(to_wine_path("C:/games/emu/system"), "C:/games/emu/system");
+        assert_eq!(to_wine_path(r"Z:\home\deck\emu"), r"Z:\home\deck\emu");
+    }
+
+    /// Preset files reference their stages relatively; converting those would
+    /// break the one thing that already worked.
+    #[test]
+    fn relative_paths_are_left_alone() {
+        assert_eq!(
+            to_wine_path("../shaders_slang/crt/crt-lottes.slangp"),
+            "../shaders_slang/crt/crt-lottes.slangp"
+        );
+        assert_eq!(to_wine_path("shaders/crt.slang"), "shaders/crt.slang");
+    }
+
+    #[test]
+    fn spaces_and_non_ascii_survive() {
+        assert_eq!(
+            to_wine_path("/home/deck/My Games/Pokémon Ranger/system"),
+            r"Z:\home\deck\My Games\Pokémon Ranger\system"
+        );
+    }
+
+    #[test]
+    fn empty_input_is_not_turned_into_a_drive_root() {
+        assert_eq!(to_wine_path(""), "");
+    }
+
+    /// Native styling must be byte-for-byte what Drop wrote before the Wine
+    /// path existed, so the working Windows and native-Linux cases cannot move.
+    #[test]
+    fn native_style_is_unchanged() {
+        assert_eq!(
+            path_to_cfg(Path::new("/home/deck/emu/system"), PathStyle::Native),
+            "\"/home/deck/emu/system\""
+        );
+        assert_eq!(
+            path_to_cfg(Path::new(r"C:\games\emu\system"), PathStyle::Native),
+            "\"C:/games/emu/system\""
+        );
+    }
+
+    #[test]
+    fn wine_style_quotes_the_converted_path() {
+        assert_eq!(
+            path_to_cfg(Path::new("/home/deck/emu/system"), PathStyle::Wine),
+            "\"Z:\\home\\deck\\emu\\system\""
+        );
+    }
 }
