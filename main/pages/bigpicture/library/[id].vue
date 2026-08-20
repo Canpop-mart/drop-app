@@ -1206,7 +1206,6 @@ async function runDiagnostics() {
   }
 }
 const showOptions = ref(false);
-const optionsFocusIdx = ref(0);
 let optionsLockId = 0;
 
 const focusNav = useFocusNavigation();
@@ -1325,6 +1324,9 @@ const {
   toggleFullscreen,
   cycleMangohud,
   cycleProton,
+  executableCandidates,
+  executableLabel,
+  cycleExecutable,
 } = gameConfig;
 
 // Proton override is only meaningful for Windows games launched on a Linux
@@ -1454,6 +1456,19 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
     });
   }
 
+  // Which file in the install folder the game starts. The backend returns an
+  // empty candidate list for an emulated or not-yet-installed game (there the
+  // executable belongs to the emulator), so the row simply does not appear —
+  // the desktop Configure modal is where the reason gets spelled out.
+  if (executableCandidates.value.length > 0) {
+    items.push({
+      id: "executable",
+      label: "Executable",
+      valueLabel: executableLabel.value,
+      action: cycleExecutable,
+    });
+  }
+
   // VC++ runtime — Windows game on a Linux host (Proton) only.
   if (
     isWindowsGame.value &&
@@ -1510,6 +1525,32 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
   return items;
 });
 
+// Focus follows the item's id, not its position. This list is reactive: the
+// Executable row is inserted in the middle of it once the install-folder scan
+// resolves, which on a cold cache can be after the menu is already open. With
+// a bare index the highlight would stay put while every row below the
+// insertion slid down under it, so an A press aimed at "Open install folder"
+// could land on "Remove from Library". There is no mouse in gamescope to
+// correct that. Falling back to 0 when the focused row disappears keeps the
+// highlight on the top row, which is never a destructive one.
+const optionsFocusId = ref<string | null>(null);
+const optionsFocusIdx = computed(() => {
+  const idx = optionsMenuItems.value.findIndex(
+    (item) => item.id === optionsFocusId.value,
+  );
+  return idx >= 0 ? idx : 0;
+});
+
+function moveOptionsFocus(delta: number) {
+  const items = optionsMenuItems.value;
+  if (items.length === 0) return;
+  const next = Math.min(
+    items.length - 1,
+    Math.max(0, optionsFocusIdx.value + delta),
+  );
+  optionsFocusId.value = items[next].id;
+}
+
 const _optionsSubs: (() => void)[] = [];
 
 function wireOptionsGamepad() {
@@ -1520,16 +1561,13 @@ function wireOptionsGamepad() {
   _optionsSubs.push(
     gamepad.onButton(GamepadButton.DPadUp, () => {
       if (!showOptions.value) return;
-      optionsFocusIdx.value = Math.max(0, optionsFocusIdx.value - 1);
+      moveOptionsFocus(-1);
     }, bypass),
   );
   _optionsSubs.push(
     gamepad.onButton(GamepadButton.DPadDown, () => {
       if (!showOptions.value) return;
-      optionsFocusIdx.value = Math.min(
-        optionsMenuItems.value.length - 1,
-        optionsFocusIdx.value + 1,
-      );
+      moveOptionsFocus(1);
     }, bypass),
   );
   _optionsSubs.push(
@@ -1554,7 +1592,11 @@ function unwireOptionsGamepad() {
 
 watch(showOptions, (v) => {
   if (v) {
-    optionsFocusIdx.value = 0;
+    // Re-read the install folder each time the menu opens: a game installed
+    // during this session would otherwise show no Executable row until the
+    // page was navigated away from and back.
+    gameConfig.loadExecutables();
+    optionsFocusId.value = null;
     optionsLockId = focusNav.acquireInputLock();
     wireOptionsGamepad();
   } else {

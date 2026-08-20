@@ -11,6 +11,7 @@ use database::{
 use games::{
     collections::collection::Collection,
     downloads::error::LibraryError,
+    exe_scan::{self, ExecutableCandidate},
     downloads::mod_data::{MODS_DIR, ModData, moddata_path},
     library::{FetchGameStruct, Game, get_current_meta, push_game_update, uninstall_game_logic},
     state::{GameStatusManager, GameStatusWithTransient},
@@ -19,6 +20,7 @@ use games::{
 use log::{info, warn};
 use utils::{app_emit, path_guard};
 use process::PROCESS_MANAGER;
+use process::parser::ParsedCommand;
 use remote::{
     auth::generate_authorization_header,
     cache::{cache_object, cache_object_db, get_cached_object},
@@ -873,6 +875,123 @@ pub fn update_game_configuration(
         .insert(version, configuration);
 
     Ok(())
+}
+
+/// What the "which executable does this game run" picker needs.
+///
+/// `unsupportedReason` is a code, not a sentence: the wording the user reads
+/// lives in the two UI surfaces, so it can be edited without a rebuild of the
+/// Rust side and stays consistent between them.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutableScanResult {
+    pub supported: bool,
+    /// One of `notInstalled`, `emulated`, `noVersionData` when unsupported.
+    pub unsupported_reason: Option<&'static str>,
+    /// The path the server's launch config runs, relative to the install dir.
+    /// `None` when the command could not be tokenised.
+    pub automatic: Option<String>,
+    /// The override currently saved for this device, if any.
+    pub selected: Option<String>,
+    pub candidates: Vec<ExecutableCandidate>,
+}
+
+impl ExecutableScanResult {
+    fn unsupported(reason: &'static str) -> Self {
+        Self {
+            supported: false,
+            unsupported_reason: Some(reason),
+            automatic: None,
+            selected: None,
+            candidates: Vec::new(),
+        }
+    }
+}
+
+/// List the executables inside a game's install directory so the user can pick
+/// which one to launch.
+///
+/// The install directory is resolved from the database by game id — the caller
+/// never supplies a path, so the webview cannot aim this at an arbitrary
+/// directory. The walk itself runs on a blocking thread; a large install would
+/// otherwise stall the async runtime while the UI waits.
+#[tauri::command]
+pub async fn scan_game_executables(game_id: String) -> ExecutableScanResult {
+    struct ScanInputs {
+        install_dir: PathBuf,
+        target_platform: Platform,
+        automatic: Option<String>,
+        selected: Option<String>,
+    }
+
+    let inputs = {
+        let db = borrow_db_checked();
+        let (install_dir, version_id) = match db.applications.game_statuses.get(&game_id) {
+            Some(GameDownloadStatus::Installed {
+                install_dir,
+                version_id,
+                install_type: InstalledGameType::Installed,
+                ..
+            }) => (PathBuf::from(install_dir), version_id.clone()),
+            _ => return ExecutableScanResult::unsupported("notInstalled"),
+        };
+        let Some(meta) = db.applications.installed_game_version.get(&game_id) else {
+            return ExecutableScanResult::unsupported("notInstalled");
+        };
+        let target_platform = meta.target_platform;
+
+        // A game imported by a disk scan has no cached GameVersion, so there is
+        // no launch config to compare against and no per-game configuration to
+        // save the pick into. Those are the emulated ROM imports in practice.
+        let Some(version) = db.applications.game_versions.get(&version_id) else {
+            return ExecutableScanResult::unsupported("noVersionData");
+        };
+
+        let launch = version
+            .launches
+            .iter()
+            .find(|v| v.platform == target_platform);
+
+        // An emulated game launches the emulator's binary, not anything inside
+        // this install, so swapping the executable here would be meaningless.
+        if launch.is_some_and(|l| l.emulator.as_ref().is_some_and(|e| !e.game_id.is_empty())) {
+            return ExecutableScanResult::unsupported("emulated");
+        }
+
+        ScanInputs {
+            install_dir,
+            target_platform,
+            automatic: launch
+                .and_then(|l| ParsedCommand::parse(l.command.clone()).ok())
+                .map(|p| p.command),
+            selected: version.user_configuration.executable_override.clone(),
+        }
+    };
+
+    let ScanInputs {
+        install_dir,
+        target_platform,
+        automatic,
+        selected,
+    } = inputs;
+
+    // The entry marked "in use" is the override when one is set, otherwise the
+    // server's automatic pick.
+    let current = selected.clone().or_else(|| automatic.clone());
+    let scan_dir = install_dir.clone();
+    let candidates = tokio::task::spawn_blocking(move || {
+        exe_scan::scan_executables(&scan_dir, target_platform, current.as_deref())
+    })
+    .await
+    .unwrap_or_default();
+
+    ExecutableScanResult {
+        supported: true,
+        unsupported_reason: None,
+        automatic,
+        selected,
+        candidates,
+    }
 }
 
 /// Returns the total size (in bytes) of a game's install directory.

@@ -81,6 +81,10 @@ export type GameVersion = {
     fullscreen: boolean | null;
     mangohud: MangoHudPreset | null;
     crtShader: boolean;
+    // Which binary inside the install to run, relative to the install dir
+    // (e.g. "bin/Game64.exe"). Local to this machine, so the Deck and the
+    // desktop can point at different files. null = use the server's command.
+    executableOverride: string | null;
   };
   setups: Array<{ platform: string }>;
   launches: Array<{

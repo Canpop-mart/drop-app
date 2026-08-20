@@ -75,6 +75,7 @@ pub mod data {
                 mangohud: None,
                 crt_shader: false,
                 fullscreen: None,
+                executable_override: None,
             }
         }
 
@@ -241,6 +242,20 @@ pub mod data {
             /// Enable CRT shader overlay for emulated games (RetroArch)
             #[serde(default)]
             pub crt_shader: bool,
+            /// Which binary inside the install to launch, as a path RELATIVE
+            /// to the game's install directory (e.g. `bin/Game64.exe`).
+            ///
+            /// Relative and not absolute on purpose: an install moves (onto an
+            /// SD card, onto another device, into the multi-version layout) and
+            /// an absolute path goes stale the moment it does. This database is
+            /// local to one machine, so the Deck and the desktop each keep
+            /// their own choice.
+            ///
+            /// `None` = launch whatever the server's launch config says. Old
+            /// DBs that pre-date this field deserialize to `None` via
+            /// `#[serde(default)]`.
+            #[serde(default)]
+            pub executable_override: Option<String>,
         }
 
         impl Default for UserConfiguration {

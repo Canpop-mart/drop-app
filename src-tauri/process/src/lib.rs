@@ -32,7 +32,9 @@ pub mod error;
 pub mod format;
 pub mod gamepad;
 pub mod m3u;
-mod parser;
+/// Public so the client layer can read the executable out of a server launch
+/// command with exactly the same tokenising rules the launch path uses.
+pub mod parser;
 pub mod prefix_prep;
 pub mod process_handlers;
 pub mod process_manager;

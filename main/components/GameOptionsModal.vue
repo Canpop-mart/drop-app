@@ -121,6 +121,7 @@ const DEFAULT_USER_CONFIGURATION: GameVersion["userConfiguration"] = {
   fullscreen: null,
   mangohud: null,
   crtShader: false,
+  executableOverride: null,
 };
 
 const configuration: Ref<GameVersion["userConfiguration"]> = ref(

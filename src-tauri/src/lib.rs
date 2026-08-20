@@ -400,6 +400,7 @@ pub fn run() {
             uninstall_game,
             uninstall_mod,
             list_installed_mods,
+            scan_game_executables,
             // Processes
             launch_game,
             kill_game,

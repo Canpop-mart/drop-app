@@ -22,6 +22,14 @@
       >
     </p>
 
+    <!-- The template above is applied after the picked executable is resolved,
+         so the picker needs to see it to warn when it would be discarded. -->
+    <ExecutablePicker
+      :game-id="gameId"
+      :launch-template="model.launchTemplate ?? ''"
+      v-model="executableOverride"
+    />
+
     <ProtonSelector v-model="model" v-if="$props.protonEnabled" />
 
     <!-- MangoHud is a Linux performance overlay for any launched game, so it
@@ -58,13 +66,25 @@
 import { platform } from "@tauri-apps/plugin-os";
 import type { GameVersion } from "~/types";
 import ProtonSelector from "./ProtonSelector.vue";
+import ExecutablePicker from "./ExecutablePicker.vue";
 import { MANGOHUD_OPTIONS } from "~/composables/game-detail/emulator-options";
 
 const model = defineModel<GameVersion["userConfiguration"]>({ required: true });
 
-defineProps<{
+const { gameId } = defineProps<{
   protonEnabled: boolean;
+  gameId: string;
 }>();
+
+// The picker owns one field of the shared configuration object. Coerced
+// through null so a cached config saved before this field existed does not
+// hand the picker `undefined`.
+const executableOverride = computed({
+  get: () => model.value.executableOverride ?? null,
+  set: (value: string | null) => {
+    model.value.executableOverride = value;
+  },
+});
 
 const isLinux = platform() === "linux";
 </script>

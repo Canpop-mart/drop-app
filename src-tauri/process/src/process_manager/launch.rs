@@ -6,7 +6,8 @@
 //! alone:
 //!
 //!   1. resolve game metadata + the persistent install status,
-//!   2. pick the launch / setup config for the target platform,
+//!   2. pick the launch / setup config for the target platform, then apply the
+//!      mod (2b) and user (2c) executable overrides,
 //!   3. select a [`ProcessHandler`] (native, Windows, UMU/Proton, …),
 //!   4. build the launch command (direct, or via an emulator),
 //!   5. format it through the user's launch template,
@@ -306,6 +307,7 @@ impl ProcessManager<'_> {
             "install_type": format!("{:?}", install_type),
             "launch_template": &game_version.user_configuration.launch_template,
             "override_proton_path": &game_version.user_configuration.override_proton_path,
+            "executable_override": &game_version.user_configuration.executable_override,
         }));
         info!(
             "[LAUNCH] game {game_id} — target_platform={target_platform:?}, \
@@ -375,6 +377,71 @@ impl ProcessManager<'_> {
                 "override": &override_exe,
             }));
             target_command.command = override_exe;
+        }
+
+        // ── STEP 2c: User executable override ──────────────────────────────
+        // The server auto-detects a launch command at import and often picks a
+        // launcher, an installer or a crash handler. `executable_override` is
+        // the user's per-device correction, stored relative to the install dir
+        // so it survives the game moving to an SD card or another machine.
+        //
+        // Applied AFTER the mod override on purpose: it is the more specific
+        // intent of the two, it is the only one the user can see and reset in
+        // the UI, and "Automatic" puts the mod's entry point back in one click.
+        //
+        // Never applied to an emulator launch — there the executable is the
+        // emulator's own binary and {rom} carries the game, so replacing it
+        // would just break the ROM path. Setup runs are left alone too: the
+        // picker lists a game's executables, not an installer's.
+        let mut exe_override_abs: Option<String> = None;
+        if emulator.is_none()
+            && matches!(install_type, InstalledGameType::Installed)
+            && let Some(stored) = game_version
+                .user_configuration
+                .executable_override
+                .as_deref()
+                .filter(|v| !v.trim().is_empty())
+        {
+            match games::exe_scan::resolve_override(std::path::Path::new(install_dir), stored) {
+                Ok(resolved) => {
+                    let resolved = resolved.to_string_lossy().to_string();
+                    // Arguments from the server's command are kept. They are
+                    // usually game-wide flags (-nolauncher, -skipintro) rather
+                    // than launcher-specific ones, the common case has no args
+                    // at all, and STEP 2b's mod override already behaves this
+                    // way — two overrides that treat args differently would be
+                    // the surprising outcome.
+                    info!(
+                        "[LAUNCH] executable override active for {game_id}: {stored} \
+                         (args kept: {:?})",
+                        target_command.args
+                    );
+                    let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                        "step": "2c_executable_override",
+                        "game_id": &game_id,
+                        "stored": stored,
+                        "resolved": &resolved,
+                        "replaced": &target_command.command,
+                        "args_kept": &target_command.args,
+                    }));
+                    target_command.command = resolved.clone();
+                    exe_override_abs = Some(resolved);
+                }
+                Err(e) => {
+                    // Loud, and then carry on with the server's command: a
+                    // stale override must not be the reason a game stops
+                    // launching entirely.
+                    warn!(
+                        "[LAUNCH] ignoring executable override {stored:?} for {game_id}: {e}"
+                    );
+                    let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                        "step": "2c_executable_override_rejected",
+                        "game_id": &game_id,
+                        "stored": stored,
+                        "reason": e.to_string(),
+                    }));
+                }
+            }
         }
 
         // ── STEP 3: Handler selection ──────────────────────────────────────
@@ -459,6 +526,13 @@ impl ProcessManager<'_> {
                         .nth(launch_process_index)
                         .and_then(|lc| {
                             ParsedCommand::parse(lc.command.clone()).ok().map(|mut p| {
+                                // This branch rebuilds the command from the
+                                // server config, so re-apply the override here
+                                // or falling back to Proton would silently
+                                // discard the user's pick.
+                                if let Some(exe) = &exe_override_abs {
+                                    p.command = exe.clone();
+                                }
                                 p.make_absolute(PathBuf::from(install_dir));
                                 p.reconstruct()
                             })
@@ -499,6 +573,10 @@ impl ProcessManager<'_> {
         // binary and CWD-relative lookups silently fail — Goldberg runtime
         // state, a game loading data past its first menu, etc.). Emulator
         // launches keep their effective_cwd (the emulator install dir).
+        //
+        // A STEP 2c executable override rides along here for free: it replaced
+        // `command` with an absolute path before STEP 4, so the parent taken
+        // below is the override's own folder, not the original binary's.
         let working_dir_owned = if effective_cwd.is_some() {
             working_dir.to_string()
         } else {
@@ -515,6 +593,31 @@ impl ProcessManager<'_> {
             parsed_launch.command,
             None,
         );
+        // The template is applied last and can drop the launch string on the
+        // floor: `SimpleCurlyFormat` only substitutes the placeholders below,
+        // so a template holding none of them runs its own text and the STEP 2c
+        // override never reaches the process. That is exactly what the legacy
+        // workaround this feature replaces looks like (a literal path typed
+        // into the template field). Both surfaces warn about it in the UI;
+        // logging it here makes a "my pick did nothing" report answerable from
+        // a log alone.
+        let launch_template = &game_version.user_configuration.launch_template;
+        if exe_override_abs.is_some()
+            && !["{}", "{0}", "{exe}", "{abs_exe}"]
+                .iter()
+                .any(|placeholder| launch_template.contains(placeholder))
+        {
+            warn!(
+                "[LAUNCH] executable override for {game_id} is discarded by \
+                 launch template {launch_template:?} (no placeholder for the command)"
+            );
+            let _ = self.app_handle.emit("launch_trace", serde_json::json!({
+                "step": "5_template_discards_executable_override",
+                "game_id": &game_id,
+                "launch_template": launch_template,
+            }));
+        }
+
         // Two passes so a template that itself contains placeholders (e.g.
         // a wrapper that references {abs_exe}) is fully expanded.
         let target_launch_string = SimpleCurlyFormat
