@@ -47,14 +47,15 @@ async fn enqueue_game_impl(
         }
 
         // Already fully installed at this exact version — skip the re-download.
-        // Re-running the download agent reconciles the install dir against the
-        // server manifest and deletes anything not in it, which for a shared
-        // standalone emulator (Eden/Yuzu/Cemu) means the player's saves: that
-        // NAND/user data lives inside the install dir and is never in the
-        // manifest. Installing a second game that depends on an
-        // already-installed emulator must not re-trigger that sweep. A genuine
-        // update targets a different version_id, and a partial/interrupted
-        // install resumes via `resume_download`, so neither is skipped here.
+        // Installing a second game that depends on an already-installed
+        // emulator would otherwise re-run the whole download agent over the
+        // emulator's install dir for nothing. (That used to be destructive as
+        // well: the agent deleted every file not in the manifest, which for a
+        // standalone emulator meant the player's NAND/saves. It now removes
+        // only files an earlier version shipped; see
+        // `remove_files_dropped_since_previous_version`.) A genuine update
+        // targets a different version_id, and a partial/interrupted install
+        // resumes via `resume_download`, so neither is skipped here.
         if let Some(install) = db.applications.get_install(&meta.id, &meta.version) {
             let complete = !matches!(
                 install.install_type,
@@ -272,8 +273,9 @@ pub async fn resume_download(game_id: String) -> Result<(), ApplicationDownloadE
             .clone();
 
         // A mod must never be resumed through this path: it would rebuild a
-        // GameDownloadAgent over the parent's install dir and run the reconcile
-        // sweep, deleting the whole base game. Mods resume via `download_mod`,
+        // GameDownloadAgent over the parent's install dir, overwrite the base
+        // game's `.dropdata` ledger with the mod's, and install the mod as if
+        // it were a game. Mods resume via `download_mod`,
         // which uses the additive (no-sweep) ModDownloadAgent. In practice a mod
         // is never left PartiallyInstalled (see mod_agent's cancel/validate), so
         // the match below would reject it anyway — this is defense in depth.

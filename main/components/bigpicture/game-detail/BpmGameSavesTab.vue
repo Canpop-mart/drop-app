@@ -83,11 +83,12 @@
     </div>
 
     <!-- PC Game saves via Ludusavi -->
-    <div v-if="saves.pcSaves.value.length > 0" class="mt-6">
+    <div v-if="saves.pcSaves.value.length > 0 || saves.hasPcBackup.value" class="mt-6">
       <div class="flex items-center justify-between mb-3">
         <h4 class="text-sm font-semibold" style="color: var(--bpm-muted)">PC GAME SAVES (via Ludusavi)</h4>
         <div class="flex gap-2">
           <button
+            v-if="saves.pcSaves.value.length > 0"
             :ref="(el: any) => registerAction(el, { onSelect: saves.backupPcSaves })"
             class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-blue-900/20 text-blue-400 hover:bg-blue-900/30"
             @click="saves.backupPcSaves()"
@@ -95,9 +96,10 @@
             {{ saves.pcSaveStatus.value === 'backing-up' ? 'Backing up...' : 'Backup All' }}
           </button>
           <button
-            :ref="(el: any) => registerAction(el, { onSelect: saves.restorePcSaves })"
+            v-if="saves.hasPcBackup.value"
+            :ref="(el: any) => registerAction(el, { onSelect: saves.requestRestorePcSaves })"
             class="px-3 py-1.5 text-xs rounded-lg transition-colors bg-green-900/20 text-green-400 hover:bg-green-900/30"
-            @click="saves.restorePcSaves()"
+            @click="saves.requestRestorePcSaves()"
           >
             {{ saves.pcSaveStatus.value === 'restoring' ? 'Restoring...' : 'Restore' }}
           </button>

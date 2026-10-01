@@ -8,12 +8,8 @@
     <!-- Global BPM overlays -->
     <BpmScreensaver :active="screensaverEnabled && isIdle" @dismiss="isIdle = false" />
     <BpmCrtFilter v-if="crtEnabled" :enabled="true" :intensity="0.4" />
-    <BpmAchievementToast
-      v-if="currentAchievement"
-      :theme-id="theme"
-      :achievement="currentAchievement"
-      @dismissed="currentAchievement = null"
-    />
+    <!-- The themed achievement toast lives in the bigpicture layout
+         (BpmAchievementToastHost) so it shows on every BPM page. -->
     <BpmLaunchScreen
       v-if="launchingGame"
       :theme-id="theme"
@@ -1180,7 +1176,6 @@ import BpmClock from "~/components/bigpicture/BpmClock.vue";
 import BpmScreensaver from "~/components/bigpicture/BpmScreensaver.vue";
 import BpmCrtFilter from "~/components/bigpicture/BpmCrtFilter.vue";
 import BpmAnimatedBackground from "~/components/bigpicture/BpmAnimatedBackground.vue";
-import BpmAchievementToast from "~/components/bigpicture/BpmAchievementToast.vue";
 import BpmLaunchScreen from "~/components/bigpicture/BpmLaunchScreen.vue";
 import BpmBoxArtOverlay from "~/components/bigpicture/BpmBoxArtOverlay.vue";
 import BpmHomeSkeleton from "~/components/bigpicture/BpmHomeSkeleton.vue";
@@ -2129,11 +2124,6 @@ function readAnimBg(): boolean {
   return !isSteamDeckHardware.value;
 }
 const animBgEnabled = ref(readAnimBg());
-const currentAchievement = ref<{
-  title: string;
-  game: string;
-  icon?: string;
-} | null>(null);
 const launchingGame = ref<{ name: string; coverUrl?: string } | null>(null);
 const screensaverEnabled = ref(
   typeof localStorage !== "undefined"

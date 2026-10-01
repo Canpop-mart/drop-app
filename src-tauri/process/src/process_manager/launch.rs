@@ -897,6 +897,14 @@ impl ProcessManager<'_> {
             let poll_game_id = game_id.clone();
             let poll_emulator_info = emulator_info;
             let poll_app_handle = self.app_handle.clone();
+            // For the Big Picture toast's game line. Cached library metadata;
+            // empty when it isn't cached, and the toast just omits the line.
+            let toast_game_id = game_id.clone();
+            let toast_game_name = remote::cache::get_cached_object::<games::library::Game>(
+                &format!("game/{game_id}"),
+            )
+            .map(|g| g.m_name)
+            .unwrap_or_default();
             tauri::async_runtime::spawn(async move {
                 remote::achievements::poll_achievements(
                     poll_game_id,
@@ -914,6 +922,8 @@ impl ProcessManager<'_> {
                                 "title": achievement.title,
                                 "description": achievement.description,
                                 "iconUrl": achievement.icon_url,
+                                "gameId": toast_game_id,
+                                "gameName": toast_game_name,
                             }),
                         );
                     },
@@ -1183,8 +1193,12 @@ impl ProcessManager<'_> {
 
         // Co-op: seed Goldberg's custom_broadcasts.txt with the active room's
         // peer IPs so LAN discovery works over the ZeroTier overlay (which drops
-        // broadcast). Empty list (not in a room) clears any stale file. Bounded
-        // + best-effort — slow/absent server must never delay or block a launch.
+        // broadcast). Outside a room the stale file is cleared; inside one the
+        // game's dir is remembered even with no peers yet and the file is kept
+        // current as peers join. gbe_fork reads it at Steam API init, so that
+        // helps the next launch, not this running game (see remote::coop).
+        // Bounded + best-effort: a slow or absent server must never delay or
+        // block a launch.
         if let Some(info) = &emulator_info
             && info.is_goldberg_like()
         {

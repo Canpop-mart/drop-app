@@ -5,6 +5,28 @@
       <div class="size-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
     </div>
 
+    <!-- Load failed. The editor is not shown at all: its fields would be empty,
+         and Save would overwrite the real profile and showcase with blanks. -->
+    <div v-else-if="loadFailed" class="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
+      <p class="text-zinc-300">Could not load your profile.</p>
+      <div class="flex gap-3">
+        <button
+          :ref="(el: any) => registerContent(el, { onSelect: retryLoad })"
+          class="px-5 py-2.5 rounded-xl text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors"
+          @click="retryLoad"
+        >
+          Try again
+        </button>
+        <button
+          :ref="(el: any) => registerContent(el, { onSelect: goBack })"
+          class="px-5 py-2.5 rounded-xl text-sm text-zinc-300 bg-zinc-800/50 hover:bg-zinc-700 transition-colors"
+          @click="goBack"
+        >
+          Back
+        </button>
+      </div>
+    </div>
+
     <template v-else>
       <!-- Banner preview -->
       <div class="relative shrink-0 h-48">
@@ -122,6 +144,9 @@
         <!-- Game Showcase -->
         <div>
           <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-3">Game Showcase</p>
+          <p v-if="showcaseFull" class="text-xs text-zinc-400 -mt-2 mb-3">
+            {{ showcaseFullHint }}
+          </p>
           <div class="grid grid-cols-3 sm:grid-cols-6 gap-3">
             <template v-for="(slot, idx) in gameSlots" :key="'game-' + idx">
               <button
@@ -154,6 +179,7 @@
                 v-else
                 :ref="(el: any) => registerContent(el, { onSelect: () => openGamePicker(idx) })"
                 class="rounded-xl overflow-hidden bg-zinc-800/30 ring-1 ring-white/5 aspect-[2/3] flex flex-col items-center justify-center text-zinc-600 hover:text-zinc-400 transition-colors"
+                :class="{ 'opacity-40': showcaseFull }"
                 @click="openGamePicker(idx)"
               >
                 <PlusIcon class="size-5 mb-1" />
@@ -166,6 +192,9 @@
         <!-- Achievement Showcase -->
         <div>
           <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-3">Achievement Showcase</p>
+          <p v-if="showcaseFull" class="text-xs text-zinc-400 -mt-2 mb-3">
+            {{ showcaseFullHint }}
+          </p>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <template v-for="(slot, idx) in achievementSlots" :key="'ach-' + idx">
               <button
@@ -196,6 +225,7 @@
                 v-else
                 :ref="(el: any) => registerContent(el, { onSelect: () => openAchievementPicker(idx) })"
                 class="w-full flex items-center justify-center gap-2 p-4 rounded-xl bg-zinc-800/30 ring-1 ring-white/5 text-zinc-600 hover:text-zinc-400 transition-colors"
+                :class="{ 'opacity-40': showcaseFull }"
                 @click="openAchievementPicker(idx)"
               >
                 <PlusIcon class="size-5" />
@@ -222,7 +252,7 @@
           >
             Cancel
           </button>
-          <span v-if="saveMessage" class="text-sm" :class="saveMessage.includes('Failed') ? 'text-red-400' : 'text-green-400'">{{ saveMessage }}</span>
+          <span v-if="saveMessage" class="text-sm" :class="saveFailed ? 'text-red-400' : 'text-green-400'">{{ saveMessage }}</span>
         </div>
       </div>
 
@@ -294,7 +324,10 @@
                 <div v-else class="size-8 rounded-lg bg-zinc-700 shrink-0" />
                 <span class="text-zinc-200 truncate">{{ game.mName }}</span>
               </button>
-              <p v-if="filteredPickerGames.length === 0" class="text-sm text-zinc-500 p-3 text-center">
+              <p v-if="gamesLoadFailed" class="text-sm text-red-400 p-3 text-center">
+                Could not load the game list.
+              </p>
+              <p v-else-if="filteredPickerGames.length === 0" class="text-sm text-zinc-500 p-3 text-center">
                 No games found
               </p>
             </div>
@@ -390,6 +423,13 @@ import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { devLog } from "~/composables/dev-mode";
+import { useServerApi } from "~/composables/use-server-api";
+import {
+  MAX_SHOWCASE_ITEMS,
+  mergeShowcase,
+  untouchedCount,
+  type ShowcaseEntry,
+} from "~/composables/bigpicture/showcase-merge";
 
 definePageMeta({ layout: "bigpicture" });
 
@@ -428,9 +468,16 @@ const registerPicker = useBpFocusableGroup("picker");
 
 // ── State ─────────────────────────────────────────────────────────────────
 
+const api = useServerApi();
+
 const loading = ref(true);
+// True when the profile or showcase could not be fetched. The editor is then
+// not rendered, so nothing can be saved over the real data.
+const loadFailed = ref(false);
+const gamesLoadFailed = ref(false);
 const saving = ref(false);
 const saveMessage = ref("");
+const saveFailed = ref(false);
 const profile = ref<UserProfile | null>(null);
 
 const displayName = ref("");
@@ -500,6 +547,83 @@ const achievementSlots = ref<(LocalShowcaseItem | null)[]>(
   Array.from({ length: MAX_ACH_SLOTS }, () => null),
 );
 
+// The showcase as the server last returned it, in stored order. Saving merges
+// the slot edits back into this list (see showcase-merge.ts) so items Big
+// Picture doesn't show as slots survive the save.
+const storedShowcase = ref<ShowcaseEntry[]>([]);
+
+function toEntry(item: ShowcaseEntry): ShowcaseEntry {
+  return {
+    type: item.type,
+    gameId: item.gameId ?? null,
+    itemId: item.itemId ?? null,
+    title: item.title ?? "",
+    data: item.data ?? null,
+  };
+}
+
+const showcaseFull = computed(() => {
+  const filled =
+    gameSlots.value.filter(Boolean).length +
+    achievementSlots.value.filter(Boolean).length;
+  const untouched = untouchedCount(storedShowcase.value, MAX_GAME_SLOTS, MAX_ACH_SLOTS);
+  return filled + untouched >= MAX_SHOWCASE_ITEMS;
+});
+
+const showcaseFullHint = computed(() => {
+  const anySlotFilled =
+    gameSlots.value.some(Boolean) || achievementSlots.value.some(Boolean);
+  return anySlotFilled
+    ? `Your showcase is full (${MAX_SHOWCASE_ITEMS} items). Remove one to add another.`
+    : `Your showcase is full (${MAX_SHOWCASE_ITEMS} items) with cards you can only change from the profile page on desktop.`;
+});
+
+/**
+ * Fill the slots from a stored showcase list (server order). The slots show
+ * the first MAX_GAME_SLOTS FavoriteGame and MAX_ACH_SLOTS Achievement items,
+ * the same window `mergeShowcase` assumes when saving. `knownGames` supplies
+ * cover art for items the server returned without it (the PUT response).
+ */
+function applyStoredShowcase(
+  stored: LocalShowcaseItem[],
+  knownGames: Map<string, NonNullable<LocalShowcaseItem["game"]>> = new Map(),
+) {
+  const withGame = stored.map((item) => ({
+    ...item,
+    game: item.game ?? (item.gameId ? knownGames.get(item.gameId) ?? null : null),
+  }));
+  for (const item of withGame) {
+    if (item.game) storedGameArt.set(item.game.id, item.game);
+  }
+  storedShowcase.value = withGame.map(toEntry);
+  const games = withGame.filter((i) => i.type === "FavoriteGame");
+  const achs = withGame.filter((i) => i.type === "Achievement");
+  gameSlots.value = Array.from({ length: MAX_GAME_SLOTS }, (_, i) => games[i] ?? null);
+  achievementSlots.value = Array.from({ length: MAX_ACH_SLOTS }, (_, i) => achs[i] ?? null);
+}
+
+// Cover art the server sent with the stored showcase (for all 12 items, not
+// just the ones in slots), so an item that moves into the slot window after a
+// save still has its art. The PUT response carries none.
+const storedGameArt = new Map<string, NonNullable<LocalShowcaseItem["game"]>>();
+
+/** Cover art for every game the editor already knows about. */
+function knownGameMap() {
+  const map = new Map(storedGameArt);
+  for (const g of allGames.value) {
+    map.set(g.id, {
+      id: g.id,
+      mName: g.mName,
+      mIconObjectId: g.mIconObjectId,
+      mCoverObjectId: g.mCoverObjectId,
+    });
+  }
+  for (const slot of [...gameSlots.value, ...achievementSlots.value]) {
+    if (slot?.game) map.set(slot.game.id, slot.game);
+  }
+  return map;
+}
+
 function removeGameSlot(idx: number) { gameSlots.value[idx] = null; }
 function removeAchievementSlot(idx: number) { achievementSlots.value[idx] = null; }
 
@@ -523,6 +647,7 @@ const filteredPickerGames = computed(() => {
 });
 
 function openGamePicker(idx: number) {
+  if (showcaseFull.value) return;
   pickerMode.value = "game";
   pickerSlotIndex.value = idx;
   pickerSelectedGameId.value = null;
@@ -536,6 +661,7 @@ function openGamePicker(idx: number) {
 }
 
 function openAchievementPicker(idx: number) {
+  if (showcaseFull.value) return;
   pickerMode.value = "achievement";
   pickerSlotIndex.value = idx;
   pickerSelectedGameId.value = null;
@@ -667,34 +793,65 @@ function triggerBannerUpload() {
 }
 
 async function onBannerSelected(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0];
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
   if (!file) return;
 
+  if (bannerPreview.value) URL.revokeObjectURL(bannerPreview.value);
   bannerPreview.value = URL.createObjectURL(file);
   bannerUploading.value = true;
+  clearSaveResult();
   try {
-    const form = new FormData();
-    form.append("file", file);
-    const url = serverUrl("api/v1/user/banner");
-    await fetch(url, { method: "POST", body: form });
+    // Native upload command, the same path the desktop editor uses. A
+    // multipart fetch over server:// hard-crashes WebKitGTK on the Deck.
+    const { bannerObjectId } = await api.profile.uploadBanner(file);
+    if (profile.value) profile.value.bannerObjectId = bannerObjectId;
   } catch (err) {
     console.error("[BPM:PROFILE] Banner upload failed:", err);
+    showSaveResult(`Could not upload the banner: ${String(err)}`, true);
   } finally {
+    // Show the stored banner (new on success, old on failure), not the local file.
+    if (bannerPreview.value) URL.revokeObjectURL(bannerPreview.value);
+    bannerPreview.value = null;
     bannerUploading.value = false;
+    input.value = "";
   }
 }
 
 // ── Save ──────────────────────────────────────────────────────────────────
 
-async function saveProfile() {
-  devLog("state","[BPM:PROFILE] saveProfile called");
-  saving.value = true;
+/** The server's own error text from an h3 error response, if it sent one. */
+async function serverErrorText(res: Response): Promise<string> {
+  const body = await res.json().catch(() => null);
+  return body?.statusMessage || body?.message || `HTTP ${res.status}`;
+}
+
+let saveMessageTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearSaveResult() {
+  if (saveMessageTimer) clearTimeout(saveMessageTimer);
+  saveMessageTimer = null;
   saveMessage.value = "";
+  saveFailed.value = false;
+}
+
+function showSaveResult(message: string, failed: boolean) {
+  clearSaveResult();
+  saveMessage.value = message;
+  saveFailed.value = failed;
+  // Failures stay until the next attempt so they can't be missed.
+  if (!failed) saveMessageTimer = setTimeout(clearSaveResult, 3000);
+}
+
+async function saveProfile() {
+  // The editor isn't rendered when the load failed, but never save over the
+  // stored profile from a state that didn't come from the server.
+  if (loadFailed.value || !profile.value) return;
+  saving.value = true;
+  clearSaveResult();
+  let profileSaved = false;
   try {
-    // Save profile fields
-    const profileUrl = serverUrl("api/v1/user/profile");
-    devLog("state","[BPM:PROFILE] PATCH profile to:", profileUrl, { displayName: displayName.value, bio: bio.value, profileTheme: selectedTheme.value });
-    const profileRes = await fetch(profileUrl, {
+    const profileRes = await fetch(serverUrl("api/v1/user/profile"), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -703,39 +860,55 @@ async function saveProfile() {
         profileTheme: selectedTheme.value,
       }),
     });
-    devLog("state","[BPM:PROFILE] Profile PATCH response:", profileRes.status, profileRes.ok);
     if (!profileRes.ok) {
-      const errText = await profileRes.text().catch(() => "");
-      console.error("[BPM:PROFILE] Profile PATCH failed:", profileRes.status, errText);
+      const why = await serverErrorText(profileRes);
+      console.error("[BPM:PROFILE] Profile PATCH failed:", profileRes.status, why);
+      showSaveResult(`Failed to save profile: ${why}`, true);
+      return;
     }
+    profileSaved = true;
 
-    // Save showcase
-    const gameItems = gameSlots.value
+    const filledGames = gameSlots.value
       .filter((s): s is LocalShowcaseItem => s !== null)
-      .map((s) => ({ type: s.type, gameId: s.gameId, itemId: s.itemId, title: s.title, data: s.data }));
-    const achItems = achievementSlots.value
+      .map(toEntry);
+    const filledAchs = achievementSlots.value
       .filter((s): s is LocalShowcaseItem => s !== null)
-      .map((s) => ({ type: s.type, gameId: s.gameId, itemId: s.itemId, title: s.title, data: s.data }));
+      .map(toEntry);
+    const items = mergeShowcase(
+      storedShowcase.value,
+      filledGames,
+      filledAchs,
+      MAX_GAME_SLOTS,
+      MAX_ACH_SLOTS,
+    );
 
-    const showcaseUrl = serverUrl("api/v1/user/showcase");
-    devLog("state","[BPM:PROFILE] PUT showcase to:", showcaseUrl, "items:", gameItems.length + achItems.length);
-    const showcaseRes = await fetch(showcaseUrl, {
+    const showcaseRes = await fetch(serverUrl("api/v1/user/showcase"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: [...gameItems, ...achItems] }),
+      body: JSON.stringify({ items }),
     });
-    devLog("state","[BPM:PROFILE] Showcase PUT response:", showcaseRes.status, showcaseRes.ok);
     if (!showcaseRes.ok) {
-      const errText = await showcaseRes.text().catch(() => "");
-      console.error("[BPM:PROFILE] Showcase PUT failed:", showcaseRes.status, errText);
+      const why = await serverErrorText(showcaseRes);
+      console.error("[BPM:PROFILE] Showcase PUT failed:", showcaseRes.status, why);
+      showSaveResult(`Profile saved, but the showcase failed: ${why}`, true);
+      return;
     }
+    // What the server now holds is the baseline for the next save, and the
+    // slots must show the same window of it that the next merge will assume.
+    // Otherwise a stored item that just moved into that window (one past the
+    // slot limit, after a removal) is invisible and the next save drops it.
+    const saved = await showcaseRes.json().catch(() => null);
+    applyStoredShowcase(saved?.items ?? items, knownGameMap());
 
-    saveMessage.value = "Profile saved!";
-    setTimeout(() => { saveMessage.value = ""; }, 3000);
+    showSaveResult("Profile saved!", false);
   } catch (err) {
     console.error("[BPM:PROFILE] Save failed:", err);
-    saveMessage.value = "Failed to save";
-    setTimeout(() => { saveMessage.value = ""; }, 3000);
+    showSaveResult(
+      profileSaved
+        ? "Profile saved, but the showcase failed: could not reach the server"
+        : "Failed to save: could not reach the server",
+      true,
+    );
   } finally {
     saving.value = false;
   }
@@ -768,7 +941,19 @@ _unsubs.push(
 
 // ── Data loading ──────────────────────────────────────────────────────────
 
-onMounted(async () => {
+/** JSON body of a successful GET, or null for any failure. */
+async function getJson(url: string): Promise<any | null> {
+  try {
+    const res = await fetch(url);
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadProfile() {
+  loading.value = true;
+  loadFailed.value = false;
   try {
     const userId = state.value?.user?.id;
     if (!userId) {
@@ -776,49 +961,51 @@ onMounted(async () => {
       return;
     }
 
-    // Fetch profile, showcase, and games list in parallel
-    const profileUrl = serverUrl(`api/v1/user/${userId}`);
-    const showcaseUrl = serverUrl(`api/v1/user/${userId}/showcase`);
-    const gamesUrl = serverUrl("api/v1/store?sort=name&order=asc&take=200");
-
     const [profileRes, showcaseRes, gamesRes] = await Promise.all([
-      fetch(profileUrl).then((r) => r.ok ? r.json() : null).catch(() => null),
-      fetch(showcaseUrl).then((r) => r.ok ? r.json() : null).catch(() => null),
-      fetch(gamesUrl).then((r) => r.ok ? r.json() : null).catch(() => null),
+      getJson(serverUrl(`api/v1/user/${userId}`)),
+      getJson(serverUrl(`api/v1/user/${userId}/showcase`)),
+      getJson(serverUrl("api/v1/store?sort=name&order=asc&take=200")),
     ]);
 
-    if (profileRes) {
-      profile.value = profileRes;
-      displayName.value = profileRes.displayName ?? "";
-      bio.value = profileRes.bio ?? "";
-      selectedTheme.value = profileRes.profileTheme ?? "default";
+    // Without both of these the editor would start from blanks, and Save
+    // would write those blanks over the real profile.
+    if (!profileRes || !showcaseRes) {
+      loadFailed.value = true;
+      return;
     }
 
+    profile.value = profileRes;
+    displayName.value = profileRes.displayName ?? "";
+    bio.value = profileRes.bio ?? "";
+    selectedTheme.value = profileRes.profileTheme ?? "default";
+
+    gamesLoadFailed.value = !gamesRes;
     allGames.value = gamesRes?.results ?? [];
 
-    if (showcaseRes) {
-      const existingGames = (showcaseRes.items ?? []).filter(
-        (i: any) => i.type === "FavoriteGame",
-      );
-      const existingAchs = (showcaseRes.items ?? []).filter(
-        (i: any) => i.type === "Achievement",
-      );
-      gameSlots.value = Array.from({ length: MAX_GAME_SLOTS }, (_, i) =>
-        existingGames[i] ? { ...existingGames[i] } : null,
-      );
-      achievementSlots.value = Array.from({ length: MAX_ACH_SLOTS }, (_, i) =>
-        existingAchs[i] ? { ...existingAchs[i] } : null,
-      );
-    }
+    applyStoredShowcase(showcaseRes.items ?? []);
   } catch (err) {
     console.error("[BPM:PROFILE] Failed to load profile data:", err);
+    loadFailed.value = true;
   } finally {
     loading.value = false;
     nextTick(() => focusNav.autoFocusContent("content"));
   }
-});
+}
+
+/**
+ * "Try again" from the load-failed state. The button that was pressed is about
+ * to leave the DOM while still holding focus, and autoFocusContent won't move
+ * focus while anything is focused, so let go of it first.
+ */
+function retryLoad() {
+  focusNav.clearFocus();
+  loadProfile();
+}
+
+onMounted(loadProfile);
 
 onUnmounted(() => {
+  if (saveMessageTimer) clearTimeout(saveMessageTimer);
   for (const unsub of _unsubs) unsub();
   if (bannerPreview.value) URL.revokeObjectURL(bannerPreview.value);
 });

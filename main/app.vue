@@ -25,6 +25,7 @@
     <ModalStack />
     <AchievementToast />
     <SaveSyncToastHost />
+    <CoopRoomToastHost />
     <SaveSyncConflictHost />
   </NuxtLayout>
 </template>

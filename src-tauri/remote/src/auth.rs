@@ -69,10 +69,25 @@ struct Claims {
     nbf: usize,
 }
 
-pub fn generate_authorization_header() -> String {
+/// Signs a short-lived JWT for the Drop server, as `JWT <client_id> <token>`.
+///
+/// Returns `Unauthorized` when this device has no usable credentials, rather
+/// than panicking. It used to `expect()` on all three failure paths, and a
+/// client that had a server URL but no auth — pairing interrupted, or signed
+/// out — died on startup before it could draw the sign-in screen, so the user
+/// could never recover without deleting the database by hand. There is no
+/// request worth making without credentials, so every caller can treat this as
+/// "ask the user to sign in again".
+pub fn generate_authorization_header() -> Result<String, RemoteAccessError> {
     let certs = {
         let db = borrow_db_checked();
-        db.auth.clone().expect("Authorisation not initialised")
+        match db.auth.clone() {
+            Some(auth) => auth,
+            None => {
+                warn!("[AUTH] no credentials on this device; request needs a sign-in");
+                return Err(RemoteAccessError::Unauthorized);
+            }
+        }
     };
 
     let system_time: usize = SystemTime::now()
@@ -85,14 +100,20 @@ pub fn generate_authorization_header() -> String {
         exp: system_time + 10,
     };
 
-    let jwt = jsonwebtoken::encode(
-        &Header::new(Algorithm::ES384),
-        &claims,
-        &EncodingKey::from_ec_pem(certs.private.as_bytes()).unwrap(),
-    )
-    .expect("failed to sign jwt");
+    // A key we cannot parse or sign with is as unusable as one we never had,
+    // and re-pairing is the fix for both, so both map to `Unauthorized`.
+    let key = EncodingKey::from_ec_pem(certs.private.as_bytes()).map_err(|e| {
+        error!("[AUTH] stored private key is unusable: {e}");
+        RemoteAccessError::Unauthorized
+    })?;
 
-    format!("JWT {} {}", certs.client_id, jwt)
+    let jwt =
+        jsonwebtoken::encode(&Header::new(Algorithm::ES384), &claims, &key).map_err(|e| {
+            error!("[AUTH] failed to sign request token: {e}");
+            RemoteAccessError::Unauthorized
+        })?;
+
+    Ok(format!("JWT {} {}", certs.client_id, jwt))
 }
 
 pub async fn fetch_user() -> Result<User, RemoteAccessError> {

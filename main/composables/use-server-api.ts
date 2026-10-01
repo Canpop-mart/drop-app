@@ -421,56 +421,6 @@ export interface FavoriteSearchRow {
   isFavorite: boolean;
 }
 
-export interface WrappedTopGame {
-  id: string;
-  mName: string;
-  mCoverObjectId: string | null;
-  seconds: number;
-  players?: number;
-}
-
-export interface PersonalWrapped {
-  window: string;
-  displayName: string;
-  totalSeconds: number;
-  sessionCount: number;
-  longestSessionSeconds: number;
-  avgSessionSeconds: number;
-  achievementsUnlocked: number;
-  points: number;
-  rarest: {
-    title: string;
-    globalPercent: number;
-    gameName: string | null;
-  } | null;
-  topGames: WrappedTopGame[];
-  topGame: (WrappedTopGame & { pctOfTotal: number }) | null;
-  topTags: { name: string; seconds: number }[];
-}
-
-export interface CommunityWrapped {
-  window: string;
-  totalSeconds: number;
-  sessionCount: number;
-  playerCount: number;
-  achievementsUnlocked: number;
-  topGames: WrappedTopGame[];
-  topGame: WrappedTopGame | null;
-  topPlayer: {
-    userId: string;
-    displayName: string;
-    avatarObjectId: string | null;
-    seconds: number;
-  } | null;
-  rarest: {
-    title: string;
-    globalPercent: number;
-    userDisplayName: string | null;
-    gameName: string | null;
-  } | null;
-  newPlayers: number;
-}
-
 // ── Cloud-save types ────────────────────────────────────────────────────────
 
 export interface CloudSaveListEntry {
@@ -751,9 +701,6 @@ export function useServerApi() {
       weeklyRecap: () =>
         apiFetch<WeeklyRecapSlide[]>("api/v1/community/weekly-recap"),
 
-      /** Community "Wrapped" stats for a window (all|year|month|week). */
-      wrapped: (window: string) =>
-        apiFetch<CommunityWrapped>(`api/v1/community/wrapped?window=${window}`),
 
       /**
        * "Spin to pick" — server-side roulette over the caller's library
@@ -917,9 +864,6 @@ export function useServerApi() {
           }),
       },
 
-      /** Personal "Wrapped" stats for a window (all|year|month|week). */
-      wrapped: (id: string, window: string) =>
-        apiFetch<PersonalWrapped>(`api/v1/user/${id}/wrapped?window=${window}`),
     },
 
     playtime: {

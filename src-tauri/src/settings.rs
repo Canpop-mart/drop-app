@@ -166,72 +166,44 @@ pub fn fetch_settings() -> Settings {
     borrow_db_checked().settings.clone()
 }
 
-/// Exchange RA username + password for a Connect token and save both to
-/// local settings. The password never hits disk. Called from the BPM
-/// Achievements settings when the user links their RA account.
+/// Save the RetroAchievements Connect token the Drop server handed back after
+/// linking, as the local copy RetroArch signs in with.
+///
+/// Linking itself goes through the server (`PUT
+/// /api/v1/user/external-accounts/retroachievements` via server://), because
+/// the server needs the RA username to record unlocks. The frontend calls
+/// this with the `externalId` and `connectToken` from that response. The
+/// password never reaches this process.
 #[tauri::command]
-pub async fn ra_login_and_save(username: String, password: String) -> Result<String, String> {
-    if username.trim().is_empty() || password.is_empty() {
-        return Err("Username and password required".to_string());
+pub fn ra_store_credentials(username: String, connect_token: String) -> Result<(), String> {
+    let username = username.trim();
+    if username.is_empty() || connect_token.is_empty() {
+        return Err("The server did not return RetroAchievements credentials".to_string());
     }
-
-    #[derive(serde::Deserialize)]
-    struct RALoginResponse {
-        #[serde(rename = "Success")]
-        success: Option<bool>,
-        #[serde(rename = "Token")]
-        token: Option<String>,
-        #[serde(rename = "Error")]
-        error: Option<String>,
-    }
-
-    // RA's Connect API requires a user agent identifying the client; the
-    // server side of Drop already sends one.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent(concat!("Drop/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
-
-    let response = client
-        .post("https://retroachievements.org/dorequest.php")
-        .form(&[("r", "login2"), ("u", username.trim()), ("p", &password)])
-        .send()
-        .await
-        .map_err(|e| format!("Network error contacting RetroAchievements: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err(format!("RetroAchievements returned HTTP {}", response.status()));
-    }
-
-    let body: RALoginResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("Could not parse RA response: {e}"))?;
-
-    if body.success != Some(true) {
-        return Err(body.error.unwrap_or_else(|| "Login rejected".to_string()));
-    }
-
-    let token = body.token.ok_or_else(|| "RA response missing Token".to_string())?;
-    if token.is_empty() {
-        return Err("RA returned empty Token".to_string());
-    }
-
-    {
-        let mut db = borrow_db_mut_checked();
-        db.settings.ra_username = username.trim().to_string();
-        db.settings.ra_token = token;
-        // This token is brand new, so whatever expired before is history —
-        // RetroArch gets credentials injected again from the next launch.
-        db.settings.ra_expired_token = String::new();
-    }
-
-    Ok(username.trim().to_string())
+    let mut db = borrow_db_mut_checked();
+    db.settings.ra_username = username.to_string();
+    db.settings.ra_token = connect_token;
+    // This token is brand new, so whatever expired before is history —
+    // RetroArch gets credentials injected again from the next launch.
+    db.settings.ra_expired_token = String::new();
+    Ok(())
 }
 
-/// Unlink the locally-configured RA account. Leaves the server-linked
-/// account (if any) intact so RetroArch falls back to that.
+/// Re-sync the local copy of the RA credentials with the server now, the same
+/// way a RetroArch launch does (see `sync_ra_credentials`): the server's
+/// account replaces the local one, a definite "not linked" clears it, and an
+/// unreachable server leaves it alone. Returns what happened, including
+/// `status: "unreachable"` with the error, so the settings screens can say so
+/// instead of silently doing nothing.
+#[tauri::command]
+pub async fn ra_refresh_credentials() -> ::remote::retroarch::ra::RaSyncReport {
+    ::remote::retroarch::ra::sync_ra_credentials().await.1
+}
+
+/// Clear the local copy of the RA credentials. The settings screens call
+/// this after unlinking on the server; on its own it leaves any
+/// server-linked account intact, and the next RetroArch launch would fetch
+/// and cache that account's token again.
 #[tauri::command]
 pub fn ra_clear_credentials() {
     let mut db = borrow_db_mut_checked();

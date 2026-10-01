@@ -168,6 +168,24 @@ async fn setup(handle: AppHandle) -> AppState {
     let session_type = SessionType::detect();
     info!("detected session type: {:?}", session_type);
 
+    // State the auth situation once per launch. A device with a server URL but
+    // no credentials used to panic on the first authenticated request, and the
+    // log gave no hint why: it ended at "initialized drop client" and the only
+    // evidence was a crash file. Anyone triaging a startup report should be
+    // able to see this from the log alone.
+    {
+        let db = borrow_db_checked();
+        let has_url = !db.base_url.is_empty();
+        match (has_url, db.auth.is_some()) {
+            (_, true) => info!("[AUTH] signed in"),
+            (true, false) => warn!(
+                "[AUTH] a server is configured but this device has no credentials; \
+                 authenticated requests will fail until it is paired again"
+            ),
+            (false, false) => info!("[AUTH] not set up yet (no server configured)"),
+        }
+    }
+
     // Repair impossible / stuck game states left by a prior crash BEFORE the
     // disk scan runs. The transient-status map is `#[serde(skip)]`, so a
     // crash mid-`Validating`/`Downloading`/`Uninstalling` already drops the
@@ -332,7 +350,8 @@ pub fn run() {
             // User utils
             update_settings,
             fetch_settings,
-            ra_login_and_save,
+            ra_store_credentials,
+            ra_refresh_credentials,
             ra_clear_credentials,
             // Auth
             auth_initiate,
@@ -386,9 +405,12 @@ pub fn run() {
             list_pc_game_saves,
             backup_pc_game_saves,
             restore_pc_game_saves,
+            has_pc_save_backup,
             check_ludusavi,
             install_ludusavi,
             check_ra_rom_hash,
+            clear_local_achievements,
+            clear_all_local_achievements,
             // Downloads
             download_game,
             download_mod,
@@ -477,6 +499,8 @@ pub fn run() {
             room_leave,
             room_members,
             room_browse,
+            room_mine,
+            room_resume,
             ap_session_create,
             ap_session_join,
             ap_session_get,
@@ -513,10 +537,12 @@ pub fn run() {
                 // Start background poller for incoming stream requests
                 streaming::spawn_stream_request_poller();
 
-                // Clean up ZeroTier room networks orphaned by a previous crash
-                // before any new co-op join (prevents the duplicate-IP / 169.254
-                // link-local adapter pileup). No-op if ZeroTier isn't installed
-                // or we've never hosted/joined a room.
+                // Clean up ZeroTier networks orphaned by a previous run before
+                // any new co-op join (prevents the duplicate-IP / 169.254
+                // link-local adapter pileup), keeping any room or Archipelago
+                // session the server says this device can still rejoin. No-op if
+                // ZeroTier isn't running, we've never joined through Drop, or
+                // the server can't be asked.
                 tokio::spawn(async {
                     crate::zerotier::startup_cleanup().await;
                 });
@@ -911,7 +937,7 @@ async fn recieve_handshake_logic(app: &AppHandle, path: String) -> Result<(), Re
     }
 
     let web_token = {
-        let header = generate_authorization_header();
+        let header = generate_authorization_header()?;
         let token = client
             .post(base_url.join("/api/v1/client/user/webtoken")?)
             .header("Authorization", header)

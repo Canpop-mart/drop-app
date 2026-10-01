@@ -674,85 +674,153 @@
           RetroAchievements
         </h3>
         <p class="text-sm text-zinc-400">
-          Link your RetroAchievements account so RetroArch can track unlocks
-          during emulated gameplay. Your password is exchanged for a session
-          token and never stored.
+          Link your RetroAchievements account so Drop records your unlocks and
+          RetroArch signs in for you. Your password is sent to your Drop
+          server once to get a session token and is never stored.
         </p>
 
         <div class="bg-zinc-900/50 rounded-xl p-4 space-y-4">
-          <div v-if="raLinked && !raExpired" class="flex items-start gap-3">
-            <div class="flex-1">
-              <p class="text-sm text-zinc-300">
+          <!-- Status line. Text only, so it can change freely. -->
+          <div class="text-sm">
+            <p v-if="ra.loadState.value === 'loading'" class="text-zinc-500">
+              Checking…
+            </p>
+            <!-- The server check failed: say so rather than guess "not linked". -->
+            <p v-else-if="ra.loadState.value === 'error'" class="text-red-300">
+              Could not check your RetroAchievements link with the server.
+              <span class="block text-xs text-red-300/70 mt-1">{{ ra.loadError.value }}</span>
+            </p>
+            <template v-else-if="ra.state.value === 'linked'">
+              <p class="text-zinc-300">
                 Linked as
-                <span class="font-semibold text-zinc-100">{{ raUsername }}</span>
+                <span class="font-semibold text-zinc-100">{{ ra.serverUsername.value }}</span>
               </p>
               <p class="text-xs text-zinc-500 mt-1">
-                RetroArch will authenticate automatically on next launch.
+                Unlocks are recorded, and RetroArch signs in automatically on the next launch.
               </p>
-            </div>
-            <button
-              :ref="(el: any) => registerContent(el, { onSelect: unlinkRetroAchievements })"
-              class="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-zinc-300"
-              @click="unlinkRetroAchievements"
-            >
-              Unlink
-            </button>
-          </div>
-          <template v-else>
-            <!-- RA session tokens last about two months and cannot be
-                 renewed, so the only fix is signing in again. -->
+            </template>
+            <!-- Re-linked elsewhere; this device's copy couldn't be refreshed. -->
             <div
-              v-if="raExpired"
+              v-else-if="ra.state.value === 'mismatch'"
               class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5"
             >
-              <p class="text-sm text-amber-200">
-                Your RetroAchievements sign-in has expired
+              <p class="text-amber-200">
+                Your server has {{ ra.serverUsername.value }}, but this device still signs
+                RetroArch in as {{ ra.localUsername.value }}.
               </p>
-              <!-- raUsername can be empty here: the dead token may have come
-                   from the account linked on the website, not this device. -->
+              <p class="text-xs text-amber-200/70 mt-1">
+                It switches on the next launch that can reach the server.
+              </p>
+              <p v-if="ra.syncError.value" class="text-xs text-red-300 mt-1">
+                {{ ra.syncError.value }}
+              </p>
+            </div>
+            <!-- Linked before RetroArch sign-ins were stored on the server. -->
+            <div
+              v-else-if="ra.state.value === 'needs_signin'"
+              class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5"
+            >
+              <p class="text-amber-200">
+                Linked as {{ ra.serverUsername.value }}, but RetroArch can't sign in yet
+              </p>
+              <p class="text-xs text-amber-200/70 mt-1">
+                Sign in again once below so RetroArch can sign in for you.
+              </p>
+            </div>
+            <!-- RA session tokens last about two months and cannot be
+                 renewed, so the only fix is signing in again. The dead token
+                 may have come from the account linked on the website. -->
+            <div
+              v-else-if="ra.state.value === 'expired'"
+              class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5"
+            >
+              <p class="text-amber-200">Your RetroAchievements sign-in has expired</p>
               <p class="text-xs text-amber-200/70 mt-1">
                 RetroAchievements stopped accepting it, so unlocks are no
                 longer being tracked. Sign in again to pick them back up.
               </p>
             </div>
-            <div>
-              <label class="block text-sm font-medium text-zinc-400 mb-1">Username</label>
-              <input
-                v-model="raUsername"
-                :ref="(el: any) => registerContent(el, {})"
-                type="text"
-                autocomplete="off"
-                class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                placeholder="RetroAchievements username"
-              />
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-zinc-400 mb-1">Password</label>
-              <input
-                v-model="raPassword"
-                :ref="(el: any) => registerContent(el, {})"
-                type="password"
-                autocomplete="off"
-                class="w-full px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                placeholder="Password"
-              />
-            </div>
-            <button
-              :ref="(el: any) => registerContent(el, { onSelect: linkRetroAchievements })"
-              :disabled="raStatus === 'linking' || !raUsername || !raPassword"
-              class="w-full px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-400 text-white font-medium rounded-lg transition-colors"
-              @click="linkRetroAchievements"
+            <!-- Signed in by an older build, straight to RA: RetroArch works
+                 but the server never learned the username. -->
+            <div
+              v-else-if="ra.state.value === 'device_only'"
+              class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5"
             >
-              <span v-if="raStatus === 'linking'">Linking…</span>
-              <span v-else-if="raExpired">Sign in again</span>
-              <span v-else>Link account</span>
-            </button>
+              <p class="text-amber-200">Signed in on this device only</p>
+              <p class="text-xs text-amber-200/70 mt-1">
+                Your server does not know this account, so unlocks are not
+                being recorded. Sign in again to fix that.
+              </p>
+            </div>
+          </div>
+
+          <!-- Sign-in rows. Each opens the on-screen keyboard, like the
+               welcome wizard. Shown whenever the form applies. -->
+          <template v-if="raShowForm">
+            <div
+              :ref="(el: any) => registerContent(el, { onSelect: () => openRaKeyboard('username') })"
+              class="cursor-pointer rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2"
+              @click="openRaKeyboard('username')"
+            >
+              <p class="text-xs font-medium text-zinc-400">Username</p>
+              <p v-if="raUsername" class="text-sm text-zinc-200">{{ raUsername }}</p>
+              <BigPictureButtonPrompt v-else button="A" label="Enter" size="sm" />
+            </div>
+            <div
+              :ref="(el: any) => registerContent(el, { onSelect: () => openRaKeyboard('password') })"
+              class="cursor-pointer rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2"
+              @click="openRaKeyboard('password')"
+            >
+              <p class="text-xs font-medium text-zinc-400">Password</p>
+              <p v-if="raPassword" class="text-sm text-zinc-200 font-mono">
+                {{ "•".repeat(Math.min(raPassword.length, 16)) }}
+              </p>
+              <BigPictureButtonPrompt v-else button="A" label="Enter" size="sm" />
+            </div>
+            <!-- Only when the server has no RA login of its own. -->
+            <div
+              v-if="ra.apiKeyRequired.value"
+              :ref="(el: any) => registerContent(el, { onSelect: () => openRaKeyboard('apiKey') })"
+              class="cursor-pointer rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2"
+              @click="openRaKeyboard('apiKey')"
+            >
+              <p class="text-xs font-medium text-zinc-400">Web API key</p>
+              <p v-if="raApiKey" class="text-sm text-zinc-200 font-mono">
+                {{ "•".repeat(Math.min(raApiKey.length, 16)) }}
+              </p>
+              <BigPictureButtonPrompt v-else button="A" label="Enter" size="sm" />
+              <p class="text-xs text-zinc-500 mt-1">
+                Your server needs this to track unlocks. It is under Settings, Keys on
+                retroachievements.org.
+              </p>
+            </div>
           </template>
+
+          <!-- One action button that stays mounted through every state, so a
+               controller's focus never jumps while it checks or links. Its
+               label and action follow the state (raPrimary). -->
+          <button
+            :ref="(el: any) => registerContent(el, { onSelect: () => raPrimary.run() })"
+            :disabled="raPrimary.disabled"
+            class="w-full px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-400 text-white font-medium rounded-lg transition-colors"
+            @click="raPrimary.run()"
+          >
+            {{ raPrimary.label }}
+          </button>
           <p v-if="raStatus === 'linked'" class="text-xs text-green-400">
             Account linked.
           </p>
           <p v-if="raError" class="text-xs text-red-400">{{ raError }}</p>
         </div>
+
+        <BigPictureKeyboard
+          :visible="raKeyboardOpen"
+          :model-value="raKeyboardValue"
+          :placeholder="raKeyboardPlaceholder"
+          @update:model-value="onRaKeyboardInput"
+          @close="raKeyboardOpen = false"
+          @submit="raKeyboardOpen = false"
+        />
       </div>
 
       <!-- ═══════ Cloud Saves ═══════ -->
@@ -1315,6 +1383,9 @@
 </template>
 
 <script setup lang="ts">
+import { useRaLink } from "~/composables/ra-link";
+import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
+import BigPictureButtonPrompt from "~/components/bigpicture/BigPictureButtonPrompt.vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { platform } from "@tauri-apps/plugin-os";
@@ -1474,75 +1545,121 @@ const devCategoryMeta: Record<DevCategory, { label: string; description: string 
 };
 
 // ── RetroAchievements credentials ──────────────────────────────────────────
+// Linking goes through the Drop server (see composables/ra-link.ts); the
+// panel only says "linked" once the server has the account.
 
+const ra = useRaLink();
 const raUsername = ref("");
 const raPassword = ref("");
-const raLinked = ref(false);
-// RetroAchievements session tokens are derived from the password, last about
-// 45 to 60 days and have no refresh. The backend records the dead token when
-// RetroArch's log shows it was rejected; until the user signs in again Drop
-// stops injecting it, so this has to be said out loud here.
-const raExpired = ref(false);
-const raStatus = ref<"" | "linking" | "linked" | "error">("");
+const raApiKey = ref("");
+const raStatus = ref<"" | "linked">("");
 const raError = ref("");
 
 onMounted(async () => {
-  try {
-    const settings = await invoke<Record<string, any>>("fetch_settings");
-    if (settings.raUsername) {
-      raUsername.value = settings.raUsername;
-      // Presence of raToken is inferred from Rust Debug redaction — we
-      // just rely on raUsername non-empty as "linked".
-      raLinked.value = !!(settings.raToken && settings.raToken.length > 0);
-    }
-    raExpired.value = !!settings.raExpiredToken;
-  } catch {
-    // Settings not available yet — keep defaults
-  }
+  await ra.refresh();
+  raUsername.value = ra.serverUsername.value ?? ra.localUsername.value;
 });
 
 // Emitted by the RetroArch exit path the moment a rejection is found in the
 // log, so a session that just ended flips the panel without a restart.
 onMounted(async () => {
   const unlisten = await listen("ra_credentials_expired", () => {
-    raExpired.value = true;
+    ra.localExpired.value = true;
   });
   onUnmounted(unlisten);
 });
 
+// Which sign-in field the on-screen keyboard is editing.
+const raKeyboardOpen = ref(false);
+const raKeyboardField = ref<"username" | "password" | "apiKey">("username");
+const raKeyboardValue = ref("");
+const raKeyboardPlaceholder = ref("");
+
+function openRaKeyboard(field: "username" | "password" | "apiKey") {
+  raKeyboardField.value = field;
+  raKeyboardValue.value =
+    field === "username" ? raUsername.value : field === "password" ? raPassword.value : raApiKey.value;
+  raKeyboardPlaceholder.value =
+    field === "username" ? "RetroAchievements username" : field === "password" ? "Password" : "Web API key";
+  raKeyboardOpen.value = true;
+}
+
+function onRaKeyboardInput(val: string) {
+  if (raKeyboardField.value === "username") raUsername.value = val.slice(0, 64);
+  else if (raKeyboardField.value === "password") raPassword.value = val.slice(0, 128);
+  else raApiKey.value = val.slice(0, 128);
+  raKeyboardValue.value = val;
+}
+
+// The sign-in rows apply unless the server confirms a link (or the check
+// hasn't answered yet).
+const raShowForm = computed(
+  () =>
+    ra.loadState.value === "ready" &&
+    ra.state.value !== "linked" &&
+    ra.state.value !== "mismatch",
+);
+
+// The single, always-mounted action button's label and behaviour.
+const raPrimary = computed(() => {
+  if (ra.loadState.value === "loading") {
+    return { label: "Checking…", disabled: true, run: () => {} };
+  }
+  if (ra.loadState.value === "error") {
+    return { label: "Retry", disabled: false, run: () => void ra.refresh() };
+  }
+  if (ra.busy.value) {
+    return { label: "Working…", disabled: true, run: () => {} };
+  }
+  if (ra.state.value === "linked") {
+    return { label: "Unlink", disabled: false, run: () => void unlinkRetroAchievements() };
+  }
+  if (ra.state.value === "mismatch") {
+    return { label: "Update this device", disabled: false, run: () => void ra.syncLocalCopy() };
+  }
+  const ready =
+    !!raUsername.value && !!raPassword.value && (!ra.apiKeyRequired.value || !!raApiKey.value);
+  return {
+    label:
+      ra.state.value === "expired" ||
+      ra.state.value === "device_only" ||
+      ra.state.value === "needs_signin"
+        ? "Sign in again"
+        : "Link account",
+    disabled: !ready,
+    run: () => {
+      if (ready) void linkRetroAchievements();
+    },
+  };
+});
+
 async function linkRetroAchievements() {
   raError.value = "";
-  raStatus.value = "linking";
+  raStatus.value = "";
   try {
-    const user = await invoke<string>("ra_login_and_save", {
-      username: raUsername.value,
-      password: raPassword.value,
-    });
-    raUsername.value = user;
+    await ra.link(raUsername.value, raPassword.value, raApiKey.value);
+    raUsername.value = ra.serverUsername.value ?? raUsername.value;
     raPassword.value = "";
-    raLinked.value = true;
-    raExpired.value = false;
+    raApiKey.value = "";
     raStatus.value = "linked";
     setTimeout(() => {
       if (raStatus.value === "linked") raStatus.value = "";
     }, 2500);
   } catch (e: any) {
-    raError.value = typeof e === "string" ? e : String(e?.message ?? e);
-    raStatus.value = "error";
+    raError.value = String(e?.message ?? e);
   }
 }
 
 async function unlinkRetroAchievements() {
+  raError.value = "";
   try {
-    await invoke("ra_clear_credentials");
+    await ra.unlink();
     raUsername.value = "";
     raPassword.value = "";
-    raLinked.value = false;
-    raExpired.value = false;
+    raApiKey.value = "";
     raStatus.value = "";
-    raError.value = "";
-  } catch (e) {
-    console.error("[BPM:SETTINGS] Failed to clear RA credentials:", e);
+  } catch (e: any) {
+    raError.value = `Could not unlink: ${String(e?.message ?? e)}`;
   }
 }
 

@@ -17,9 +17,10 @@
 //! `[2000, 2100]` range validation in `remote/src/achievements.rs`).
 
 use super::achievements::GoldbergAchievement;
+use super::{save_roots, WindowsRoots};
 use log::{debug, info, warn};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// On-disk achievement-file formats produced by the various crackers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,34 +54,15 @@ struct CrackerSource {
     path: PathBuf,
 }
 
-// ── Base directories ─────────────────────────────────────────────────────
-
-fn public_documents() -> PathBuf {
-    // %PUBLIC% defaults to C:\Users\Public on Windows.
-    match std::env::var("PUBLIC") {
-        Ok(p) if !p.is_empty() => PathBuf::from(p).join("Documents"),
-        _ => PathBuf::from("C:\\Users\\Public\\Documents"),
-    }
-}
-
-fn program_data() -> PathBuf {
-    match std::env::var("ProgramData") {
-        Ok(p) if !p.is_empty() => PathBuf::from(p),
-        _ => PathBuf::from("C:\\ProgramData"),
-    }
-}
-
 // ── Location map (ported from Hydra find-achivement-files.ts) ─────────────
 
-/// Every cracker achievement file that *could* exist for `app_id`, across the
-/// well-known fixed locations. Existence is checked by the caller; this just
-/// enumerates the candidates + their format.
-fn cracker_candidate_paths(app_id: &str) -> Vec<CrackerSource> {
-    let app_data = dirs::data_dir();
-    let local_app_data = dirs::data_local_dir();
-    let documents = dirs::document_dir();
-    let public_docs = public_documents();
-    let program = program_data();
+/// Every cracker achievement file that *could* exist for `app_id` under one
+/// set of Windows folders (the host's, or a Wine prefix's). Existence is
+/// checked by the caller; this just enumerates the candidates + their format.
+fn cracker_candidate_paths(app_id: &str, roots: &WindowsRoots) -> Vec<CrackerSource> {
+    let app_data = &roots.app_data;
+    let local_app_data = &roots.local_app_data;
+    let documents = &roots.documents;
 
     let mut out: Vec<CrackerSource> = Vec::new();
 
@@ -88,62 +70,61 @@ fn cracker_candidate_paths(app_id: &str) -> Vec<CrackerSource> {
         out.push(CrackerSource { label, format, path });
     };
 
-    // CODEX — INI
-    push("CODEX", CrackerFormat::CodexIni,
-        public_docs.join("Steam").join("CODEX").join(app_id).join("achievements.ini"));
-    if let Some(ad) = &app_data {
+    if let Some(public_docs) = &roots.public_documents {
+        // CODEX — INI
+        push("CODEX", CrackerFormat::CodexIni,
+            public_docs.join("Steam").join("CODEX").join(app_id).join("achievements.ini"));
+        // RUNE — INI (same shape as CODEX)
+        push("RUNE", CrackerFormat::CodexIni,
+            public_docs.join("Steam").join("RUNE").join(app_id).join("achievements.ini"));
+        // OnlineFix — INI
+        push("OnlineFix", CrackerFormat::OnlineFix,
+            public_docs.join("OnlineFix").join(app_id).join("Stats").join("Achievements.ini"));
+        push("OnlineFix", CrackerFormat::OnlineFix,
+            public_docs.join("OnlineFix").join(app_id).join("Achievements.ini"));
+        // EMPRESS — JSON (Goldberg-shaped)
+        push("EMPRESS", CrackerFormat::GoldbergJson,
+            public_docs.join("EMPRESS").join(app_id).join("remote").join(app_id).join("achievements.json"));
+    }
+    if let Some(ad) = app_data {
         push("CODEX", CrackerFormat::CodexIni,
             ad.join("Steam").join("CODEX").join(app_id).join("achievements.ini"));
-    }
-
-    // RUNE — INI (same shape as CODEX)
-    push("RUNE", CrackerFormat::CodexIni,
-        public_docs.join("Steam").join("RUNE").join(app_id).join("achievements.ini"));
-
-    // OnlineFix — INI
-    push("OnlineFix", CrackerFormat::OnlineFix,
-        public_docs.join("OnlineFix").join(app_id).join("Stats").join("Achievements.ini"));
-    push("OnlineFix", CrackerFormat::OnlineFix,
-        public_docs.join("OnlineFix").join(app_id).join("Achievements.ini"));
-
-    // RLD! / dodi — INI (hex-LE)
-    push("RLD!", CrackerFormat::Rld,
-        program.join("RLD!").join(app_id).join("achievements.ini"));
-    push("RLD!", CrackerFormat::Rld,
-        program.join("Steam").join("Player").join(app_id).join("stats").join("achievements.ini"));
-    push("RLD!", CrackerFormat::Rld,
-        program.join("Steam").join("RLD!").join(app_id).join("stats").join("achievements.ini"));
-    push("dodi", CrackerFormat::Rld,
-        program.join("Steam").join("dodi").join(app_id).join("stats").join("achievements.ini"));
-
-    // EMPRESS — JSON (Goldberg-shaped)
-    if let Some(ad) = &app_data {
         push("EMPRESS", CrackerFormat::GoldbergJson,
             ad.join("EMPRESS").join("remote").join(app_id).join("achievements.json"));
     }
-    push("EMPRESS", CrackerFormat::GoldbergJson,
-        public_docs.join("EMPRESS").join(app_id).join("remote").join(app_id).join("achievements.json"));
+
+    // RLD! / dodi — INI (hex-LE)
+    if let Some(program) = &roots.program_data {
+        push("RLD!", CrackerFormat::Rld,
+            program.join("RLD!").join(app_id).join("achievements.ini"));
+        push("RLD!", CrackerFormat::Rld,
+            program.join("Steam").join("Player").join(app_id).join("stats").join("achievements.ini"));
+        push("RLD!", CrackerFormat::Rld,
+            program.join("Steam").join("RLD!").join(app_id).join("stats").join("achievements.ini"));
+        push("dodi", CrackerFormat::Rld,
+            program.join("Steam").join("dodi").join(app_id).join("stats").join("achievements.ini"));
+    }
 
     // SKIDROW — INI
-    if let Some(docs) = &documents {
+    if let Some(docs) = documents {
         push("SKIDROW", CrackerFormat::Skidrow,
             docs.join("SKIDROW").join(app_id).join("SteamEmu").join("UserStats").join("achiev.ini"));
         push("SKIDROW", CrackerFormat::Skidrow,
             docs.join("Player").join(app_id).join("SteamEmu").join("UserStats").join("achiev.ini"));
     }
-    if let Some(lad) = &local_app_data {
+    if let Some(lad) = local_app_data {
         push("SKIDROW", CrackerFormat::Skidrow,
             lad.join("SKIDROW").join(app_id).join("SteamEmu").join("UserStats").join("achiev.ini"));
     }
 
     // CreamAPI — CFG
-    if let Some(ad) = &app_data {
+    if let Some(ad) = app_data {
         push("CreamAPI", CrackerFormat::CreamApi,
             ad.join("CreamAPI").join(app_id).join("stats").join("CreamAPI.Achievements.cfg"));
     }
 
     // Razor1911 — plain text
-    if let Some(ad) = &app_data {
+    if let Some(ad) = app_data {
         push("Razor1911", CrackerFormat::Razor1911,
             ad.join(".1911").join(app_id).join("achievement"));
     }
@@ -407,27 +388,13 @@ fn parse_source(src: &CrackerSource) -> Vec<GoldbergAchievement> {
     }
 }
 
-/// Locate an installed Steam client and return its per-user `librarycache`
-/// achievement files for `app_id`. Best-effort path search (registry-free):
-/// checks `STEAM_PATH`/`SteamPath` env and the common install dirs.
-fn steam_cache_sources(app_id: &str) -> Vec<CrackerSource> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    for var in ["STEAM_PATH", "SteamPath"] {
-        if let Ok(p) = std::env::var(var)
-            && !p.is_empty()
-        {
-            roots.push(PathBuf::from(p));
-        }
-    }
-    for p in [
-        "C:\\Program Files (x86)\\Steam",
-        "C:\\Program Files\\Steam",
-    ] {
-        roots.push(PathBuf::from(p));
-    }
-
+/// The per-user `librarycache` achievement files for `app_id` under each
+/// given Steam install directory (see [`WindowsRoots::steam_dirs`]: the
+/// `STEAM_PATH`/`SteamPath` env vars and the common install dirs, on the host
+/// or inside a Wine prefix). Best-effort, registry-free.
+fn steam_cache_sources(app_id: &str, steam_dirs: &[PathBuf]) -> Vec<CrackerSource> {
     let mut out = Vec::new();
-    for root in roots {
+    for root in steam_dirs {
         let userdata = root.join("userdata");
         let Ok(users) = std::fs::read_dir(&userdata) else { continue };
         for user in users.flatten() {
@@ -448,14 +415,25 @@ fn steam_cache_sources(app_id: &str) -> Vec<CrackerSource> {
 /// the merged set of unlocked achievements (deduped by name, earliest unlock
 /// time wins). This is the breadth that lets Drop surface achievements for
 /// games cracked with something other than Goldberg/SSE.
-pub fn scan_all_crackers(app_id: &str, dll_dir: Option<&str>) -> Vec<GoldbergAchievement> {
+///
+/// The fixed locations are searched on the host AND, when `wine_prefix` is
+/// given, inside the game's Wine prefix, where a Windows game running under
+/// Proton actually writes them.
+pub fn scan_all_crackers(
+    app_id: &str,
+    dll_dir: Option<&str>,
+    wine_prefix: Option<&Path>,
+) -> Vec<GoldbergAchievement> {
     const TAG: &str = "[ACH-CRACK]";
 
-    let mut sources = cracker_candidate_paths(app_id);
+    let mut sources = Vec::new();
+    for roots in save_roots(wine_prefix) {
+        sources.extend(cracker_candidate_paths(app_id, &roots));
+        sources.extend(steam_cache_sources(app_id, &roots.steam_dirs));
+    }
     if let Some(dir) = dll_dir {
         sources.extend(exe_adjacent_candidate_paths(dir));
     }
-    sources.extend(steam_cache_sources(app_id));
 
     let mut merged: HashMap<String, GoldbergAchievement> = HashMap::new();
     for src in &sources {

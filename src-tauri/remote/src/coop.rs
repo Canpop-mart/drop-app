@@ -6,13 +6,22 @@
 //! across a ZeroTier room.
 //!
 //! The bin crate records the active room here on host/join (and clears it on
-//! leave). The launch path seeds the file just before spawning the game, AND a
-//! background loop re-seeds it while the room is active — otherwise a peer who
-//! joins *after* you launched is never added to your list, so you never announce
-//! back to them and the session stays one-directional (the launch-order trap).
+//! leave). The launch path seeds the file just before spawning the game and
+//! records the game's DLL dir even when nobody else has joined yet. After that
+//! the file is kept current two ways: every member poll the UI makes
+//! (`observe_peers`, called by the bin crate's `room_members`) and a slower
+//! background loop (`reseed_all`).
+//!
+//! What that does and doesn't buy: gbe_fork reads `custom_broadcasts.txt` when
+//! the game initialises the Steam API, so a game that is ALREADY running does
+//! not see a rewrite. Keeping the file current means the next launch (or a
+//! relaunch) of that game has every peer. For a running host, a peer who joins
+//! later and then launches has the host's IP in its own file; its announce
+//! reaches the host, which is how the host learns about it without a
+//! relaunch. Nothing here has been shown to update a game mid-session.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use log::{info, warn};
 use serde::Deserialize;
@@ -21,32 +30,107 @@ use crate::goldberg::write_custom_broadcasts;
 use crate::requests::{generate_url, remote_request, NoBody, RemoteRequest};
 
 /// The co-op room this client is currently in, if any (room id). Set by the bin
-/// crate's `room_host`/`room_join`, cleared by `room_leave`.
+/// crate's `room_host`/`room_join`/`room_resume`, cleared by `room_leave`.
 static ACTIVE_ROOM: Mutex<Option<String>> = Mutex::new(None);
 
-/// DLL dirs whose `custom_broadcasts.txt` we've seeded this room session. The
-/// re-seed loop keeps them current as peers join, and `clear_active_room` clears
-/// them on leave. One entry per launched co-op game — a Vec is plenty.
-static SEEDED_DIRS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+/// Which DLL dirs have been seeded this room session and what each was last
+/// written with.
+static SEEDS: Mutex<SeedBook> = Mutex::new(SeedBook::new());
+
+/// A poisoned lock here only means another thread panicked mid-update of a
+/// plain list; the data is still usable, and co-op seeding must never take the
+/// launch path down with it.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Pure bookkeeping for the seeded `custom_broadcasts.txt` files, kept apart
+/// from the file writes so it can be unit-tested.
+#[derive(Debug, Default, PartialEq)]
+struct SeedBook {
+    /// (DLL dir, the normalised peer list last written there).
+    dirs: Vec<(PathBuf, Vec<String>)>,
+}
+
+/// Sort + dedup so "the same peers in a different order" is not a change.
+fn normalise(peers: &[String]) -> Vec<String> {
+    let mut v: Vec<String> = peers.iter().map(|p| p.trim().to_string()).collect();
+    v.retain(|p| !p.is_empty());
+    v.sort();
+    v.dedup();
+    v
+}
+
+impl SeedBook {
+    const fn new() -> Self {
+        Self { dirs: Vec::new() }
+    }
+
+    /// A game was just launched and its file written with `peers`. While in a
+    /// room the dir is remembered even with zero peers, so the host who launches
+    /// before anyone joins still has the file filled in later. Outside a room it
+    /// is forgotten.
+    fn record_launch(&mut self, dir: &Path, peers: &[String], in_room: bool) {
+        self.dirs.retain(|(d, _)| d != dir);
+        if in_room {
+            self.dirs.push((dir.to_path_buf(), normalise(peers)));
+        }
+    }
+
+    /// A fresh peer list arrived. Returns the dirs whose file must be rewritten
+    /// (and marks them as written); the caller writes them while still holding
+    /// the lock, so the book never runs ahead of the files.
+    ///
+    /// An empty list is ignored on purpose. The server omits a member whose IP
+    /// the controller didn't return on that poll, so an empty list is often a
+    /// hiccup, and clearing the file then could race a launch reading it. The
+    /// cost of the other case (the last peer really left) is only announces
+    /// sent to an address nobody uses; the file is cleared when we leave.
+    fn observe(&mut self, peers: &[String]) -> Vec<PathBuf> {
+        let peers = normalise(peers);
+        if peers.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for (dir, written) in &mut self.dirs {
+            if *written != peers {
+                *written = peers.clone();
+                out.push(dir.clone());
+            }
+        }
+        out
+    }
+
+    fn take_dirs(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.dirs)
+            .into_iter()
+            .map(|(d, _)| d)
+            .collect()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.dirs.is_empty()
+    }
+}
 
 /// Record the room this client just hosted/joined so the launch path can seed
 /// peer broadcasts for it.
 pub fn set_active_room(room_id: &str) {
-    *ACTIVE_ROOM.lock().unwrap() = Some(room_id.to_string());
+    *lock(&ACTIVE_ROOM) = Some(room_id.to_string());
     info!("[COOP] active room set: {room_id}");
 }
 
 /// The active room id, or None. The re-seed loop also uses this to detect a room
 /// change (leave / rejoin) and stop itself.
 pub fn current_room_id() -> Option<String> {
-    ACTIVE_ROOM.lock().unwrap().clone()
+    lock(&ACTIVE_ROOM).clone()
 }
 
 /// Forget the active room and clear every seeded `custom_broadcasts.txt`, so a
 /// later solo launch doesn't keep unicasting to stale peers.
 pub fn clear_active_room() {
-    *ACTIVE_ROOM.lock().unwrap() = None;
-    let dirs: Vec<PathBuf> = std::mem::take(&mut *SEEDED_DIRS.lock().unwrap());
+    *lock(&ACTIVE_ROOM) = None;
+    let dirs = lock(&SEEDS).take_dirs();
     for dir in &dirs {
         write_custom_broadcasts(dir, &[]);
     }
@@ -104,37 +188,113 @@ pub async fn current_peer_ips() -> Vec<String> {
     Vec::new()
 }
 
-/// Seed a game's `custom_broadcasts.txt` at launch AND remember its DLL dir so
-/// the re-seed loop keeps it current. An empty peer list (not in a room / no
-/// peers assigned yet) clears the file and forgets the dir.
+/// Seed a game's `custom_broadcasts.txt` at launch AND, while in a room,
+/// remember its DLL dir so later peer updates reach it. The dir is remembered
+/// even when `peers` is empty (the host launched before anyone joined); outside
+/// a room the file is cleared and the dir forgotten.
 pub fn seed_and_record(dll_dir: &Path, peers: &[String]) {
+    let in_room = current_room_id().is_some();
+    // Same lock as observe_peers, so a poll can't interleave with this write.
+    let mut book = lock(&SEEDS);
     write_custom_broadcasts(dll_dir, peers);
-    let mut seeded = SEEDED_DIRS.lock().unwrap();
-    if peers.is_empty() {
-        seeded.retain(|d| d != dll_dir);
-    } else if !seeded.iter().any(|d| d == dll_dir) {
-        seeded.push(dll_dir.to_path_buf());
+    book.record_launch(dll_dir, peers, in_room);
+    drop(book);
+    if in_room && peers.is_empty() {
+        info!(
+            "[COOP] no peers yet for {}; will fill in as they join",
+            dll_dir.display()
+        );
     }
 }
 
-/// Re-seed every recorded game's `custom_broadcasts.txt` with the room's current
-/// peers. Called on a timer while in a room so a late-joining peer is picked up
-/// without a relaunch (removes the launch-order dependency). A transient empty
-/// fetch is ignored so we never clobber a good seed; no-op until a game has been
-/// seeded this session.
-pub async fn reseed_all() {
+/// Apply a freshly fetched peer list to every seeded game whose file is out of
+/// date. Cheap when nothing changed (no file I/O). Called on every UI member
+/// poll so the file is current within seconds for the game's next launch (a
+/// running game read it at startup; see the module docs).
+pub fn observe_peers(peers: &[String]) {
     if current_room_id().is_none() {
         return;
     }
-    let dirs: Vec<PathBuf> = SEEDED_DIRS.lock().unwrap().clone();
-    if dirs.is_empty() {
+    // Written under the lock: a 4s UI poll and the 12s loop can both land here,
+    // and writing after unlocking could leave an older list in a file the book
+    // already records as newer.
+    let mut book = lock(&SEEDS);
+    for dir in book.observe(peers) {
+        write_custom_broadcasts(&dir, peers);
+    }
+}
+
+/// Background fallback for `observe_peers`: fetch the room's peers and rewrite
+/// any seeded file that is out of date. No-op until a game has been seeded this
+/// room session.
+pub async fn reseed_all() {
+    if current_room_id().is_none() || lock(&SEEDS).is_empty() {
         return;
     }
     let peers = current_peer_ips().await;
-    if peers.is_empty() {
-        return;
+    observe_peers(&peers);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
     }
-    for dir in &dirs {
-        write_custom_broadcasts(dir, &peers);
+
+    #[test]
+    fn launch_with_no_peers_is_still_recorded_in_a_room() {
+        let mut b = SeedBook::new();
+        b.record_launch(Path::new("/g"), &[], true);
+        assert_eq!(b.dirs.len(), 1);
+        // The first joiner then gets written.
+        assert_eq!(b.observe(&s(&["10.242.1.2"])), vec![PathBuf::from("/g")]);
+    }
+
+    #[test]
+    fn launch_outside_a_room_is_forgotten() {
+        let mut b = SeedBook::new();
+        b.record_launch(Path::new("/g"), &s(&["10.0.0.1"]), true);
+        b.record_launch(Path::new("/g"), &[], false);
+        assert!(b.is_empty());
+    }
+
+    #[test]
+    fn unchanged_peers_write_nothing_and_order_does_not_matter() {
+        let mut b = SeedBook::new();
+        b.record_launch(Path::new("/g"), &s(&["10.0.0.2", "10.0.0.1"]), true);
+        assert!(b.observe(&s(&["10.0.0.1", "10.0.0.2"])).is_empty());
+        assert_eq!(
+            b.observe(&s(&["10.0.0.1", "10.0.0.2", "10.0.0.3"])),
+            vec![PathBuf::from("/g")]
+        );
+        assert!(b.observe(&s(&["10.0.0.3", "10.0.0.2", "10.0.0.1"])).is_empty());
+    }
+
+    #[test]
+    fn empty_fetch_never_clobbers_a_seed() {
+        let mut b = SeedBook::new();
+        b.record_launch(Path::new("/g"), &s(&["10.0.0.1"]), true);
+        assert!(b.observe(&[]).is_empty());
+        assert_eq!(b.dirs[0].1, s(&["10.0.0.1"]));
+    }
+
+    #[test]
+    fn only_stale_dirs_are_rewritten() {
+        let mut b = SeedBook::new();
+        b.record_launch(Path::new("/a"), &s(&["10.0.0.1"]), true);
+        b.record_launch(Path::new("/b"), &[], true);
+        assert_eq!(b.observe(&s(&["10.0.0.1"])), vec![PathBuf::from("/b")]);
+    }
+
+    #[test]
+    fn relaunch_replaces_the_entry_instead_of_duplicating() {
+        let mut b = SeedBook::new();
+        b.record_launch(Path::new("/g"), &[], true);
+        b.record_launch(Path::new("/g"), &s(&["10.0.0.1"]), true);
+        assert_eq!(b.dirs.len(), 1);
+        assert_eq!(b.take_dirs(), vec![PathBuf::from("/g")]);
+        assert!(b.is_empty());
     }
 }

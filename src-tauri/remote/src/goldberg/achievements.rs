@@ -121,7 +121,11 @@ fn migrate_array_to_map_format(path: &Path, achievements: &[GoldbergAchievement]
 /// Retries on read failure (the game may briefly lock the file while writing).
 /// If the file is in the legacy definitions-array format it is migrated to GBE
 /// map format on the spot so GBE can record future unlocks.
-pub fn read_goldberg_unlocks(app_id: &str, dll_dir: Option<&str>) -> Vec<GoldbergAchievement> {
+pub fn read_goldberg_unlocks(
+    app_id: &str,
+    dll_dir: Option<&str>,
+    wine_prefix: Option<&Path>,
+) -> Vec<GoldbergAchievement> {
     const TAG: &str = "[ACH-GSE]";
 
     // Scan EVERY candidate location, not just the first that exists. Drop writes
@@ -129,10 +133,11 @@ pub fn read_goldberg_unlocks(app_id: &str, dll_dir: Option<&str>) -> Vec<Goldber
     // map-format file to record into — but some GBE forks ignore the
     // `local_save_path` redirect and write unlocks to their own default folder
     // instead (`GSE Saves`, `Goldberg SteamEmu Saves`, next to the DLL or under
-    // %APPDATA%). Returning the first file found would let that all-`false`
-    // shadow mask the real unlocks, so read them all and keep the one with the
-    // most earned achievements.
-    let candidates = super::gse_candidate_paths(app_id, dll_dir);
+    // %APPDATA%, or the %APPDATA% inside the game's Wine prefix on Linux).
+    // Returning the first file found would let that all-`false` shadow mask
+    // the real unlocks, so read them all and keep the one with the most
+    // earned achievements.
+    let candidates = super::gse_candidate_paths(app_id, dll_dir, wine_prefix);
     if candidates.is_empty() {
         match super::gse_save_path(app_id, dll_dir) {
             Some(p) => info!(
@@ -158,6 +163,40 @@ pub fn read_goldberg_unlocks(app_id: &str, dll_dir: Option<&str>) -> Vec<Goldber
         }
     }
     best
+}
+
+/// Returns `contents` with every achievement marked not earned (and its
+/// unlock time and progress zeroed), or `None` when nothing in it was earned
+/// or it isn't a Goldberg map / array file. Every other field is kept.
+///
+/// Used by the achievement reset so a reset on the server isn't undone by the
+/// next launch re-reading this file.
+pub fn clear_earned_json(contents: &str) -> Option<String> {
+    let mut root: serde_json::Value = serde_json::from_str(contents).ok()?;
+    let mut changed = false;
+    let mut clear = |entry: &mut serde_json::Value| {
+        let Some(obj) = entry.as_object_mut() else { return };
+        let earned = obj.get("earned").and_then(|v| v.as_bool()).unwrap_or(false);
+        let has_time = obj.get("earned_time").and_then(|v| v.as_u64()).unwrap_or(0) != 0;
+        if !earned && !has_time {
+            return;
+        }
+        obj.insert("earned".into(), serde_json::Value::Bool(false));
+        obj.insert("earned_time".into(), serde_json::Value::from(0u64));
+        if obj.contains_key("progress") {
+            obj.insert("progress".into(), serde_json::Value::from(0u64));
+        }
+        changed = true;
+    };
+    match &mut root {
+        serde_json::Value::Object(map) => map.values_mut().for_each(&mut clear),
+        serde_json::Value::Array(items) => items.iter_mut().for_each(&mut clear),
+        _ => return None,
+    }
+    if !changed {
+        return None;
+    }
+    serde_json::to_string_pretty(&root).ok()
 }
 
 /// Read a file with a few short retries (GBE may be mid-write). `None` if every
@@ -258,5 +297,40 @@ pub fn migrate_runtime_achievements_if_needed(dll_dir: &str) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clear_map_format_marks_everything_unearned() {
+        let input = r#"{"A":{"earned":true,"earned_time":1700000000,"progress":5,"max_progress":5},"B":{"earned":false,"earned_time":0}}"#;
+        let out = clear_earned_json(input).expect("changed");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["A"]["earned"], false);
+        assert_eq!(v["A"]["earned_time"], 0);
+        assert_eq!(v["A"]["progress"], 0);
+        assert_eq!(v["A"]["max_progress"], 5);
+        assert_eq!(v["B"]["earned"], false);
+        // Reads back as nothing earned.
+        match parse_gbe_achievements_typed(&out) {
+            ParseResult::Map(a) => assert!(a.iter().all(|x| !x.earned)),
+            _ => panic!("expected map format"),
+        }
+    }
+
+    #[test]
+    fn clear_array_format_and_noop_cases() {
+        let arr = r#"[{"name":"A","earned":true,"earned_time":5,"displayName":"x"}]"#;
+        let out = clear_earned_json(arr).expect("changed");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v[0]["earned"], false);
+        assert_eq!(v[0]["displayName"], "x");
+
+        assert_eq!(clear_earned_json(r#"{"A":{"earned":false,"earned_time":0}}"#), None);
+        assert_eq!(clear_earned_json("not json"), None);
+        assert_eq!(clear_earned_json("42"), None);
     }
 }

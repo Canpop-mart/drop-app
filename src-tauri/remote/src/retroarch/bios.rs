@@ -304,15 +304,16 @@ pub fn check_and_place_bios(
 /// Copies every file in `system_dir` belonging to `spec`'s BIOS set into
 /// `target_dir`, the subdirectory the core actually reads.
 ///
-/// **Copy, not hardlink or symlink.** A hardlink saves the few MB but is still
-/// an unlink target for the manifest-reconcile sweep in
-/// `games::downloads::download_agent`, so it buys nothing there, and it fails
-/// outright across filesystems (`system/` on the internal drive, an install on
+/// **Copy, not hardlink or symlink.** A hardlink saves the few MB but buys
+/// nothing against the download agent's file removal in
+/// `games::downloads::download_agent`, and it fails outright across
+/// filesystems (`system/` on the internal drive, an install on
 /// the Deck's SD card). A symlink needs Developer Mode on Windows and is one
 /// more thing for Wine to resolve. A plain copy is an ordinary file to every
-/// core, on every platform, under Proton or not. The sweep is taught to leave
-/// `system/` alone — see `PROTECTED_DATA_DIRS` — which is what actually keeps
-/// these files alive across a re-download.
+/// core, on every platform, under Proton or not. What keeps these files alive
+/// across a re-download: the agent only removes files an earlier version of
+/// the emulator shipped, and never anything under `system/` (see
+/// `PROTECTED_DATA_DIRS`).
 fn place_bios_in_subdir(system_dir: &Path, target_dir: &Path, spec: &BiosSpec) {
     let root_bios: Vec<_> = fs::read_dir(system_dir)
         .into_iter()

@@ -104,6 +104,11 @@ async fn send_with_retry<F>(
 where
     F: Fn() -> reqwest_middleware::RequestBuilder,
 {
+    // Fail before the first attempt when this device has no usable
+    // credentials. Every retry would be identical and the server would only
+    // 401 each time, so there is nothing to gain from making the round trip.
+    generate_authorization_header()?;
+
     send_with_retry_inner(
         method,
         url.as_str(),
@@ -111,7 +116,12 @@ where
         ServerErrorPolicy::AsError,
         || {
             // Fresh auth header every attempt — the JWT lives only 10s.
-            build_request().header("Authorization", generate_authorization_header())
+            match generate_authorization_header() {
+                Ok(header) => build_request().header("Authorization", header),
+                // Unreachable given the check above, and a request without the
+                // header earns an honest 401 rather than taking the app down.
+                Err(_) => build_request(),
+            }
         },
     )
     .await

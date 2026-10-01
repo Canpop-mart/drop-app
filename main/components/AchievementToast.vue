@@ -57,19 +57,17 @@
 
 <script setup lang="ts">
 import { useListen } from "~/composables/useListen";
+import {
+  acceptUnlock,
+  bpmToastHosts,
+  type AchievementUnlockedPayload,
+} from "~/composables/achievements/toast";
 
 interface AchievementToastItem {
   id: string;
   title: string;
   description?: string;
   iconUrl?: string;
-}
-
-interface AchievementPayload {
-  id: string;
-  title: string;
-  description: string;
-  iconUrl: string;
 }
 
 const toasts = ref<AchievementToastItem[]>([]);
@@ -83,18 +81,12 @@ const TOAST_LIFETIME_MS = 6_000;
 
 const recentIds = new Map<string, number>();
 
-useListen<AchievementPayload>("achievement_unlocked", (event) => {
+useListen<AchievementUnlockedPayload>("achievement_unlocked", (event) => {
+  // Big Picture shows its own themed toast (BpmAchievementToastHost).
+  if (bpmToastHosts.value > 0) return;
   const data = event.payload;
   const now = Date.now();
-
-  // Drop stale entries so the map doesn't grow unbounded.
-  for (const [id, ts] of recentIds) {
-    if (now - ts > DEDUP_WINDOW_MS) recentIds.delete(id);
-  }
-
-  const lastSeen = recentIds.get(data.id);
-  if (lastSeen !== undefined && now - lastSeen < DEDUP_WINDOW_MS) return;
-  recentIds.set(data.id, now);
+  if (!acceptUnlock(recentIds, data.id, now, DEDUP_WINDOW_MS)) return;
 
   const toast: AchievementToastItem = {
     id: `${data.id}-${now}`,

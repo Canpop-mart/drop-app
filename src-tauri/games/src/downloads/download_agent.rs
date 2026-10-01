@@ -21,10 +21,9 @@ use remote::error::RemoteAccessError;
 use remote::requests::generate_url;
 use remote::utils::DROP_CLIENT_ASYNC;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs::{create_dir_all, remove_file};
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -38,6 +37,7 @@ use crate::state::GameStatusManager;
 
 use super::download_logic::download_game_chunk;
 use super::drop_data::DropData;
+use super::mod_data::mod_owned_files;
 
 pub(crate) static RETRY_COUNT: usize = 3;
 
@@ -76,10 +76,10 @@ pub(crate) fn is_disk_full(e: &ApplicationDownloadError) -> bool {
 
 /// Top-level directories inside an install dir that hold USER data created at
 /// runtime (saves, NAND, configs) rather than files shipped in the server
-/// manifest. The reconcile sweep in `run()` deletes anything not in the
-/// manifest to clear stale files left by a previous version; without this
-/// guard it also deletes these, wiping the player's saves on every
-/// re-download. Standalone emulators are the acute case: Eden/Yuzu/Ryujinx
+/// manifest. `run()` removes files an earlier version of the game shipped and
+/// this one no longer does; a path under one of these is never removed even
+/// then. The sweep used to delete EVERY file not in the manifest, and this
+/// list was all that stood between it and the player's saves. Standalone emulators are the acute case: Eden/Yuzu/Ryujinx
 /// keep per-title saves under `user/` (portable mode) and Cemu under `mlc01/`;
 /// RetroArch saves live in `drop-saves/`. `remove_file` is a hard unlink (no
 /// Recycle Bin), so a wrong delete here is irreversible.
@@ -111,7 +111,87 @@ const PROTECTED_DATA_DIRS: &[&str] = &[
     "states",
     "nand",
     "sdmc",
+    ".mods", // mod_data::MODS_DIR: one ledger per installed mod. Losing these
+             // makes every installed mod read as uninstalled and drops its
+             // launch override, even when the mod's files survive.
 ];
+
+/// Directories that hold user data WHEREVER they sit in the install tree, not
+/// only at the top. Drop creates these next to a binary at runtime, and that
+/// binary is often in a subfolder: an Unreal game keeps its Steam DLL in
+/// `Binaries/Win64/`, so GBE's `drop-goldberg/` (achievements AND game saves)
+/// and the `steam_settings/` Drop writes at launch live there, and a
+/// top-level-only check let the sweep unlink them on every update or repair.
+/// Kept separate from `PROTECTED_DATA_DIRS` because generic names like `user`
+/// or `system` do appear deep inside shipped game data, and protecting those
+/// at any depth would stop stale game files from ever being cleaned up.
+const PROTECTED_DATA_DIRS_ANY_DEPTH: &[&str] = &[
+    "drop-goldberg",
+    "drop-saves",
+    "steam_settings",
+    // GBE fork and original Goldberg defaults, used next to the DLL by builds
+    // that ignore Drop's `local_save_path` redirect (see goldberg/mod.rs
+    // APPDATA_FALLBACK_DIRS, which Drop's own achievement reader scans).
+    "GSE Saves",
+    "Goldberg SteamEmu Saves",
+];
+
+/// Whether a path (POSIX-relative to the install dir) is runtime user data the
+/// stale-file sweep must never delete. See the two lists above.
+fn is_protected_user_data(relative: &str) -> bool {
+    // Manifest keys are meant to be POSIX, but the path is joined with the OS
+    // separator rules, so a `\\` or a `./` in a key would still name a real
+    // nested directory on Windows. Judge the components the OS will see.
+    let parts: Vec<&str> = relative
+        .split(['/', '\\'])
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect();
+    let top_level = parts
+        .first()
+        .is_some_and(|top| PROTECTED_DATA_DIRS.iter().any(|d| d.eq_ignore_ascii_case(top)));
+    // Directory components only: the last part is the file itself.
+    let dirs = &parts[..parts.len().saturating_sub(1)];
+    let any_depth = dirs.iter().any(|component| {
+        PROTECTED_DATA_DIRS_ANY_DEPTH
+            .iter()
+            .any(|d| d.eq_ignore_ascii_case(component))
+    });
+    top_level || any_depth
+}
+
+/// Whether the stale-file sweep may delete this path (POSIX-relative to the
+/// install dir): it is not in the current manifest, not Drop's own resume
+/// ledger, not user data, and no installed mod wrote it. `mod_files` holds
+/// lower-cased paths (see `mod_owned_files`).
+fn should_sweep(
+    relative: &str,
+    file_list: &HashMap<String, String>,
+    mod_files: &HashSet<String>,
+) -> bool {
+    if file_list.contains_key(relative) || relative == ".dropdata" {
+        return false;
+    }
+    if is_protected_user_data(relative) {
+        return false;
+    }
+    !mod_files.contains(&relative.to_lowercase())
+}
+
+/// Files the previous version of this game shipped that the version being
+/// installed does not. These are the only files the sweep may consider: a file
+/// Drop never installed is the player's or the game's, whatever its name.
+fn stale_paths<'a>(
+    previous: &'a HashMap<String, String>,
+    current: &HashMap<String, String>,
+) -> Vec<&'a str> {
+    let mut stale: Vec<&str> = previous
+        .keys()
+        .filter(|path| !current.contains_key(*path))
+        .map(String::as_str)
+        .collect();
+    stale.sort_unstable();
+    stale
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -221,21 +301,6 @@ impl GameDownloadAgent {
         Ok(result)
     }
 
-    fn scan_filetree(&self, path: &Path) -> Result<Vec<PathBuf>, io::Error> {
-        if !path.is_dir() {
-            return Ok(vec![path.into()]);
-        };
-
-        let subdirs = path.read_dir()?;
-        let mut results = Vec::new();
-        for subdir in subdirs {
-            let subdir = subdir?;
-            let subfiles = self.scan_filetree(&subdir.path())?;
-            results.extend(subfiles);
-        }
-        Ok(results)
-    }
-
     // Blocking
     pub fn setup_download(&self, app_handle: &AppHandle) -> Result<(), ApplicationDownloadError> {
         let mut db_lock = borrow_db_mut_checked();
@@ -290,26 +355,42 @@ impl GameDownloadAgent {
     }
 
     async fn download_manifest(&self) -> Result<(), ApplicationDownloadError> {
+        let manifest_download = self
+            .fetch_manifest(
+                &self.metadata.version,
+                self.dropdata.previously_installed_version.as_deref(),
+            )
+            .await?;
+
+        if let Ok(mut manifest) = self.dl_info.lock() {
+            *manifest = Some(manifest_download);
+            return Ok(());
+        }
+
+        Err(ApplicationDownloadError::Lock)
+    }
+
+    /// The server's download manifest for `version`. With `previous`, chunks
+    /// already present from that version are left out of the download.
+    async fn fetch_manifest(
+        &self,
+        version: &str,
+        previous: Option<&str>,
+    ) -> Result<DownloadInformation, ApplicationDownloadError> {
         let client = DROP_CLIENT_ASYNC.clone();
         let url = generate_url(
             &["/api/v1/client/game/manifest"],
             &[
                 ("id", &self.metadata.id),
-                ("version", &self.metadata.version),
-                (
-                    "previous",
-                    self.dropdata
-                        .previously_installed_version
-                        .as_ref()
-                        .map_or("", |v| v),
-                ),
+                ("version", version),
+                ("previous", previous.unwrap_or("")),
             ],
         )
         .map_err(ApplicationDownloadError::Communication)?;
 
         let response = client
             .get(url)
-            .header("Authorization", generate_authorization_header())
+            .header("Authorization", generate_authorization_header()?)
             .send()
             .await
             .map_err(|e| ApplicationDownloadError::Communication(e.into()))?;
@@ -326,17 +407,97 @@ impl GameDownloadAgent {
             ));
         }
 
-        let manifest_download: DownloadInformation = response
+        response
             .json()
             .await
-            .map_err(|e| ApplicationDownloadError::Communication(e.into()))?;
+            .map_err(|e| ApplicationDownloadError::Communication(e.into()))
+    }
 
-        if let Ok(mut manifest) = self.dl_info.lock() {
-            *manifest = Some(manifest_download);
-            return Ok(());
+    /// Remove files an earlier version of this game installed into this same
+    /// directory that the version being installed no longer ships.
+    ///
+    /// Only an in-place version change has anything to remove. New versions
+    /// normally get their own folder, and a resume, repair or reinstall of the
+    /// same version wrote nothing that isn't in its manifest, so any other
+    /// file there belongs to the player or the game: saves (RPG Maker's
+    /// `save/`, Ren'Py's `game/saves/`), configs, GBE data, mods. The old
+    /// sweep deleted everything not in the manifest and took those with it.
+    ///
+    /// `previously_installed_version` stays in the ledger after the update
+    /// completes, so later resumes and repairs of this install run this
+    /// again against the same old list. That only ever removes files the old
+    /// version shipped and the new one doesn't.
+    ///
+    /// Never fails the download: a file we can't identify or can't delete is
+    /// left where it is and logged.
+    async fn remove_files_dropped_since_previous_version(
+        &self,
+        file_list: &HashMap<String, String>,
+    ) {
+        let Some(previous) = self.dropdata.previously_installed_version.as_deref() else {
+            return;
+        };
+        if previous == self.metadata.version {
+            return;
         }
+        let base_path = &self.dropdata.base_path;
 
-        Err(ApplicationDownloadError::Lock)
+        let previous_files = match self.fetch_manifest(previous, None).await {
+            Ok(info) => info.file_list,
+            Err(e) => {
+                warn!(
+                    "not removing files from version {previous} in {}: could not fetch its file list ({e})",
+                    base_path.display()
+                );
+                return;
+            }
+        };
+
+        // Mods overlay into this directory and can overwrite a file the old
+        // version shipped. If we can't tell which files are theirs, remove
+        // nothing: a leftover file is recoverable, a deleted mod file is not.
+        let mod_files = match mod_owned_files(base_path) {
+            Ok(files) => files,
+            Err(why) => {
+                warn!(
+                    "not removing files from version {previous} in {}: {why}",
+                    base_path.display()
+                );
+                return;
+            }
+        };
+
+        let Ok(base_real) = base_path.canonicalize() else {
+            warn!("not removing old files: cannot resolve {}", base_path.display());
+            return;
+        };
+
+        for relative in stale_paths(&previous_files, file_list) {
+            if !should_sweep(relative, file_list, &mod_files) {
+                continue;
+            }
+            let path = base_path.join(relative);
+            // Only a regular file, reached without leaving the install dir
+            // through a symlink, a junction or a `..` in the server's path.
+            let is_file = std::fs::symlink_metadata(&path)
+                .map(|m| m.is_file())
+                .unwrap_or(false);
+            if !is_file {
+                continue;
+            }
+            let inside = path
+                .parent()
+                .and_then(|p| p.canonicalize().ok())
+                .is_some_and(|parent| parent.starts_with(&base_real));
+            if !inside {
+                warn!("not removing {}: it is outside the install dir", path.display());
+                continue;
+            }
+            match remove_file(&path) {
+                Ok(()) => debug!("removed {} (shipped by {previous}, not by this version)", path.display()),
+                Err(e) => warn!("could not remove old file {}: {e}", path.display()),
+            }
+        }
     }
 
     // Sets up progress for download writes
@@ -393,54 +554,8 @@ impl GameDownloadAgent {
 
         let file_list = &file_list;
         let base_path = &self.dropdata.base_path;
-        let current_file_tree = self.scan_filetree(base_path)?;
-
-        for file in current_file_tree {
-            let relative = file.strip_prefix(base_path)?;
-            // The server's file_list keys are POSIX paths (forward slashes).
-            // On Windows relative.to_string_lossy() yields BACKSLASH separators,
-            // so a subdirectory file ("game\asset\x") never matches the manifest
-            // key ("game/asset/x") — and the sweep below would then DELETE every
-            // file in a subdirectory on any re-run of run() (a validation repair
-            // pass or a resumed download), destroying a working install. Join the
-            // components with "/" so the key matches on every OS. Literal
-            // backslashes inside a single Unix filename are preserved (they are
-            // one Normal component, not a separator).
-            let filename = relative
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
-                .join("/");
-            let needed = file_list.contains_key(&filename) || filename == ".dropdata";
-            if needed {
-                continue;
-            }
-
-            // Never delete runtime/user data that lives inside the install dir
-            // but isn't part of any manifest (emulator saves/NAND/configs).
-            // The sweep exists to remove files left over from a *previous Drop
-            // install*, not data the user or a standalone emulator wrote at
-            // runtime. See PROTECTED_DATA_DIRS — installing a second game that
-            // shares an emulator re-runs this agent over the shared install
-            // dir, and without the guard it wipes every title's saves.
-            let top_component = relative
-                .components()
-                .next()
-                .and_then(|c| c.as_os_str().to_str());
-            let in_protected_dir = match top_component {
-                Some(top) => PROTECTED_DATA_DIRS
-                    .iter()
-                    .any(|dir| dir.eq_ignore_ascii_case(top)),
-                None => false,
-            };
-            if in_protected_dir {
-                debug!("preserving user data (not in manifest): {}", file.display());
-                continue;
-            }
-
-            debug!("deleted {}", file.display());
-            remove_file(file)?;
-        }
+        self.remove_files_dropped_since_previous_version(file_list)
+            .await;
 
         let local_completed_chunks = completed_chunks.clone();
 
@@ -744,7 +859,6 @@ impl GameDownloadAgent {
         missing: &[crate::downloads::validate::MissingFile],
         mismatched: &[crate::downloads::validate::MismatchedChunk],
     ) -> usize {
-        use std::collections::HashSet;
         let mut to_clear: HashSet<String> = HashSet::new();
 
         for chunk in mismatched {
@@ -892,3 +1006,99 @@ impl Downloadable for GameDownloadAgent {
         lock!(self.status).clone()
     }
 }
+
+#[cfg(test)]
+mod sweep_tests {
+    use super::*;
+
+    fn manifest(paths: &[&str]) -> HashMap<String, String> {
+        paths.iter().map(|p| (p.to_string(), String::new())).collect()
+    }
+
+    #[test]
+    fn protected_names_at_top_level() {
+        assert!(is_protected_user_data("user/nand/save.bin"));
+        assert!(is_protected_user_data("System/scph1001.bin"));
+        assert!(is_protected_user_data(".mods/smapi.moddata"));
+        // Generic names are only protected at the top: deep inside game data
+        // they are ordinary shipped files that may go stale.
+        assert!(!is_protected_user_data("Content/system/old.pak"));
+        assert!(!is_protected_user_data("data/user/stale.dat"));
+    }
+
+    #[test]
+    fn drop_runtime_dirs_protected_at_any_depth() {
+        // Unreal layout: the Steam DLL, and so GBE's folders, sit two deep.
+        assert!(is_protected_user_data(
+            "Binaries/Win64/drop-goldberg/480/achievements.json"
+        ));
+        assert!(is_protected_user_data(
+            "Binaries/Win64/drop-goldberg/480/remote/save1.sav"
+        ));
+        assert!(is_protected_user_data(
+            "Binaries/Win64/steam_settings/configs.user.ini"
+        ));
+        assert!(is_protected_user_data("RetroArch-Win64/drop-saves/u1/game.srm"));
+        assert!(is_protected_user_data("A/B/C/DROP-GOLDBERG/x"));
+    }
+
+    #[test]
+    fn protection_sees_through_backslashes_and_dot_segments() {
+        assert!(is_protected_user_data("saves\\slot1.sav"));
+        assert!(is_protected_user_data("./saves/slot1.sav"));
+        assert!(is_protected_user_data("Binaries\\Win64\\drop-goldberg\\480\\a.json"));
+    }
+
+    #[test]
+    fn a_file_merely_named_like_a_dir_is_not_protected() {
+        assert!(!is_protected_user_data("bin/steam_settings"));
+        assert!(!is_protected_user_data("readme-drop-goldberg.txt"));
+    }
+
+    #[test]
+    fn mods_dir_constant_is_protected() {
+        assert!(PROTECTED_DATA_DIRS.contains(&super::super::mod_data::MODS_DIR));
+    }
+
+    #[test]
+    fn gbe_fork_default_dirs_protected_at_any_depth() {
+        assert!(is_protected_user_data("Binaries/Win64/GSE Saves/480/achievements.json"));
+        assert!(is_protected_user_data("bin/Goldberg SteamEmu Saves/480/remote/a.sav"));
+    }
+
+    #[test]
+    fn only_files_the_previous_version_shipped_are_stale() {
+        let previous = manifest(&["Game.exe", "old.dll", "data/removed.pak", "data/kept.pak"]);
+        let current = manifest(&["Game.exe", "data/kept.pak", "data/new.pak"]);
+        assert_eq!(stale_paths(&previous, &current), vec!["data/removed.pak", "old.dll"]);
+        // A resume or repair of the same version has nothing to remove.
+        assert!(stale_paths(&current, &current).is_empty());
+    }
+
+    #[test]
+    fn stale_file_under_user_data_or_owned_by_a_mod_is_kept() {
+        let current = manifest(&["Game.exe"]);
+        let mods: HashSet<String> = ["mods/loader.dll".to_string()].into();
+        // The old version shipped a default save, which the player now owns.
+        assert!(!should_sweep("saves/slot1.sav", &current, &mods));
+        // A mod replaced a file the old version shipped.
+        assert!(!should_sweep("Mods/Loader.dll", &current, &mods));
+        assert!(should_sweep("old.dll", &current, &mods));
+    }
+
+    #[test]
+    fn sweep_keeps_manifest_ledger_userdata_and_mod_files() {
+        let list = manifest(&["Game.exe", "Content/Paks/base.pak"]);
+        let mods: HashSet<String> = ["mods/contentpatcher/contentpatcher.dll".to_string()].into();
+
+        assert!(!should_sweep("Game.exe", &list, &mods));
+        assert!(!should_sweep(".dropdata", &list, &mods));
+        assert!(!should_sweep("Binaries/Win64/drop-goldberg/480/x.sav", &list, &mods));
+        // Mod ledger paths are lower-cased; on-disk casing may differ.
+        assert!(!should_sweep("Mods/ContentPatcher/ContentPatcher.dll", &list, &mods));
+
+        assert!(should_sweep("Content/Paks/old_v1.pak", &list, &mods));
+        assert!(should_sweep("leftover.txt", &list, &mods));
+    }
+}
+

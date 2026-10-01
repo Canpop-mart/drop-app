@@ -65,7 +65,7 @@ export interface MergedSave {
 }
 
 export type SyncConfirmAction = {
-  type: "upload" | "download" | "delete";
+  type: "upload" | "download" | "delete" | "restore-pc";
   save: SaveFile | null;
   filename: string;
   saveType: string;
@@ -218,6 +218,19 @@ export function useBpmGameSaves(
     };
   }
 
+  /**
+   * Restore this game's PC saves from the last "Backup All". It overwrites
+   * the saves on disk, so it goes behind the same confirmation as Delete.
+   */
+  function requestRestorePcSaves() {
+    confirmSyncAction.value = {
+      type: "restore-pc",
+      save: null,
+      filename: gameName.value ?? "",
+      saveType: "pc",
+    };
+  }
+
   function confirmSync() {
     if (!confirmSyncAction.value) return;
     const action = confirmSyncAction.value;
@@ -228,6 +241,8 @@ export function useBpmGameSaves(
       doDownload(action.filename, action.saveType);
     } else if (action.type === "delete" && action.save) {
       deleteSave(action.save);
+    } else if (action.type === "restore-pc") {
+      restorePcSaves();
     }
   }
 
@@ -321,6 +336,18 @@ export function useBpmGameSaves(
   const ludusaviAvailable = ref(false);
   const ludusaviInstalling = ref(false);
   const pcSaveGroups = ref<PcSaveGroup[]>([]);
+  /** Whether "Backup All" has made a backup Restore can use, on this device. */
+  const hasPcBackup = ref(false);
+
+  async function refreshPcBackup() {
+    try {
+      hasPcBackup.value =
+        ludusaviAvailable.value &&
+        (await invoke<boolean>("has_pc_save_backup", { gameId }));
+    } catch {
+      hasPcBackup.value = false;
+    }
+  }
 
   async function doInstallLudusavi() {
     ludusaviInstalling.value = true;
@@ -341,6 +368,9 @@ export function useBpmGameSaves(
   async function fetchPcSaves() {
     try {
       ludusaviAvailable.value = await invoke("check_ludusavi");
+      // Independent of whether any saves are on disk right now: a backup is
+      // most needed exactly when they are gone.
+      await refreshPcBackup();
       if (!ludusaviAvailable.value || !gameName.value) return;
       const result = await invoke<{ files: LudusaviFile[]; game_name: string }>(
         "list_pc_game_saves",
@@ -353,7 +383,9 @@ export function useBpmGameSaves(
   }
 
   async function backupPcSaves() {
-    if (!gameName.value) return;
+    // A second press while one is running would queue another full Ludusavi
+    // pass behind the first.
+    if (!gameName.value || pcSaveStatus.value) return;
     pcSaveStatus.value = "backing-up";
     try {
       const backupPath = await invoke<string>("backup_pc_game_saves", {
@@ -365,23 +397,27 @@ export function useBpmGameSaves(
       onError(`Backup failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       pcSaveStatus.value = "";
+      await refreshPcBackup();
     }
   }
 
   async function restorePcSaves() {
+    if (pcSaveStatus.value) return;
     pcSaveStatus.value = "restoring";
+    let restored = false;
     try {
-      const backupPath =
-        `${await invoke("get_temp_dir")}drop-ludusavi-${gameId}`.replace(
-          /\\/g,
-          "/",
-        );
-      await invoke("restore_pc_game_saves", { backupPath });
+      // The backend knows where "Backup All" put this game's backup.
+      await invoke("restore_pc_game_saves", { gameId });
+      restored = true;
     } catch (e) {
       onError(`Restore failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       pcSaveStatus.value = "";
     }
+    // Refresh the listing after the label is cleared: the rescan can take a
+    // while (Ludusavi, and a manifest update once a day) and the restore is
+    // already done.
+    if (restored) void fetchPcSaves();
   }
 
   // Group raw Ludusavi files into save slots, attaching `_backupN` files
@@ -594,11 +630,13 @@ export function useBpmGameSaves(
     requestUpload,
     requestDownload,
     confirmSync,
+    requestRestorePcSaves,
     // Merged view
     mergedSaves,
     // Ludusavi PC saves
     pcSaves,
     pcSaveStatus,
+    hasPcBackup,
     pcSaveGroups,
     ludusaviAvailable,
     ludusaviInstalling,

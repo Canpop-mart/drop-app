@@ -91,11 +91,22 @@
         }"
       >
         <p class="text-sm font-semibold" :style="{ color: 'var(--bpm-accent-hex)' }">
-          Linked as {{ raUsername }}
+          Linked as {{ ra.serverUsername.value ?? raUsername }}
         </p>
         <p class="text-xs mt-1" :style="{ color: 'var(--bpm-muted)' }">
           Achievement tracking is active. You can unlink from Settings → Achievements.
         </p>
+      </div>
+
+      <!-- The server check failed: a retry, not a guess. -->
+      <div
+        v-else-if="ra.loadState.value === 'error'"
+        :ref="(el: any) => registerContent(el, { onSelect: ra.refresh })"
+        class="cursor-pointer rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+        @click="ra.refresh"
+      >
+        Could not check your RetroAchievements link with the server. Press A to retry.
+        <span class="block text-xs mt-1 opacity-70">{{ ra.loadError.value }}</span>
       </div>
 
       <template v-else>
@@ -141,9 +152,31 @@
           </p>
         </div>
 
+        <!-- Web API key: only when the server has no RA login of its own. -->
+        <div
+          v-if="ra.apiKeyRequired.value"
+          :ref="(el: any) => registerContent(el, { onSelect: () => openKeyboard('apiKey') })"
+          class="cursor-pointer rounded-xl p-4 transition-colors"
+          :style="{
+            backgroundColor: 'var(--bpm-surface)',
+            border: '1px solid var(--bpm-border)',
+          }"
+          @click="openKeyboard('apiKey')"
+        >
+          <p class="text-xs uppercase tracking-wide font-medium mb-2" :style="{ color: 'var(--bpm-muted)' }">
+            Web API key
+          </p>
+          <p v-if="raApiKey" class="text-base font-mono" :style="{ color: 'var(--bpm-text)' }">
+            {{ "•".repeat(Math.min(raApiKey.length, 16)) }}
+          </p>
+          <p v-else class="text-sm italic" :style="{ color: 'var(--bpm-muted)' }">
+            Press A to enter. Your server needs it to track unlocks.
+          </p>
+        </div>
+
         <p class="text-xs" :style="{ color: 'var(--bpm-muted)' }">
-          Drop only sends these to retroachievements.org's official API. After login we store a
-          session token, not the password.
+          These go to your Drop server, which signs in to retroachievements.org once to get a
+          session token. The password is not stored.
         </p>
 
         <div
@@ -155,7 +188,7 @@
 
         <button
           :ref="(el: any) => registerContent(el, { onSelect: doLink })"
-          :disabled="linking || !raUsername || !raPassword"
+          :disabled="linking || !raUsername || !raPassword || (ra.apiKeyRequired.value && !raApiKey)"
           class="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50"
           :style="{
             backgroundColor: 'var(--bpm-accent-hex)',
@@ -227,12 +260,12 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
 import BpmWizardShell from "~/components/bigpicture/BpmWizardShell.vue";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { useOnboarding } from "~/composables/onboarding";
+import { useRaLink } from "~/composables/ra-link";
 
 definePageMeta({ layout: "bpm-wizard" });
 
@@ -243,27 +276,27 @@ const onboarding = useOnboarding();
 type SubStep = "intro" | "link" | "tips";
 const subStep = ref<SubStep>("intro");
 
+const ra = useRaLink();
 const raUsername = ref("");
 const raPassword = ref("");
-const raLinked = ref(false);
+const raApiKey = ref("");
+// "Linked" only once the server has the account: that is what records unlocks.
+// (A mismatched device copy still counts: the server has the account, and
+// the device picks it up on its next launch.)
+const raLinked = computed(
+  () => ra.state.value === "linked" || ra.state.value === "mismatch",
+);
 const raError = ref("");
-const linking = ref(false);
+const linking = computed(() => ra.busy.value);
 
 const keyboardOpen = ref(false);
 const keyboardValue = ref("");
 const keyboardPlaceholder = ref("");
-const keyboardField = ref<"username" | "password" | null>(null);
+const keyboardField = ref<"username" | "password" | "apiKey" | null>(null);
 
 onMounted(async () => {
-  try {
-    const settings = await invoke<Record<string, any>>("fetch_settings");
-    if (settings.raUsername) {
-      raUsername.value = settings.raUsername;
-      raLinked.value = !!(settings.raToken && settings.raToken.length > 0);
-    }
-  } catch {
-    // Settings unavailable — fall back to empty.
-  }
+  await ra.refresh();
+  raUsername.value = ra.serverUsername.value ?? ra.localUsername.value;
 });
 
 // Re-seed focus into the newly visible sub-step. Without this, the previous
@@ -314,17 +347,19 @@ function handleSkip() {
   navigateTo(onboarding.nextRoute("retroachievements"));
 }
 
-function openKeyboard(field: "username" | "password") {
+function openKeyboard(field: "username" | "password" | "apiKey") {
   keyboardField.value = field;
-  keyboardValue.value = field === "username" ? raUsername.value : raPassword.value;
+  keyboardValue.value =
+    field === "username" ? raUsername.value : field === "password" ? raPassword.value : raApiKey.value;
   keyboardPlaceholder.value =
-    field === "username" ? "RetroAchievements username" : "Password";
+    field === "username" ? "RetroAchievements username" : field === "password" ? "Password" : "Web API key";
   keyboardOpen.value = true;
 }
 
 function onKeyboardInput(val: string) {
   if (keyboardField.value === "username") raUsername.value = val.slice(0, 64);
   else if (keyboardField.value === "password") raPassword.value = val.slice(0, 128);
+  else if (keyboardField.value === "apiKey") raApiKey.value = val.slice(0, 128);
   keyboardValue.value = val;
 }
 
@@ -334,19 +369,14 @@ function onKeyboardSubmit() {
 
 async function doLink() {
   raError.value = "";
-  linking.value = true;
   try {
-    const user = await invoke<string>("ra_login_and_save", {
-      username: raUsername.value,
-      password: raPassword.value,
-    });
-    raUsername.value = user;
+    await ra.link(raUsername.value, raPassword.value, raApiKey.value);
+    raUsername.value = ra.serverUsername.value ?? raUsername.value;
     raPassword.value = "";
-    raLinked.value = true;
+    raApiKey.value = "";
   } catch (e: any) {
-    raError.value = typeof e === "string" ? e : String(e?.message ?? e);
-  } finally {
-    linking.value = false;
+    // The server's own reason (bad password, API key needed, ...).
+    raError.value = String(e?.message ?? e);
   }
 }
 </script>

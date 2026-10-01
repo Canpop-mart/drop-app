@@ -192,13 +192,18 @@ impl DropData {
             Ok(v) => {
                 if v.game_id != game_id || v.game_version != game_version {
                     // A different game/version occupying this directory is a
-                    // legitimate reason to start a new ledger.
+                    // legitimate reason to start a new ledger. Only an earlier
+                    // version of the SAME game counts as the previous install:
+                    // the download agent deletes files that version shipped and
+                    // this one doesn't, and another game's file list would make
+                    // it delete that game's files.
+                    let previous = (v.game_id == game_id).then_some(v.game_version);
                     return Ok(DropData::new(
                         game_id,
                         game_version,
                         target_platform,
                         base_path,
-                        Some(v.game_version),
+                        previous,
                     ));
                 }
                 Ok(v)
@@ -248,7 +253,7 @@ impl DropData {
         // file was last written, so a library folder that has been moved or
         // renamed carries a path that no longer exists. Everything
         // destructive keys off this field — chunk bytes are written under it,
-        // the reconcile sweep hard-unlinks every non-manifest file under it,
+        // the download agent removes files an earlier version shipped from it,
         // validation reads it and the install dir recorded in the DB comes
         // from it — so a stale value downloads into and deletes inside the old
         // directory while the DB points at the new one. The directory we just
@@ -597,5 +602,42 @@ mod tests {
         )
         .expect("a fresh download has no ledger to lose");
         assert!(fresh.get_contexts().is_empty());
+    }
+
+    fn ledger_in(dir: &Path, game: &str, version: &str) {
+        DropData::new(
+            game.to_string(),
+            version.to_string(),
+            Platform::Windows,
+            dir.to_path_buf(),
+            None,
+        )
+        .write();
+    }
+
+    /// The download agent deletes files the previous version shipped and this
+    /// one doesn't, so "previous" must only ever be the same game.
+    #[test]
+    fn previous_version_is_only_recorded_for_the_same_game() {
+        let dir = scratch_dir("prev_same_game");
+        ledger_in(&dir, "g", "v1");
+        let upgraded =
+            DropData::generate("g".to_string(), "v2".to_string(), Platform::Windows, dir.clone())
+                .unwrap();
+        assert_eq!(upgraded.previously_installed_version.as_deref(), Some("v1"));
+
+        let dir = scratch_dir("prev_other_game");
+        ledger_in(&dir, "other", "v1");
+        let other =
+            DropData::generate("g".to_string(), "v2".to_string(), Platform::Windows, dir.clone())
+                .unwrap();
+        assert_eq!(other.previously_installed_version, None);
+
+        let dir = scratch_dir("prev_resume");
+        ledger_in(&dir, "g", "v2");
+        let resumed =
+            DropData::generate("g".to_string(), "v2".to_string(), Platform::Windows, dir.clone())
+                .unwrap();
+        assert_eq!(resumed.previously_installed_version, None);
     }
 }

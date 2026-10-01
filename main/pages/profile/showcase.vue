@@ -22,6 +22,21 @@
       Loading…
     </div>
 
+    <!-- Load failed: no editor, because Save would replace the stored
+         showcase with this empty list. -->
+    <div
+      v-else-if="loadFailed"
+      class="flex min-h-[30vh] flex-col items-center justify-center gap-4 text-sm text-zinc-400"
+    >
+      <p>Couldn't load your showcase.</p>
+      <button
+        class="rounded-md bg-zinc-800/60 px-4 py-2 font-medium text-zinc-200 ring-1 ring-zinc-700/60 transition-colors hover:bg-zinc-800"
+        @click="load"
+      >
+        Try again
+      </button>
+    </div>
+
     <template v-else>
       <draggable
         v-model="slots"
@@ -195,6 +210,9 @@ interface Slot {
   title: string;
   cover: string | null;
   gameName: string | null;
+  /** Stored as-is and sent back on save. Big Picture keeps an achievement's
+   *  icon and description here, and saving `null` erased them. */
+  data: unknown;
 }
 
 let uid = 0;
@@ -203,6 +221,7 @@ const { vars } = useProfileTheme(() => theme.value);
 
 const slots = ref<Slot[]>([]);
 const loading = ref(true);
+const loadFailed = ref(false);
 const pickerOpen = ref(false);
 const pendingType = ref<SlotType>("FavoriteGame");
 const saving = ref(false);
@@ -241,6 +260,7 @@ function onPick(g: FavoriteSearchRow) {
     title: "",
     cover: g.mCoverObjectId,
     gameName: g.mName,
+    data: null,
   });
 }
 
@@ -254,6 +274,7 @@ function addCustom() {
     title: "",
     cover: null,
     gameName: null,
+    data: null,
   });
 }
 
@@ -262,6 +283,7 @@ function remove(index: number) {
 }
 
 async function save() {
+  if (loadFailed.value || loading.value) return;
   saving.value = true;
   saveError.value = null;
   saveOk.value = false;
@@ -272,7 +294,7 @@ async function save() {
         gameId: s.gameId,
         itemId: s.itemId,
         title: s.title,
-        data: null,
+        data: s.data ?? null,
       })),
     );
     saveOk.value = true;
@@ -285,7 +307,10 @@ async function save() {
   }
 }
 
-onMounted(async () => {
+async function load() {
+  loading.value = true;
+  loadFailed.value = false;
+  saveError.value = null;
   try {
     const me = await api.profile.me();
     theme.value = me.profileTheme;
@@ -298,11 +323,14 @@ onMounted(async () => {
       title: it.type === "Achievement" ? (it.achievement?.title ?? "") : it.title,
       cover: it.game?.mCoverObjectId ?? null,
       gameName: it.game?.mName ?? null,
+      data: it.data ?? null,
     }));
   } catch {
-    saveError.value = "Couldn't load your showcase.";
+    loadFailed.value = true;
   } finally {
     loading.value = false;
   }
-});
+}
+
+onMounted(load);
 </script>

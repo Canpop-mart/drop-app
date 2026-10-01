@@ -22,6 +22,10 @@
     <!-- Download completion toast — watches useCompletedDownloads -->
     <BpmDownloadToast />
 
+    <!-- Themed achievement unlock toast. While this is mounted the desktop
+         AchievementToast (app.vue) stays quiet, so only one shows. -->
+    <BpmAchievementToastHost />
+
     <!-- Debug overlay (toggle with Select button) -->
     <div
       v-if="debugVisible"
@@ -108,6 +112,7 @@ import BigPictureTopBar from "~/components/bigpicture/BigPictureTopBar.vue";
 import BigPictureContextBar from "~/components/bigpicture/BigPictureContextBar.vue";
 import LaunchErrorDialog from "~/components/bigpicture/LaunchErrorDialog.vue";
 import BpmDownloadToast from "~/components/bigpicture/BpmDownloadToast.vue";
+import BpmAchievementToastHost from "~/components/bigpicture/BpmAchievementToastHost.vue";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useDeckMode } from "~/composables/deck-mode";

@@ -3,10 +3,12 @@
  * the achievement list, and RetroAchievements ROM-hash verification.
  *
  * Extracted from `pages/library/[id]/index.vue` (was ~330 lines of inline
- * `onMounted` fetches and refs). All three concerns share one trait: they
- * are non-critical server reads that must soft-fail — a stats/achievements
- * endpoint being down should never blank the page, so every fetch swallows
- * its error and leaves an empty default.
+ * `onMounted` fetches and refs). All three concerns are non-critical server
+ * reads: an endpoint being down must never blank the page. The stats bar
+ * soft-fails to zeroes; the achievement list records its failure in
+ * `achievementsError` so the UI can show an error with a retry instead of the
+ * "no achievements" empty state, and `achievementStatus` says WHY a game has
+ * none (or can't record unlocks for this player).
  *
  * Per-game-detail composable: NOT a singleton. Each call wires fresh refs
  * and component-scoped `useListen` subscriptions, so it must be invoked
@@ -16,6 +18,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useListen } from "~/composables/useListen";
 import { serverUrl } from "~/composables/use-server-fetch";
+import {
+  parseAchievementStatus,
+  serverErrorText,
+  type AchievementStatus,
+} from "~/composables/achievements/status";
 
 export interface GameStatsData {
   playtimeSeconds: number;
@@ -73,59 +80,132 @@ export function useGameStats(gameId: string) {
   // ── Achievements ───────────────────────────────────────────────────────
   const achievements = ref<AchievementData[]>([]);
   const achievementsLoading = ref(true);
+  /** Set when the list could not be fetched; null after a good fetch. */
+  const achievementsError = ref<string | null>(null);
+  /** Why there are none / why unlocks can't record. Null until known. */
+  const achievementStatus = ref<AchievementStatus | null>(null);
+  /** The status route failed, so the reason is unknown (list may be fine). */
+  const achievementStatusError = ref(false);
   const achievementsUnlocked = computed(
     () => achievements.value.filter((a) => a.unlocked).length,
   );
+
+  async function loadStatus() {
+    try {
+      const res = await fetch(
+        serverUrl(`api/v1/games/${gameId}/achievements/status`),
+      );
+      if (!res.ok) throw new Error(String(res.status));
+      achievementStatus.value = parseAchievementStatus(await res.json());
+      achievementStatusError.value = false;
+    } catch (e) {
+      console.warn("[ACH] achievement status fetch failed:", e);
+      achievementStatusError.value = true;
+    }
+  }
 
   async function loadAchievements() {
     try {
       const res = await fetch(
         serverUrl(`api/v1/games/${gameId}/achievements`),
       );
-      if (res.ok) {
-        const data = await res.json();
-        // Server returns a plain array; tolerate a wrapped shape too.
-        achievements.value = Array.isArray(data)
-          ? data
-          : (data.achievements ?? []);
+      if (!res.ok) {
+        let body: unknown = null;
+        try {
+          body = await res.json();
+        } catch {
+          // No JSON body; the status code carries the message.
+        }
+        throw new Error(serverErrorText(res.status, body));
       }
-    } catch {
-      achievements.value = [];
+      const data = await res.json();
+      // Server returns a plain array; tolerate a wrapped shape too.
+      achievements.value = Array.isArray(data)
+        ? data
+        : (data.achievements ?? []);
+      achievementsError.value = null;
+    } catch (e: any) {
+      // Keep whatever list is already shown (a refresh after an unlock can
+      // fail too); the UI decides how loud to be based on the list length.
+      achievementsError.value = String(e?.message ?? e);
     } finally {
       achievementsLoading.value = false;
     }
   }
 
-  onMounted(loadAchievements);
+  /** Retry both reads (the list and the reason). */
+  async function retryAchievements() {
+    achievementsLoading.value = achievements.value.length === 0;
+    await Promise.all([loadAchievements(), loadStatus()]);
+  }
+
+  onMounted(() => {
+    loadAchievements();
+    loadStatus();
+  });
 
   // Refresh when the backend reports a new unlock, so the list + progress
   // count update live instead of staying stale until you re-navigate (the
   // unlock toast already fires; this keeps the page itself in sync). The
-  // event carries no gameId, so any unlock triggers a (cheap) refetch.
+  // event carries the gameId, but any unlock triggering a cheap refetch is
+  // harmless, so it isn't filtered.
   useListen("achievement_unlocked", () => {
     loadAchievements();
   });
 
   const resetBusy = ref(false);
+  const resetError = ref<string | null>(null);
+  /** Extra line for the user after a reset (e.g. the game was running). */
+  const resetNote = ref<string | null>(null);
 
-  /** Reset every achievement for this game server-side. Returns success. */
+  /**
+   * Reset every achievement for this game server-side, then clear this
+   * device's local save files so the next launch doesn't re-report them.
+   * Returns success; on failure `resetError` says why.
+   */
   async function resetAchievements(): Promise<boolean> {
     resetBusy.value = true;
+    resetError.value = null;
+    resetNote.value = null;
     try {
       const res = await fetch(
         serverUrl(`api/v1/user/achievements/reset?gameId=${gameId}`),
         { method: "DELETE" },
       );
-      if (res.ok) {
-        await res.json();
-        achievements.value = achievements.value.map((a) => ({
-          ...a,
-          unlocked: false,
-        }));
-        return true;
+      if (!res.ok) {
+        let body: unknown = null;
+        try {
+          body = await res.json();
+        } catch {
+          // No JSON body; the status code carries the message.
+        }
+        resetError.value = serverErrorText(res.status, body);
+        return false;
       }
-      return false;
-    } catch {
+      await res.json();
+      achievements.value = achievements.value.map((a) => ({
+        ...a,
+        unlocked: false,
+      }));
+      try {
+        const local = await invoke<{ status: string; failures: string[] }>(
+          "clear_local_achievements",
+          { gameId },
+        );
+        if (local.status === "running") {
+          resetNote.value =
+            "The game is running, so its local unlocks were kept. Reset again after closing it.";
+        } else if (local.failures.length > 0) {
+          resetNote.value =
+            "Some local save files could not be cleared: " +
+            local.failures.join("; ");
+        }
+      } catch (e: any) {
+        resetNote.value = `Local save files were not cleared: ${String(e?.message ?? e)}`;
+      }
+      return true;
+    } catch (e: any) {
+      resetError.value = String(e?.message ?? e);
       return false;
     } finally {
       resetBusy.value = false;
@@ -147,8 +227,14 @@ export function useGameStats(gameId: string) {
     // Achievements
     achievements,
     achievementsLoading,
+    achievementsError,
+    achievementStatus,
+    achievementStatusError,
     achievementsUnlocked,
+    retryAchievements,
     resetBusy,
+    resetError,
+    resetNote,
     resetAchievements,
     // ROM hash
     romHashResult,

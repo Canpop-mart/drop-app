@@ -64,14 +64,61 @@
         {{ error }}
       </div>
 
-      <!-- Host ended the session (calm, expected) -->
+      <!--
+        Restart recovery: the server says we're still in a room. A plain row of
+        focusable buttons, not a modal, so there's no input lock to leak.
+      -->
+      <div
+        v-if="pendingRoom && !room"
+        class="mb-4 flex flex-wrap items-center gap-3 rounded-lg bg-blue-900/20 border border-blue-500/30 px-4 py-3"
+      >
+        <span class="text-sm text-blue-100 flex-1 min-w-0">
+          You're still in a co-op room{{
+            pendingRoom.gameName ? ` for ${pendingRoom.gameName}` : ""
+          }}
+          ({{ formatRoomCode(pendingRoom.shortCode) }}).
+        </span>
+        <button
+          :ref="(el: any) => registerAction(el, { onSelect: onRejoin })"
+          :disabled="busy"
+          class="px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
+          @click="onRejoin"
+        >
+          {{ busy ? "Rejoining…" : "Rejoin" }}
+        </button>
+        <button
+          :ref="(el: any) => registerAction(el, { onSelect: leavePending })"
+          :disabled="busy"
+          class="px-3 py-1.5 rounded-md text-sm font-medium bg-zinc-700 text-zinc-200 hover:bg-zinc-600 disabled:opacity-50"
+          @click="leavePending"
+        >
+          {{ pendingRoom.isHost ? "End it" : "Leave" }}
+        </button>
+      </div>
+      <div
+        v-else-if="pendingError && !room"
+        class="mb-4 flex flex-wrap items-center gap-3 rounded-lg bg-zinc-900/60 px-4 py-3 text-sm text-zinc-400"
+      >
+        <span class="flex-1 min-w-0">
+          Couldn't check whether you're still in a room: {{ pendingError }}
+        </span>
+        <button
+          :ref="(el: any) => registerAction(el, { onSelect: checkMine })"
+          class="px-3 py-1.5 rounded-md text-sm font-medium bg-zinc-700 text-zinc-200 hover:bg-zinc-600"
+          @click="checkMine"
+        >
+          Retry
+        </button>
+      </div>
+
+      <!-- The room ended underneath us (host ended it, it expired) -->
       <div
         v-if="sessionEnded"
         class="rounded-xl bg-zinc-900/60 border border-zinc-700 p-6 text-center"
       >
         <p class="text-lg font-medium text-zinc-200 mb-1">Session ended</p>
         <p class="text-sm text-zinc-500 mb-4">
-          The host closed the room. You can host or join another anytime.
+          The room has ended. You can host or join another anytime.
         </p>
         <button
           :ref="(el: any) => registerAction(el, { onSelect: dismissSessionEnded })"
@@ -83,11 +130,25 @@
       </div>
 
       <div
-        v-else-if="status && !status.installed"
+        v-else-if="!room && unavailable"
         class="px-4 py-3 rounded-lg bg-amber-900/20 border border-amber-500/30 text-amber-200 text-sm"
       >
-        ZeroTier isn't available in this build. Co-op rooms need the bundled
-        client (Steam Deck / Linux AppImage).
+        {{ unavailable }}
+      </div>
+      <div
+        v-else-if="!room && statusError"
+        class="flex flex-wrap items-center gap-3 px-4 py-3 rounded-lg bg-red-900/30 border border-red-500/30 text-red-200 text-sm"
+      >
+        <span class="flex-1 min-w-0">
+          Couldn't check ZeroTier on this device: {{ statusError }}
+        </span>
+        <button
+          :ref="(el: any) => registerAction(el, { onSelect: loadStatus })"
+          class="px-3 py-1.5 rounded-md text-sm font-medium bg-zinc-700 text-zinc-100 hover:bg-zinc-600"
+          @click="loadStatus"
+        >
+          Retry
+        </button>
       </div>
 
       <!-- In a room -->
@@ -97,7 +158,7 @@
             {{ isHost ? "Room code (share with friends)" : "Room code" }}
           </p>
           <button
-            :ref="(el: any) => registerAction(el, { onSelect: copyCode })"
+            :ref="(el: any) => { els.code = el; registerAction(el, { onSelect: copyCode }); }"
             class="group inline-flex items-center gap-3"
             @click="copyCode"
           >
@@ -113,8 +174,8 @@
               {{ codeCopied ? "✓ Copied!" : "Copy" }}
             </span>
           </button>
-          <p v-if="room.name" class="text-sm text-zinc-400 mt-2">
-            {{ room.name }}
+          <p v-if="roomGameName || room.name" class="text-sm text-zinc-400 mt-2">
+            {{ roomGameName || room.name }}
           </p>
         </div>
 
@@ -200,8 +261,9 @@
           </button>
           <p v-else class="text-sm text-zinc-500">Waiting for the host's address…</p>
           <p class="text-xs text-zinc-600 mt-2">
-            In your game, choose "join by IP" / "direct connect" and enter this
-            address. The LAN browser won't list it, so connect directly.
+            If the game lists LAN games, the host should show up there. If it
+            doesn't, choose join by IP or direct connect in the game and enter
+            this address.
           </p>
         </div>
       </div>
@@ -213,8 +275,67 @@
           <p class="text-sm text-zinc-500 mb-4">
             Create a room and share the code with friends.
           </p>
+          <!--
+            Optional game: search with the on-screen keyboard, then pick from at
+            most GAME_RESULTS_MAX rows (spatial, not a scrolling list). Rows are
+            keyed by game id so focus stays on the same game if results change.
+          -->
+          <div class="flex flex-wrap items-center gap-3 mb-3">
+            <span class="text-sm text-zinc-400">Game:</span>
+            <button
+              :ref="(el: any) => registerAction(el, { onSelect: openGameSearch })"
+              class="px-3 py-1.5 rounded-md text-sm font-medium bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+              @click="openGameSearch"
+            >
+              {{ hostGame ? hostGame.name : "Choose a game (optional)" }}
+            </button>
+            <button
+              v-if="hostGame"
+              :ref="(el: any) => registerAction(el, { onSelect: clearHostGame })"
+              class="px-3 py-1.5 rounded-md text-sm font-medium bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+              @click="clearHostGame"
+            >
+              Clear
+            </button>
+          </div>
+          <div v-if="gameSearching" class="mb-3 text-sm text-zinc-500">
+            Searching…
+          </div>
+          <div
+            v-else-if="gameSearchError"
+            class="mb-3 flex flex-wrap items-center gap-3 rounded-lg bg-red-900/30 border border-red-500/30 px-3 py-2 text-sm text-red-200"
+          >
+            <span class="flex-1 min-w-0">Search failed: {{ gameSearchError }}</span>
+            <button
+              :ref="(el: any) => registerAction(el, { onSelect: () => runGameSearch(gameQuery) })"
+              class="px-3 py-1.5 rounded-md text-sm font-medium bg-zinc-700 text-zinc-100 hover:bg-zinc-600"
+              @click="runGameSearch(gameQuery)"
+            >
+              Retry
+            </button>
+          </div>
+          <div
+            v-else-if="gameResults.length"
+            class="mb-3 grid grid-cols-2 gap-2"
+          >
+            <button
+              v-for="g in gameResults"
+              :key="g.id"
+              :ref="(el: any) => registerAction(el, { onSelect: () => pickGame(g) })"
+              class="truncate rounded-md bg-zinc-800 px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-700"
+              @click="pickGame(g)"
+            >
+              {{ g.mName }}
+            </button>
+          </div>
+          <p
+            v-else-if="gameSearched"
+            class="mb-3 text-sm text-zinc-500"
+          >
+            No games found.
+          </p>
           <button
-            :ref="(el: any) => registerAction(el, { onSelect: host })"
+            :ref="(el: any) => { els.host = el; registerAction(el, { onSelect: host }); }"
             :disabled="busy"
             class="px-5 py-2.5 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
             @click="host"
@@ -263,6 +384,22 @@
           <p class="text-sm text-zinc-500 mb-4">
             Jump into a room someone on this server is hosting.
           </p>
+          <div
+            v-if="browseError"
+            class="mb-3 flex flex-wrap items-center gap-3 rounded-lg bg-red-900/30 border border-red-500/30 px-4 py-3 text-sm text-red-200"
+          >
+            <span class="flex-1 min-w-0">
+              Couldn't load open rooms: {{ browseError }}
+            </span>
+            <button
+              :ref="(el: any) => registerAction(el, { onSelect: browse })"
+              :disabled="browsing"
+              class="px-3 py-1.5 rounded-md text-sm font-medium bg-zinc-700 text-zinc-100 hover:bg-zinc-600 disabled:opacity-50"
+              @click="browse"
+            >
+              Retry
+            </button>
+          </div>
           <div v-if="browsable.length" class="space-y-2">
             <div
               v-for="r in browsable"
@@ -279,6 +416,7 @@
                 </p>
               </div>
               <button
+                v-if="!r.isSelf"
                 :ref="(el: any) => registerAction(el, { onSelect: () => join(r.shortCode) })"
                 :disabled="busy"
                 class="shrink-0 px-4 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
@@ -286,16 +424,24 @@
               >
                 Join
               </button>
+              <span
+                v-else
+                class="shrink-0 text-xs px-2 py-0.5 rounded bg-blue-600/20 text-blue-300"
+              >
+                Your room
+              </span>
             </div>
           </div>
-          <p v-else class="text-sm text-zinc-600">
-            {{ browsing ? "Looking for rooms…" : "No open rooms right now." }}
+          <p v-else-if="browsing" class="text-sm text-zinc-600">
+            Looking for rooms…
+          </p>
+          <p v-else-if="browseLoaded && !browseError" class="text-sm text-zinc-600">
+            No open rooms right now.
           </p>
         </div>
 
-        <p class="text-xs text-zinc-600">
-          You may be asked for your password once, to let the app set up the
-          virtual network adapter.
+        <p v-if="hint" class="text-xs text-zinc-600">
+          {{ hint }}
         </p>
       </div>
       </template>
@@ -309,6 +455,14 @@
       @close="showKeyboard = false"
       @submit="onSubmitCode"
     />
+    <BigPictureKeyboard
+      :visible="showGameKeyboard"
+      :model-value="gameQuery"
+      placeholder="Game name"
+      @update:model-value="gameQuery = $event"
+      @close="showGameKeyboard = false"
+      @submit="onSubmitGameSearch"
+    />
   </div>
 </template>
 
@@ -317,7 +471,16 @@ import { UserGroupIcon } from "@heroicons/vue/24/outline";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { useCoopRoom } from "~/composables/coop-room";
+import {
+  elevationHint,
+  formatRoomCode,
+  unavailableReason,
+} from "~/composables/coop-room-logic";
 import { useDisplayName } from "~/composables/use-display-name";
+import {
+  useServerApi,
+  type FavoriteSearchRow,
+} from "~/composables/use-server-api";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
 
 definePageMeta({ layout: "bigpicture" });
@@ -325,6 +488,7 @@ definePageMeta({ layout: "bigpicture" });
 const {
   room,
   status,
+  statusError,
   members,
   busy,
   error,
@@ -333,19 +497,25 @@ const {
   codeCopied,
   hostIp,
   hostIpCopied,
+  roomGameName,
   browsable,
   browsing,
+  browseError,
+  browseLoaded,
+  pendingRoom,
+  pendingError,
+  hostGame,
   displayCode,
   loadStatus,
-  pollMembers,
-  startPolling,
-  stopPolling,
   copyCode,
   copyHostIp,
   host,
   join,
   browse,
   leave,
+  checkMine,
+  rejoinPending,
+  leavePending,
   dismissSessionEnded,
 } = useCoopRoom();
 
@@ -359,6 +529,9 @@ const joinCode = ref("");
 const confirmingLeave = ref(false);
 const showKeyboard = ref(false);
 
+const unavailable = computed(() => unavailableReason(status.value));
+const hint = computed(() => elevationHint(status.value));
+
 function onJoin() {
   join(joinCode.value);
 }
@@ -371,6 +544,68 @@ async function doLeave() {
   await leave();
 }
 
+// ── Optional game for the room ──────────────────────────────────────────
+// Same server search the desktop picker (GamePickerModal) uses.
+const GAME_RESULTS_MAX = 6;
+const api = useServerApi();
+const showGameKeyboard = ref(false);
+const gameQuery = ref("");
+const gameResults = ref<FavoriteSearchRow[]>([]);
+const gameSearching = ref(false);
+const gameSearched = ref(false);
+const gameSearchError = ref("");
+
+function openGameSearch() {
+  showGameKeyboard.value = true;
+}
+function onSubmitGameSearch() {
+  showGameKeyboard.value = false;
+  runGameSearch(gameQuery.value);
+}
+async function runGameSearch(term: string) {
+  const q = term.trim();
+  gameSearchError.value = "";
+  if (!q) {
+    gameResults.value = [];
+    gameSearched.value = false;
+    return;
+  }
+  gameSearching.value = true;
+  try {
+    const rows = await api.profile.favorites.search(q);
+    gameResults.value = rows.slice(0, GAME_RESULTS_MAX);
+    gameSearched.value = true;
+  } catch (e) {
+    gameResults.value = [];
+    gameSearchError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    gameSearching.value = false;
+  }
+}
+// The control that held focus (a result row, Clear, Rejoin) disappears in
+// these handlers, and the focus system would otherwise fall back to the first
+// element on the page (the tabs). Land on the next logical control instead.
+const els: { host: HTMLElement | null; code: HTMLElement | null } = {
+  host: null,
+  code: null,
+};
+function focusAfterRender(target: () => HTMLElement | null) {
+  nextTick(() => focusNav.focusElement(target()));
+}
+function pickGame(g: FavoriteSearchRow) {
+  hostGame.value = { id: g.id, name: g.mName };
+  gameResults.value = [];
+  gameSearched.value = false;
+  focusAfterRender(() => els.host);
+}
+function clearHostGame() {
+  hostGame.value = null;
+  focusAfterRender(() => els.host);
+}
+async function onRejoin() {
+  if (await rejoinPending()) focusAfterRender(() => els.code);
+}
+
 const focusNav = useFocusNavigation();
 const registerAction = useBpFocusableGroup("content");
 
@@ -379,15 +614,12 @@ onMounted(() => {
   // correct in both co-op and Archipelago before anyone sees it.
   useDisplayName().ensure();
   loadStatus();
-  if (room.value) {
-    pollMembers();
-    startPolling();
-  } else {
+  // Member polling runs app-wide (plugins/coop-room.client.ts); this page only
+  // refreshes what's shown when you're not in a room.
+  if (!room.value) {
+    checkMine();
     browse();
   }
   focusNav.autoFocusContent("content");
-});
-onUnmounted(() => {
-  stopPolling();
 });
 </script>

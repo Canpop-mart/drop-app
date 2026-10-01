@@ -1,5 +1,6 @@
 <!--
-  Shared game-search modal used by the favourites + showcase editors. Emits
+  Shared game-search modal used by the favourites + showcase editors and the
+  co-op host card. Emits
   `select` with the chosen game row. Debounced search over the existing
   favourites/game search endpoint.
 -->
@@ -32,6 +33,18 @@
       <div class="max-h-80 overflow-y-auto p-2">
         <div v-if="loading" class="py-8 text-center text-sm text-zinc-500">
           Searching…
+        </div>
+        <div
+          v-else-if="searchError"
+          class="py-8 text-center text-sm text-red-300"
+        >
+          <p>Search failed: {{ searchError }}</p>
+          <button
+            class="mt-3 rounded-md bg-zinc-800 px-3 py-1.5 text-zinc-100 hover:bg-zinc-700"
+            @click="scheduleSearch"
+          >
+            Retry
+          </button>
         </div>
         <div
           v-else-if="q.trim() && results.length === 0"
@@ -97,12 +110,15 @@ const api = useServerApi();
 const q = ref("");
 const results = ref<FavoriteSearchRow[]>([]);
 const loading = ref(false);
+// Kept apart from an empty result so a failed search never reads as "No games found".
+const searchError = ref("");
 const inputEl = ref<HTMLInputElement | null>(null);
 let timer: ReturnType<typeof setTimeout> | null = null;
 
 function scheduleSearch() {
   if (timer) clearTimeout(timer);
   const term = q.value.trim();
+  searchError.value = "";
   if (!term) {
     results.value = [];
     loading.value = false;
@@ -112,8 +128,9 @@ function scheduleSearch() {
   timer = setTimeout(async () => {
     try {
       results.value = await api.profile.favorites.search(term);
-    } catch {
+    } catch (e) {
       results.value = [];
+      searchError.value = e instanceof Error ? e.message : String(e);
     } finally {
       loading.value = false;
     }
@@ -130,6 +147,7 @@ watch(
     if (o) {
       q.value = "";
       results.value = [];
+      searchError.value = "";
       nextTick(() => inputEl.value?.focus());
     }
   },

@@ -8,8 +8,9 @@
 //!  1. `new()` receives the parent's already-final install dir and writes its
 //!     resume ledger to `<install dir>/.mods/<mod id>.moddata` (not the
 //!     parent's `.dropdata`, which belongs to the base game).
-//!  2. `run()` omits the reconcile sweep — a mod is purely additive, so a sweep
-//!     over the shared parent dir would delete the entire base game.
+//!  2. `run()` never removes files. A mod is purely additive, and the game
+//!     agent's removal of files dropped since the previous version works from
+//!     the BASE game's manifests, which say nothing about a mod.
 //!  3. On completion it records the exact files it wrote into `.moddata` so an
 //!     uninstall removes precisely those files and nothing of the base game.
 
@@ -209,7 +210,7 @@ impl ModDownloadAgent {
 
         let response = client
             .get(url)
-            .header("Authorization", generate_authorization_header())
+            .header("Authorization", generate_authorization_header()?)
             .send()
             .await
             .map_err(|e| ApplicationDownloadError::Communication(e.into()))?;

@@ -73,7 +73,7 @@ pub async fn fetch_library_logic(
     }
 
     let response = generate_url(&["/api/v1/client/user/library"], &[])?;
-    let auth_header = generate_authorization_header();
+    let auth_header = generate_authorization_header()?;
     let response = DROP_CLIENT_ASYNC
         .get(response)
         .header("Authorization", auth_header)
@@ -259,7 +259,7 @@ pub async fn fetch_game_logic(
             let response = generate_url(&["/api/v1/client/game", &id], &[])?;
             let response = client
                 .get(response)
-                .header("Authorization", generate_authorization_header())
+                .header("Authorization", generate_authorization_header()?)
                 .send()
                 .await?;
 
@@ -750,7 +750,7 @@ pub async fn fetch_game_mods(game_id: String) -> Result<Vec<ModListing>, RemoteA
     let url = generate_url(&["/api/v1/client/game", &game_id, "mods"], &[])?;
     let response = client
         .get(url)
-        .header("Authorization", generate_authorization_header())
+        .header("Authorization", generate_authorization_header()?)
         .send()
         .await?;
 
@@ -2566,16 +2566,106 @@ fn scan_dir_for_saves(
     }
 }
 
-/// Backup PC game saves using Ludusavi to a temporary directory.
-/// Returns the backup path for upload.
+/// Where Big Picture's "Backup All" keeps a game's Ludusavi backup, so that
+/// "Restore" can find it again. Under Drop's data dir rather than the system
+/// temp dir: SteamOS clears /tmp on reboot, which threw the backup away.
+fn ludusavi_backup_dir(game_id: &str) -> Result<std::path::PathBuf, String> {
+    // The id becomes a path component; refuse anything that could leave the
+    // backups folder.
+    if game_id.is_empty()
+        || !game_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!("Invalid game id: {game_id}"));
+    }
+    Ok(database::db::DATA_ROOT_DIR
+        .join("save-backups")
+        .join(game_id))
+}
+
+/// Where backups went before they moved into the data dir, on platforms where
+/// that location is worth reading. On Windows the per-user temp dir survives
+/// reboots, so it can still hold the only backup a player has. On Linux it is
+/// the shared, world-writable /tmp, which SteamOS also clears on reboot: a
+/// backup there is either gone or not provably ours, so it is not used.
+/// Only read, never written.
+fn legacy_ludusavi_backup_dir(game_id: &str) -> Option<std::path::PathBuf> {
+    cfg!(windows).then(|| std::env::temp_dir().join(format!("drop-ludusavi-{game_id}")))
+}
+
+fn dir_has_entries(dir: &std::path::Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
+}
+
+/// The backup Restore should use: the current one; else the previous one, if
+/// a replacement was interrupted between moving it aside and moving the new
+/// one in; else (Windows only) one left in the legacy temp location.
+fn existing_ludusavi_backup(game_id: &str) -> Result<Option<std::path::PathBuf>, String> {
+    let dir = ludusavi_backup_dir(game_id)?;
+    Ok([Some(dir.clone()), Some(dir.with_extension("old")), legacy_ludusavi_backup_dir(game_id)]
+        .into_iter()
+        .flatten()
+        .find(|candidate| dir_has_entries(candidate)))
+}
+
+/// Whether Ludusavi's `--api` output for a backup names at least one game.
+/// A run that matched nothing still exits 0 on some versions, and replacing a
+/// good backup with an empty one would lose it.
+fn ludusavi_backed_up_anything(stdout: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(stdout)
+        .ok()
+        .and_then(|v| v.get("games")?.as_object().map(|g| !g.is_empty()))
+        .unwrap_or(false)
+}
+
+/// Backup and Restore for one game must not interleave: both touch the same
+/// folders, and a double press would otherwise race on the staging folder.
+static LUDUSAVI_BACKUP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Back up a game's PC saves with Ludusavi into Drop's data dir. The previous
+/// backup is only replaced once the new one has succeeded and found
+/// something, and it is moved aside rather than deleted until the new one is
+/// in place, so no failure leaves the player with no backup. Returns the
+/// backup path.
 #[tauri::command]
-pub fn backup_pc_game_saves(game_id: String, game_name: String) -> Result<String, String> {
+pub async fn backup_pc_game_saves(game_id: String, game_name: String) -> Result<String, String> {
+    // Ludusavi scans for several seconds. Off the main thread, or the whole
+    // UI (and in Big Picture, the controller) freezes until it finishes.
+    tokio::task::spawn_blocking(move || backup_pc_game_saves_blocking(&game_id, &game_name))
+        .await
+        .map_err(|e| format!("Backup task failed: {e}"))?
+}
+
+fn backup_pc_game_saves_blocking(game_id: &str, game_name: &str) -> Result<String, String> {
+    // The lock guards no data, so a panic in an earlier holder leaves nothing
+    // inconsistent; recover rather than disable backups for the session.
+    let _guard = LUDUSAVI_BACKUP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let ludusavi = find_ludusavi().ok_or("Ludusavi not installed")?;
 
-    let backup_dir = std::env::temp_dir().join(format!("drop-ludusavi-{game_id}"));
-    let _ = std::fs::remove_dir_all(&backup_dir); // Clean previous
-    std::fs::create_dir_all(&backup_dir).map_err(|e| format!("Failed to create backup dir: {e}"))?;
+    let backup_dir = ludusavi_backup_dir(game_id)?;
+    let staging_dir = backup_dir.with_extension("new");
+    let aside_dir = backup_dir.with_extension("old");
 
+    // Finish an interrupted replacement: the previous backup was moved aside
+    // but the new one never moved in.
+    if !backup_dir.exists() && aside_dir.exists() {
+        let _ = std::fs::rename(&aside_dir, &backup_dir);
+    }
+    let _ = std::fs::remove_dir_all(&staging_dir);
+    if backup_dir.exists() {
+        let _ = std::fs::remove_dir_all(&aside_dir);
+    }
+    let had_backup = dir_has_entries(&backup_dir);
+    let kept = if had_backup { " The previous backup was kept." } else { "" };
+
+    std::fs::create_dir_all(&staging_dir)
+        .map_err(|e| format!("Failed to create backup dir: {e}"))?;
+
+    let game_id = game_id.to_string();
+    let game_name = game_name.to_string();
     let app_id = find_steam_app_id(&game_id);
 
     // Resolve canonical name from Steam ID (backup doesn't accept --steam-id)
@@ -2594,33 +2684,79 @@ pub fn backup_pc_game_saves(game_id: String, game_name: String) -> Result<String
     };
     let search_name = resolved_name.as_deref().unwrap_or(&game_name);
 
-    let mut cmd = std::process::Command::new(&ludusavi);
-    cmd.args([
-        "backup",
-        "--api",
-        "--force",
-        "--path",
-        &backup_dir.to_string_lossy(),
-        search_name,
-    ]);
+    let output = std::process::Command::new(&ludusavi)
+        .args(["backup", "--api", "--force", "--path"])
+        .arg(&staging_dir)
+        .arg(search_name)
+        .output()
+        .map_err(|e| format!("Failed to run Ludusavi: {e}"))?;
 
-    let output = cmd.output().map_err(|e| format!("Failed to run Ludusavi: {e}"))?;
-
-    if !output.status.success() {
+    let found_something = ludusavi_backed_up_anything(&output.stdout);
+    if !output.status.success() || !found_something {
+        let _ = std::fs::remove_dir_all(&staging_dir);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Ludusavi backup failed: {}", stderr));
+        return Err(match (output.status.success(), found_something) {
+            (true, _) => format!("Ludusavi found no saves to back up.{kept}"),
+            // Ludusavi exits non-zero with games listed when some files
+            // could not be read. A partial backup must not replace a full one.
+            (false, true) => format!(
+                "Ludusavi could not read every save file. Is the game still running?{kept}"
+            ),
+            (false, false) => format!("Ludusavi backup failed: {stderr}{kept}"),
+        });
+    }
+
+    if backup_dir.exists()
+        && let Err(e) = std::fs::rename(&backup_dir, &aside_dir)
+    {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        return Err(format!("Could not replace the previous backup ({e}).{kept}"));
+    }
+    if let Err(e) = std::fs::rename(&staging_dir, &backup_dir) {
+        // Put the previous backup back. If even that fails it stays at
+        // `aside_dir`, which Restore and the next Backup both know about.
+        if aside_dir.exists() {
+            let _ = std::fs::rename(&aside_dir, &backup_dir);
+        }
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        return Err(format!("Could not save the backup ({e}).{kept}"));
+    }
+    if let Err(e) = std::fs::remove_dir_all(&aside_dir)
+        && aside_dir.exists()
+    {
+        warn!("could not remove the replaced backup {}: {e}", aside_dir.display());
     }
 
     Ok(backup_dir.to_string_lossy().to_string())
 }
 
-/// Restore PC game saves from a Ludusavi backup directory.
+/// Whether "Restore" has a backup to restore for this game on this device.
 #[tauri::command]
-pub fn restore_pc_game_saves(backup_path: String) -> Result<(), String> {
+pub fn has_pc_save_backup(game_id: String) -> bool {
+    matches!(existing_ludusavi_backup(&game_id), Ok(Some(_)))
+}
+
+/// Restore a game's PC saves from the backup `backup_pc_game_saves` made.
+#[tauri::command]
+pub async fn restore_pc_game_saves(game_id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || restore_pc_game_saves_blocking(&game_id))
+        .await
+        .map_err(|e| format!("Restore task failed: {e}"))?
+}
+
+fn restore_pc_game_saves_blocking(game_id: &str) -> Result<(), String> {
+    let _guard = LUDUSAVI_BACKUP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let ludusavi = find_ludusavi().ok_or("Ludusavi not installed")?;
 
+    let Some(backup_dir) = existing_ludusavi_backup(game_id)? else {
+        return Err("There is no backup of this game's saves on this device yet.".to_string());
+    };
+
     let output = std::process::Command::new(&ludusavi)
-        .args(["restore", "--api", "--force", "--path", &backup_path])
+        .args(["restore", "--api", "--force", "--path"])
+        .arg(&backup_dir)
         .output()
         .map_err(|e| format!("Failed to run Ludusavi: {e}"))?;
 
@@ -2804,4 +2940,191 @@ pub async fn check_ra_rom_hash(
     .await;
 
     serde_json::to_value(&result).map_err(|e| format!("Serialization error: {e}"))
+}
+
+#[cfg(test)]
+mod ludusavi_backup_tests {
+    use super::*;
+
+    #[test]
+    fn backup_dir_rejects_ids_that_leave_the_folder() {
+        assert!(ludusavi_backup_dir("0b6c1f2e-1a2b-4c3d-9e8f-001122334455").is_ok());
+        assert!(ludusavi_backup_dir("").is_err());
+        assert!(ludusavi_backup_dir("../../etc").is_err());
+        assert!(ludusavi_backup_dir("a/b").is_err());
+        assert!(ludusavi_backup_dir("a\\b").is_err());
+    }
+
+    #[test]
+    fn backup_dir_is_not_the_temp_dir() {
+        let dir = ludusavi_backup_dir("abc").unwrap();
+        assert!(!dir.starts_with(std::env::temp_dir()));
+        assert!(dir.ends_with("save-backups/abc"));
+    }
+
+    #[test]
+    fn empty_or_unreadable_backup_output_counts_as_nothing() {
+        assert!(ludusavi_backed_up_anything(
+            br#"{"overall":{"totalGames":1},"games":{"Hades":{"files":{}}}}"#
+        ));
+        assert!(!ludusavi_backed_up_anything(br#"{"overall":{"totalGames":0},"games":{}}"#));
+        assert!(!ludusavi_backed_up_anything(b""));
+        assert!(!ludusavi_backed_up_anything(b"not json"));
+    }
+}
+
+/// Result of [`clear_local_achievements`], for the reset UI.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearLocalAchievementsResult {
+    /// `cleared` (files rewritten, possibly zero), `running` (left alone: the
+    /// game would write its in-memory state back on exit), `not_installed`,
+    /// or `no_emulator` (no Steam API DLL, so no Goldberg save to clear).
+    pub status: String,
+    /// Files rewritten with every achievement marked not earned.
+    pub files_cleared: usize,
+    /// Files found but not rewritten, as "path: error".
+    pub failures: Vec<String>,
+}
+
+/// After an achievement reset on the server, mark the game's local Goldberg
+/// save files as not earned, so the next launch doesn't re-report the old
+/// unlocks and the player can earn them again.
+///
+/// The server's reset marker already ignores re-reported unlocks that carry
+/// an earned time from before the reset; this covers the files that carry no
+/// time, and lets the emulator fire the achievement again at all. Only
+/// Goldberg-format JSON files are touched (see `clear_local_unlocks`).
+///
+/// Refuses while the game is running: the emulator holds its unlock state in
+/// memory and writes it back on exit, which would undo the clear.
+#[tauri::command]
+pub async fn clear_local_achievements(
+    game_id: String,
+) -> Result<ClearLocalAchievementsResult, String> {
+    clear_local_achievements_for(&game_id).await
+}
+
+/// Result of [`clear_all_local_achievements`].
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearAllLocalAchievementsResult {
+    /// Installed games looked at.
+    pub games_checked: usize,
+    /// Files rewritten across all of them.
+    pub files_cleared: usize,
+    /// Games skipped because they were running.
+    pub running: Vec<String>,
+    /// "game id: error" or "path: error" for everything that failed.
+    pub failures: Vec<String>,
+}
+
+/// [`clear_local_achievements`] for every game installed on this device,
+/// after an "all games" reset. Uses the local install list, so it covers
+/// every installed game however many the server's store lists.
+#[tauri::command]
+pub async fn clear_all_local_achievements() -> ClearAllLocalAchievementsResult {
+    let game_ids: Vec<String> = {
+        let db = borrow_db_checked();
+        db.applications
+            .game_statuses
+            .iter()
+            .filter(|(_, status)| matches!(status, GameDownloadStatus::Installed { .. }))
+            .map(|(id, _)| id.clone())
+            .collect()
+    };
+    let mut out = ClearAllLocalAchievementsResult {
+        games_checked: game_ids.len(),
+        files_cleared: 0,
+        running: Vec::new(),
+        failures: Vec::new(),
+    };
+    for game_id in game_ids {
+        match clear_local_achievements_for(&game_id).await {
+            Ok(r) => {
+                out.files_cleared += r.files_cleared;
+                if r.status == "running" {
+                    out.running.push(game_id.clone());
+                }
+                out.failures.extend(r.failures);
+            }
+            Err(e) => out.failures.push(format!("{game_id}: {e}")),
+        }
+    }
+    info!(
+        "[ACH] clear_all_local_achievements: {} game(s), {} file(s) cleared, {} running, {} failure(s)",
+        out.games_checked,
+        out.files_cleared,
+        out.running.len(),
+        out.failures.len()
+    );
+    out
+}
+
+async fn clear_local_achievements_for(
+    game_id: &str,
+) -> Result<ClearLocalAchievementsResult, String> {
+    let game_id = game_id.to_string();
+    let result = |status: &str, files_cleared: usize, failures: Vec<String>| {
+        ClearLocalAchievementsResult { status: status.to_string(), files_cleared, failures }
+    };
+
+    let running = {
+        let id = game_id.clone();
+        tokio::task::spawn_blocking(move || PROCESS_MANAGER.lock().is_game_running(&id))
+            .await
+            .map_err(|e| format!("Could not check whether the game is running: {e}"))?
+    };
+    if running {
+        info!("[ACH] clear_local_achievements: {game_id} is running, leaving its files alone");
+        return Ok(result("running", 0, Vec::new()));
+    }
+
+    let install_dir = {
+        let db = borrow_db_checked();
+        match db.applications.game_statuses.get(&game_id) {
+            Some(GameDownloadStatus::Installed { install_dir, .. }) => {
+                install_dir.clone()
+            }
+            _ => return Ok(result("not_installed", 0, Vec::new())),
+        }
+    };
+
+    let Some(dll_dir) = remote::goldberg::discovery::find_steam_api_dir(Path::new(&install_dir))
+    else {
+        return Ok(result("no_emulator", 0, Vec::new()));
+    };
+    let dll_dir = dll_dir.to_string_lossy().to_string();
+
+    // Every AppID the emulator may be saving under: what's on disk, plus the
+    // server's Goldberg link (which can differ from the game's own file).
+    let mut app_ids = remote::goldberg::local_app_ids(&dll_dir);
+    match remote::achievements::fetch_achievement_config(&game_id).await {
+        Ok(config) => {
+            for link in config.external_links {
+                if link.provider == "Goldberg" && !app_ids.contains(&link.external_game_id) {
+                    app_ids.push(link.external_game_id);
+                }
+            }
+        }
+        // The on-disk AppIDs are usually the same ones; carry on with them.
+        Err(e) => warn!("[ACH] clear_local_achievements: config fetch failed for {game_id}: {e}"),
+    }
+
+    let wine_prefix = remote::goldberg::wine_prefix_for_game(&game_id);
+    let report = remote::goldberg::clear_local_unlocks(&app_ids, &dll_dir, wine_prefix.as_deref());
+    info!(
+        "[ACH] clear_local_achievements: {game_id}: AppIDs {app_ids:?}, cleared {} file(s), {} failure(s)",
+        report.cleared.len(),
+        report.failed.len()
+    );
+    Ok(result(
+        "cleared",
+        report.cleared.len(),
+        report
+            .failed
+            .into_iter()
+            .map(|(p, e)| format!("{}: {e}", p.display()))
+            .collect(),
+    ))
 }

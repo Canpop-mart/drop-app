@@ -279,7 +279,10 @@ export function useArchipelago() {
         networkId: session.value?.networkId ?? detail.value?.networkId ?? null,
       });
     } catch (e) {
-      console.error("ap_session_leave failed", e);
+      // The Rust side has already left what it could; this says what didn't
+      // happen (e.g. ZeroTier wasn't running to disconnect the overlay). Shown
+      // by ArchipelagoPanel on both surfaces.
+      error.value = errMessage(e);
     } finally {
       stopPolling();
       session.value = null;

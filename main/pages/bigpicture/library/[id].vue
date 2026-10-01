@@ -520,6 +520,24 @@
           </p>
         </div>
 
+        <!-- This game tracks through RetroAchievements and the player has no
+             RA account on the server: say so instead of a silent 0/N. -->
+        <p
+          v-if="achievementStatus?.raAccountMissing"
+          class="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-300 outline outline-1 outline-amber-500/20"
+        >
+          {{ RA_ACCOUNT_MISSING_TEXT }}
+        </p>
+
+        <!-- The fetch failed: a retry card, never the "no achievements" line. -->
+        <BigPictureSectionError
+          v-if="achievementsError && achievements.length === 0"
+          :ref="(el: any) => registerAction(el, { onSelect: retryAchievements })"
+          title="Couldn't load achievements"
+          :detail="achievementsError"
+          @retry="retryAchievements"
+        />
+
         <!-- Achievement items -->
         <div class="space-y-2">
           <div
@@ -559,7 +577,8 @@
                   class="shrink-0"
                 />
               </div>
-              <p class="text-sm text-zinc-500 truncate">
+              <!-- Same as the desktop list: no description, no empty line. -->
+              <p v-if="achievement.description" class="text-sm text-zinc-500 truncate">
                 {{ achievement.description }}
               </p>
               <!-- Rarity bar -->
@@ -583,12 +602,24 @@
           </div>
         </div>
 
-        <p
-          v-if="achievements.length === 0"
-          class="text-zinc-500 text-center py-8 text-sm"
+        <div
+          v-if="achievements.length === 0 && !achievementsError && !achievementsLoading"
+          class="text-center py-8"
         >
-          No achievements available for this game.
-        </p>
+          <p class="text-zinc-500 text-sm">No achievements available for this game.</p>
+          <p v-if="achievementReasonText" class="text-zinc-400 text-sm mt-1">
+            {{ achievementReasonText }}
+          </p>
+          <!-- The reason couldn't be fetched: say so, with a retry. -->
+          <button
+            v-else-if="achievementStatusError"
+            :ref="(el: any) => registerAction(el, { onSelect: retryAchievements })"
+            class="mt-3 px-4 py-2 rounded-lg text-sm bg-zinc-800 text-zinc-300"
+            @click="retryAchievements"
+          >
+            Could not check why. Retry
+          </button>
+        </div>
 
         <!-- Leaderboard / activity / first-to-unlock — the shared component
              desktop shows alongside achievements in its Community tab. -->
@@ -960,6 +991,19 @@ const statusRef = shallowRef<any>(null);
 const status = computed<GameStatus | null>(() => statusRef.value?.value ?? null);
 const version = ref<GameVersion | null>(null);
 const versionOptions = ref<VersionOption[] | null>(null);
+
+// ── Multi-version install ────────────────────────────────────────────────
+// Every version of this game installed on this device, in any state.
+const installedVersions = ref<InstalledVersion[]>([]);
+// Which installed version Play launches. Null means "let the backend decide",
+// which is the pre-existing behaviour and stays the default.
+const activeVersionId = ref<string | null>(null);
+// Directories the user has configured to install into.
+const downloadDirs = ref<string[]>([]);
+const installDirIndex = ref(0);
+// Index into `installableVersions`, not into the full option list.
+const installCandidateIndex = ref(0);
+
 const activeTab = ref("about");
 // Plain object — NOT reactive. Storing DOM refs in a reactive ref causes
 // infinite update loops when set from :ref callbacks during render.
@@ -1375,6 +1419,116 @@ async function installRuntimes() {
   }
 }
 
+// ── Multi-version install helpers ─────────────────────────────────────────
+
+type InstalledVersion = {
+  versionId: string;
+  installType: string;
+  updateAvailable: boolean;
+};
+
+/** Human name for a version id, falling back to the id so a row is never blank. */
+function versionLabel(versionId: string): string {
+  const opt = versionOptions.value?.find((v) => v.versionId === versionId);
+  return opt?.displayName || opt?.versionPath || versionId;
+}
+
+/** Versions on the server that are not installed here yet. */
+const installableVersions = computed<VersionOption[]>(() => {
+  const installed = new Set(installedVersions.value.map((i) => i.versionId));
+  return (versionOptions.value ?? []).filter((v) => !installed.has(v.versionId));
+});
+
+const activeVersionLabel = computed(() => {
+  const id = activeVersionId.value ?? installedVersions.value[0]?.versionId;
+  if (!id) return "";
+  const n = installedVersions.value.findIndex((i) => i.versionId === id) + 1;
+  return `${versionLabel(id)} (${n}/${installedVersions.value.length})`;
+});
+
+const installCandidateLabel = computed(() => {
+  const list = installableVersions.value;
+  if (list.length === 0) return "";
+  const idx = Math.min(installCandidateIndex.value, list.length - 1);
+  const name = versionLabel(list[idx].versionId);
+  return list.length > 1 ? `${name} (${idx + 1}/${list.length})` : name;
+});
+
+const installDirLabel = computed(() => {
+  const dirs = downloadDirs.value;
+  if (dirs.length === 0) return "";
+  const idx = Math.min(installDirIndex.value, dirs.length - 1);
+  return `${dirs[idx]} (${idx + 1}/${dirs.length})`;
+});
+
+function cycleActiveVersion() {
+  const list = installedVersions.value;
+  if (list.length === 0) return;
+  const cur = list.findIndex(
+    (i) => i.versionId === (activeVersionId.value ?? list[0].versionId),
+  );
+  const next = list[(Math.max(cur, 0) + 1) % list.length];
+  activeVersionId.value = next.versionId;
+  showInfoToast(`Play launches ${versionLabel(next.versionId)}`);
+}
+
+function cycleInstallCandidate() {
+  const list = installableVersions.value;
+  if (list.length === 0) return;
+  installCandidateIndex.value = (installCandidateIndex.value + 1) % list.length;
+}
+
+function cycleInstallDir() {
+  const dirs = downloadDirs.value;
+  if (dirs.length === 0) return;
+  installDirIndex.value = (installDirIndex.value + 1) % dirs.length;
+}
+
+async function installSelectedVersion() {
+  const list = installableVersions.value;
+  if (list.length === 0) return;
+  const vo = list[Math.min(installCandidateIndex.value, list.length - 1)];
+  try {
+    await invoke("download_game", {
+      gameId,
+      versionId: vo.versionId,
+      installDir: Math.min(
+        installDirIndex.value,
+        Math.max(downloadDirs.value.length - 1, 0),
+      ),
+      targetPlatform: vo.platform,
+      enableUpdates: true,
+    });
+    showInfoToast(`Installing ${versionLabel(vo.versionId)}`);
+    showOptions.value = false;
+    await loadInstalledVersions();
+  } catch (e) {
+    launchErrorTitle.value = "Install Failed";
+    launchError.value = `Could not start the install: ${
+      e instanceof Error ? e.message : String(e)
+    }`;
+  }
+}
+
+async function loadInstalledVersions() {
+  try {
+    installedVersions.value = await invoke<InstalledVersion[]>(
+      "fetch_game_installs",
+      { gameId },
+    );
+    if (
+      activeVersionId.value &&
+      !installedVersions.value.some((i) => i.versionId === activeVersionId.value)
+    ) {
+      // The version Play pointed at was uninstalled underneath us.
+      activeVersionId.value = null;
+    }
+  } catch (e) {
+    console.warn("[BPM:GAME] fetch_game_installs failed:", e);
+    installedVersions.value = [];
+  }
+}
+
 // ── Options menu: gamepad-navigable list ──────────────────────────────────
 interface OptionsMenuItem {
   id: string;
@@ -1466,6 +1620,49 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
       label: "Executable",
       valueLabel: executableLabel.value,
       action: cycleExecutable,
+    });
+  }
+
+  // Multi-version install, the Big Picture half of what the desktop page has
+  // had since v5.4.0. The data was already here (the page fetches version
+  // options on load); only the controls were missing, so a Deck could neither
+  // pick which installed version Play uses nor add a second one.
+  if (installedVersions.value.length > 1) {
+    items.push({
+      id: "version",
+      label: "Version",
+      valueLabel: activeVersionLabel.value,
+      action: cycleActiveVersion,
+    });
+  }
+
+  // Cycles the candidate; the row below commits it. Two plain rows rather than
+  // a modal with its own focus scope and input lock, which is the pattern that
+  // has repeatedly shipped broken on this page.
+  if (installableVersions.value.length > 0) {
+    items.push({
+      id: "install-another",
+      label: "Install another version",
+      valueLabel: installCandidateLabel.value,
+      action: cycleInstallCandidate,
+    });
+
+    // Only worth a row when there is a real choice. On a Deck the second entry
+    // is usually the SD card, and BPM used to hardcode index 0 with no way to
+    // say otherwise.
+    if (downloadDirs.value.length > 1) {
+      items.push({
+        id: "install-dir",
+        label: "Install to",
+        valueLabel: installDirLabel.value,
+        action: cycleInstallDir,
+      });
+    }
+
+    items.push({
+      id: "install-start",
+      label: `Install ${installCandidateLabel.value}`,
+      action: installSelectedVersion,
     });
   }
 
@@ -1870,6 +2067,14 @@ import BpmCloudSavesPanel from "~/components/bigpicture/BpmCloudSavesPanel.vue";
 import GameFriendsTile from "~/components/GameFriendsTile.vue";
 import GameCommunityTab from "~/components/GameCommunityTab.vue";
 import GameAchievementFirstBadge from "~/components/GameAchievementFirstBadge.vue";
+import BigPictureSectionError from "~/components/bigpicture/BigPictureSectionError.vue";
+import {
+  RA_ACCOUNT_MISSING_TEXT,
+  parseAchievementStatus,
+  serverErrorText,
+  unavailableReasonText,
+  type AchievementStatus,
+} from "~/composables/achievements/status";
 import {
   useServerApi,
   type GamePlayerEntry,
@@ -1899,7 +2104,12 @@ const saves = useBpmGameSaves(
   gameId,
   computed(() => game.value?.mName),
   isNativeGame,
-  (msg) => { launchError.value = msg; },
+  // Shared error dialog: set its title too, or a save error shows under
+  // whatever title the last launch or install failure left behind.
+  (msg) => {
+    launchErrorTitle.value = "Saves";
+    launchError.value = msg;
+  },
 );
 
 /**
@@ -1915,6 +2125,14 @@ const saveConfirmCopy = computed(() => {
       title: "Delete This Save?",
       message: `This deletes '${name}' from this device. Drop keeps a timestamped backup next to it, but the game will no longer see this save.`,
       confirmLabel: "Delete Save",
+      destructive: true,
+    };
+  }
+  if (action?.type === "restore-pc") {
+    return {
+      title: "Restore From Backup?",
+      message: "This replaces this game's saves on this device with the last backup made here with Backup All. Progress since that backup will be lost.",
+      confirmLabel: "Restore Backup",
       destructive: true,
     };
   }
@@ -2038,22 +2256,67 @@ function rarityTextColor(rarity: number): string {
 const unlockedCount = computed(() => achievements.value.filter(a => a.unlocked).length);
 const achievementPercent = computed(() => achievements.value.length > 0 ? (unlockedCount.value / achievements.value.length) * 100 : 0);
 
-// Live-refresh the achievement list/count when the backend reports an unlock,
-// so the Community tab updates in place instead of only after re-navigating
-// (the unlock toast already fires). The event carries no gameId, so any unlock
-// triggers a cheap refetch of this game's achievements.
-async function reloadAchievements() {
+// Fetch state for the list. A failure shows a retry card when there is no
+// list to show; a failed refresh keeps the list already on screen.
+const achievementsError = ref<string | null>(null);
+const achievementsLoading = ref(true);
+// Why there are none / RA account missing (status route). Null until known;
+// a failed status fetch just leaves the generic empty line.
+const achievementStatus = ref<AchievementStatus | null>(null);
+const achievementStatusError = ref(false);
+const achievementReasonText = computed(() =>
+  unavailableReasonText(achievementStatus.value?.reason),
+);
+
+async function loadAchievementStatus() {
   try {
-    const res = await fetch(serverUrl(`api/v1/games/${gameId}/achievements`));
-    if (!res.ok) return;
-    const r = await res.json();
-    achievements.value = Array.isArray(r) ? r : (r.achievements ?? []);
-  } catch {
-    // best-effort; ignore refresh failures
+    const res = await fetch(serverUrl(`api/v1/games/${gameId}/achievements/status`));
+    if (!res.ok) throw new Error(String(res.status));
+    achievementStatus.value = parseAchievementStatus(await res.json());
+    achievementStatusError.value = false;
+  } catch (e) {
+    console.warn("[BPM:GAME] achievement status fetch failed:", e);
+    achievementStatusError.value = true;
   }
 }
+
+/** Fetch the list with a timeout; records the failure instead of hiding it. */
+async function loadAchievementsList(timeoutMs = 5000) {
+  try {
+    const res = await fetch(serverUrl(`api/v1/games/${gameId}/achievements`), {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    devLog("state", "[BPM:GAME] achievements fetch status:", res.status);
+    if (!res.ok) {
+      let body: unknown = null;
+      try {
+        body = await res.json();
+      } catch {
+        // No JSON body; the status code carries the message.
+      }
+      throw new Error(serverErrorText(res.status, body));
+    }
+    const r = await res.json();
+    achievements.value = Array.isArray(r) ? r : (r.achievements ?? []);
+    achievementsError.value = null;
+  } catch (e: any) {
+    console.warn("[BPM:GAME] achievements fetch FAILED:", e);
+    achievementsError.value =
+      e?.name === "TimeoutError" ? "The server took too long to answer." : String(e?.message ?? e);
+  } finally {
+    achievementsLoading.value = false;
+  }
+}
+
+async function retryAchievements() {
+  await Promise.all([loadAchievementsList(10000), loadAchievementStatus()]);
+}
+
+// Live-refresh the achievement list/count when the backend reports an unlock,
+// so the Community tab updates in place instead of only after re-navigating
+// (the unlock toast already fires).
 useListen("achievement_unlocked", () => {
-  reloadAchievements();
+  loadAchievementsList();
 });
 
 // ── ROM Hash Verification (RetroAchievements) ──────────────────────────
@@ -2169,8 +2432,6 @@ onMounted(async () => {
   // Fire all fetches in parallel — apply results as each resolves instead
   // of waiting for all (avoids a slow fetch blocking the entire page).
 
-  const achievementsUrl = serverUrl(`api/v1/games/${gameId}/achievements`);
-  devLog("state", "[BPM:GAME] Achievements URL:", achievementsUrl);
 
   // Game data — needed for the page header, status, and config
   // useGame is a local Tauri invoke (usually cached) — 5s is generous
@@ -2196,26 +2457,25 @@ onMounted(async () => {
     })
     .catch((e) => console.warn("[BPM:GAME] version_options failed:", e));
 
-  // Achievements — server:// proxied fetch, 5s timeout
-  const achievementsPromise = withTimeout(
-    fetch(achievementsUrl).then((res) => {
-      devLog("state", "[BPM:GAME] achievements fetch status:", res.status);
-      return res.ok ? res.json() : null;
-    }),
-    5000,
-  )
+  // What is installed here, for the Version / Install another version rows.
+  // Non-blocking like the options above: the rows simply do not appear until
+  // it resolves, rather than holding up the page.
+  void loadInstalledVersions();
+
+  // Install targets. Failure is non-fatal: the "Install to" row hides and the
+  // install falls back to the first directory, which is what BPM always did.
+  void invoke<string[]>("fetch_download_dir_stats")
     .then((r) => {
-      if (!r) { console.warn("[BPM:GAME] achievements timed out or null"); return; }
-      achievements.value = Array.isArray(r) ? r : (r.achievements ?? []);
-      devLog("state", "[BPM:GAME] Achievements loaded:", achievements.value.length);
-      if (achievements.value.length > 0) {
-        const sample = achievements.value.slice(0, 3);
-        for (const a of sample) {
-          devLog("state", `[BPM:GAME] Achievement "${a.title}" iconUrl: ${a.iconUrl || "(empty)"}`);
-        }
-      }
+      if (r) downloadDirs.value = r;
     })
-    .catch((e) => console.warn("[BPM:GAME] achievements fetch FAILED:", e));
+    .catch((e) => console.warn("[BPM:GAME] download_dir_stats failed:", e));
+
+  // Achievements — server:// proxied fetch, 5s timeout. A failure or timeout
+  // leaves `achievementsError` set so the tab shows a retry card.
+  const achievementsPromise = loadAchievementsList(5000).then(() => {
+    devLog("state", "[BPM:GAME] Achievements loaded:", achievements.value.length);
+  });
+  void loadAchievementStatus();
 
   // Wait for the critical data (game + achievements) before setting up focus.
   // version_options, playtime, and recommendations are intentionally NOT awaited.
@@ -2316,6 +2576,9 @@ async function launchGame() {
     const result: LaunchResult = await invoke("launch_game", {
       id: gameId,
       index: 0,
+      // Null lets the backend pick, which is what BPM always did and stays the
+      // default until the user chooses a version from the options menu.
+      version: activeVersionId.value ?? undefined,
     });
     if (result.result === "InstallRequired") {
       // Auto-download the required dependency (e.g. the emulator). There is no

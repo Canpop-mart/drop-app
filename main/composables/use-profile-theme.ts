@@ -123,8 +123,6 @@ export function accentVars(hex: string): Record<string, string> {
     "--accent-soft": `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.14)`,
     "--accent-border": `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.42)`,
     "--accent-contrast": lum > 150 ? "#000000" : "#ffffff",
-    // A deep shade for large immersive gradients (the Wrapped hero cards).
-    "--accent-deep": hslToHex(h, s, Math.max(l - 0.34, 0.12)),
     "--profile-banner": `linear-gradient(135deg, ${hex}, ${bannerTo})`,
   };
 }

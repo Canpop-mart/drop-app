@@ -51,14 +51,55 @@
         {{ error }}
       </div>
 
-      <!-- Host ended the session (calm, expected) -->
+      <!-- Restart recovery: the server says we're still in a room -->
+      <div
+        v-if="pendingRoom && !room"
+        class="mb-4 flex flex-wrap items-center gap-3 rounded-lg bg-blue-900/20 border border-blue-500/30 px-4 py-3"
+      >
+        <span class="text-sm text-blue-100 flex-1 min-w-0">
+          You're still in a co-op room{{
+            pendingRoom.gameName ? ` for ${pendingRoom.gameName}` : ""
+          }}
+          ({{ formatRoomCode(pendingRoom.shortCode) }}).
+        </span>
+        <button
+          :disabled="busy"
+          class="px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
+          @click="rejoinPending"
+        >
+          {{ busy ? "Rejoining…" : "Rejoin" }}
+        </button>
+        <button
+          :disabled="busy"
+          class="px-3 py-1.5 rounded-md text-sm font-medium bg-zinc-700 text-zinc-200 hover:bg-zinc-600 disabled:opacity-50"
+          @click="leavePending"
+        >
+          {{ pendingRoom.isHost ? "End it" : "Leave" }}
+        </button>
+      </div>
+      <div
+        v-else-if="pendingError && !room"
+        class="mb-4 flex flex-wrap items-center gap-3 rounded-lg bg-zinc-900/60 px-4 py-3 text-sm text-zinc-400"
+      >
+        <span class="flex-1 min-w-0">
+          Couldn't check whether you're still in a room: {{ pendingError }}
+        </span>
+        <button
+          class="px-3 py-1.5 rounded-md text-sm font-medium bg-zinc-700 text-zinc-200 hover:bg-zinc-600"
+          @click="checkMine"
+        >
+          Retry
+        </button>
+      </div>
+
+      <!-- The room ended underneath us (host ended it, it expired) -->
       <div
         v-if="sessionEnded"
         class="rounded-xl bg-zinc-900/60 border border-zinc-700 p-6 text-center"
       >
         <p class="text-lg font-medium text-zinc-200 mb-1">Session ended</p>
         <p class="text-sm text-zinc-500 mb-4">
-          The host closed the room. You can host or join another anytime.
+          The room has ended. You can host or join another anytime.
         </p>
         <button
           class="px-5 py-2.5 rounded-lg text-sm font-medium bg-zinc-700 text-zinc-100 hover:bg-zinc-600"
@@ -69,12 +110,24 @@
       </div>
 
       <div
-        v-else-if="status && !status.installed"
+        v-else-if="!room && unavailable"
         class="px-4 py-3 rounded-lg bg-amber-900/20 border border-amber-500/30 text-amber-200 text-sm"
       >
-        ZeroTier isn't installed. Install the official ZeroTier client from
-        <span class="font-mono">zerotier.com/download</span>, then reopen this
-        page.
+        {{ unavailable }}
+      </div>
+      <div
+        v-else-if="!room && statusError"
+        class="flex flex-wrap items-center gap-3 px-4 py-3 rounded-lg bg-red-900/30 border border-red-500/30 text-red-200 text-sm"
+      >
+        <span class="flex-1 min-w-0">
+          Couldn't check ZeroTier on this device: {{ statusError }}
+        </span>
+        <button
+          class="px-3 py-1.5 rounded-md text-sm font-medium bg-zinc-700 text-zinc-100 hover:bg-zinc-600"
+          @click="loadStatus"
+        >
+          Retry
+        </button>
       </div>
 
       <!-- In a room -->
@@ -100,8 +153,8 @@
               {{ codeCopied ? "✓ Copied!" : "Copy" }}
             </span>
           </button>
-          <p v-if="room.name" class="text-sm text-zinc-400 mt-2">
-            {{ room.name }}
+          <p v-if="roomGameName || room.name" class="text-sm text-zinc-400 mt-2">
+            {{ roomGameName || room.name }}
           </p>
         </div>
 
@@ -188,8 +241,9 @@
           </button>
           <p v-else class="text-sm text-zinc-500">Waiting for the host's address…</p>
           <p class="text-xs text-zinc-600 mt-2">
-            In your game, choose "join by IP" / "direct connect" and enter this
-            address. The LAN browser won't list it, so connect directly.
+            If the game lists LAN games, the host should show up there. If it
+            doesn't, choose join by IP or direct connect in the game and enter
+            this address.
           </p>
         </div>
       </div>
@@ -201,6 +255,22 @@
           <p class="text-sm text-zinc-500 mb-4">
             Create a room and share the code with friends.
           </p>
+          <div class="flex flex-wrap items-center gap-3 mb-4">
+            <span class="text-sm text-zinc-400">Game:</span>
+            <button
+              class="px-3 py-1.5 rounded-md text-sm font-medium bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+              @click="pickerOpen = true"
+            >
+              {{ hostGame ? hostGame.name : "Choose a game (optional)" }}
+            </button>
+            <button
+              v-if="hostGame"
+              class="text-xs text-zinc-500 hover:text-zinc-300"
+              @click="hostGame = null"
+            >
+              Clear
+            </button>
+          </div>
           <button
             :disabled="busy"
             class="px-5 py-2.5 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
@@ -245,6 +315,21 @@
           <p class="text-sm text-zinc-500 mb-4">
             Jump into a room someone on this server is hosting.
           </p>
+          <div
+            v-if="browseError"
+            class="mb-3 flex flex-wrap items-center gap-3 rounded-lg bg-red-900/30 border border-red-500/30 px-4 py-3 text-sm text-red-200"
+          >
+            <span class="flex-1 min-w-0">
+              Couldn't load open rooms: {{ browseError }}
+            </span>
+            <button
+              :disabled="browsing"
+              class="px-3 py-1.5 rounded-md text-sm font-medium bg-zinc-700 text-zinc-100 hover:bg-zinc-600 disabled:opacity-50"
+              @click="browse"
+            >
+              Retry
+            </button>
+          </div>
           <div v-if="browsable.length" class="space-y-2">
             <div
               v-for="r in browsable"
@@ -261,25 +346,41 @@
                 </p>
               </div>
               <button
+                v-if="!r.isSelf"
                 :disabled="busy"
                 class="shrink-0 px-4 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
                 @click="join(r.shortCode)"
               >
                 Join
               </button>
+              <span
+                v-else
+                class="shrink-0 text-xs px-2 py-0.5 rounded bg-blue-600/20 text-blue-300"
+              >
+                Your room
+              </span>
             </div>
           </div>
-          <p v-else class="text-sm text-zinc-600">
-            {{ browsing ? "Looking for rooms…" : "No open rooms right now." }}
+          <p v-else-if="browsing" class="text-sm text-zinc-600">
+            Looking for rooms…
+          </p>
+          <p v-else-if="browseLoaded && !browseError" class="text-sm text-zinc-600">
+            No open rooms right now.
           </p>
         </div>
 
-        <p class="text-xs text-zinc-600">
-          You may be asked for your password once, to let the app read ZeroTier's
-          settings.
+        <p v-if="hint" class="text-xs text-zinc-600">
+          {{ hint }}
         </p>
       </div>
       </template>
+
+      <GamePickerModal
+        :open="pickerOpen"
+        placeholder="Search for the game you'll play…"
+        @close="pickerOpen = false"
+        @select="onPickGame"
+      />
     </div>
   </div>
 </template>
@@ -287,11 +388,19 @@
 <script setup lang="ts">
 import { UserGroupIcon } from "@heroicons/vue/24/outline";
 import { useCoopRoom } from "~/composables/coop-room";
+import {
+  elevationHint,
+  formatRoomCode,
+  unavailableReason,
+} from "~/composables/coop-room-logic";
 import { useDisplayName } from "~/composables/use-display-name";
+import GamePickerModal from "~/components/GamePickerModal.vue";
+import type { FavoriteSearchRow } from "~/composables/use-server-api";
 
 const {
   room,
   status,
+  statusError,
   members,
   busy,
   error,
@@ -300,19 +409,25 @@ const {
   codeCopied,
   hostIp,
   hostIpCopied,
+  roomGameName,
   browsable,
   browsing,
+  browseError,
+  browseLoaded,
+  pendingRoom,
+  pendingError,
+  hostGame,
   displayCode,
   loadStatus,
-  pollMembers,
-  startPolling,
-  stopPolling,
   copyCode,
   copyHostIp,
   host,
   join,
   browse,
   leave,
+  checkMine,
+  rejoinPending,
+  leavePending,
   dismissSessionEnded,
 } = useCoopRoom();
 
@@ -324,9 +439,18 @@ const tab = ref<"coop" | "archipelago">("coop");
 
 const joinCode = ref("");
 const confirmingLeave = ref(false);
+const pickerOpen = ref(false);
+
+const unavailable = computed(() => unavailableReason(status.value));
+const hint = computed(() => elevationHint(status.value));
 
 function onJoin() {
   join(joinCode.value);
+}
+
+function onPickGame(g: FavoriteSearchRow) {
+  hostGame.value = { id: g.id, name: g.mName };
+  pickerOpen.value = false;
 }
 
 async function doLeave() {
@@ -339,14 +463,11 @@ onMounted(() => {
   // correct in both co-op and Archipelago before anyone sees it.
   useDisplayName().ensure();
   loadStatus();
-  if (room.value) {
-    pollMembers();
-    startPolling();
-  } else {
+  // Member polling runs app-wide (plugins/coop-room.client.ts); this page only
+  // refreshes what's shown when you're not in a room.
+  if (!room.value) {
+    checkMine();
     browse();
   }
-});
-onUnmounted(() => {
-  stopPolling();
 });
 </script>

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     io::{self, Read},
     path::{Path, PathBuf},
@@ -207,6 +207,67 @@ impl ModData {
     }
 }
 
+/// Every file the mods installed under `base_path` wrote there, as lower-cased
+/// POSIX paths relative to `base_path`, so the base game's stale-file sweep can
+/// leave them alone. A ledger records paths relative to the mod's own overlay
+/// folder (`base_path/<modInstallDir>`, see mod_agent.rs), so they are prefixed
+/// with that folder here. Lower-cased because a mod written into an existing
+/// directory on Windows takes the directory's on-disk casing, not the ledger's.
+///
+/// Returns `Err` with a reason when a ledger exists that cannot answer the
+/// question: it fails to decode, it lists no files because the mod's download
+/// never finished (`installed_files` is only filled on completion), or its
+/// overlay folder is not inside `base_path` (for instance the library was
+/// moved after the mod was installed). The caller must then assume any
+/// unknown file might belong to a mod.
+pub fn mod_owned_files(base_path: &Path) -> Result<HashSet<String>, String> {
+    let entries = match std::fs::read_dir(base_path.join(MODS_DIR)) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(e) => return Err(format!("could not read {MODS_DIR}: {e}")),
+    };
+
+    let mut owned = HashSet::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("could not read {MODS_DIR}: {e}"))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".moddata") {
+            continue;
+        }
+        let ledger = ModData::read(&entry.path())
+            .map_err(|e| format!("mod ledger {name} is unreadable: {e}"))?;
+        let files = ledger.get_installed_files();
+        if files.is_empty() {
+            return Err(format!(
+                "mod {} has no file list (its download did not finish)",
+                ledger.game_id
+            ));
+        }
+        let overlay = ledger.base_path.strip_prefix(base_path).map_err(|_| {
+            format!(
+                "mod {} is recorded at {}, which is not inside {}",
+                ledger.game_id,
+                ledger.base_path.display(),
+                base_path.display()
+            )
+        })?;
+        let prefix = overlay
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        owned.extend(files.into_iter().map(|f| {
+            let full = if prefix.is_empty() {
+                f
+            } else {
+                format!("{prefix}/{f}")
+            };
+            full.to_lowercase()
+        }));
+    }
+    Ok(owned)
+}
+
 /// Scan a base game's installed mods (`<install_dir>/.mods/*.moddata`) for a
 /// launch override and return the first one found. Typically only a loader mod
 /// (e.g. SMAPI) sets this, so first-match is sufficient. The launcher calls this
@@ -268,4 +329,109 @@ mod tests {
         );
     }
 
+    fn scratch_install(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "drop-mod-owned-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(MODS_DIR)).unwrap();
+        dir
+    }
+
+    fn write_ledger(base: &Path, id: &str, files: &[&str]) {
+        write_ledger_at(base, base.to_path_buf(), id, files);
+    }
+
+    /// `overlay` is where the mod's files land (mod_agent.rs: the install dir
+    /// joined with the version's `modInstallDir`); the ledger always lives in
+    /// the install dir's `.mods/`.
+    fn write_ledger_at(base: &Path, overlay: PathBuf, id: &str, files: &[&str]) {
+        let meta = moddata_path(base, id);
+        let m = ModData::new(
+            id.to_string(),
+            "v1".to_string(),
+            Platform::Windows,
+            "parent".to_string(),
+            None,
+            overlay,
+            meta,
+            None,
+        );
+        m.set_installed_files(files.iter().map(|s| s.to_string()).collect());
+        m.write();
+    }
+
+    #[test]
+    fn owned_files_without_mods_dir_is_empty() {
+        let dir = std::env::temp_dir().join(format!("drop-mod-owned-none-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(mod_owned_files(&dir).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn owned_files_merges_ledgers_and_lowercases() {
+        let dir = scratch_install("merge");
+        write_ledger(&dir, "smapi", &["StardewModdingAPI.exe", "smapi-internal/SMAPI.dll"]);
+        write_ledger(&dir, "ap", &["Mods/StardewArchipelago/manifest.json"]);
+        // A leftover temp file from an interrupted write is not a ledger.
+        std::fs::write(dir.join(MODS_DIR).join("x.moddata.tmp.3"), b"junk").unwrap();
+
+        let owned = mod_owned_files(&dir).unwrap();
+        assert!(owned.contains("stardewmoddingapi.exe"));
+        assert!(owned.contains("smapi-internal/smapi.dll"));
+        assert!(owned.contains("mods/stardewarchipelago/manifest.json"));
+        assert_eq!(owned.len(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn owned_files_are_relative_to_the_install_dir_not_the_overlay() {
+        let dir = scratch_install("overlay");
+        // Imported with modInstallDir = "Mods": the ledger lists paths inside
+        // Mods/, and the sweep sees them from the install root.
+        write_ledger_at(
+            &dir,
+            dir.join("Mods"),
+            "cp",
+            &["ContentPatcher/ContentPatcher.dll", "ContentPatcher/manifest.json"],
+        );
+        // mod_agent joins an empty modInstallDir, giving a trailing separator.
+        write_ledger_at(&dir, dir.join(""), "root", &["StardewModdingAPI.exe"]);
+
+        let owned = mod_owned_files(&dir).unwrap();
+        assert!(owned.contains("mods/contentpatcher/contentpatcher.dll"), "{owned:?}");
+        assert!(owned.contains("mods/contentpatcher/manifest.json"));
+        assert!(owned.contains("stardewmoddingapi.exe"));
+        assert!(!owned.contains("contentpatcher/contentpatcher.dll"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn owned_files_refuses_ledger_recorded_elsewhere() {
+        let dir = scratch_install("moved");
+        write_ledger_at(&dir, PathBuf::from("/somewhere/else/Mods"), "m", &["a.dll"]);
+        assert!(mod_owned_files(&dir).unwrap_err().contains("not inside"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn owned_files_refuses_unfinished_ledger() {
+        let dir = scratch_install("unfinished");
+        write_ledger(&dir, "done", &["a.dll"]);
+        write_ledger(&dir, "halfway", &[]);
+        let err = mod_owned_files(&dir).unwrap_err();
+        assert!(err.contains("halfway"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn owned_files_refuses_corrupt_ledger() {
+        let dir = scratch_install("corrupt");
+        std::fs::write(moddata_path(&dir, "broken"), b"not pot").unwrap();
+        assert!(mod_owned_files(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

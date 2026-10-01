@@ -51,6 +51,15 @@ pub struct AchievementConfigResponse {
     pub achievements: Vec<AchievementItem>,
     #[serde(default)]
     pub external_links: Vec<ExternalLink>,
+    /// Why the server has no achievements for this game (`no_link`,
+    /// `steam_key_missing`, `ra_credentials_missing`, `not_scanned`). Older
+    /// servers omit it.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The game tracks through RetroAchievements and this player has no RA
+    /// account linked on the server, so nothing they earn will be recorded.
+    #[serde(default)]
+    pub ra_account_missing: bool,
 }
 
 /// A single achievement report entry sent from the client to the server
@@ -66,6 +75,10 @@ pub struct AchievementReportEntry {
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct AchievementReportBody {
+    /// This machine's clock at send time. The unlock times come from this
+    /// clock too, so the server uses the difference to correct them onto its
+    /// own clock before comparing them with an achievement reset.
+    client_now: String,
     achievements: Vec<AchievementReportEntry>,
 }
 
@@ -78,10 +91,31 @@ pub struct AchievementReportResponse {
     /// Rows the server actually created on this call (first-time unlocks).
     #[serde(default)]
     pub newly_unlocked: u32,
+    /// The rows counted by `newly_unlocked`, so the client toasts exactly what
+    /// the server just recorded. `None` from servers that predate the field.
+    #[serde(default)]
+    pub unlocks: Option<Vec<ReportedUnlock>>,
     /// Reports with NO matching server definition — a silent drop
     /// (externalId/definition mismatch). Older servers omit this field.
     #[serde(default)]
     pub skipped: u32,
+    /// Matched reports earned before the player reset this game's
+    /// achievements, so ignored. Older servers omit this field.
+    #[serde(default)]
+    pub ignored_before_reset: u32,
+}
+
+/// One unlock the server recorded in response to a report.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportedUnlock {
+    pub id: String,
+    pub external_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub icon_url: String,
 }
 
 /// Helper to get current time in seconds
@@ -92,29 +126,30 @@ fn get_current_time_secs() -> u64 {
         .as_secs()
 }
 
-/// Cache wrapper for achievement config with expiry info
+/// Last good achievement config for a game, kept on disk so a launch with the
+/// server unreachable still knows which provider/AppIDs to watch.
 #[derive(Encode, Decode, Clone)]
 struct CachedAchievementConfig {
     data: AchievementConfigResponse,
-    expiry: u64,
+    /// Unix seconds when this copy was fetched. Only used for logging.
+    fetched_at: u64,
 }
 
-const ACHIEVEMENT_CONFIG_CACHE_TTL: u64 = 5 * 60; // 5 minutes in seconds
+fn config_cache_key(game_id: &str) -> String {
+    format!("achievement-config/{game_id}")
+}
 
-/// Fetch achievement config for a game from the server with 5-minute caching
+/// Fetch the achievement config for a game from the server.
+///
+/// Always asks the server first. The unlock state in it must be current: the
+/// poller seeds its "already unlocked" set from it, and a stale copy (the old
+/// five-minute cache) made a relaunch re-announce the previous session's
+/// unlocks. The on-disk copy is only a fallback for when the server can't be
+/// reached, so an offline launch still knows the game's provider and AppIDs.
 pub async fn fetch_achievement_config(
     game_id: &str,
 ) -> Result<AchievementConfigResponse, RemoteAccessError> {
-    let cache_key = format!("achievement-config/{}", game_id);
-
-    // Try to get from cache first
-    if let Ok(cached) = get_cached_object::<CachedAchievementConfig>(&cache_key) {
-        let now = get_current_time_secs();
-        if cached.expiry > now {
-            debug!("{TAG} Using cached achievement config for game {game_id}");
-            return Ok(cached.data);
-        }
-    }
+    let cache_key = config_cache_key(game_id);
 
     debug!("{TAG} Fetching achievement config for game {game_id}");
     let url = generate_url(
@@ -124,7 +159,19 @@ pub async fn fetch_achievement_config(
         )],
         &[],
     )?;
-    let data: AchievementConfigResponse = remote_request(RemoteRequest::get(url)).await?;
+    let data: AchievementConfigResponse = match remote_request(RemoteRequest::get(url)).await {
+        Ok(data) => data,
+        Err(e) => {
+            if let Ok(cached) = get_cached_object::<CachedAchievementConfig>(&cache_key) {
+                let age = get_current_time_secs().saturating_sub(cached.fetched_at);
+                warn!(
+                    "{TAG} Config fetch for {game_id} failed ({e}); using the copy from {age}s ago"
+                );
+                return Ok(cached.data);
+            }
+            return Err(e);
+        }
+    };
     debug!(
         "{TAG} Config for {game_id}: {} achievements, {} external links, {} already unlocked",
         data.achievements.len(),
@@ -132,14 +179,13 @@ pub async fn fetch_achievement_config(
         data.achievements.iter().filter(|a| a.unlocked).count()
     );
 
-    // Cache the config with 5-minute expiry
     let cached = CachedAchievementConfig {
         data: data.clone(),
-        expiry: get_current_time_secs() + ACHIEVEMENT_CONFIG_CACHE_TTL,
+        fetched_at: get_current_time_secs(),
     };
     if let Err(e) = cache_object(&cache_key, &cached) {
+        // Only the offline fallback is lost; the fresh data is still returned.
         debug!("{TAG} Failed to cache achievement config for {game_id}: {e}");
-        // Don't fail the request if caching fails, just log it
     }
 
     Ok(data)
@@ -163,13 +209,23 @@ pub async fn report_achievements(
         )],
         &[],
     )?;
-    let body = AchievementReportBody { achievements };
+    let body = AchievementReportBody {
+        client_now: chrono::Utc::now().to_rfc3339(),
+        achievements,
+    };
     let data: AchievementReportResponse =
         remote_request(RemoteRequest::post(url, &body)).await?;
     info!(
-        "{TAG} Server report for {game_id}: matched {}, newly unlocked {}, not-found {}",
-        data.recorded, data.newly_unlocked, data.skipped
+        "{TAG} Server report for {game_id}: matched {}, newly unlocked {}, not-found {}, \
+         ignored (earned before a reset) {}",
+        data.recorded, data.newly_unlocked, data.skipped, data.ignored_before_reset
     );
+    // The on-disk config copy is deliberately NOT cleared here. It is only
+    // read when the server can't be reached (fetch_achievement_config is
+    // network-first), and a stale unlock state in it is harmless now that
+    // toasts come from this response rather than from diffing a config. Keeping
+    // it means a launch during a network blip still knows which AppIDs to
+    // watch, and reports succeed once the connection is back.
     Ok(data)
 }
 
@@ -178,6 +234,10 @@ pub async fn report_achievements(
 #[serde(rename_all = "camelCase")]
 struct RAPollResponse {
     newly_unlocked: Vec<RAPollUnlock>,
+    /// Why the server read nothing (`no_link`, `no_account`,
+    /// `no_credentials`, `empty_progress`, `error`). Older servers omit it.
+    #[serde(default)]
+    skipped: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -209,6 +269,11 @@ async fn poll_ra(game_id: &str) -> Vec<RAPollUnlock> {
 
     match remote_request::<RAPollResponse, _>(RemoteRequest::post(url, &Empty {})).await {
         Ok(data) => {
+            if let Some(reason) = &data.skipped {
+                // Once per poll while it lasts, so debug; the launch-time
+                // warning below says it once at info/warn level.
+                debug!("{TAG} RA poll for {game_id} read nothing: {reason}");
+            }
             if !data.newly_unlocked.is_empty() {
                 info!(
                     "{TAG} RA poll found {} new unlocks for {game_id}",
@@ -224,8 +289,10 @@ async fn poll_ra(game_id: &str) -> Vec<RAPollUnlock> {
     }
 }
 
-/// Notify the server that a game session has ended, triggering server-side
-/// achievement sync (Steam, RetroAchievements) for this user + game.
+/// Notify the server that a game session has ended, triggering the
+/// server-side RetroAchievements sync for this user + game. (Goldberg/Steam
+/// emulator unlocks are not synced here: they only ever arrive through
+/// `report_achievements`.)
 pub async fn notify_session_end(game_id: &str) -> Result<(), RemoteAccessError> {
     let url = generate_url(
         &[&format!("/api/v1/client/game/{}/session-end", game_id)],
@@ -240,12 +307,15 @@ pub async fn notify_session_end(game_id: &str) -> Result<(), RemoteAccessError> 
 }
 
 /// Checks local emulator save files for newly earned achievements and
-/// reports them to the server. Supports both Goldberg and SSE.
+/// returns the ones not yet known to be unlocked, ready to report. Supports
+/// both Goldberg and SSE, plus the cracker locations, on the host and (Linux)
+/// inside the game's Wine prefix.
 async fn check_and_report_local(
     game_id: &str,
     goldberg_app_ids: &[String],
     known_unlocked_external_ids: &HashSet<String>,
     emulator_info: Option<&EmulatorInfo>,
+    wine_prefix: Option<&std::path::Path>,
 ) -> Vec<AchievementReportEntry> {
     let mut new_reports = Vec::new();
 
@@ -255,7 +325,7 @@ async fn check_and_report_local(
         debug!("{TAG} Checking local files for AppID {app_id} (game {game_id})");
 
         // Use the unified reader that auto-selects based on emulator type
-        let earned = goldberg::read_earned(app_id, emulator_info);
+        let earned = goldberg::read_earned(app_id, emulator_info, wine_prefix);
         debug!(
             "{TAG} AppID {app_id}: {} earned achievements on disk, {} already known",
             earned.len(),
@@ -309,18 +379,89 @@ async fn check_and_report_local(
     new_reports
 }
 
-/// Cache entry for achievement config with timestamp
-struct AchievementConfigCache {
-    data: AchievementConfigResponse,
-    cached_at: SystemTime,
-}
-
-impl AchievementConfigCache {
-    fn is_stale(&self, cache_duration_secs: u64) -> bool {
-        match SystemTime::now().duration_since(self.cached_at) {
-            Ok(elapsed) => elapsed.as_secs() >= cache_duration_secs,
-            Err(_) => true, // If time went backwards, consider it stale
+/// Reports locally-found unlocks and toasts exactly the ones the server says
+/// it recorded for the first time. Used by every poll tick and by the final
+/// check when the game exits.
+///
+/// Every reported name is marked known afterwards, whatever the server said
+/// about it: a name the server couldn't match (or ignored as earned before a
+/// reset) would otherwise be re-sent every 15 s. The save file persists, so a
+/// report that genuinely failed is retried next launch (the known set is
+/// reseeded from the server). On a network error nothing is marked, so the
+/// next tick retries.
+async fn report_and_announce(
+    game_id: &str,
+    reports: Vec<AchievementReportEntry>,
+    known_unlocked: &mut HashSet<String>,
+    known_unlocked_external_ids: &mut HashSet<String>,
+    on_new_achievement: &(impl Fn(AchievementItem) + Send),
+) {
+    if reports.is_empty() {
+        return;
+    }
+    info!(
+        "{TAG} Reporting {} new local achievements for {}",
+        reports.len(),
+        game_id
+    );
+    let resp = match report_achievements(game_id, reports.clone()).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            warn!("{TAG} Failed to report achievements for {game_id}: {e} (will retry)");
+            return;
         }
+    };
+    if resp.skipped > 0 {
+        warn!(
+            "{TAG} {} of {} reported achievements for {} had NO matching \
+             server definition (externalId/definition mismatch) and were dropped",
+            resp.skipped,
+            reports.len(),
+            game_id
+        );
+    }
+    for r in &reports {
+        known_unlocked_external_ids.insert(r.external_id.clone());
+    }
+
+    match resp.unlocks {
+        Some(unlocks) => {
+            for u in unlocks {
+                if !known_unlocked.insert(u.id.clone()) {
+                    continue;
+                }
+                known_unlocked_external_ids.insert(u.external_id.clone());
+                info!("{TAG} New achievement unlocked: {} - {}", u.title, u.description);
+                on_new_achievement(AchievementItem {
+                    id: u.id,
+                    external_id: u.external_id,
+                    provider: "Goldberg".to_string(),
+                    title: u.title,
+                    description: u.description,
+                    icon_url: u.icon_url,
+                    unlocked: true,
+                });
+            }
+        }
+        // A server from before `unlocks` existed: fall back to a fresh config
+        // diff, only when it says it created something.
+        None if resp.newly_unlocked > 0 => match fetch_achievement_config(game_id).await {
+            Ok(data) => {
+                for a in data.achievements {
+                    if a.unlocked && known_unlocked.insert(a.id.clone()) {
+                        known_unlocked_external_ids.insert(a.external_id.clone());
+                        info!("{TAG} New achievement unlocked: {} - {}", a.title, a.description);
+                        on_new_achievement(a);
+                    }
+                }
+            }
+            Err(e) => warn!(
+                "{TAG} {} new unlock(s) recorded for {game_id} but the config refetch \
+                 for the toast failed: {e}",
+                resp.newly_unlocked
+            ),
+        },
+        None => {}
     }
 }
 
@@ -367,11 +508,13 @@ pub async fn poll_achievements(
                     .iter()
                     .any(|l| l.provider == "RetroAchievements");
 
-                // AppIDs to scan locally: "Goldberg" links AND "Steam"-provider
-                // links (the game's store AppID). Including the Steam AppID lets
-                // the multi-cracker scanner find unlocks for a game the server
-                // never classified as Goldberg, so client-side detection no
-                // longer depends on server-side Goldberg classification.
+                // AppIDs to scan locally: the "Goldberg" links. The server
+                // files every Steam-style game under Goldberg and never
+                // creates a "Steam"-provider link today, so the "Steam" arm
+                // below matches nothing; it is kept so a server that does add
+                // them later gets scanned without a client change. Games with
+                // no server link at all are covered by the local AppID fold-in
+                // just below.
                 let mut goldberg_app_ids: Vec<String> = data
                     .external_links
                     .iter()
@@ -425,6 +568,16 @@ pub async fn poll_achievements(
                     data.achievements.len(),
                     unlocked_ids.len(),
                 );
+                if let Some(reason) = &data.reason {
+                    warn!("{TAG} Server has no achievements for {game_id}: {reason}");
+                }
+                if ra_linked && data.ra_account_missing {
+                    warn!(
+                        "{TAG} {game_id} tracks through RetroAchievements but this account \
+                         has no RetroAchievements account linked on the server: unlocks \
+                         will NOT be recorded"
+                    );
+                }
 
                 (unlocked_ids, unlocked_ext_ids, mode)
             }
@@ -445,9 +598,12 @@ pub async fn poll_achievements(
     }
 
     let mut first_poll = true;
-    let mut cached_config: Option<AchievementConfigCache> = None;
-    // Only re-fetch config every 3 cycles (45 seconds), reuse cache otherwise
-    const CONFIG_CACHE_DURATION_SECS: u64 = 45;
+    // The game's Proton prefix on Linux, where a Windows build writes its
+    // AppData / Documents saves. Looked up once; `None` elsewhere.
+    let wine_prefix = goldberg::wine_prefix_for_game(&game_id);
+    if let Some(p) = &wine_prefix {
+        info!("{TAG} Also searching the Wine prefix {} for {game_id}", p.display());
+    }
 
     // A fixed-cadence interval rather than `sleep(15s)` at the end of each
     // cycle: `sleep` would make the real period `15s + poll_duration`, so the
@@ -466,20 +622,28 @@ pub async fn poll_achievements(
         // Wait for the next 15s tick or until cancelled
         tokio::select! {
             _ = cancel.notified() => {
-                // On session end, do one final check for Goldberg mode
+                // On session end, do one final check for Goldberg mode. An
+                // unlock earned in the last seconds before quitting is only
+                // seen here, and it toasts like any other.
                 if let AchievementMode::Goldberg { app_ids } = &mode {
                     let final_reports = check_and_report_local(
                         &game_id,
                         app_ids,
                         &known_unlocked_external_ids,
                         emulator_info.as_ref(),
+                        wine_prefix.as_deref(),
                     ).await;
                     if !final_reports.is_empty() {
-                        info!("{TAG} Final sync: reporting {} achievements for {}", final_reports.len(), game_id);
-                        if let Err(e) = report_achievements(&game_id, final_reports).await {
-                            warn!("{TAG} Failed to report final achievements: {}", e);
-                        }
+                        info!("{TAG} Final sync: {} unreported achievements for {}", final_reports.len(), game_id);
                     }
+                    report_and_announce(
+                        &game_id,
+                        final_reports,
+                        &mut known_unlocked,
+                        &mut known_unlocked_external_ids,
+                        &on_new_achievement,
+                    )
+                    .await;
                 }
                 // For RA mode, do a few *delayed* final polls. RetroArch reports
                 // unlocks to RA's servers asynchronously, so an achievement
@@ -543,93 +707,24 @@ pub async fn poll_achievements(
                     }
                 }
 
-                // Check local emulator files (fast, no network)
+                // Check local emulator files (fast, no network), report what's
+                // new, and toast what the server says it recorded.
                 let new_reports = check_and_report_local(
                     &game_id,
                     app_ids,
                     &known_unlocked_external_ids,
                     emulator_info.as_ref(),
+                    wine_prefix.as_deref(),
                 )
                 .await;
-
-                if !new_reports.is_empty() {
-                    info!(
-                        "{TAG} Reporting {} new Goldberg achievements for {}",
-                        new_reports.len(),
-                        game_id
-                    );
-                    match report_achievements(&game_id, new_reports.clone()).await {
-                        Ok(resp) => {
-                            if resp.skipped > 0 {
-                                warn!(
-                                    "{TAG} {} of {} reported achievements for {} had NO matching \
-                                     server definition (externalId/definition mismatch) and were dropped",
-                                    resp.skipped, new_reports.len(), game_id
-                                );
-                            }
-                            // Mark all sent as known. The on-disk save file is the
-                            // source of truth and persists, so a genuinely missed
-                            // unlock is re-read + re-reported on the next launch
-                            // (the known set is reseeded fresh from the server).
-                            for r in &new_reports {
-                                known_unlocked_external_ids.insert(r.external_id.clone());
-                            }
-                        }
-                        Err(e) => {
-                            warn!("{TAG} Failed to report achievements: {}", e);
-                        }
-                    }
-                }
-
-                // Poll server for state changes only if cache is stale (every 45 secs)
-                let should_fetch = cached_config
-                    .as_ref()
-                    .map(|c| c.is_stale(CONFIG_CACHE_DURATION_SECS))
-                    .unwrap_or(true);
-
-                if should_fetch {
-                    match fetch_achievement_config(&game_id).await {
-                        Ok(data) => {
-                            cached_config = Some(AchievementConfigCache {
-                                data: data.clone(),
-                                cached_at: SystemTime::now(),
-                            });
-
-                            for achievement in &data.achievements {
-                                if achievement.unlocked && !known_unlocked.contains(&achievement.id) {
-                                    info!(
-                                        "{TAG} New achievement unlocked: {} - {}",
-                                        achievement.title, achievement.description
-                                    );
-                                    known_unlocked.insert(achievement.id.clone());
-                                    known_unlocked_external_ids
-                                        .insert(achievement.external_id.clone());
-                                    on_new_achievement(achievement.clone());
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            debug!(
-                                "{TAG} Achievement poll failed for {}: {} (will retry)",
-                                game_id, e
-                            );
-                        }
-                    }
-                } else if let Some(cache) = &cached_config {
-                    // Use cached config to check for new unlocks without fetching
-                    for achievement in &cache.data.achievements {
-                        if achievement.unlocked && !known_unlocked.contains(&achievement.id) {
-                            info!(
-                                "{TAG} New achievement unlocked (from cache): {} - {}",
-                                achievement.title, achievement.description
-                            );
-                            known_unlocked.insert(achievement.id.clone());
-                            known_unlocked_external_ids
-                                .insert(achievement.external_id.clone());
-                            on_new_achievement(achievement.clone());
-                        }
-                    }
-                }
+                report_and_announce(
+                    &game_id,
+                    new_reports,
+                    &mut known_unlocked,
+                    &mut known_unlocked_external_ids,
+                    &on_new_achievement,
+                )
+                .await;
             }
 
             AchievementMode::RetroAchievements => {

@@ -9,13 +9,6 @@
         </p>
       </div>
       <div class="flex shrink-0 flex-col items-end gap-2.5">
-        <NuxtLink
-          to="/wrapped/community"
-          class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow transition-colors hover:bg-blue-500"
-        >
-          <SparklesIcon class="size-4" />
-          Wrapped
-        </NuxtLink>
         <button
           v-if="!stats && statsError"
           class="flex items-center gap-1.5 text-sm text-zinc-500 font-medium hover:text-zinc-300 transition-colors"
@@ -278,7 +271,7 @@
 </template>
 
 <script setup lang="ts">
-import { TrophyIcon, BoltIcon, SparklesIcon } from "@heroicons/vue/24/solid";
+import { TrophyIcon, BoltIcon } from "@heroicons/vue/24/solid";
 import { ArrowPathIcon } from "@heroicons/vue/24/outline";
 import { invoke } from "@tauri-apps/api/core";
 import {

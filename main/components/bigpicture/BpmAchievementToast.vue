@@ -24,7 +24,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onBeforeUnmount } from 'vue'
 
 interface Achievement {
   title: string
@@ -44,6 +44,7 @@ const emit = defineEmits<{
 
 const show = ref(false)
 let timeout: ReturnType<typeof setTimeout>
+let leaveTimeout: ReturnType<typeof setTimeout>
 
 const themeConfig = {
   steam: {
@@ -235,24 +236,34 @@ function dismiss() {
   show.value = false
   // Let the leave-transition play before telling the parent to null the
   // achievement, otherwise it pops instead of sliding out.
-  setTimeout(() => emit('dismissed'), 500)
+  leaveTimeout = setTimeout(() => emit('dismissed'), 500)
 }
 
+// `immediate`: a parent may mount this with an achievement already set, and
+// a plain watch would never fire for that first value (the toast would stay
+// hidden and never emit `dismissed`).
 watch(
   () => props.achievement,
   (newAchievement) => {
     if (newAchievement) {
       show.value = true
       clearTimeout(timeout)
+      clearTimeout(leaveTimeout)
       timeout = setTimeout(() => {
         show.value = false
-        setTimeout(() => {
+        leaveTimeout = setTimeout(() => {
           emit('dismissed')
         }, 500)
       }, 5000)
     }
-  }
+  },
+  { immediate: true }
 )
+
+onBeforeUnmount(() => {
+  clearTimeout(timeout)
+  clearTimeout(leaveTimeout)
+})
 </script>
 
 <style scoped>

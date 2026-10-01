@@ -2,8 +2,8 @@
 //!
 //! Two concerns:
 //!
-//! * **Connect credentials** — fetched from local settings or the Drop server
-//!   and injected into `retroarch.cfg` so RetroArch authenticates with
+//! * **Connect credentials** — fetched from the Drop server (a local copy is
+//!   used only when it can't be reached) and injected into `retroarch.cfg` so RetroArch authenticates with
 //!   RetroAchievements without a manual login. See [`fetch_ra_credentials`].
 //! * **Credential expiry** — Connect tokens are password-derived, last about
 //!   45 to 60 days and cannot be refreshed. RetroArch never tells Drop it was
@@ -34,20 +34,162 @@ pub struct RACredentials {
     pub connect_token: String,
 }
 
-/// Fetches RetroAchievements Connect credentials.
-///
-/// Lookup order:
-/// 1. Local settings (`ra_username` + `ra_token`) — preferred: works offline
-///    and allows an RA account not linked to the Drop account.
-/// 2. Drop server (`/api/v1/client/user/ra-credentials`) — linked account.
-///
-/// Returns `None` if neither path yields a username + Connect token. A failed
-/// server fetch is logged and swallowed — RA auto-login is nice-to-have, not
-/// a launch blocker.
+/// How long the server lookup may take before the local copy is used. The
+/// launch path bounds the whole call at 2 s; this leaves room for the local
+/// fallback inside that.
+const SERVER_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// What a credential sync found, for the settings screens.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RaSyncReport {
+    /// `linked`, `linked_no_token` (linked but the server holds no Connect
+    /// token: the player must sign in again once), `not_linked`, or
+    /// `unreachable` (the server couldn't be asked; nothing was changed).
+    pub status: &'static str,
+    /// The RA account the server has, when it said.
+    pub server_username: Option<String>,
+    /// Who RetroArch will sign in as now. `None`: nobody.
+    pub signs_in_as: Option<String>,
+    /// Why the server couldn't be asked (`unreachable` only).
+    pub error: Option<String>,
+}
+
+/// Fetches RetroAchievements Connect credentials for RetroArch.
+/// See [`sync_ra_credentials`].
 pub async fn fetch_ra_credentials() -> Option<RACredentials> {
-    // 1. Local settings first. The read guard is released before
-    // `heal_expired_state` runs — it takes the write lock, and the DB lock is
-    // not reentrant.
+    sync_ra_credentials().await.0
+}
+
+/// Asks the Drop server for this player's RA credentials and brings the local
+/// copy in line. The server is authoritative: RA linking happens there (web
+/// page or any client), so what it holds now is what RetroArch signs in as.
+///
+/// The route always answers 200 with an explicit `linked` flag, so only a
+/// well-formed Drop answer can change the local copy; a 404 or any other
+/// failure (a reverse proxy while the container restarts, say) never does.
+///
+/// * `linked: true` with a token: use it and overwrite the local copy. A
+///   re-link to another account, a new password, or a token from another
+///   device all take effect. A fresh token also clears a recorded "expired"
+///   state. A token that is itself the one recorded as rejected is not
+///   injected: RetroArch would only fail again.
+/// * `linked: true` without a token (accounts linked before tokens were
+///   stored): keep using the local token if it is for the same account, and
+///   report `linked_no_token` so settings can ask for one sign-in.
+/// * `linked: false`: the account was unlinked. Clear the local copy so
+///   RetroArch stops signing in as an account the server no longer tracks.
+/// * Anything else: use the local copy (unless it is the rejected token) and
+///   report `unreachable`.
+///
+/// Servers from before the `linked` flag answer `{ username, connectToken }`
+/// or 404; the first is read as linked, the second as unreachable.
+pub async fn sync_ra_credentials() -> (Option<RACredentials>, RaSyncReport) {
+    let report = |status: &'static str,
+                  server_username: Option<String>,
+                  signs_in_as: Option<&RACredentials>,
+                  error: Option<String>| RaSyncReport {
+        status,
+        server_username,
+        signs_in_as: signs_in_as.map(|c| c.username.clone()),
+        error,
+    };
+
+    let url = match generate_url(&["api", "v1", "client", "user", "ra-credentials"], &[]) {
+        Ok(u) => u,
+        Err(e) => {
+            warn!("[RETROARCH] Failed to build RA credentials URL: {e}");
+            let local = local_fallback("could not build the request URL");
+            let r = report("unreachable", None, local.as_ref(), Some(e.to_string()));
+            return (local, r);
+        }
+    };
+
+    /// Server response shape — inner struct (no `serde_json` in this crate).
+    #[derive(Deserialize)]
+    struct RACredsResponse {
+        /// Missing on servers from before the flag existed.
+        #[serde(default)]
+        linked: Option<bool>,
+        #[serde(default)]
+        username: Option<String>,
+        #[serde(default, rename = "connectToken")]
+        connect_token: Option<String>,
+    }
+
+    let answer = tokio::time::timeout(
+        SERVER_LOOKUP_TIMEOUT,
+        remote_request::<RACredsResponse, _>(RemoteRequest::get(url)),
+    )
+    .await;
+
+    let resp = match answer {
+        Ok(Ok(resp)) => resp,
+        Ok(Err(e)) => {
+            let why = e.to_string();
+            let local = local_fallback(&why);
+            let r = report("unreachable", None, local.as_ref(), Some(why));
+            return (local, r);
+        }
+        Err(_) => {
+            let why = "the server did not answer in time".to_string();
+            let local = local_fallback(&why);
+            let r = report("unreachable", None, local.as_ref(), Some(why));
+            return (local, r);
+        }
+    };
+
+    let username = resp.username.unwrap_or_default();
+    let token = resp.connect_token.unwrap_or_default();
+    match (resp.linked, username.is_empty(), token.is_empty()) {
+        (Some(false), _, _) => {
+            info!("[RETROARCH] No RA account linked on the server; clearing any local copy");
+            clear_local_copy();
+            (None, report("not_linked", None, None, None))
+        }
+        (Some(true) | None, false, false) => {
+            if is_expired_token(&token) {
+                warn!(
+                    "[RETROARCH] The server's RA token for {username} is the one RetroAchievements \
+                     already rejected; not injecting it (sign in again)"
+                );
+                return (None, report("linked", Some(username), None, None));
+            }
+            info!("[RETROARCH] Using the server-linked RA account {username}");
+            // A token that isn't the recorded dead one: the expiry is history.
+            heal_expired_state(&token);
+            {
+                let mut db = database::borrow_db_mut_checked();
+                db.settings.ra_username = username.clone();
+                db.settings.ra_token = token.clone();
+            }
+            let creds = RACredentials { username: username.clone(), connect_token: token };
+            let r = report("linked", Some(username), Some(&creds), None);
+            (Some(creds), r)
+        }
+        (Some(true), false, true) => {
+            // Keep a local token only if it is for this same account.
+            let local = local_fallback("the server has no Connect token for this account")
+                .filter(|c| c.username.eq_ignore_ascii_case(&username));
+            warn!(
+                "[RETROARCH] RA account {username} is linked on the server without a Connect \
+                 token; the player needs to sign in again once"
+            );
+            let r = report("linked_no_token", Some(username), local.as_ref(), None);
+            (local, r)
+        }
+        _ => {
+            let why = "unexpected response from the server".to_string();
+            let local = local_fallback(&why);
+            let r = report("unreachable", None, local.as_ref(), Some(why));
+            (local, r)
+        }
+    }
+}
+
+/// The local copy of the server-linked RA credentials, for when the server
+/// can't be asked. `None` when there is none or it is the rejected token.
+fn local_fallback(why: &str) -> Option<RACredentials> {
     let local = {
         let db = database::borrow_db_checked();
         (!db.settings.ra_username.is_empty() && !db.settings.ra_token.is_empty()).then(|| {
@@ -56,71 +198,32 @@ pub async fn fetch_ra_credentials() -> Option<RACredentials> {
                 connect_token: db.settings.ra_token.clone(),
             }
         })
-    };
-    let mut local_expired = false;
-    if let Some(creds) = local {
-        // A local token that has already been rejected is worth less than
-        // whatever the server holds, so fall through rather than hand back a
-        // token we know RetroArch will refuse.
-        if is_expired_token(&creds.connect_token) {
-            local_expired = true;
-            warn!(
-                "[RETROARCH] Local RA token for {} has expired — trying the server-linked account",
-                creds.username
-            );
-        } else {
-            info!(
-                "[RETROARCH] Using locally-configured RA credentials for {}",
-                creds.username
-            );
-            heal_expired_state(&creds.connect_token);
-            return Some(creds);
-        }
+    }?;
+    if is_expired_token(&local.connect_token) {
+        warn!(
+            "[RETROARCH] RA server lookup failed ({why}) and the local token for {} has expired",
+            local.username
+        );
+        return None;
     }
+    info!(
+        "[RETROARCH] RA server lookup failed ({why}); using the local copy for {}",
+        local.username
+    );
+    Some(local)
+}
 
-    // 2. Drop server, via the shared retrying helper.
-    let url = match generate_url(&["api", "v1", "client", "user", "ra-credentials"], &[]) {
-        Ok(u) => u,
-        Err(e) => {
-            debug!("[RETROARCH] Failed to build RA credentials URL: {e}");
-            return None;
-        }
-    };
-
-    /// Server response shape — inner struct (no `serde_json` in this crate).
-    #[derive(Deserialize)]
-    struct RACreds {
-        username: String,
-        #[serde(rename = "connectToken")]
-        connect_token: String,
+/// Drops the local copy of the RA credentials (the server no longer has an
+/// account linked). Expiry state goes with it: there is no token left to be
+/// expired.
+fn clear_local_copy() {
+    let mut db = database::borrow_db_mut_checked();
+    if db.settings.ra_username.is_empty() && db.settings.ra_token.is_empty() {
+        return;
     }
-
-    match remote_request::<RACreds, _>(RemoteRequest::get(url)).await {
-        Ok(creds) if !creds.connect_token.is_empty() => {
-            info!("[RETROARCH] Got RA credentials for user {}", creds.username);
-            // A token the server hands back that isn't the one we recorded as
-            // dead means the user re-linked on the web — the expiry state is
-            // stale, so drop it and start injecting again. Not so if we got
-            // here because the LOCAL token expired: that record has to stand,
-            // or the next launch would reach for the dead local token first
-            // and fail all over again.
-            if !local_expired {
-                heal_expired_state(&creds.connect_token);
-            }
-            Some(RACredentials {
-                username: creds.username,
-                connect_token: creds.connect_token,
-            })
-        }
-        Ok(_) => {
-            debug!("[RETROARCH] RA credentials have empty Connect token");
-            None
-        }
-        Err(e) => {
-            debug!("[RETROARCH] Failed to fetch RA credentials: {e}");
-            None
-        }
-    }
+    db.settings.ra_username = String::new();
+    db.settings.ra_token = String::new();
+    db.settings.ra_expired_token = String::new();
 }
 
 // ── Credential expiry ────────────────────────────────────────────────────

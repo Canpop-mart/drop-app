@@ -10,6 +10,139 @@
       </p>
     </div>
 
+    <!-- RetroAchievements account. Linking goes through the Drop server so
+         it can record unlocks; see composables/ra-link.ts. -->
+    <div class="mt-5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
+      <h4 class="text-sm font-semibold text-zinc-100">RetroAchievements</h4>
+      <div
+        v-if="ra.loadState.value === 'error'"
+        class="mt-2 flex items-center gap-3 text-sm text-red-400"
+      >
+        <span class="flex-1"
+          >Could not check your RetroAchievements link with the server.
+          {{ ra.loadError.value }}</span
+        >
+        <button
+          class="rounded-md bg-zinc-700 px-3 py-1.5 text-sm font-semibold text-zinc-100 hover:bg-zinc-600"
+          @click="ra.refresh"
+        >
+          Retry
+        </button>
+      </div>
+      <p
+        v-else-if="ra.loadState.value === 'loading'"
+        class="mt-2 text-sm text-zinc-500"
+      >
+        Checking...
+      </p>
+      <div
+        v-else-if="ra.state.value === 'mismatch'"
+        class="mt-2 flex items-center gap-3"
+      >
+        <p class="flex-1 text-sm text-amber-300">
+          Your server has {{ ra.serverUsername.value }}, but this device still
+          signs RetroArch in as {{ ra.localUsername.value }}. It switches on
+          the next launch that can reach the server.
+          <span v-if="ra.syncError.value" class="block text-red-400">{{
+            ra.syncError.value
+          }}</span>
+        </p>
+        <button
+          :disabled="ra.busy.value"
+          class="rounded-md bg-zinc-700 px-3 py-1.5 text-sm font-semibold text-zinc-100 hover:bg-zinc-600 disabled:opacity-50"
+          @click="ra.syncLocalCopy"
+        >
+          Update this device
+        </button>
+      </div>
+      <div
+        v-else-if="ra.state.value === 'linked'"
+        class="mt-2 flex items-center gap-3"
+      >
+        <p class="flex-1 text-sm text-zinc-300">
+          Linked as
+          <span class="font-semibold text-zinc-100">{{
+            ra.serverUsername.value
+          }}</span
+          >. Unlocks are recorded, and RetroArch signs in automatically.
+        </p>
+        <button
+          :disabled="ra.busy.value"
+          class="rounded-md bg-zinc-700 px-3 py-1.5 text-sm font-semibold text-zinc-100 hover:bg-zinc-600 disabled:opacity-50"
+          @click="unlinkRa"
+        >
+          Unlink
+        </button>
+      </div>
+      <div v-else class="mt-2 flex flex-col gap-3">
+        <p
+          v-if="ra.state.value === 'expired'"
+          class="text-sm text-amber-300"
+        >
+          Your RetroAchievements sign-in has expired, so unlocks are no longer
+          tracked. Sign in again.
+        </p>
+        <p
+          v-else-if="ra.state.value === 'needs_signin'"
+          class="text-sm text-amber-300"
+        >
+          Linked as {{ ra.serverUsername.value }}, but RetroArch can't sign in
+          yet. Link your account again below so RetroArch can sign in for you.
+        </p>
+        <p
+          v-else-if="ra.state.value === 'device_only'"
+          class="text-sm text-amber-300"
+        >
+          Signed in on this device only. Your server does not know this
+          account, so unlocks are not being recorded. Sign in again.
+        </p>
+        <p v-else class="text-sm text-zinc-400">
+          Link your account so Drop records RetroAchievements unlocks. Your
+          password goes to your Drop server once and is not stored.
+        </p>
+        <input
+          v-model="raUsername"
+          type="text"
+          autocomplete="off"
+          placeholder="RetroAchievements username"
+          class="rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-blue-500"
+        />
+        <input
+          v-model="raPassword"
+          type="password"
+          autocomplete="off"
+          placeholder="Password"
+          class="rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-blue-500"
+        />
+        <template v-if="ra.apiKeyRequired.value">
+          <input
+            v-model="raApiKey"
+            type="password"
+            autocomplete="off"
+            placeholder="Web API key"
+            class="rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-blue-500"
+          />
+          <p class="text-xs text-zinc-500">
+            Your server needs your Web API key to track unlocks. It is under
+            Settings, Keys on retroachievements.org.
+          </p>
+        </template>
+        <button
+          :disabled="
+            ra.busy.value ||
+            !raUsername ||
+            !raPassword ||
+            (ra.apiKeyRequired.value && !raApiKey)
+          "
+          class="self-start rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          @click="linkRa"
+        >
+          {{ ra.busy.value ? "Linking..." : "Link account" }}
+        </button>
+      </div>
+      <p v-if="raError" class="mt-2 text-sm text-red-400">{{ raError }}</p>
+    </div>
+
     <!-- Achievement Reset -->
     <div class="mt-5 flex flex-col gap-4">
       <div class="flex items-center gap-3">
@@ -34,6 +167,12 @@
 
       <p v-if="achievementMessage" class="text-sm text-green-400">
         {{ achievementMessage }}
+      </p>
+      <p v-if="gamesError" class="text-sm text-red-400">
+        Could not load your games.
+        <button class="underline hover:text-red-300" @click="loadGames">
+          Retry
+        </button>
       </p>
     </div>
 
@@ -179,7 +318,43 @@
 </template>
 
 <script setup lang="ts">
+import { invoke } from "@tauri-apps/api/core";
 import { serverUrl } from "~/composables/use-server-fetch";
+import { useRaLink } from "~/composables/ra-link";
+import { serverErrorText } from "~/composables/achievements/status";
+
+// ── RetroAchievements link ──────────────────────────────────────────────
+
+const ra = useRaLink();
+const raUsername = ref("");
+const raPassword = ref("");
+const raApiKey = ref("");
+const raError = ref("");
+
+onMounted(async () => {
+  await ra.refresh();
+  raUsername.value = ra.serverUsername.value ?? ra.localUsername.value;
+});
+
+async function linkRa() {
+  raError.value = "";
+  try {
+    await ra.link(raUsername.value, raPassword.value, raApiKey.value);
+    raPassword.value = "";
+    raApiKey.value = "";
+  } catch (e: any) {
+    raError.value = String(e?.message ?? e);
+  }
+}
+
+async function unlinkRa() {
+  raError.value = "";
+  try {
+    await ra.unlink();
+  } catch (e: any) {
+    raError.value = `Could not unlink: ${String(e?.message ?? e)}`;
+  }
+}
 
 // ── State ──────────────────────────────────────────────────────────────────
 
@@ -240,23 +415,27 @@ const debugResult = ref<{
 
 // ── Data fetching ────────────────────────────────────────────────────────
 
-onMounted(async () => {
+const gamesError = ref(false);
+
+async function loadGames() {
+  gamesError.value = false;
   try {
     const gamesRes = await fetch(
       serverUrl("api/v1/store?sort=name&order=asc&limit=200"),
     );
-    if (gamesRes.ok) {
-      const data = await gamesRes.json();
-      const map = new Map<string, { mName: string }>();
-      for (const g of data.results ?? []) {
-        map.set(g.id, { mName: g.mName });
-      }
-      games.value = map;
+    if (!gamesRes.ok) throw new Error(String(gamesRes.status));
+    const data = await gamesRes.json();
+    const map = new Map<string, { mName: string }>();
+    for (const g of data.results ?? []) {
+      map.set(g.id, { mName: g.mName });
     }
+    games.value = map;
   } catch {
-    errorMessage.value = "Failed to load games list.";
+    gamesError.value = true;
   }
-});
+}
+
+onMounted(loadGames);
 
 // ── Actions ──────────────────────────────────────────────────────────────
 
@@ -286,9 +465,14 @@ async function resetAchievements() {
   const gameName =
     gamesList.value.find((g) => g.id === resetGameId.value)?.mName ??
     "all games";
-  const message = resetGameId.value
-    ? `This will reset all achievements for ${gameName}. Are you sure?`
-    : "This will reset ALL of your achievements across every game. Are you sure?";
+  // Placeholder copy. Says what a reset does and doesn't reach.
+  const message =
+    (resetGameId.value
+      ? `This resets your achievements for ${gameName} on your Drop server and in this device's Goldberg save files.`
+      : "This resets ALL of your achievements, for every game, on your Drop server and in this device's Goldberg save files.") +
+    " RetroAchievements unlocks stay on retroachievements.org, and Drop keeps ignoring those old ones unless you reset them there too." +
+    " Unlocks some other emulators saved without a date can come back the next time the game runs." +
+    " Are you sure?";
 
   if (!confirm(message)) return;
 
@@ -304,17 +488,69 @@ async function resetAchievements() {
     );
     if (res.ok) {
       const data = await res.json();
-      achievementMessage.value = `Achievements reset successfully. (${data.deleted} removed)`;
+      // Clear this device's local save files too, or the next launch
+      // re-reports what was just reset (see clearLocalAfterReset).
+      const local = await clearLocalAfterReset(resetGameId.value || null);
+      achievementMessage.value = `Achievements reset successfully. (${data.deleted} removed)${local}`;
       setTimeout(() => {
         achievementMessage.value = "";
-      }, 5000);
+      }, 8000);
     } else {
-      errorMessage.value = "Failed to reset achievements.";
+      let body: unknown = null;
+      try {
+        body = await res.json();
+      } catch {
+        // No JSON body; the status code alone goes into the message.
+      }
+      errorMessage.value = `Failed to reset achievements: ${serverErrorText(res.status, body)}`;
     }
   } catch (e) {
     errorMessage.value = `Failed to reset achievements: ${e}`;
   } finally {
     achievementResetting.value = false;
   }
+}
+
+/**
+ * After a server reset, mark this device's local Goldberg save files as not
+ * earned: one game, or (gameId null) every game installed on this device.
+ * Returns a short suffix for the status line. The server ignores re-reported
+ * unlocks dated before the reset anyway; this covers files without dates and
+ * lets the game award them again. A running game is skipped (it would write
+ * its state back).
+ */
+async function clearLocalAfterReset(gameId: string | null): Promise<string> {
+  let running = 0;
+  let failures: string[] = [];
+  try {
+    if (gameId) {
+      const r = await invoke<{ status: string; failures: string[] }>(
+        "clear_local_achievements",
+        { gameId },
+      );
+      if (r.status === "running") running = 1;
+      failures = r.failures;
+    } else {
+      const r = await invoke<{ running: string[]; failures: string[] }>(
+        "clear_all_local_achievements",
+      );
+      running = r.running.length;
+      failures = r.failures;
+    }
+  } catch (e) {
+    failures = [String(e)];
+  }
+  const notes: string[] = [];
+  if (running > 0)
+    notes.push(
+      "A game that is running kept its local unlocks. Reset it again after closing it.",
+    );
+  if (failures.length > 0) {
+    console.warn("[ACH] clearing local achievements:", failures);
+    notes.push(
+      `Some local save files could not be cleared: ${failures.join("; ")}`,
+    );
+  }
+  return notes.length ? ` ${notes.join(" ")}` : "";
 }
 </script>

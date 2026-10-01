@@ -72,7 +72,7 @@ pub fn fetch_drop_object(path: String) -> Result<Vec<u8>, RemoteAccessError> {
     let req = generate_url(&[&path], &[])?;
     let req = remote::utils::DROP_CLIENT_SYNC
         .get(req)
-        .header("Authorization", generate_authorization_header())
+        .header("Authorization", generate_authorization_header()?)
         .send();
 
     match req {

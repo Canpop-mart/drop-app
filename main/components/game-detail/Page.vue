@@ -270,11 +270,16 @@
                 <GameDetailAchievements
                   :achievements="stats.achievements.value"
                   :loading="stats.achievementsLoading.value"
+                  :error="stats.achievementsError.value"
+                  :status="stats.achievementStatus.value"
+                  :status-error="stats.achievementStatusError.value"
+                  :notice="stats.resetNote.value"
                   :unlocked-count="stats.achievementsUnlocked.value"
                   :rom-hash-result="stats.romHashResult.value"
                   :firsts-map="gameFirstsMap"
                   :compare="compareData"
                   :you-avatar-object-id="myAvatarObjectId"
+                  @retry="stats.retryAchievements"
                 />
               </CollapsibleSection>
             </div>
@@ -487,6 +492,17 @@
             Reset all achievements for
             <span class="text-zinc-200 font-medium">{{ game.mName }}</span
             >? This cannot be undone.
+          </p>
+          <!-- Placeholder copy: what a reset doesn't reach. -->
+          <p class="mt-2 text-xs text-zinc-500">
+            This clears it on your Drop server and in this device's Goldberg
+            save files. RetroAchievements unlocks stay on retroachievements.org,
+            and Drop keeps ignoring those old ones unless you reset them there
+            too. Unlocks some other emulators saved without a date can come
+            back the next time the game runs.
+          </p>
+          <p v-if="stats.resetError.value" class="mt-2 text-sm text-red-400">
+            Could not reset: {{ stats.resetError.value }}
           </p>
         </div>
         <div class="flex justify-end gap-3 border-t border-zinc-700 px-6 py-4">

@@ -668,6 +668,24 @@ export function useFocusNavigation() {
     if (target) applyFocus(target);
   }
 
+  /**
+   * Move focus to a specific registered element (e.g. back to a page's main
+   * action after the control that held focus was removed). Returns false when
+   * `el` isn't registered or isn't in the document.
+   */
+  function focusElement(el: HTMLElement | null | undefined): boolean {
+    if (!el?.isConnected) return false;
+    for (const group of groups.values()) {
+      for (const f of group.elements) {
+        if (f.el === el) {
+          applyFocus(f);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   function clearFocus() {
     applyFocus(null);
   }
@@ -834,6 +852,7 @@ export function useFocusNavigation() {
     registerElement,
     setGroupOrder,
     focusGroup,
+    focusElement,
     clearFocus,
     navigate,
     cycleGroup,

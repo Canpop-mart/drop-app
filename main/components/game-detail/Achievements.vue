@@ -55,11 +55,34 @@
       </p>
     </div>
 
-    <!-- Loading / empty / list. -->
+    <!-- A one-off note (e.g. after a reset) and the RA-account warning. -->
+    <p v-if="notice" class="mb-3 text-xs text-amber-300">{{ notice }}</p>
+    <p
+      v-if="status?.raAccountMissing"
+      class="mb-3 rounded-lg bg-amber-500/10 p-2 text-xs text-amber-300 outline outline-1 outline-amber-500/20"
+    >
+      {{ RA_ACCOUNT_MISSING_TEXT }}
+    </p>
+
+    <!-- Loading / error / empty / list. A failed fetch must never look like
+         "no achievements". -->
     <div v-if="loading" class="flex justify-center py-4">
       <div
         class="w-5 h-5 border-2 border-zinc-600 border-t-zinc-100 rounded-full animate-spin"
       />
+    </div>
+    <div
+      v-else-if="error && achievements.length === 0"
+      class="flex flex-col items-center justify-center text-center py-4"
+    >
+      <p class="text-red-400 text-sm">Could not load achievements.</p>
+      <p class="text-zinc-500 text-xs mt-1">{{ error }}</p>
+      <button
+        class="mt-3 rounded-md bg-zinc-700 px-3 py-1.5 text-sm font-semibold text-zinc-100 hover:bg-zinc-600"
+        @click="emit('retry')"
+      >
+        Retry
+      </button>
     </div>
     <div
       v-else-if="achievements.length === 0"
@@ -67,6 +90,15 @@
     >
       <TrophyIcon class="size-10 text-zinc-600 mb-2" />
       <p class="text-zinc-500 text-sm">No achievements available</p>
+      <p v-if="reasonText" class="text-zinc-400 text-xs mt-1 max-w-sm">
+        {{ reasonText }}
+      </p>
+      <p v-else-if="statusError" class="text-zinc-500 text-xs mt-1">
+        Could not check why.
+        <button class="underline hover:text-zinc-300" @click="emit('retry')">
+          Retry
+        </button>
+      </p>
     </div>
     <!-- No inner max-height — the CollapsibleSection wrapper now
          provides the show/hide affordance, so capping list height
@@ -74,6 +106,13 @@
          expands naturally and users collapse the whole section if
          it gets long. -->
     <div v-else class="space-y-1">
+      <!-- A refresh failed but the earlier list is still good. -->
+      <p v-if="error" class="mb-2 text-xs text-red-400">
+        Could not refresh achievements.
+        <button class="underline hover:text-red-300" @click="emit('retry')">
+          Retry
+        </button>
+      </p>
       <!-- Compare mode: one compact summary line — small avatars, counts,
            percents (you gold, them blue), then the shared / only-you /
            only-them breakdown pushed right. The per-row ownership bars
@@ -192,7 +231,10 @@
               class="shrink-0"
             />
           </div>
-          <p class="text-xs text-zinc-500 truncate">
+          <!-- Hidden achievements ship no description, and so does a game
+               whose definitions never reached Steam. Drop the line rather
+               than leaving a blank one in the middle of the row. -->
+          <p v-if="ach.description" class="text-xs text-zinc-500 truncate">
             {{ ach.description }}
           </p>
           <p
@@ -246,10 +288,23 @@ import type {
   RomHashResult,
 } from "~/composables/game-detail/use-game-stats";
 import type { GameAchievementFirst } from "~/composables/use-server-api";
+import {
+  RA_ACCOUNT_MISSING_TEXT,
+  unavailableReasonText,
+  type AchievementStatus,
+} from "~/composables/achievements/status";
 
 const props = defineProps<{
   achievements: AchievementData[];
   loading: boolean;
+  /** The list fetch failed (message). Null when the last fetch was good. */
+  error?: string | null;
+  /** Why the list is empty / RA account missing. Null until known. */
+  status?: AchievementStatus | null;
+  /** The status fetch failed, so the reason is unknown. */
+  statusError?: boolean;
+  /** One-off note to show above the list (e.g. after a reset). */
+  notice?: string | null;
   unlockedCount: number;
   romHashResult: RomHashResult | null;
   /** Map of achievementId -> "first to unlock" record. Provided by the
@@ -269,6 +324,10 @@ const props = defineProps<{
   youName?: string;
   youAvatarObjectId?: string | null;
 }>();
+
+const emit = defineEmits<{ (e: "retry"): void }>();
+
+const reasonText = computed(() => unavailableReasonText(props.status?.reason));
 
 // Icon error tracking — swap to the trophy fallback when a URL 404s (e.g.
 // Goldberg stores a crack-local icon path that doesn't resolve on the web).
