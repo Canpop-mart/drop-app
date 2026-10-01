@@ -8,16 +8,24 @@
 //!  1. `new()` receives the parent's already-final install dir and writes its
 //!     resume ledger to `<install dir>/.mods/<mod id>.moddata` (not the
 //!     parent's `.dropdata`, which belongs to the base game).
-//!  2. `run()` never removes files. A mod is purely additive, and the game
-//!     agent's removal of files dropped since the previous version works from
-//!     the BASE game's manifests, which say nothing about a mod.
-//!  3. On completion it records the exact files it wrote into `.moddata` so an
-//!     uninstall removes precisely those files and nothing of the base game.
+//!  2. `run()` has no stale-file sweep. The game agent's removal of files
+//!     dropped since the previous version works from the BASE game's
+//!     manifests, which say nothing about a mod; a mod update instead lets go
+//!     of its own old files on completion, from its ledger (point 3).
+//!  3. When it starts (not when it is queued) it re-reads the ledger from
+//!     disk, then records the manifest's file list in `.moddata`, drops a
+//!     `.pending` marker, and moves aside every base-game file it is about to
+//!     overwrite (`mod_data::back_up_originals`). So a cancelled or failed
+//!     install can be removed as cleanly as a finished one, and uninstall puts
+//!     the base game's own files back. Once every chunk is on disk it cuts
+//!     rewritten files back to their manifest size. On completion it lets go
+//!     of files the previous version had but this one doesn't (an update),
+//!     and removes the marker: only then is the mod installed.
 
 use async_trait::async_trait;
-use database::models::data::UserConfiguration;
+use database::models::data::{InstalledGameType, UserConfiguration};
 use database::{
-    ApplicationTransientStatus, DownloadableMetadata, borrow_db_mut_checked,
+    ApplicationTransientStatus, DownloadableMetadata, GameDownloadStatus, borrow_db_mut_checked,
 };
 use download_manager::depot_manager::DepotManager;
 use download_manager::download_manager_frontend::{DownloadManagerSignal, DownloadStatus};
@@ -50,8 +58,22 @@ use crate::downloads::utils::get_disk_available;
 use crate::library::{on_game_complete, push_game_update};
 use crate::state::GameStatusManager;
 
-use super::download_logic::download_game_chunk;
-use super::mod_data::{ModData, MODS_DIR, moddata_path};
+use super::download_logic::{
+    download_game_chunk, files_written_by, manifest_file_sizes, trim_stale_tails,
+};
+use super::drop_data::DropData;
+use super::mod_data::{
+    ModData, MODS_DIR, back_up_originals, moddata_path, overlay_rel, pending_marker_path,
+    release_recorded, reload_for_run, settle_unlisted_originals, undo_backups,
+};
+
+/// Emitted with the parent game's id whenever a mod's on-disk state under it
+/// changes (download started, finished, failed, cancelled, uninstalled). The
+/// game page's Mods tab re-reads the ledgers on it. Deliberately not
+/// `update_library`, which re-fetches every game in the library.
+pub fn mods_changed_event(parent_game_id: &str) -> String {
+    format!("update_mods/{parent_game_id}")
+}
 
 pub struct ModDownloadAgent {
     pub metadata: DownloadableMetadata,
@@ -64,6 +86,9 @@ pub struct ModDownloadAgent {
     depot_manager: Arc<DepotManager>,
     sender: Sender<DownloadManagerSignal>,
     pub moddata: ModData,
+    /// The parent game's install dir (where `.mods/` lives). The overlay
+    /// folder `moddata.base_path` may be a subfolder of it.
+    install_dir: PathBuf,
     status: Mutex<DownloadStatus>,
 }
 
@@ -118,6 +143,7 @@ impl ModDownloadAgent {
             overlay_dir,
             meta_path,
         );
+        let ledger_install_dir = install_dir.clone();
 
         let result = Self {
             metadata,
@@ -133,6 +159,7 @@ impl ModDownloadAgent {
             disk_progress: Arc::new(ProgressObject::new(0, 0, sender.clone(), ProgressType::Disk)),
             sender,
             moddata,
+            install_dir: ledger_install_dir,
             status: Mutex::new(DownloadStatus::Queued),
             depot_manager,
             configuration,
@@ -176,6 +203,7 @@ impl ModDownloadAgent {
             .insert(self.metadata.clone(), status.clone());
         drop(db_lock);
         push_game_update(app_handle, &self.metadata.id, None, (None, Some(status)));
+        app_emit!(app_handle, &mods_changed_event(&self.parent_game_id), ());
 
         if lock!(self.dl_info).is_none() {
             return Err(ApplicationDownloadError::NotInitialized);
@@ -191,19 +219,30 @@ impl ModDownloadAgent {
     }
 
     async fn download_manifest(&self) -> Result<(), ApplicationDownloadError> {
+        let manifest_download = self
+            .fetch_manifest(self.moddata.previously_installed_version.as_deref())
+            .await?;
+
+        if let Ok(mut manifest) = self.dl_info.lock() {
+            *manifest = Some(manifest_download);
+            return Ok(());
+        }
+        Err(ApplicationDownloadError::Lock)
+    }
+
+    /// The server's download manifest for this version. With `previous`,
+    /// chunks already present from that version are left out.
+    async fn fetch_manifest(
+        &self,
+        previous: Option<&str>,
+    ) -> Result<DownloadInformation, ApplicationDownloadError> {
         let client = DROP_CLIENT_ASYNC.clone();
         let url = generate_url(
             &["/api/v1/client/game/manifest"],
             &[
                 ("id", &self.metadata.id),
                 ("version", &self.metadata.version),
-                (
-                    "previous",
-                    self.moddata
-                        .previously_installed_version
-                        .as_ref()
-                        .map_or("", |v| v),
-                ),
+                ("previous", previous.unwrap_or("")),
             ],
         )
         .map_err(ApplicationDownloadError::Communication)?;
@@ -227,16 +266,32 @@ impl ModDownloadAgent {
             ));
         }
 
-        let manifest_download: DownloadInformation = response
+        response
             .json()
             .await
-            .map_err(|e| ApplicationDownloadError::Communication(e.into()))?;
+            .map_err(|e| ApplicationDownloadError::Communication(e.into()))
+    }
 
-        if let Ok(mut manifest) = self.dl_info.lock() {
-            *manifest = Some(manifest_download);
-            return Ok(());
+    /// Cut every file this download rewrote back to its manifest size (see
+    /// `trim_stale_tails`). The sizes need the full manifest: the delta one
+    /// used for an update leaves out chunks of unchanged files.
+    async fn trim_rewritten_files(&self) -> Result<(), ApplicationDownloadError> {
+        let (written, delta_sizes) = {
+            let dl_info = lock!(self.dl_info);
+            let info = dl_info.as_ref().ok_or(ApplicationDownloadError::NotInitialized)?;
+            (files_written_by(info), manifest_file_sizes(info))
+        };
+        let sizes = if self.moddata.previously_installed_version.is_some() {
+            manifest_file_sizes(&self.fetch_manifest(None).await?)
+        } else {
+            delta_sizes
+        };
+        let trimmed = trim_stale_tails(&self.moddata.base_path, &written, &sizes)
+            .map_err(|e| ApplicationDownloadError::IoError(Arc::new(e)))?;
+        if trimmed > 0 {
+            info!("mod {}: cut {trimmed} rewritten file(s) back to size", self.metadata.id);
         }
-        Err(ApplicationDownloadError::Lock)
+        Ok(())
     }
 
     fn setup_progress(&self) {
@@ -262,6 +317,7 @@ impl ModDownloadAgent {
     async fn run(&self) -> Result<bool, ApplicationDownloadError> {
         self.depot_manager.sync_depots().await?;
         self.setup_progress();
+        self.prepare_install_dir()?;
 
         let manifests_chunks: Vec<(String, HashMap<String, ChunkData>, [u8; 16])> = {
             let dl_info = lock!(self.dl_info);
@@ -429,6 +485,7 @@ impl ModDownloadAgent {
             );
             return Ok(false);
         }
+        self.trim_rewritten_files().await?;
         Ok(true)
     }
 
@@ -561,18 +618,179 @@ impl ModDownloadAgent {
         to_clear.len()
     }
 
-    /// Record the exact set of files this mod wrote (the manifest's file list,
-    /// POSIX-relative) so uninstall removes precisely these.
-    fn record_installed_files(&self) {
-        let files: Vec<String> = {
-            let dl_info = lock!(self.dl_info);
-            match dl_info.as_ref() {
-                Some(info) => info.file_list.keys().cloned().collect(),
-                None => Vec::new(),
+    /// The files this run's chunks write (POSIX paths relative to the overlay
+    /// folder). For an update this is only what changed since the installed
+    /// version (the delta manifest); files the mod ships unchanged are not
+    /// downloaded, so they must not be moved aside or claimed either.
+    fn files_this_run_writes(&self) -> Result<Vec<String>, ApplicationDownloadError> {
+        let dl_info = lock!(self.dl_info);
+        let info = dl_info.as_ref().ok_or(ApplicationDownloadError::NotInitialized)?;
+        Ok(run_writes(info))
+    }
+
+    /// The manifest's file list (POSIX paths relative to the overlay folder).
+    fn manifest_files(&self) -> Result<Vec<String>, ApplicationDownloadError> {
+        let dl_info = lock!(self.dl_info);
+        let info = dl_info.as_ref().ok_or(ApplicationDownloadError::NotInitialized)?;
+        let mut files: Vec<String> = info.file_list.keys().cloned().collect();
+        files.sort();
+        Ok(files)
+    }
+
+    /// The parent game must still be installed where it was when this
+    /// download was queued. A base-game download or uninstall can run while
+    /// a mod waits in the queue, and the mod must not write into a folder the
+    /// game has left or is half-way through rewriting.
+    ///
+    /// A failed or paused in-place update leaves the game's status Installed
+    /// at the old version, so the game's own `.dropdata` is checked too: it
+    /// names the version the folder is being brought to.
+    fn check_parent_unchanged(&self) -> Result<(), String> {
+        let installed_version = {
+            let db = database::borrow_db_checked();
+            match db.applications.game_statuses.get(&self.parent_game_id) {
+                Some(GameDownloadStatus::Installed {
+                    install_dir,
+                    install_type,
+                    version_id,
+                    ..
+                }) if !matches!(install_type, InstalledGameType::PartiallyInstalled { .. })
+                    && std::path::Path::new(install_dir) == self.install_dir.as_path() =>
+                {
+                    version_id.clone()
+                }
+                _ => {
+                    return Err(format!(
+                        "the game this mod belongs to is no longer fully installed at {}",
+                        self.install_dir.display()
+                    ));
+                }
             }
         };
+        parent_folder_settled(&self.install_dir, &installed_version)
+    }
+
+    /// Everything that has to be on disk before the first chunk is written:
+    ///  0. the parent still installed in place, `moddata` re-read from disk,
+    ///     and any base-game originals left over from a crashed earlier
+    ///     attempt put back (`settle_unlisted_originals`);
+    ///  1. the `.pending` marker, so this is never mistaken for an installed mod;
+    ///  2. base-game files this run will overwrite moved to `originals/`;
+    ///  3. the ledger, listing the files this run writes on top of any it
+    ///     already had.
+    ///
+    /// The backups come before the ledger on purpose: a file the ledger lists
+    /// counts as the mod's own and is never backed up, so listing first and
+    /// crashing mid-backup would lose the originals not yet moved. The cost is
+    /// that a crash between 2 and 3 leaves originals the ledger doesn't list;
+    /// step 0 of the next attempt (or `remove_mod`) puts them back.
+    ///
+    /// Any failure aborts the download before a single file is overwritten,
+    /// and puts back what step 2 moved.
+    fn prepare_install_dir(&self) -> Result<(), ApplicationDownloadError> {
+        let io_err = |what: String| ApplicationDownloadError::IoError(Arc::new(std::io::Error::other(what)));
+        let id = &self.metadata.id;
+        let incoming = self.files_this_run_writes()?;
+
+        self.check_parent_unchanged()
+            .and_then(|()| reload_for_run(&self.install_dir, &self.moddata))
+            .map_err(|why| io_err(format!("cannot install mod {id}: {why}")))?;
+
+        let prefix = overlay_rel(&self.install_dir, &self.moddata)
+            .map_err(|why| io_err(format!("cannot install mod {id}: {why}")))?;
+        let listed: std::collections::HashSet<String> = self
+            .moddata
+            .get_installed_files()
+            .iter()
+            .map(|f| if prefix.is_empty() { f.to_lowercase() } else { format!("{prefix}/{f}").to_lowercase() })
+            .collect();
+        let leftovers = settle_unlisted_originals(&self.install_dir, id, &listed);
+        if let Some((file, why)) = leftovers.failed_originals.first() {
+            return Err(io_err(format!(
+                "cannot install mod {id}: a game file it set aside earlier ({file}) could not be put back: {why}"
+            )));
+        }
+        if leftovers.restored + leftovers.kept_for_other_mods > 0 {
+            info!(
+                "mod {id}: put back {} game file(s) left over from an earlier attempt",
+                leftovers.restored + leftovers.kept_for_other_mods
+            );
+        }
+
+        let marker = pending_marker_path(&self.install_dir, id);
+        std::fs::write(&marker, self.metadata.version.as_bytes()).map_err(|e| {
+            io_err(format!("could not mark mod {id} as installing ({}): {e}", marker.display()))
+        })?;
+
+        let moved = back_up_originals(&self.install_dir, &self.moddata, &incoming).map_err(|why| {
+            io_err(format!("could not set aside the game files mod {id} replaces: {why}"))
+        })?;
+
+        let previous = self.moddata.get_installed_files();
+        let known: std::collections::HashSet<String> = previous.iter().cloned().collect();
+        let mut files = previous.clone();
+        files.extend(incoming.into_iter().filter(|f| !known.contains(f)));
         self.moddata.set_installed_files(files);
-        self.moddata.write();
+        if let Err(e) = self.moddata.try_write() {
+            // Nothing has been overwritten yet: put the game's files back and
+            // forget this run, so no game file sits in originals/ unlisted.
+            self.moddata.set_installed_files(previous);
+            for (file, why) in undo_backups(&self.install_dir, id, &moved) {
+                error!("mod {id}: could not put back game file {file}: {why}");
+            }
+            return Err(io_err(format!("could not record the files of mod {id}: {e}")));
+        }
+        Ok(())
+    }
+
+    /// Make the finished download the installed mod: hand back files the
+    /// previous version had but this one doesn't (restoring any base-game
+    /// original, see `release_recorded`), shrink the ledger to this version's
+    /// files, then remove the `.pending` marker. A file that could not be
+    /// handed back stays listed, so uninstalling later still covers it. An
+    /// original that could not be put back fails the install.
+    fn finish_install(&self) -> Result<(), String> {
+        let current = self.manifest_files().map_err(|e| e.to_string())?;
+        let current_set: std::collections::HashSet<&String> = current.iter().collect();
+        let stale: Vec<String> = self
+            .moddata
+            .get_installed_files()
+            .into_iter()
+            .filter(|f| !current_set.contains(f))
+            .collect();
+
+        let outcome = release_recorded(&self.install_dir, &self.moddata, &stale, false)
+            .map_err(|why| format!("could not remove the old version of mod {}: {why}", self.metadata.id))?;
+        if !stale.is_empty() {
+            info!(
+                "mod {} update: {} old file(s) removed, {} original(s) restored, {} left to other mods",
+                self.metadata.id, outcome.removed, outcome.restored, outcome.kept_for_other_mods
+            );
+        }
+        for (file, why) in &outcome.failed {
+            warn!("mod {}: could not remove old file {file}: {why}", self.metadata.id);
+        }
+        // A game file the old version had replaced and that could not be put
+        // back: the install stays unfinished (Resume or Remove), because
+        // another mod installed meanwhile would take the mod's copy now in
+        // its place for the game's original.
+        if let Some((file, why)) = outcome.failed_originals.first() {
+            return Err(format!(
+                "could not put back the game's file {file} that the old version of mod {} replaced: {why}",
+                self.metadata.id
+            ));
+        }
+
+        let marker = pending_marker_path(&self.install_dir, &self.metadata.id);
+        match std::fs::remove_file(&marker) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!(
+                "could not mark mod {} as installed ({}): {e}",
+                self.metadata.id,
+                marker.display()
+            )),
+        }
     }
 }
 
@@ -634,13 +852,24 @@ impl Downloadable for ModDownloadAgent {
             None,
             GameStatusManager::fetch_state(&self.metadata.id, &handle),
         );
+        drop(handle);
+        app_emit!(app_handle, &mods_changed_event(&self.parent_game_id), ());
     }
 
     async fn on_complete(&self, app_handle: &AppHandle) {
-        // Record which files we wrote BEFORE marking installed, so a crash in
-        // the window can't leave an "installed" mod with an empty file list
-        // (which would make uninstall a silent no-op that leaks the files).
-        self.record_installed_files();
+        // Settle the files on disk BEFORE recording the mod as installed. Until
+        // the marker is gone the Mods tab offers Resume / Remove, never a
+        // half-installed "Installed".
+        if let Err(why) = self.finish_install() {
+            error!("could not finish installing mod {}: {why}", self.metadata.id);
+            send!(
+                self.sender,
+                DownloadManagerSignal::Error(ApplicationDownloadError::IoError(Arc::new(
+                    std::io::Error::other(why)
+                )))
+            );
+            return;
+        }
 
         // Reuse the shared completion path: it fetches the mod's version,
         // records installed_game_version + game_statuses (keyed by the mod's own
@@ -665,6 +894,7 @@ impl Downloadable for ModDownloadAgent {
                 );
             }
         }
+        app_emit!(app_handle, &mods_changed_event(&self.parent_game_id), ());
     }
 
     fn on_cancelled(&self, app_handle: &AppHandle) {
@@ -672,9 +902,17 @@ impl Downloadable for ModDownloadAgent {
         // clear the transient status and refresh the UI. Deliberately does NOT
         // call set_partially_installed — a mod must never hold a game-shaped
         // "PartiallyInstalled" status, or the generic resume path would rebuild
-        // a GameDownloadAgent over the parent dir and sweep the base game. A
-        // re-install resumes from the persisted `.moddata` ledger instead.
-        self.moddata.write();
+        // a GameDownloadAgent over the parent dir and sweep the base game. The
+        // Mods tab offers Resume (download_mod again, which picks up the
+        // persisted `.moddata` ledger) or Remove (uninstall_mod).
+        //
+        // Nothing is written here. Every finished chunk is already on disk
+        // (run() writes the ledger per chunk), and `moddata` may be out of
+        // date: it is what the ledger said when this download was queued, or
+        // when it last started, and a base-game download may have taken
+        // files back from the mod since (for instance after the queue was
+        // rearranged). Writing it back would list the game's file as the
+        // mod's again.
         let mut handle = borrow_db_mut_checked();
         handle
             .applications
@@ -686,9 +924,148 @@ impl Downloadable for ModDownloadAgent {
             None,
             GameStatusManager::fetch_state(&self.metadata.id, &handle),
         );
+        drop(handle);
+        app_emit!(app_handle, &mods_changed_event(&self.parent_game_id), ());
     }
 
     fn status(&self) -> DownloadStatus {
         lock!(self.status).clone()
+    }
+}
+
+/// Sorted list of the files a download of `info` writes (see
+/// `files_written_by`).
+fn run_writes(info: &DownloadInformation) -> Vec<String> {
+    let mut files: Vec<String> = files_written_by(info).into_iter().collect();
+    files.sort();
+    files
+}
+
+/// Refuse when the game's folder is part-way through a download of another
+/// version: its `.dropdata` names a version other than the installed one (a
+/// failed, paused or cancelled in-place update). Mods must not set aside or
+/// overwrite files that the game's own download is about to rewrite. No
+/// `.dropdata` (an older install) says nothing either way. Only finishing
+/// that download clears this: cancelling it rewrites `.dropdata` with the
+/// same version and leaves the game partially installed.
+fn parent_folder_settled(install_dir: &std::path::Path, installed_version: &str) -> Result<(), String> {
+    match DropData::read(install_dir) {
+        Ok(d) if d.game_version == installed_version => Ok(()),
+        Ok(d) => Err(format!(
+            "the game has an unfinished download of another version ({}); let that download finish first",
+            d.game_version
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("the game's download record cannot be read: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::downloads::mod_data::{originals_dir, remove_mod};
+    use database::platform::Platform;
+    use droplet_rs::manifest::{FileEntry, Manifest};
+    use std::path::Path;
+
+    fn chunk(files: &[&str]) -> ChunkData {
+        ChunkData {
+            files: files
+                .iter()
+                .map(|f| FileEntry {
+                    filename: f.to_string(),
+                    start: 0,
+                    length: 1,
+                    permissions: 0,
+                })
+                .collect(),
+            checksum: String::new(),
+            iv: [0; 16],
+        }
+    }
+
+    fn put(path: &Path, body: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    /// Mod v1 ships G and H. A base-game update rewrites G and takes it back.
+    /// Mod v2 ships G unchanged and a new H, so the delta manifest only has
+    /// H's chunk. The run must not move the game's G aside: nothing would
+    /// write it back.
+    #[test]
+    fn a_delta_update_only_sets_aside_files_it_downloads() {
+        let dir = std::env::temp_dir().join(format!("drop-mod-agent-delta-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(MODS_DIR)).unwrap();
+        let v1 = ModData::new(
+            "m".to_string(),
+            "v1".to_string(),
+            Platform::Windows,
+            "parent".to_string(),
+            None,
+            dir.clone(),
+            moddata_path(&dir, "m"),
+            None,
+        );
+        v1.set_installed_files(vec!["G.dll".to_string(), "H.dll".to_string()]);
+        v1.write();
+        put(&dir.join("G.dll"), "game v2");
+        put(&dir.join("H.dll"), "mod v1");
+        crate::downloads::mod_data::hand_files_to_base_game(&dir, &["G.dll".to_string()]).unwrap();
+
+        // Delta from v1: G still maps to v1 and its chunk is left out.
+        let mut file_list = HashMap::new();
+        file_list.insert("G.dll".to_string(), "v1".to_string());
+        file_list.insert("H.dll".to_string(), "v2".to_string());
+        let mut chunks = HashMap::new();
+        chunks.insert("h".to_string(), chunk(&["H.dll"]));
+        let mut manifests = HashMap::new();
+        manifests.insert(
+            "v2".to_string(),
+            Manifest { version: "v2".to_string(), chunks, size: 0, key: [0; 16] },
+        );
+        let delta = DownloadInformation { file_list, manifests, install_size: 0, download_size: 0 };
+        let incoming = run_writes(&delta);
+        assert_eq!(incoming, vec!["H.dll".to_string()]);
+
+        let v2 = ModData::generate(
+            "m".to_string(),
+            "v2".to_string(),
+            Platform::Windows,
+            "parent".to_string(),
+            None,
+            dir.clone(),
+            moddata_path(&dir, "m"),
+        );
+        reload_for_run(&dir, &v2).unwrap();
+        assert!(back_up_originals(&dir, &v2, &incoming).unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(dir.join("G.dll")).unwrap(), "game v2");
+        assert!(!originals_dir(&dir, "m").join("G.dll").exists());
+        // And uninstalling leaves the game's G alone.
+        v2.set_installed_files(vec!["H.dll".to_string()]);
+        v2.write();
+        remove_mod(&dir, "m").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("G.dll")).unwrap(), "game v2");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_half_updated_game_folder_is_refused() {
+        let dir = std::env::temp_dir().join(format!("drop-mod-agent-settled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(parent_folder_settled(&dir, "v1").is_ok(), "no .dropdata");
+        let d = DropData::new(
+            "game".to_string(),
+            "v2".to_string(),
+            Platform::Windows,
+            dir.clone(),
+            None,
+        );
+        d.write();
+        assert!(parent_folder_settled(&dir, "v1").unwrap_err().contains("v2"));
+        assert!(parent_folder_settled(&dir, "v2").is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

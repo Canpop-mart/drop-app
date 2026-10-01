@@ -258,23 +258,13 @@ import {
 import { useAppState } from "~/composables/app-state";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
+import { resolveThemeGradient } from "~/composables/profile-themes";
 
 definePageMeta({ layout: "bigpicture" });
 
 function objectUrl(id: string): string {
   return objectImageUrl(id);
 }
-
-const THEME_MAP: Record<string, { from: string; to: string }> = {
-  default: { from: "#1e3a5f", to: "#581c87" },
-  ocean: { from: "#0c4a6e", to: "#164e63" },
-  sunset: { from: "#9a3412", to: "#831843" },
-  forest: { from: "#14532d", to: "#1a2e05" },
-  ember: { from: "#7c2d12", to: "#451a03" },
-  arctic: { from: "#0e7490", to: "#1e40af" },
-  midnight: { from: "#1e1b4b", to: "#0f172a" },
-  rose: { from: "#9f1239", to: "#4c0519" },
-};
 
 function timeAgo(dateStr: string | Date): string {
   const ms = Date.now() - new Date(dateStr).getTime();
@@ -322,9 +312,7 @@ const activity = ref<UserActivity | null>(null);
 const showcase = ref<UserShowcase | null>(null);
 const achievementIconErrors = reactive<Record<string, boolean>>({});
 
-const themeColors = computed(
-  () => THEME_MAP[profile.value?.profileTheme ?? "default"] ?? THEME_MAP.default,
-);
+const themeColors = computed(() => resolveThemeGradient(profile.value?.profileTheme));
 
 const recentSessionCount = computed(
   () => stats.value?.recentSessions?.length ?? 0,

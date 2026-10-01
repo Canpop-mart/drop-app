@@ -101,6 +101,7 @@ import HeaderWidget from "./HeaderWidget.vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useBigPictureMode } from "~/composables/big-picture";
 import { useNavHistory } from "~/composables/use-nav-history";
+import { useRequestNotifications } from "~/composables/request-notifications";
 
 const window = getCurrentWindow();
 const state = useAppState();
@@ -132,7 +133,8 @@ const navigation: Array<NavigationItem> = [
 const { currentNavigation } = useCurrentNavigationIndex(navigation);
 
 const router = useRouter();
-const quickActions: Array<QuickActionNav> = [
+const { unreadCount: unreadRequestDecisions } = useRequestNotifications();
+const quickActions = computed<Array<QuickActionNav>>(() => [
   {
     icon: UserGroupIcon,
     action: async () => {
@@ -140,8 +142,16 @@ const quickActions: Array<QuickActionNav> = [
     },
   },
   {
+    // Game request decisions (the only server notifications the client
+    // shows). Opens the user's own requests, which marks them read.
     icon: BellIcon,
-    action: async () => {},
+    notifications:
+      unreadRequestDecisions.value > 0
+        ? unreadRequestDecisions.value
+        : undefined,
+    action: async () => {
+      await router.push("/requests?view=mine");
+    },
   },
   {
     icon: BugAntIcon,
@@ -149,7 +159,7 @@ const quickActions: Array<QuickActionNav> = [
       await router.push("/bugreport");
     },
   },
-];
+]);
 
 const queue = useQueueState();
 const currentQueueObject = computed(() => queue.value.queue.at(0));

@@ -182,6 +182,11 @@ impl Middleware for AutoOfflineMiddleware {
                                 // Clear only once the state agrees, so a lost
                                 // race leaves the next response to retry.
                                 set_offline_flag(false);
+                                // Playtime queued while offline can go now
+                                // rather than at the next app start.
+                                tauri::async_runtime::spawn(async {
+                                    crate::playtime::drain_pending_stops().await;
+                                });
                             } else {
                                 warn!("failed to lock app state - {}", url.as_str());
                             }

@@ -110,6 +110,8 @@ const props = defineProps<{
   visible: boolean;
   modelValue: string;
   placeholder?: string;
+  /** Extra keys shown as one more row in both layouts (e.g. "." and ":" for an address). */
+  extraKeys?: string[];
 }>();
 
 const emit = defineEmits<{
@@ -135,7 +137,10 @@ const UPPER = [
 ];
 
 const shifted = ref(false);
-const currentLayout = computed(() => (shifted.value ? UPPER : LOWER));
+const currentLayout = computed(() => {
+  const base = shifted.value ? UPPER : LOWER;
+  return props.extraKeys?.length ? [...base, props.extraKeys] : base;
+});
 
 const focusedRow = ref(1); // Start on letter row
 const focusedCol = ref(0);

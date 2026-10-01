@@ -82,23 +82,19 @@
             Cloud saves are turned off
           </p>
           <p class="text-xs text-zinc-400 mt-1 leading-relaxed">
-            Nothing on this PC is being backed up. Turn cloud saves on in
+            Nothing on this device is being backed up. Turn cloud saves on in
             Settings, under Cloud Saves. Anything already on your server is
             still listed here.
           </p>
         </div>
 
-        <!-- Who owns what. PC saves really are shared between accounts on this
-             server, and the panel has to say so before someone is surprised
-             by another person's progress landing in their library. -->
+        <!-- Who owns what. Cloud copies are per account, but the files on
+             this computer are not, and that is what a conflict after
+             switching accounts comes from. -->
         <p class="px-6 pt-4 text-xs leading-relaxed text-zinc-500">
-          Emulator saves are backed up to your account alone, with one
-          exception: Switch games keep their saves inside the emulator's own
-          system storage, which every account on this computer shares. PC game
-          saves are shared with everyone on this Drop server, because Drop
-          finds them by where the game puts them on this computer rather than
-          by who is signed in. If two accounts have the same PC save, the one
-          played most recently is the one you see here.
+          The cloud copies here are your account's only. PC and Switch saves
+          on this device are the same files for every Drop account that plays
+          here, so after switching accounts Drop may ask which copy to keep.
         </p>
 
         <!-- Sync result / error line. -->
@@ -113,9 +109,38 @@
         <!-- Load error banner. -->
         <div
           v-if="loadError"
-          class="mx-6 mt-4 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
+          class="mx-6 mt-4 flex items-start justify-between gap-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
         >
-          {{ loadError }}
+          <span>{{ loadError }}</span>
+          <button
+            type="button"
+            class="shrink-0 rounded px-2 py-0.5 text-xs font-medium bg-red-500/20 hover:bg-red-500/30"
+            :disabled="loading"
+            @click="refresh"
+          >
+            Retry
+          </button>
+        </div>
+
+        <!-- The local scan failed. Not the same as "no saves on this PC":
+             every cloud row would otherwise read as missing here, and Sync
+             would pull them all down over files the scan could not see. -->
+        <div
+          v-if="localError"
+          class="mx-6 mt-4 flex items-start justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200"
+        >
+          <span>
+            Drop could not check the saves on this device, so it cannot tell
+            what is backed up. {{ localError }}
+          </span>
+          <button
+            type="button"
+            class="shrink-0 rounded px-2 py-0.5 text-xs font-medium bg-amber-500/20 hover:bg-amber-500/30"
+            :disabled="loading"
+            @click="refresh"
+          >
+            Retry
+          </button>
         </div>
 
         <!-- Ludusavi-missing prompt. Native (PC) games can't have their saves
@@ -167,7 +192,7 @@
              the game. Telling someone to play a game Drop can never read the
              saves of is the failure this replaced. -->
         <div
-          v-else-if="!loading && rows.length === 0 && !loadError"
+          v-else-if="!loading && rows.length === 0 && !loadError && !localError"
           class="px-6 py-10 text-center"
         >
           <CloudIcon class="mx-auto size-10 text-zinc-600 mb-3" />
@@ -246,18 +271,32 @@
                 <span :class="stateMeta(row.state).labelClass">
                   {{ stateMeta(row.state).label }}
                 </span>
-                <!-- Only on shared rows: emulator saves are always yours, so
-                     naming an owner there would be noise. -->
-                <span v-if="row.ownedBy" class="text-zinc-500">
-                  Saved by {{ row.ownedBy }}
-                </span>
               </div>
-              <!-- A second copy of the same save must never be invisible.
-                   Newest wins, and the mtime that decides it comes from
-                   whichever machine uploaded, so silence here would let a
-                   fast clock hide someone's real progress. -->
-              <p v-if="row.shadowNote" class="mt-1 text-xs text-amber-400/80">
-                {{ row.shadowNote }}
+              <!-- Two accounts on one PC share its save files. Say so when the
+                   copy here is the other person's. -->
+              <p
+                v-if="
+                  row.local &&
+                  row.local.lastSyncedByOtherAccount !== null &&
+                  row.local.lastSyncedByOtherAccount !== undefined
+                "
+                class="mt-1 text-xs text-amber-400/80"
+              >
+                {{
+                  row.local.lastSyncedByOtherAccount
+                    ? `The copy on this device was last synced by ${row.local.lastSyncedByOtherAccount}.`
+                    : "The copy on this device was last synced by another Drop account."
+                }}
+              </p>
+              <p v-if="row.legacy" class="mt-1 text-xs text-zinc-500">
+                {{ legacyNote(row.legacy) }}
+              </p>
+              <p
+                v-if="heldOnSharedDevice(row)"
+                class="mt-1 text-xs text-amber-400/80"
+              >
+                Not backed up automatically, because another Drop account also
+                plays this game here. Back it up if it is yours.
               </p>
               <p v-if="rowError[row.key]" class="mt-1.5 text-xs text-red-400">
                 {{ rowError[row.key] }}
@@ -272,13 +311,70 @@
               >
                 {{ rowNote[row.key] }}
               </p>
+
+              <!-- Previous versions the server kept of this save. Restoring
+                   one changes the cloud copy only; the row then offers its
+                   Restore button like any other newer cloud copy. -->
+              <div
+                v-if="row.cloud && historyOpen[row.key]"
+                class="mt-2 rounded-md border border-zinc-700/60 bg-zinc-900/40 px-3 py-2"
+              >
+                <p
+                  v-if="historyFor(row)?.loading && !historyFor(row)?.data"
+                  class="text-xs text-zinc-500"
+                >
+                  Loading earlier versions…
+                </p>
+                <div
+                  v-else-if="historyFor(row)?.error"
+                  class="flex items-center justify-between gap-2 text-xs text-red-400"
+                >
+                  <span>{{ historyFor(row)?.error }}</span>
+                  <button
+                    type="button"
+                    class="rounded px-2 py-0.5 bg-zinc-700 text-zinc-200 hover:bg-zinc-600"
+                    @click="loadHistory(row)"
+                  >
+                    Retry
+                  </button>
+                </div>
+                <p
+                  v-else-if="(historyFor(row)?.data?.revisions.length ?? 0) === 0"
+                  class="text-xs text-zinc-500"
+                >
+                  No earlier versions are kept for this save.
+                </p>
+                <ul v-else class="space-y-1.5">
+                  <li
+                    v-for="rev in historyFor(row)?.data?.revisions ?? []"
+                    :key="rev.id"
+                    class="flex items-center justify-between gap-3 text-xs"
+                  >
+                    <span class="text-zinc-400">
+                      {{ exact(Date.parse(rev.clientModifiedAt)) }} ·
+                      {{ formatSize(rev.size) }}
+                      <template v-if="rev.uploadedFrom">
+                        · from {{ rev.uploadedFrom }}</template
+                      >
+                    </span>
+                    <button
+                      type="button"
+                      class="shrink-0 rounded px-2 py-1 font-medium bg-zinc-700 text-zinc-200 hover:bg-blue-600 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      :disabled="isRowBusy(row)"
+                      @click="restoreTarget = { row, revision: rev }"
+                    >
+                      Restore this version
+                    </button>
+                  </li>
+                </ul>
+              </div>
             </div>
 
             <!-- State-appropriate actions. -->
             <div class="flex items-center gap-1.5 shrink-0">
-              <!-- Not backed up → push. -->
+              <!-- Not backed up, or only changed here → push. -->
               <button
-                v-if="row.state === 'localOnly'"
+                v-if="row.state === 'localOnly' || row.state === 'localNewer'"
                 type="button"
                 class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium bg-cyan-600/80 text-white hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 :disabled="isRowBusy(row)"
@@ -288,9 +384,16 @@
                 {{ rowBusy[row.key] === "backup" ? "Backing up…" : "Back up" }}
               </button>
 
-              <!-- In cloud only → pull. -->
+              <!-- In cloud only, or only changed in the cloud → pull. Also
+                   offered when this PC could not be checked: pulling is an
+                   explicit choice there, never something Sync does. -->
               <button
-                v-if="row.state === 'cloudOnly'"
+                v-if="
+                  (row.state === 'cloudOnly' ||
+                    row.state === 'cloudNewer' ||
+                    row.state === 'unchecked') &&
+                  !(row.legacy && !row.legacy.localFilename)
+                "
                 type="button"
                 class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium bg-blue-600/80 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 :disabled="isRowBusy(row)"
@@ -306,7 +409,7 @@
                   type="button"
                   class="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium bg-zinc-700 text-zinc-200 hover:bg-cyan-600 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   :disabled="isRowBusy(row)"
-                  title="Overwrite the cloud copy with this PC's version"
+                  title="Overwrite the cloud copy with this device's version"
                   @click="backupRows([row.key])"
                 >
                   <ArrowUpTrayIcon class="size-3.5" />
@@ -316,13 +419,25 @@
                   type="button"
                   class="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium bg-zinc-700 text-zinc-200 hover:bg-blue-600 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   :disabled="isRowBusy(row)"
-                  title="Overwrite this PC's copy with the cloud version"
+                  title="Overwrite this device's copy with the cloud version"
                   @click="restoreRow(row)"
                 >
                   <ArrowDownTrayIcon class="size-3.5" />
                   Keep&nbsp;cloud
                 </button>
               </template>
+
+              <!-- Earlier versions of the cloud copy. -->
+              <button
+                v-if="row.cloud"
+                type="button"
+                class="rounded-md px-2 py-1.5 text-xs text-zinc-400 hover:text-white hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                :disabled="isRowBusy(row)"
+                title="Earlier versions of the cloud copy"
+                @click="toggleHistory(row)"
+              >
+                History
+              </button>
 
               <!-- Delete cloud copy — available wherever a cloud copy exists,
                    kept muted so it doesn't shout on every row. -->
@@ -363,22 +478,12 @@
             <h3 class="text-base font-semibold font-display text-zinc-100">
               Delete Cloud Save?
             </h3>
-            <p v-if="deleteIsShared" class="mt-2 text-sm text-zinc-400">
-              Delete the cloud copy of
-              <span class="text-zinc-200 font-medium">{{
-                deleteTarget.name
-              }}</span
-              >? This removes your copy only. PC game saves are shared with
-              everyone on this Drop server, so if another account still has
-              this save it can come back the next time you sync. The copy on
-              this computer stays where it is.
-            </p>
-            <p v-else class="mt-2 text-sm text-zinc-400">
+            <p class="mt-2 text-sm text-zinc-400">
               Permanently delete the cloud copy of
               <span class="text-zinc-200 font-medium">{{
                 deleteTarget.name
               }}</span
-              >? This cannot be undone. The copy on this computer stays where
+              >? This cannot be undone. The copy on this device stays where
               it is, but your other devices will remove their copy the next
               time you play there.
             </p>
@@ -403,6 +508,65 @@
         </div>
       </div>
     </Transition>
+
+    <!-- Restore-a-version confirmation. -->
+    <Transition
+      enter-active-class="ease-out duration-200"
+      enter-from-class="opacity-0"
+      enter-to-class="opacity-100"
+      leave-active-class="ease-in duration-150"
+      leave-from-class="opacity-100"
+      leave-to-class="opacity-0"
+    >
+      <div
+        v-if="restoreTarget"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+        @click.self="restoreTarget = null"
+      >
+        <div
+          class="w-full max-w-sm rounded-xl bg-zinc-900 border border-zinc-700 shadow-2xl"
+        >
+          <div class="px-6 py-5">
+            <h3 class="text-base font-semibold font-display text-zinc-100">
+              Restore this version?
+            </h3>
+            <p class="mt-2 text-sm text-zinc-400">
+              The cloud copy of
+              <span class="text-zinc-200 font-medium">{{
+                restoreTarget.row.name
+              }}</span>
+              goes back to the version from
+              {{ exact(Date.parse(restoreTarget.revision.clientModifiedAt)) }}.
+              The current cloud copy is kept in its history. The next time the
+              game starts on any device, this one included, a copy that has not
+              changed since that device last synced is replaced with this
+              version, and a changed copy makes Drop ask which to keep.
+            </p>
+          </div>
+          <div class="flex justify-end gap-3 border-t border-zinc-700 px-6 py-4">
+            <button
+              type="button"
+              class="rounded-md px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
+              @click="restoreTarget = null"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="rounded-md px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50 transition-colors"
+              :disabled="rowBusy[restoreTarget.row.key] === 'revision'"
+              @click="confirmRestoreRevision"
+            >
+              {{
+                rowBusy[restoreTarget.row.key] === "revision"
+                  ? "Restoring…"
+                  : "Restore"
+              }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </section>
 </template>
 
@@ -412,23 +576,27 @@
  *
  * Presents ONE unified list: every save the user has for this game appears
  * exactly once, deduped across the cloud and this PC by its stable filename,
- * and tagged with a sync state:
+ * and tagged with a sync state (`saveSyncState`, the same three-way rule the
+ * launch sync uses):
  *
- *   - Synced        — local copy and cloud copy match (same hash).
- *   - Not backed up  — exists on this PC, not in the cloud yet.
- *   - In cloud only  — in the cloud, not on this PC (fresh/other device).
- *   - Conflict       — both exist but differ; the user picks a side.
+ *   - Synced          — local copy and cloud copy match (same hash).
+ *   - Not backed up   — exists on this PC, not in the cloud yet.
+ *   - In cloud only   — in the cloud, not on this PC (fresh/other device).
+ *   - Newer in cloud  — only the cloud changed since the last sync.
+ *   - Newer here      — only this PC changed since the last sync.
+ *   - Conflict        — both changed (or no record); the user picks a side.
+ *   - Unchecked       — the local scan failed, so only the cloud is known.
  *
  * The header's single **Sync** button reconciles both directions — it backs
- * up not-backed-up files and pulls down cloud-only ones — but deliberately
- * leaves conflicts for an explicit per-row choice so it can never silently
- * clobber a copy. Restore is type-aware: emulator saves write to
+ * up what is only or newer here and pulls down what is only or newer in the
+ * cloud — but deliberately leaves conflicts for an explicit per-row choice so
+ * it can never silently clobber a copy, and refuses to run at all when the
+ * local scan failed. Restore is type-aware: emulator saves write to
  * `{install}/drop-saves/{userId}/{gameId}/…`; PC saves re-scan with Ludusavi
  * via `restore_pc_cloud_save` so they land where the game actually reads them.
  *
- * Emulator saves belong to one account. PC saves are shared with every account
- * on the server, so a row here can be somebody else's copy: `ownedBy` names
- * them and `shadowNote` says when a second copy of the same save exists.
+ * History lists the earlier versions the server keeps (up to three) and can
+ * make one the live cloud copy again.
  */
 import {
   ArrowDownTrayIcon,
@@ -453,6 +621,19 @@ import {
   type CloudSaveQuota,
 } from "~/composables/use-server-api";
 import type { BackupResult } from "~/types/save-sync";
+import {
+  displaySaveName,
+  heldOnSharedDeviceState,
+  legacyRowNote,
+  matchLegacyRow,
+  saveSyncState,
+  type LegacyRow,
+  type SaveSyncState,
+} from "~/composables/save-sync-state";
+import type {
+  CloudSaveHistory,
+  CloudSaveRevision,
+} from "~/composables/use-server-api";
 
 const props = withDefaults(
   defineProps<{
@@ -478,7 +659,8 @@ const api = useServerApi();
 
 // ── State ───────────────────────────────────────────────────────────────────
 
-type SyncState = "synced" | "localOnly" | "cloudOnly" | "conflict";
+/** "unchecked": the local scan failed, so only the cloud side is known. */
+type SyncState = SaveSyncState | "unchecked";
 
 /** A save file detected on disk (from `scan_local_game_saves`). */
 interface LocalSaveEntry {
@@ -487,6 +669,15 @@ interface LocalSaveEntry {
   size: number;
   modifiedAt: number; // unix seconds
   dataHash: string;
+  /** What this account's sync manifest recorded at the last sync. */
+  syncedHash?: string | null;
+  syncedCloudId?: string | null;
+  /** Another Drop account on this device last synced these exact bytes. */
+  lastSyncedByOtherAccount?: string | null;
+  /** Another Drop account also syncs this game on this device. */
+  otherAccountsOnThisDevice?: boolean;
+  /** The name an older build's upload of this file is stored under. */
+  legacyCloudName?: string | null;
 }
 
 /** One merged row in the unified list. */
@@ -500,16 +691,12 @@ interface UnifiedRow {
   cloud: CloudSaveListEntry | null;
   local: LocalSaveEntry | null;
   /**
-   * Account that owns the cloud copy, shown only when the row can belong to
-   * someone else (a PC save). Null for emulator saves and local-only rows.
+   * For a cloud-only row that is an older build's copy of a local file (its
+   * name was changed by the server's sanitizer back then): which file, and
+   * whether the bytes match. Sync leaves such a row alone, and Restore writes
+   * it into that file instead of a stray second file the game never reads.
    */
-  ownedBy: string | null;
-  /**
-   * Says out loud that another account holds a save with this filename, and
-   * whether the copy being shown is theirs rather than yours. Null when this
-   * row is the only copy on the server.
-   */
-  shadowNote: string | null;
+  legacy: LegacyRow | null;
 }
 
 const expanded = ref(true);
@@ -517,6 +704,12 @@ const loading = ref(false);
 const loadError = ref<string | null>(null);
 const entries = ref<CloudSaveListEntry[]>([]);
 const localEntries = ref<LocalSaveEntry[]>([]);
+/**
+ * Why the local scan failed, or null. Kept apart from `loadError` (the cloud
+ * list) because the cloud list is still worth showing, and apart from an empty
+ * `localEntries` because "could not look" is not "nothing there".
+ */
+const localError = ref<string | null>(null);
 const quota = ref<CloudSaveQuota | null>(null);
 
 // Ludusavi availability — probed on mount; gates the install prompt.
@@ -572,23 +765,94 @@ const syncMessage = ref<string | null>(null);
 const syncError = ref(false);
 
 // Per-row busy / error, keyed by row.key (filename).
-const rowBusy = ref<Record<string, "backup" | "restore" | "delete">>({});
+const rowBusy = ref<
+  Record<string, "backup" | "restore" | "delete" | "revision">
+>({});
 const rowError = ref<Record<string, string>>({});
 /** Non-error per-row line, currently the path a restore wrote to. */
 const rowNote = ref<Record<string, string>>({});
 
 const deleteTarget = ref<UnifiedRow | null>(null);
 
-/**
- * A PC save's delete is a different promise from an emulator save's: the
- * server only tombstones the caller's own row, so another account's copy of
- * the same shared file survives and can come back. The dialog says which
- * promise it's making.
- */
-const deleteIsShared = computed(() => {
-  const c = deleteTarget.value?.cloud;
-  return !!c && isPcSave(c);
-});
+// ── Version history ─────────────────────────────────────────────────────────
+
+/** Which rows have their history expanded, keyed by row.key. */
+const historyOpen = ref<Record<string, boolean>>({});
+interface HistoryState {
+  loading: boolean;
+  error: string | null;
+  data: CloudSaveHistory | null;
+}
+/** History per cloud row id, so a refresh that re-keys nothing keeps it. */
+const histories = ref<Record<string, HistoryState>>({});
+/** The version a confirm dialog is asking about. */
+const restoreTarget = ref<{
+  row: UnifiedRow;
+  revision: CloudSaveRevision;
+} | null>(null);
+
+function historyFor(row: UnifiedRow): HistoryState | null {
+  return row.cloud ? (histories.value[row.cloud.id] ?? null) : null;
+}
+
+async function loadHistory(row: UnifiedRow) {
+  const id = row.cloud?.id;
+  if (!id) return;
+  // Keep what is already shown while it reloads.
+  histories.value[id] = {
+    loading: true,
+    error: null,
+    data: histories.value[id]?.data ?? null,
+  };
+  try {
+    const data = await api.saves.history(id);
+    histories.value[id] = { loading: false, error: null, data };
+  } catch (e) {
+    histories.value[id] = {
+      loading: false,
+      error: `Couldn't load earlier versions: ${e instanceof Error ? e.message : String(e)}`,
+      data: null,
+    };
+  }
+}
+
+function toggleHistory(row: UnifiedRow) {
+  const open = !historyOpen.value[row.key];
+  historyOpen.value[row.key] = open;
+  if (open) loadHistory(row);
+}
+
+async function confirmRestoreRevision() {
+  const target = restoreTarget.value;
+  if (!target || rowBusy.value[target.row.key] !== undefined) return;
+  const { row, revision } = target;
+  rowBusy.value[row.key] = "revision";
+  delete rowError.value[row.key];
+  delete rowNote.value[row.key];
+  try {
+    const result = await api.saves.restoreRevision(revision.id);
+    restoreTarget.value = null;
+    await refresh();
+    const fresh = rows.value.find((r) => r.key === row.key);
+    // Name the button the row actually shows now.
+    const takeCloud =
+      fresh?.state === "conflict" ? "Keep cloud" : "Restore";
+    rowNote.value[row.key] = !result.restored
+      ? "That version is already the cloud copy."
+      : fresh?.state === "synced"
+        ? "The cloud copy is now that earlier version, which matches this device."
+        : `The cloud copy is now that earlier version. Press ${takeCloud} to put it on this device now.`;
+    if (fresh && historyOpen.value[row.key]) await loadHistory(fresh);
+  } catch (e) {
+    restoreTarget.value = null;
+    rowError.value[row.key] =
+      e instanceof Error
+        ? `Restore failed: ${e.message}`
+        : `Restore failed: ${String(e)}`;
+  } finally {
+    delete rowBusy.value[row.key];
+  }
+}
 
 // ── Derived: the unified list + summary ───────────────────────────────────────
 
@@ -600,34 +864,20 @@ function localMs(l: LocalSaveEntry): number {
   return (l.modifiedAt || 0) * 1000;
 }
 
-/** "Ada", "Ada and Bob", "Ada, Bob and Cleo". */
-function joinNames(names: string[]): string {
-  if (names.length <= 1) return names[0] ?? "";
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+/** The note under an older build's cloud row. */
+function legacyNote(legacy: LegacyRow): string {
+  return legacyRowNote(
+    legacy,
+    legacy.localFilename ? displaySaveName(legacy.localFilename) : null,
+  );
 }
 
 /**
- * What to say when more than one account has a save with this filename.
- *
- * Only one copy can be shown, and the one shown is whichever was played most
- * recently. That is decided partly by a timestamp the other machine reported,
- * so a copy losing is not proof it is older. Saying nothing would make a
- * second copy of someone's progress invisible with no way to find out it
- * exists.
+ * A save only on this device that Sync leaves alone because another Drop
+ * account also plays this game here (same rule as the launch sync).
  */
-function shadowNote(cloud: CloudSaveListEntry): string | null {
-  const others = cloud.alsoHeldBy ?? [];
-  if (cloud.shadowedSaveId) {
-    return cloud.ownedBy
-      ? `You have your own copy of this save. ${cloud.ownedBy} played more recently, so theirs is the one shown.`
-      : "You have your own copy of this save, and a more recent one is shown instead.";
-  }
-  if (others.length > 0) {
-    return others.length > 1
-      ? `${joinNames(others)} also have saves with this name.`
-      : `${others[0]} also has a save with this name.`;
-  }
-  return null;
+function heldOnSharedDevice(row: UnifiedRow): boolean {
+  return heldOnSharedDeviceState(row.state, row.local);
 }
 
 const rows = computed<UnifiedRow[]>(() => {
@@ -653,14 +903,16 @@ const rows = computed<UnifiedRow[]>(() => {
     let whenMs: number;
     let saveType: string;
     if (cloud && local) {
-      const same =
-        !!cloud.dataHash && !!local.dataHash && cloud.dataHash === local.dataHash;
-      state = same ? "synced" : "conflict";
+      state = saveSyncState(local, {
+        id: cloud.id,
+        dataHash: cloud.dataHash ?? "",
+      });
       size = local.size || cloud.size;
       whenMs = Math.max(cloudMs(cloud), localMs(local));
       saveType = cloud.saveType || local.saveType;
     } else if (cloud) {
-      state = "cloudOnly";
+      // With the local scan failed, "not on this PC" is unknown, not true.
+      state = localError.value ? "unchecked" : "cloudOnly";
       size = cloud.size;
       whenMs = cloudMs(cloud);
       saveType = cloud.saveType;
@@ -670,19 +922,17 @@ const rows = computed<UnifiedRow[]>(() => {
       whenMs = localMs(local!);
       saveType = local!.saveType;
     }
-    const ownedBy =
-      cloud && cloud.ownedBy && isPcSave(cloud) ? cloud.ownedBy : null;
     out.push({
       key,
-      name: displayName(key),
+      name: displaySaveName(key),
       saveType,
       state,
       size,
       whenMs,
       cloud,
       local,
-      ownedBy,
-      shadowNote: cloud ? shadowNote(cloud) : null,
+      legacy:
+        cloud && !local ? matchLegacyRow(localEntries.value, cloud) : null,
     });
   }
 
@@ -690,8 +940,11 @@ const rows = computed<UnifiedRow[]>(() => {
   const order: Record<SyncState, number> = {
     conflict: 0,
     localOnly: 1,
-    cloudOnly: 2,
-    synced: 3,
+    localNewer: 2,
+    cloudNewer: 3,
+    cloudOnly: 4,
+    unchecked: 5,
+    synced: 6,
   };
   out.sort(
     (a, b) => order[a.state] - order[b.state] || a.name.localeCompare(b.name),
@@ -700,7 +953,15 @@ const rows = computed<UnifiedRow[]>(() => {
 });
 
 const counts = computed(() => {
-  const c = { synced: 0, localOnly: 0, cloudOnly: 0, conflict: 0 };
+  const c: Record<SyncState, number> = {
+    synced: 0,
+    localOnly: 0,
+    cloudOnly: 0,
+    cloudNewer: 0,
+    localNewer: 0,
+    conflict: 0,
+    unchecked: 0,
+  };
   for (const r of rows.value) c[r.state]++;
   return c;
 });
@@ -721,7 +982,10 @@ const summaryText = computed(() => {
   const segs: string[] = [];
   if (c.conflict) segs.push(`${c.conflict} conflict${c.conflict === 1 ? "" : "s"}`);
   if (c.localOnly) segs.push(`${c.localOnly} not backed up`);
+  if (c.localNewer) segs.push(`${c.localNewer} newer here`);
+  if (c.cloudNewer) segs.push(`${c.cloudNewer} newer in cloud`);
   if (c.cloudOnly) segs.push(`${c.cloudOnly} in cloud only`);
+  if (c.unchecked) segs.push(`${c.unchecked} not checked on this device`);
   const head =
     segs.length === 0
       ? total === 1
@@ -784,6 +1048,30 @@ function stateMeta(state: SyncState): {
         chipBg: "bg-sky-500/10",
         labelClass: "text-sky-400",
       };
+    case "cloudNewer":
+      return {
+        label: "Newer in cloud",
+        icon: CloudArrowDownIcon,
+        iconClass: "text-sky-400",
+        chipBg: "bg-sky-500/10",
+        labelClass: "text-sky-400",
+      };
+    case "localNewer":
+      return {
+        label: "Newer on this device",
+        icon: CloudArrowUpIcon,
+        iconClass: "text-amber-400",
+        chipBg: "bg-amber-500/10",
+        labelClass: "text-amber-400",
+      };
+    case "unchecked":
+      return {
+        label: "In cloud (this device not checked)",
+        icon: CloudIcon,
+        iconClass: "text-zinc-400",
+        chipBg: "bg-zinc-500/10",
+        labelClass: "text-zinc-400",
+      };
     case "conflict":
       return {
         label: "Conflict",
@@ -800,22 +1088,6 @@ function isRowBusy(row: UnifiedRow): boolean {
 }
 
 // ── Filename identity helpers ────────────────────────────────────────────────
-
-/**
- * Turn a cloud filename into something readable. The scanner namespaces PC
- * saves so they don't collide with emulator saves (`pc__` is the current,
- * sanitize-safe prefix and `pc/` the legacy one), and it escapes path
- * separators as `%2F` so a save nested in a subfolder keeps a distinct
- * identity through the server's filename sanitizer. Both are undone here for
- * display only — `row.key` stays the wire name every action is keyed on.
- */
-function displayName(filename: string): string {
-  let name = filename;
-  if (name.startsWith("pc__")) name = name.slice(4);
-  else if (name.startsWith("pc/")) name = name.slice(3);
-  else if (name.startsWith("switch__")) name = name.slice(8);
-  return name.replaceAll("%2F", "/").replaceAll("%25", "%");
-}
 
 function isPcSave(entry: { saveType: string; filename: string }): boolean {
   return (
@@ -835,21 +1107,26 @@ async function refresh() {
   loading.value = true;
   loadError.value = null;
   try {
-    // Cloud list + local disk scan in parallel. The local scan is best-effort
-    // — a Ludusavi miss shouldn't blank the cloud list, so it soft-fails empty.
-    // Quota rides along with the two calls the panel already makes. Like the
-    // local scan it soft-fails: an older server without the endpoint should
-    // cost the header a line, not the whole list.
+    // Cloud list + local disk scan in parallel. A failed local scan must not
+    // blank the cloud list, but it must not read as "no saves here" either:
+    // it gets its own error state, and Sync refuses to run while it stands.
+    // Quota soft-fails: an older server without the endpoint should cost the
+    // header a line, not the whole list.
+    let scanError: string | null = null;
     const [cloud, local, q] = await Promise.all([
       api.saves.list(props.gameId),
       invoke<LocalSaveEntry[]>("scan_local_game_saves", {
         gameId: props.gameId,
         gameName: props.gameName,
-      }).catch(() => [] as LocalSaveEntry[]),
+      }).catch((e) => {
+        scanError = e instanceof Error ? e.message : String(e);
+        return [] as LocalSaveEntry[];
+      }),
       api.saves.quota().catch(() => null),
     ]);
     entries.value = cloud;
     localEntries.value = local;
+    localError.value = scanError;
     quota.value = q;
   } catch (e) {
     loadError.value =
@@ -942,11 +1219,43 @@ async function reconcile() {
   try {
     // Re-scan so the push/pull lists reflect what's actually on disk now.
     await refresh();
+    if (localError.value) {
+      // Pulling "cloud only" saves when the scan simply could not see the
+      // local ones would write over them.
+      syncError.value = true;
+      syncMessage.value =
+        "Sync did not run, because Drop could not check the saves on this device. Retry above.";
+      return;
+    }
+    if (loadError.value) {
+      syncError.value = true;
+      syncMessage.value =
+        "Sync did not run, because the cloud saves could not be loaded. Retry above.";
+      return;
+    }
+    // A local file whose older-build cloud copy holds different bytes is a
+    // choice for the user, as at launch: neither side moves on Sync.
+    const legacyDisputed = new Set(
+      rows.value
+        .filter((r) => r.legacy && !r.legacy.same && r.legacy.localFilename)
+        .map((r) => r.legacy!.localFilename as string),
+    );
+    const held = rows.value.filter(heldOnSharedDevice);
     const toPush = rows.value
-      .filter((r) => r.state === "localOnly")
+      .filter(
+        (r) =>
+          (r.state === "localOnly" || r.state === "localNewer") &&
+          !heldOnSharedDevice(r) &&
+          !legacyDisputed.has(r.key),
+      )
       .map((r) => r.key);
     const toPull = rows.value
-      .filter((r) => r.state === "cloudOnly" && r.cloud)
+      .filter(
+        (r) =>
+          (r.state === "cloudOnly" || r.state === "cloudNewer") &&
+          r.cloud &&
+          !r.legacy,
+      )
       .map((r) => r.cloud as CloudSaveListEntry);
 
     let pushed = 0;
@@ -985,7 +1294,12 @@ async function reconcile() {
     // lie this panel used to tell.
     const failed = pushErrors.length + pullFailed;
     syncError.value = failed > 0;
-    if (segs.length === 0 && conflicts === 0 && failed === 0) {
+    if (
+      segs.length === 0 &&
+      conflicts === 0 &&
+      failed === 0 &&
+      held.length === 0
+    ) {
       syncMessage.value = "Everything's already in sync.";
     } else {
       const parts: string[] = [];
@@ -1000,6 +1314,10 @@ async function reconcile() {
         );
       if (pullFailed > 0)
         parts.push(`${pullFailed} couldn't be restored (game not installed?).`);
+      if (held.length > 0)
+        parts.push(
+          `${held.length} save${held.length === 1 ? " was" : "s were"} not backed up, because another Drop account also plays this game here. Use Back up on the ones that are yours.`,
+        );
       if (parts.length === 0) parts.push("Sync complete.");
       syncMessage.value = parts.join(" ");
     }
@@ -1061,7 +1379,10 @@ async function restoreRow(row: UnifiedRow) {
   delete rowError.value[row.key];
   delete rowNote.value[row.key];
   try {
-    const written = await doRestore(row.cloud);
+    const written = await doRestore(
+      row.cloud,
+      row.legacy?.localFilename ?? undefined,
+    );
     if (written) rowNote.value[row.key] = `Restored to ${written}`;
     await refresh();
   } catch (e) {
@@ -1082,18 +1403,24 @@ async function restoreRow(row: UnifiedRow) {
  * this disk, so it is the one thing the user can check the restore against.
  * Emulator saves go to a location Drop owns, so there is nothing to report.
  */
-async function doRestore(entry: CloudSaveListEntry): Promise<string | null> {
+async function doRestore(
+  entry: CloudSaveListEntry,
+  intoFilename?: string,
+): Promise<string | null> {
   const { data } = await api.saves.download(entry.id);
+  // An older build's row is written into the local file it is a copy of
+  // (`intoFilename`), never next to it under the old name.
+  const filename = intoFilename ?? entry.filename;
   if (isPcSave(entry)) {
     return await invoke<string>("restore_pc_cloud_save", {
       gameId: props.gameId,
-      filename: entry.filename,
+      filename,
       data,
     });
   }
   await invoke("write_save_file", {
     gameId: props.gameId,
-    filename: entry.filename,
+    filename,
     saveType: entry.saveType,
     data,
   });
@@ -1114,9 +1441,8 @@ async function confirmDelete() {
     deleteTarget.value = null;
     await refresh();
     if (!deleted) {
-      // The row belongs to another account and this user has no copy of their
-      // own. A delete only removes your own copy, so nothing changed, and the
-      // row is still in the list.
+      // Only an older server that shared PC saves across accounts answers
+      // this: the row was another account's and nothing of yours was there.
       rowError.value[row.key] =
         "This save belongs to another account, and you do not have a copy of your own to delete.";
     }
@@ -1145,9 +1471,13 @@ watch(
   () => {
     entries.value = [];
     localEntries.value = [];
+    localError.value = null;
     rowBusy.value = {};
     rowError.value = {};
     rowNote.value = {};
+    historyOpen.value = {};
+    histories.value = {};
+    restoreTarget.value = null;
     syncMessage.value = null;
     syncError.value = false;
     refresh();

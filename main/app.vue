@@ -26,6 +26,7 @@
     <AchievementToast />
     <SaveSyncToastHost />
     <CoopRoomToastHost />
+    <RequestNotificationToastHost />
     <SaveSyncConflictHost />
   </NuxtLayout>
 </template>

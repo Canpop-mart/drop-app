@@ -170,6 +170,12 @@ pub async fn download_mod(
         if db.applications.transient_statuses.contains_key(&meta) {
             return Ok(());
         }
+        // Another version of the same mod is queued: both would work from the
+        // same ledger and folder, and the second would find it changed.
+        if db.applications.transient_statuses.keys().any(|k| k.id == meta.id) {
+            warn!("not queueing mod {} {}: another version of it is queued", meta.id, meta.version);
+            return Err(ApplicationDownloadError::InvalidCommand);
+        }
 
         // The base game must be fully installed; the mod overlays into its dir.
         match db.applications.game_statuses.get(&parent_game_id) {

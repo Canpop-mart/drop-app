@@ -408,6 +408,86 @@ pub async fn delete_cloud_save(id: &str) -> Result<bool, RemoteAccessError> {
     Ok(response.deleted)
 }
 
+// ── Version history (per-save revisions) ───────────────────────────────
+
+/// One previous version of a cloud save, from `/saves/revisions`. Metadata
+/// only; the bytes come back through [`restore_cloud_save_revision`].
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudSaveRevision {
+    pub id: String,
+    pub save_type: String,
+    pub size: i64,
+    pub data_hash: String,
+    /// Device these bytes were uploaded from.
+    pub uploaded_from: String,
+    /// The file's mtime as that device reported it, ISO 8601.
+    pub client_modified_at: String,
+    /// When a newer upload (or a restore) replaced this version, ISO 8601.
+    pub superseded_at: String,
+}
+
+/// The live version, echoed alongside its history.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudSaveCurrentVersion {
+    pub id: String,
+    pub filename: String,
+    pub size: i64,
+    pub data_hash: String,
+    pub uploaded_from: String,
+    pub client_modified_at: String,
+    #[serde(default)]
+    pub deleted_at: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudSaveHistory {
+    pub current: CloudSaveCurrentVersion,
+    /// Newest first. The server keeps at most three.
+    pub revisions: Vec<CloudSaveRevision>,
+}
+
+/// List the previous versions the server kept for the save `id` names.
+pub async fn list_cloud_save_revisions(id: &str) -> Result<CloudSaveHistory, RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/saves/revisions"], &[("id", id)])?;
+    remote_request(RemoteRequest::get(url)).await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreRevisionBody {
+    revision_id: String,
+}
+
+/// What a restore did on the server.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudSaveRestoreResult {
+    /// False when the chosen version was already the live one.
+    pub restored: bool,
+    #[serde(default)]
+    pub already_current: bool,
+    /// The save row, now holding the restored bytes.
+    pub id: String,
+    pub filename: String,
+    pub data_hash: String,
+}
+
+/// Make a previous version the live cloud copy again. The version it replaces
+/// is kept in the history, so a restore can itself be undone. Only the cloud
+/// changes; putting the bytes on disk is a separate download.
+pub async fn restore_cloud_save_revision(
+    revision_id: &str,
+) -> Result<CloudSaveRestoreResult, RemoteAccessError> {
+    let url = generate_url(&["/api/v1/client/saves/restore"], &[])?;
+    let body = RestoreRevisionBody {
+        revision_id: revision_id.to_string(),
+    };
+    remote_request(RemoteRequest::post(url, &body)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,10 +7,11 @@
     </div>
 
     <div class="mt-5 flex flex-col gap-8">
-      <!-- Display name -->
+      <!-- Multiplayer device name (the client record's name, /client/name).
+           Not the profile display name, which is edited on the profile. -->
       <div>
         <label for="displayName" class="block text-sm font-medium text-zinc-100">
-          Display name
+          Multiplayer device name
         </label>
         <div class="mt-2 flex items-center gap-3 max-w-md">
           <input
@@ -86,7 +87,7 @@ import { type Settings } from "~/types";
 const router = useRouter();
 const error = ref<string | null>(null);
 
-// ── Display name ────────────────────────────────────────────────────────────
+// ── Multiplayer device name ─────────────────────────────────────────────────
 
 const { setName, accountName: getAccountName } = useDisplayName();
 const accountName = computed(() => getAccountName());
@@ -106,7 +107,7 @@ async function saveName() {
       nameSaved.value = false;
     }, 2000);
   } catch (e) {
-    error.value = `Failed to save display name: ${e}`;
+    error.value = `Failed to save device name: ${e}`;
   } finally {
     nameSaving.value = false;
   }

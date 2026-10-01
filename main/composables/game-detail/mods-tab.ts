@@ -18,10 +18,28 @@ export type AvailableMod = {
   mShortDescription: string;
   mIconObjectId: string;
   requiredMods?: ModRequirement[];
+  /** Newest version on the server; absent from older servers. */
+  latestVersionId?: string | null;
 };
 
-/** A mod found on disk under the parent's install dir (`list_installed_mods`). */
-export type InstalledModEntry = { gameId: string; fileCount?: number };
+/**
+ * A mod found on disk under the parent's install dir (`list_installed_mods`).
+ * `complete` is false for a download that was cancelled, failed or is still
+ * running; left out, the entry counts as a finished install.
+ */
+export type InstalledModEntry = {
+  gameId: string;
+  fileCount?: number;
+  version?: string;
+  complete?: boolean;
+  downloading?: boolean;
+  /** Why the mod's launch override would not be used for the game as it is
+   *  installed now: "platform", "unfinished" or "otherMod". Absent when it
+   *  would be, or the mod has none. */
+  launchOverrideSkipped?: string | null;
+  /** With "otherMod": the mod whose override is used instead. */
+  launchOverrideWinner?: string | null;
+};
 
 /** One mod as both surfaces render it: the server listing and the on-disk
  *  ledger folded into a single row/card. */
@@ -32,12 +50,49 @@ export type ModCard = {
   iconObjectId: string | null;
   /** Prerequisite mod names, for the "Requires:" line. */
   requires: string[];
+  /** A finished install is on disk. */
   installed: boolean;
+  /** A download started but did not finish; offer Resume or Remove. */
+  unfinished: boolean;
+  /** A download of this mod is queued or running in the download manager. */
+  downloading: boolean;
+  /** Installed, and the server has a different (newer) version. */
+  updateAvailable: boolean;
   fileCount: number | null;
-  /** Installed, but the server no longer lists it. Nothing is known about it
-   *  beyond its id and file count, and uninstall is the only thing to offer. */
+  /** On disk, but the server no longer lists it. Nothing is known about it
+   *  beyond its id and file count, and removing it is the only thing to offer. */
   unlisted: boolean;
+  /** Why this mod's change to how the game starts is not used, or null. */
+  launchNote: string | null;
 };
+
+/** What a mod card can do. */
+export type ModAction = "install" | "update" | "resume" | "uninstall" | "remove";
+
+/**
+ * The card's main action (A on a controller, the coloured button on desktop)
+ * and its second one (X / the plain button), or null when there is none.
+ * Nothing is offered while a download runs: its files are in use, and the
+ * backend refuses to uninstall then anyway.
+ */
+export function modCardActions(card: ModCard): {
+  primary: ModAction | null;
+  secondary: ModAction | null;
+} {
+  if (card.downloading) return { primary: null, secondary: null };
+  if (card.unfinished) {
+    return {
+      primary: card.unlisted ? "remove" : "resume",
+      secondary: card.unlisted ? null : "remove",
+    };
+  }
+  if (card.installed) {
+    return card.updateAvailable
+      ? { primary: "update", secondary: "uninstall" }
+      : { primary: "uninstall", secondary: null };
+  }
+  return { primary: "install", secondary: null };
+}
 
 /**
  * The Mods tab only makes sense for an installed game that actually has mods.
@@ -47,16 +102,20 @@ export type ModCard = {
  * restoring it a moment later reads as the tab flickering in and out.
  *
  * An installed mod that the server no longer lists still counts — otherwise
- * uninstalling it would be impossible once the listing went away.
+ * uninstalling it would be impossible once the listing went away. So does a
+ * failed load, so the error and its Retry are reachable.
  */
 export function shouldShowModsTab(opts: {
   installed: boolean;
   loaded: boolean;
   availableCount: number;
   installedCount: number;
+  /** Either list failed to load. The tab stays so its error and Retry show;
+   *  hiding it would make "could not load" look like "no mods". */
+  failed?: boolean;
 }): boolean {
   if (!opts.installed) return false;
-  if (!opts.loaded) return true;
+  if (!opts.loaded || opts.failed) return true;
   return opts.availableCount > 0 || opts.installedCount > 0;
 }
 
@@ -86,6 +145,28 @@ export function modDisplayName(
 }
 
 /**
+ * Player-facing line for a finished mod whose launch override a launch would
+ * skip (see `decide_launch_override` in mod_data.rs), or null. An unfinished
+ * install already says it is unfinished, so it gets no second line.
+ */
+export function launchOverrideNote(
+  available: readonly AvailableMod[],
+  entry: InstalledModEntry | undefined,
+): string | null {
+  if (!entry || entry.complete === false) return null;
+  switch (entry.launchOverrideSkipped) {
+    case "platform":
+      return "Its launch change is not used: it has none for this game's platform.";
+    case "otherMod":
+      return entry.launchOverrideWinner
+        ? `Its launch change is not used: ${modDisplayName(available, entry.launchOverrideWinner)} already changes how the game starts.`
+        : "Its launch change is not used: another mod already changes how the game starts.";
+    default:
+      return null;
+  }
+}
+
+/**
  * Fold the server listing and the on-disk ledger into one ordered set of mods.
  *
  * Server order is preserved and installed-but-unlisted mods are appended, so a
@@ -100,15 +181,24 @@ export function buildModCards(
 
   const cards: ModCard[] = available.map((mod) => {
     const onDisk = installedById.get(mod.id);
+    const installed = onDisk !== undefined && onDisk.complete !== false;
     return {
       id: mod.id,
       name: mod.mName,
       description: mod.mShortDescription ?? "",
       iconObjectId: mod.mIconObjectId || null,
       requires: (mod.requiredMods ?? []).map((r) => r.name),
-      installed: onDisk !== undefined,
+      installed,
+      unfinished: onDisk !== undefined && onDisk.complete === false,
+      downloading: onDisk?.downloading === true,
+      updateAvailable:
+        installed &&
+        !!mod.latestVersionId &&
+        !!onDisk?.version &&
+        mod.latestVersionId !== onDisk.version,
       fileCount: onDisk?.fileCount ?? null,
       unlisted: false,
+      launchNote: launchOverrideNote(available, onDisk),
     };
   });
 
@@ -121,9 +211,13 @@ export function buildModCards(
       description: "",
       iconObjectId: null,
       requires: [],
-      installed: true,
+      installed: entry.complete !== false,
+      unfinished: entry.complete === false,
+      downloading: entry.downloading === true,
+      updateAvailable: false,
       fileCount: entry.fileCount ?? null,
       unlisted: true,
+      launchNote: launchOverrideNote(available, entry),
     });
   }
 
@@ -149,4 +243,26 @@ export function modDependentNames(
         ?.requiredMods?.some((r) => r.gameId === modId),
     )
     .map((m) => modDisplayName(available, m.gameId));
+}
+
+/**
+ * Which of a mod's download options to install onto a base game installed for
+ * `parentPlatform`. Options come newest first. The newest version's option for
+ * the base game's own platform wins: a mod version with its own launch
+ * settings only applies its launch override to launches of those platforms
+ * (a pure overlay applies it to any). Falls back to the newest option of any
+ * platform (the files are the same) when the newest version doesn't list the
+ * base game's platform or it isn't known.
+ */
+export function pickModVersion<T extends { versionId: string; platform: string }>(
+  options: readonly T[],
+  parentPlatform: string | null | undefined,
+): T | undefined {
+  const newest = options[0];
+  if (!newest || !parentPlatform) return newest;
+  return (
+    options.find(
+      (o) => o.versionId === newest.versionId && o.platform === parentPlatform,
+    ) ?? newest
+  );
 }

@@ -437,15 +437,24 @@ impl DownloadManagerBuilder {
         }
     }
     async fn manage_completed_signal(&mut self, meta: DownloadableMetadata) {
-        if let Some(interface) = self.download_queue.read().front()
+        // An agent whose `on_complete` failed sends Error before the download
+        // thread sends Completed. The Error already took the download off the
+        // queue (and ran `on_error`), so a Completed for something no longer
+        // at the front is not a completion and must not be announced as one.
+        let completed = if let Some(interface) = self.download_queue.read().front()
             && interface == &meta
         {
             self.remove_and_cleanup_front_download(&meta).await;
-        }
+            true
+        } else {
+            false
+        };
 
         // Distinct from `update_queue` so the frontend can tell a real
         // completion apart from a cancellation (which also shrinks the queue).
-        app_emit!(&self.app_handle, "download_complete", &meta.id);
+        if completed {
+            app_emit!(&self.app_handle, "download_complete", &meta.id);
+        }
 
         self.push_ui_queue_update();
         send!(self.sender, DownloadManagerSignal::Go);

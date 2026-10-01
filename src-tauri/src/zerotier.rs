@@ -158,6 +158,10 @@ pub struct ZerotierStatus {
     /// The one-time capability setup still has to happen and we're in Game Mode,
     /// where it can't. The UI tells the user to do it from Desktop Mode.
     pub needs_desktop_setup: bool,
+    /// Getting ZeroTier ready now could show a UAC or password prompt. False
+    /// when it's already running, or on Linux when Drop's own copy has its
+    /// capabilities and staging won't replace it (see `start_may_prompt`).
+    pub start_needs_prompt: bool,
 }
 
 // ── Binary staging (install) ──────────────────────────────────────────
@@ -320,6 +324,41 @@ fn contains_c_string(bytes: &[u8], path: &str) -> bool {
         .any(|at| at == 0 || bytes[at - 1] == 0)
 }
 
+/// What `stage_binary` records once it has staged this exact bundled binary
+/// for this libs dir; a different recorded value means it will copy again.
+#[cfg(target_os = "linux")]
+fn staging_marker(src_bytes: &[u8], libs_str: &str) -> String {
+    format!("{:x}\n{libs_str}", md5::compute(src_bytes))
+}
+
+/// Would starting Drop's own daemon now ask for a password? Not when the
+/// staged copy has its capabilities and `stage_binary` won't replace it
+/// (replacing drops them): nothing different is bundled, or this isn't the
+/// AppImage, or it's Game Mode, where a capable copy is kept. A copy staged
+/// before markers existed counts as a prompt, which only costs a Reconnect
+/// press. Blocking: reads the bundled binary.
+#[cfg(target_os = "linux")]
+fn start_may_prompt(game_mode: bool) -> bool {
+    let target = zerotier_binary();
+    if !(target.exists() && caps_present(&target)) {
+        return true;
+    }
+    if game_mode {
+        return false;
+    }
+    let Some((src_bin, _)) = bundled_source() else {
+        return false;
+    };
+    let Ok(src_bytes) = std::fs::read(&src_bin) else {
+        return true;
+    };
+    let libs_str = zerotier_libs_dir().to_string_lossy().to_string();
+    match std::fs::read_to_string(staged_marker_path()) {
+        Ok(recorded) => recorded.trim() != staging_marker(&src_bytes, &libs_str),
+        Err(_) => true,
+    }
+}
+
 /// Stage zerotier-one (and its libs) into the writable tools dir so we can
 /// `setcap` and run it. Only ever stages the binary bundled in the AppImage;
 /// a system zerotier-one is never copied or given capabilities. Idempotent:
@@ -347,7 +386,7 @@ fn stage_binary() -> Result<PathBuf, String> {
     let libs_str = libs_dir.to_string_lossy().to_string();
     let src_bytes =
         std::fs::read(&src_bin).map_err(|e| format!("Failed to read bundled zerotier-one: {e}"))?;
-    let marker = format!("{:x}\n{libs_str}", md5::compute(&src_bytes));
+    let marker = staging_marker(&src_bytes, &libs_str);
     let recorded = std::fs::read_to_string(staged_marker_path()).ok();
 
     let needs_copy = if !target.exists() {
@@ -867,6 +906,34 @@ impl JoinKind {
     }
 }
 
+/// How many join flows (room host/join, Archipelago create/join) are between
+/// readying the daemon and finishing their join. Their network isn't joined
+/// yet while they wait on the server, so the idle stop would otherwise see an
+/// empty network list and stop the daemon out from under them.
+static DAEMON_USERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+// Only Linux stops a daemon of its own (and the tests read it).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn daemon_users() -> usize {
+    DAEMON_USERS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Counts in `DAEMON_USERS` for as long as it lives.
+struct DaemonInUse;
+
+impl DaemonInUse {
+    fn new() -> Self {
+        DAEMON_USERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for DaemonInUse {
+    fn drop(&mut self) {
+        DAEMON_USERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Networks a join is currently waiting on. Sweeps always keep them, so a
 /// sweep running for something else can't pull a network out from under a
 /// join that's still configuring.
@@ -1359,6 +1426,10 @@ async fn stop_daemon_if_idle_locked() {
         if token_override().is_some() {
             return; // a system service: not ours to stop
         }
+        if daemon_users() > 0 {
+            info!("[ZEROTIER] Keeping the daemon running: a join is in progress");
+            return;
+        }
         match list_networks().await {
             Ok(nets) if nets.is_empty() => stop_managed_daemon().await,
             Ok(nets) => info!(
@@ -1601,15 +1672,23 @@ pub async fn zerotier_status() -> ZerotierStatus {
 
     // getcap and the /proc scan block, so they run off the async threads.
     #[cfg(target_os = "linux")]
-    let (caps_ready, game_mode) = run_blocking(|| {
+    let (caps_ready, game_mode, start_needs_prompt) = run_blocking(move || {
         let managed = zerotier_binary();
-        Ok((managed.exists() && caps_present(&managed), in_game_mode()))
+        let game_mode = in_game_mode();
+        Ok((
+            managed.exists() && caps_present(&managed),
+            game_mode,
+            !running && start_may_prompt(game_mode),
+        ))
     })
     .await
     .unwrap_or_else(|e| {
         warn!("[ZEROTIER] status check failed: {e}");
-        (false, false)
+        (false, false, true)
     });
+    // Windows: a service that isn't answering may need its token copied (UAC).
+    #[cfg(not(target_os = "linux"))]
+    let start_needs_prompt = !running;
     #[cfg(target_os = "linux")]
     let (bundled, platform) = (bundled_source().is_some() || zerotier_binary().exists(), "linux");
     #[cfg(target_os = "windows")]
@@ -1630,6 +1709,7 @@ pub async fn zerotier_status() -> ZerotierStatus {
         platform,
         bundled,
         needs_desktop_setup,
+        start_needs_prompt,
     }
 }
 
@@ -1918,6 +1998,7 @@ pub async fn room_host(game_id: Option<String>) -> Result<RoomInfo, String> {
 }
 
 async fn room_host_inner(game_id: Option<String>) -> Result<RoomInfo, String> {
+    let _in_use = DaemonInUse::new();
     let node_id = zerotier_prepare().await?;
     let url = generate_url(&["/api/v1/client/room"], &[]).map_err(|e| e.to_string())?;
     let mut body = serde_json::json!({ "zerotierNodeId": node_id });
@@ -1955,6 +2036,7 @@ async fn join_room_by_code_inner(
     short_code: &str,
     rollback_on_fail: bool,
 ) -> Result<(RoomInfo, Option<String>), String> {
+    let _in_use = DaemonInUse::new();
     let node_id = zerotier_prepare().await?;
     let url = generate_url(&["/api/v1/client/room/join"], &[]).map_err(|e| e.to_string())?;
     let body = serde_json::json!({ "shortCode": short_code, "zerotierNodeId": node_id });
@@ -2152,6 +2234,7 @@ pub async fn ap_session_create(name: Option<String>) -> Result<ApSessionInfo, St
 }
 
 async fn ap_session_create_inner(name: Option<String>) -> Result<ApSessionInfo, String> {
+    let _in_use = DaemonInUse::new();
     let node_id = zerotier_prepare().await?;
     let url = generate_url(&["/api/v1/client/archipelago"], &[]).map_err(|e| e.to_string())?;
     let body = serde_json::json!({ "zerotierNodeId": node_id, "name": name });
@@ -2180,6 +2263,7 @@ pub async fn ap_session_join(short_code: String) -> Result<ApSessionInfo, String
 }
 
 async fn ap_session_join_inner(short_code: String) -> Result<ApSessionInfo, String> {
+    let _in_use = DaemonInUse::new();
     let node_id = zerotier_prepare().await?;
     let url = generate_url(&["/api/v1/client/archipelago/join"], &[]).map_err(|e| e.to_string())?;
     let body = serde_json::json!({ "shortCode": short_code, "zerotierNodeId": node_id });
@@ -2310,32 +2394,44 @@ fn remember_ap_network(network_id: &str) {
     }
 }
 
+/// Prefix on an `ap_session_leave` error meaning the server never recorded the
+/// leave, so nothing local was changed and the UI should keep the session and
+/// offer a retry. The rest of the string is the reason.
+const AP_LEAVE_NOT_RECORDED: &str = "ap_leave_not_recorded:";
+
+/// Tell the server this device is leaving (or, for the host, closing) a
+/// session. The server answers success for a session that no longer exists.
+async fn ap_server_leave(session_id: &str) -> Result<(), String> {
+    let path = format!("/api/v1/client/archipelago/{session_id}/leave");
+    let url = generate_url(&[path.as_str()], &[]).map_err(|e| e.to_string())?;
+    let resp = make_authenticated_post(url, &serde_json::json!({}))
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(server_error_message(resp, "Leaving the session was rejected").await);
+    }
+    Ok(())
+}
+
 /// Leave a session and drop off the Archipelago overlay. Only that network is
 /// left, so a co-op room in progress keeps working, and Drop's own daemon is
 /// stopped only if nothing else is joined.
+///
+/// The server is told first. If it can't be (offline, rejected), nothing local
+/// is touched and the error carries `AP_LEAVE_NOT_RECORDED`, so the UI keeps
+/// the session and can retry: leaving the overlay while the server still lists
+/// the session would just have the next restore rejoin it.
 ///
 /// The overlay is shared across Archipelago sessions, so this disconnects any
 /// other session too. Acceptable for now: running two multiworlds at once
 /// isn't a supported flow.
 #[tauri::command]
 pub async fn ap_session_leave(session_id: String, network_id: Option<String>) -> Result<(), String> {
-    let path = format!("/api/v1/client/archipelago/{session_id}/leave");
-    match generate_url(&[path.as_str()], &[]) {
-        Ok(url) => match make_authenticated_post(url, &serde_json::json!({})).await {
-            Ok(resp) if !resp.status().is_success() => {
-                let msg = server_error_message(resp, "Leaving the session was rejected").await;
-                warn!("[ZEROTIER] {msg}");
-            }
-            Ok(_) => {}
-            Err(e) => warn!("[ZEROTIER] Could not tell the server we left session {session_id}: {e}"),
-        },
-        Err(e) => warn!("[ZEROTIER] Could not build the session leave url: {e}"),
+    if let Err(e) = ap_server_leave(&session_id).await {
+        warn!("[ZEROTIER] Could not tell the server we left Archipelago session {session_id}: {e}");
+        return Err(format!("{AP_LEAVE_NOT_RECORDED}{e}"));
     }
-    let nid = network_id.or_else(read_cached_ap_network_id);
-    let result = match nid {
-        Some(nid) if is_valid_network_id(&nid) => zerotier_leave(nid).await,
-        _ => Ok(()),
-    };
+    let result = ap_leave_overlay(network_id).await;
     if result.is_ok() {
         forget_ap_network();
     }
@@ -2343,9 +2439,46 @@ pub async fn ap_session_leave(session_id: String, network_id: Option<String>) ->
     result
 }
 
+/// Leave the Archipelago overlay locally: `network_id`, else the cached one.
+/// Nothing to leave is success.
+async fn ap_leave_overlay(network_id: Option<String>) -> Result<(), String> {
+    match network_id.or_else(read_cached_ap_network_id) {
+        Some(nid) if is_valid_network_id(&nid) => zerotier_leave(nid).await,
+        _ => Ok(()),
+    }
+}
+
+/// Forget a session on this device only, for when the server can't record a
+/// leave (e.g. it is gone for good): leave the Archipelago overlay, clear the
+/// cached overlay id and stop Drop's daemon if nothing else is joined. The
+/// server is not told, so it may still list this device in the session.
+///
+/// The cached id is cleared even if leaving the overlay fails: the user asked
+/// to be out, and keeping it would only make later sweeps keep the overlay.
+/// The leave error is still returned so the UI can say what didn't happen.
+#[tauri::command]
+pub async fn ap_session_forget(network_id: Option<String>) -> Result<(), String> {
+    info!("[ZEROTIER] Forgetting the Archipelago session on this device only");
+    let result = ap_leave_overlay(network_id).await;
+    forget_ap_network();
+    stop_daemon_if_idle().await;
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daemon_in_use_guard_counts_while_alive() {
+        let before = daemon_users();
+        {
+            let _a = DaemonInUse::new();
+            let _b = DaemonInUse::new();
+            assert_eq!(daemon_users(), before + 2);
+        }
+        assert_eq!(daemon_users(), before);
+    }
 
     #[test]
     fn placeholder_is_fixed_length_and_matches_the_workflow_prefix() {
@@ -2434,6 +2567,12 @@ mod tests {
             classify_network(&json!({"status": "PORT_ERROR"})),
             NetPhase::Other("PORT_ERROR".into())
         );
+    }
+
+    #[test]
+    fn leave_marker_matches_the_frontend() {
+        // main/composables/archipelago-logic.ts looks for this exact prefix.
+        assert_eq!(AP_LEAVE_NOT_RECORDED, "ap_leave_not_recorded:");
     }
 
     #[test]

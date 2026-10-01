@@ -8,7 +8,7 @@
         </h3>
       </div>
       <p class="text-sm text-zinc-400 mt-1">
-        Some saves were changed both on this PC and in the cloud. Choose which
+        Some saves are different on this device and in the cloud. Choose which
         version to keep for each file.
       </p>
       <p v-if="secondsLeft !== undefined" class="text-sm mt-2" :class="countdownClass">
@@ -54,11 +54,14 @@
           >
             <div class="flex items-center gap-2 mb-2">
               <ComputerDesktopIcon class="size-4 text-blue-400" />
-              <span class="text-sm font-medium text-zinc-200">This PC</span>
+              <span class="text-sm font-medium text-zinc-200">This device</span>
             </div>
             <div class="space-y-1 text-xs text-zinc-400">
               <div>{{ formatSize(conflict.localSize) }}</div>
               <div>{{ formatLocalModified(conflict.localModifiedAt) }}</div>
+              <div v-if="localOwnerText(conflict)" class="text-amber-300/90">
+                {{ localOwnerText(conflict) }}
+              </div>
             </div>
           </button>
 
@@ -81,6 +84,12 @@
               <div>{{ formatDate(conflict.cloudModifiedAt) }}</div>
               <div v-if="conflict.cloudUploadedFrom" class="text-zinc-500">
                 from {{ conflict.cloudUploadedFrom }}
+              </div>
+              <div v-if="conflict.cloudOwnedBy" class="text-zinc-500">
+                Account: {{ conflict.cloudOwnedBy }}
+              </div>
+              <div v-if="conflictCloudNote(conflict)" class="text-amber-300/90">
+                {{ conflictCloudNote(conflict) }}
               </div>
             </div>
           </button>
@@ -122,6 +131,10 @@ import {
 } from "@heroicons/vue/24/outline";
 import { invoke } from "@tauri-apps/api/core";
 import type { SaveConflict } from "~/types/save-sync";
+import {
+  conflictCloudNote,
+  conflictLocalNote,
+} from "~/composables/save-sync-state";
 
 const props = defineProps<{
   visible: boolean;
@@ -214,6 +227,15 @@ async function submit() {
   } finally {
     submitting.value = false;
   }
+}
+
+/**
+ * Whose progress the file on this device may be, when it is not obviously
+ * this account's. Two Drop accounts on one device share its save files, so
+ * after switching accounts "This device" can be the other person's save.
+ */
+function localOwnerText(conflict: SaveConflict): string {
+  return conflictLocalNote(conflict);
 }
 
 function formatSize(bytes: number): string {

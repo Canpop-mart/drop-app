@@ -27,7 +27,7 @@
         {{
           tab === "coop"
             ? "Put friends on a private virtual LAN so LAN / co-op games discover each other across the internet."
-            : "Your active multiworld and where to connect. Set sessions up from Drop on the desktop."
+            : "Join a multiworld and see where to connect. Starting one and uploading settings need the desktop layout (Desktop Mode on a Steam Deck)."
         }}
       </p>
 
@@ -49,12 +49,11 @@
       </div>
 
       <!--
-        Read-only here: picking a YAML file with a controller isn't practical, so
-        setup lives on the desktop and Big Picture just shows the connect
-        address. `compact` also drops the copy buttons, keeping this view free of
-        elements the focus system would need to register.
+        Join, leave and the connect address work here; uploading a YAML needs a
+        file picker, so that and starting a session stay on the desktop layout
+        (an accepted Dual-Surface gap, see BigPictureArchipelago.vue).
       -->
-      <ArchipelagoPanel v-if="tab === 'archipelago'" compact />
+      <BigPictureArchipelago v-if="tab === 'archipelago'" />
 
       <template v-else>
       <div
@@ -482,6 +481,7 @@ import {
   type FavoriteSearchRow,
 } from "~/composables/use-server-api";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
+import BigPictureArchipelago from "~/components/bigpicture/BigPictureArchipelago.vue";
 
 definePageMeta({ layout: "bigpicture" });
 

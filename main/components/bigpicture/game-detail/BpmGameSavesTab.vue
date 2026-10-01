@@ -47,7 +47,7 @@
               Cloud &middot; {{ formatSaveSize(item.cloud.size) }}
             </span>
             <span v-if="!item.local && item.cloud" class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-yellow-900/30 text-yellow-400">
-              Cloud only — download to play
+              Cloud only. Download to play
             </span>
           </div>
         </div>
@@ -139,6 +139,9 @@
                   <template v-if="group.primary && group.primary.size > 0"> &middot; {{ formatSaveSize(group.primary.size) }}</template>
                   <template v-if="group.backups.length > 0"> &middot; {{ group.backups.length }} backup{{ group.backups.length !== 1 ? 's' : '' }}</template>
                 </p>
+                <p v-if="saves.pcHeldOnSharedDevice(group)" class="text-xs text-amber-400/80 mt-0.5">
+                  Not backed up automatically, because another Drop account also plays this game here. Upload it if it is yours.
+                </p>
               </div>
             </div>
             <!-- Action buttons -->
@@ -146,7 +149,7 @@
               <span v-if="saves.pcCloudStatus.value[group.name]" class="text-xs px-2 py-0.5 rounded-full"
                 :class="saves.pcCloudStatus.value[group.name] === 'synced' ? 'bg-green-900/20 text-green-400' : saves.pcCloudStatus.value[group.name] === 'cloud-only' ? 'bg-blue-900/20 text-blue-400' : 'bg-zinc-800 text-zinc-500'"
               >
-                {{ saves.pcCloudStatus.value[group.name] === 'synced' ? 'Synced' : saves.pcCloudStatus.value[group.name] === 'cloud-only' ? 'Cloud' : saves.pcCloudStatus.value[group.name] === 'cloud-newer' ? 'Cloud newer' : 'Local newer' }}
+                {{ pcStatusLabel(saves.pcCloudStatus.value[group.name]) }}
               </span>
               <button
                 v-if="group.primary && saves.pcSyncStatus.value[group.name] !== 'uploading'"
@@ -189,6 +192,30 @@
       </div>
     </div>
 
+    <!-- The PC save listing failed. Not "no saves": say so, and offer a retry
+         the controller can reach. -->
+    <div
+      v-if="saves.pcSavesError.value && isNativeGame"
+      class="mt-4 p-4 rounded-xl flex items-center justify-between gap-4"
+      style="background-color: var(--bpm-surface)"
+    >
+      <div class="min-w-0">
+        <p class="text-sm font-medium text-red-300">
+          Drop could not check this game's saves on this device.
+        </p>
+        <p class="text-xs mt-0.5 break-words" style="color: var(--bpm-muted)">
+          {{ saves.pcSavesError.value }}
+        </p>
+      </div>
+      <button
+        :ref="(el: any) => registerAction(el, { onSelect: saves.fetchPcSaves })"
+        class="px-4 py-2 text-sm font-medium rounded-lg flex-shrink-0 bg-zinc-800 text-zinc-200"
+        @click="saves.fetchPcSaves()"
+      >
+        Retry
+      </button>
+    </div>
+
     <div v-if="!saves.ludusaviAvailable.value && isNativeGame" class="mt-4 p-4 rounded-xl" style="background-color: var(--bpm-surface)">
       <div class="flex items-center justify-between">
         <div>
@@ -213,6 +240,9 @@
       <template v-if="isNativeGame && !saves.ludusaviAvailable.value">
         <!-- Ludusavi prompt handles this case above -->
       </template>
+      <template v-else-if="isNativeGame && saves.pcSavesError.value">
+        <!-- The error card above says why. -->
+      </template>
       <template v-else-if="isNativeGame && saves.ludusaviAvailable.value">
         No saves detected by Ludusavi for this game.
       </template>
@@ -234,6 +264,24 @@ import {
   formatSaveSize,
   pcSaveFileName,
 } from "~/composables/bigpicture/use-bpm-game-saves";
+
+/** Badge text for a PC save slot's cloud status. */
+function pcStatusLabel(status: string | undefined): string {
+  switch (status) {
+    case "synced":
+      return "Synced";
+    case "cloud-only":
+      return "Cloud";
+    case "cloud-newer":
+      return "Cloud newer";
+    case "local-newer":
+      return "Local newer";
+    case "conflict":
+      return "Both changed";
+    default:
+      return "";
+  }
+}
 
 defineProps<{
   /** The object returned by the page's `useBpmGameSaves()` call. */

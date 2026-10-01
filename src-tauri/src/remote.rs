@@ -1,11 +1,11 @@
 use std::{sync::nonpoison::Mutex, time::Duration};
 
-use client::app_status::AppStatus;
+use client::{app_status::AppStatus, user::User};
 use database::{borrow_db_checked, borrow_db_mut_checked};
 use futures_lite::StreamExt;
 use log::{debug, warn};
 use remote::{
-    auth::{auth_initiate_logic, generate_authorization_header},
+    auth::{auth_initiate_logic, fetch_user, generate_authorization_header},
     cache::{cache_object, clear_cached_object, get_cached_object},
     error::RemoteAccessError,
     requests::generate_url,
@@ -126,6 +126,20 @@ pub async fn retry_connect(state: tauri::State<'_, Mutex<AppState>>) -> Result<(
     drop(guard);
 
     Ok(())
+}
+
+/// Re-fetch the signed-in user after a profile edit. The name games see
+/// through GBE is read from the cached `user` object at launch, and that was
+/// otherwise only written at startup, so a rename needed an app restart to
+/// reach games. Also updates `AppState.user` for the header avatar and name.
+#[tauri::command]
+pub async fn refresh_user(
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<User, RemoteAccessError> {
+    let user = fetch_user().await?;
+    cache_object("user", &user)?;
+    state.lock().user = Some(user.clone());
+    Ok(user)
 }
 
 #[tauri::command]

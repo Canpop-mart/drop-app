@@ -35,9 +35,11 @@ use crate::downloads::utils::get_disk_available;
 use crate::library::{Game, on_game_complete, push_game_update, set_partially_installed};
 use crate::state::GameStatusManager;
 
-use super::download_logic::download_game_chunk;
+use super::download_logic::{
+    download_game_chunk, files_written_by, manifest_file_sizes, trim_stale_tails,
+};
 use super::drop_data::DropData;
-use super::mod_data::mod_owned_files;
+use super::mod_data::{discard_originals, hand_files_to_base_game, mod_owned_files};
 
 pub(crate) static RETRY_COUNT: usize = 3;
 
@@ -428,17 +430,26 @@ impl GameDownloadAgent {
     /// again against the same old list. That only ever removes files the old
     /// version shipped and the new one doesn't.
     ///
-    /// Never fails the download: a file we can't identify or can't delete is
-    /// left where it is and logged.
+    /// A file we can't identify or can't delete is left where it is and
+    /// logged. The one failure that stops the download is not being able to
+    /// stop mods from putting back their copies of files this version
+    /// dropped (`discard_originals`), since that would roll the game back
+    /// later; the next attempt tries again.
+    ///
+    /// If the previous version's file list can't be fetched, nothing is
+    /// removed and no mod backup is discarded either. The folder then keeps
+    /// the dropped files whether or not a mod is installed, so a mod putting
+    /// its copy back on uninstall leaves it as it would be without mods. The
+    /// sweep runs again on every later run of this install.
     async fn remove_files_dropped_since_previous_version(
         &self,
         file_list: &HashMap<String, String>,
-    ) {
+    ) -> Result<(), ApplicationDownloadError> {
         let Some(previous) = self.dropdata.previously_installed_version.as_deref() else {
-            return;
+            return Ok(());
         };
         if previous == self.metadata.version {
-            return;
+            return Ok(());
         }
         let base_path = &self.dropdata.base_path;
 
@@ -449,9 +460,23 @@ impl GameDownloadAgent {
                     "not removing files from version {previous} in {}: could not fetch its file list ({e})",
                     base_path.display()
                 );
-                return;
+                return Ok(());
             }
         };
+
+        // A mod may hold a backup of a file this version no longer ships.
+        // Uninstalling the mod must not bring that file back, so the backups
+        // go now, whether or not the file itself is swept below.
+        let dropped: Vec<String> = stale_paths(&previous_files, file_list)
+            .into_iter()
+            .filter(|p| !is_protected_user_data(p))
+            .map(str::to_string)
+            .collect();
+        discard_originals(base_path, &dropped).map_err(|why| {
+            ApplicationDownloadError::IoError(Arc::new(std::io::Error::other(format!(
+                "could not stop mods from putting back files version {previous} dropped: {why}"
+            ))))
+        })?;
 
         // Mods overlay into this directory and can overwrite a file the old
         // version shipped. If we can't tell which files are theirs, remove
@@ -463,13 +488,13 @@ impl GameDownloadAgent {
                     "not removing files from version {previous} in {}: {why}",
                     base_path.display()
                 );
-                return;
+                return Ok(());
             }
         };
 
         let Ok(base_real) = base_path.canonicalize() else {
             warn!("not removing old files: cannot resolve {}", base_path.display());
-            return;
+            return Ok(());
         };
 
         for relative in stale_paths(&previous_files, file_list) {
@@ -498,6 +523,7 @@ impl GameDownloadAgent {
                 Err(e) => warn!("could not remove old file {}: {e}", path.display()),
             }
         }
+        Ok(())
     }
 
     // Sets up progress for download writes
@@ -555,9 +581,31 @@ impl GameDownloadAgent {
         let file_list = &file_list;
         let base_path = &self.dropdata.base_path;
         self.remove_files_dropped_since_previous_version(file_list)
-            .await;
+            .await?;
 
         let local_completed_chunks = completed_chunks.clone();
+
+        // Which files each chunk writes (relative to the install dir, as the
+        // manifest spells them). A mod may have overwritten some of them; once
+        // the base game writes them again they are the game's, not the mod's,
+        // and the mod must neither delete them nor restore its stale backup on
+        // uninstall. Handed over per chunk, before the chunk is recorded as
+        // done: a crash in between re-downloads the chunk and hands over
+        // again, where a hand-over at the end of the run would be lost.
+        let chunk_files: HashMap<String, Vec<String>> = manifests_chunks
+            .iter()
+            .flat_map(|(version_id, chunks, _)| {
+                chunks.iter().map(move |(chunk_id, chunk)| {
+                    let written = chunk
+                        .files
+                        .iter()
+                        .filter(|f| file_list.get(&f.filename) == Some(version_id))
+                        .map(|f| f.filename.clone())
+                        .collect();
+                    (chunk_id.clone(), written)
+                })
+            })
+            .collect();
 
         let mut chunk_completions = FuturesUnordered::new();
 
@@ -570,10 +618,20 @@ impl GameDownloadAgent {
         // bincode) and sits well below the per-chunk download cost, so the
         // I/O is negligible compared to the bandwidth saved on resume.
         let dropdata = &self.dropdata;
+        let chunk_files = &chunk_files;
         let mut handle_output =
             |value: Result<Option<String>, ApplicationDownloadError>| match value {
                 Ok(value) => {
                     if let Some(chunk_id) = value {
+                        if let Some(written) = chunk_files.get(&chunk_id) {
+                            // Not recorded as done if this fails, so the chunk
+                            // (and the hand-over) is retried.
+                            hand_files_to_base_game(base_path, written).map_err(|why| {
+                                ApplicationDownloadError::IoError(Arc::new(std::io::Error::other(
+                                    format!("could not take back files a mod had replaced: {why}"),
+                                )))
+                            })?;
+                        }
                         dropdata.set_context(chunk_id.clone(), true);
                         dropdata.write();
                         outputs.push(chunk_id);
@@ -717,7 +775,31 @@ impl GameDownloadAgent {
             );
             return Ok(false);
         }
+        self.trim_rewritten_files().await?;
         Ok(true)
+    }
+
+    /// Cut every file this download rewrote back to its manifest size (see
+    /// `trim_stale_tails`): an in-place update leaves the old tail on a file
+    /// that got smaller. The sizes need the full manifest, since the delta
+    /// one leaves out chunks of unchanged files.
+    async fn trim_rewritten_files(&self) -> Result<(), ApplicationDownloadError> {
+        let (written, delta_sizes) = {
+            let dl_info = lock!(self.dl_info);
+            let info = dl_info.as_ref().ok_or(ApplicationDownloadError::NotInitialized)?;
+            (files_written_by(info), manifest_file_sizes(info))
+        };
+        let sizes = if self.dropdata.previously_installed_version.is_some() {
+            manifest_file_sizes(&self.fetch_manifest(&self.metadata.version, None).await?)
+        } else {
+            delta_sizes
+        };
+        let trimmed = trim_stale_tails(&self.dropdata.base_path, &written, &sizes)
+            .map_err(|e| ApplicationDownloadError::IoError(Arc::new(e)))?;
+        if trimmed > 0 {
+            info!("{}: cut {trimmed} rewritten file(s) back to size", self.metadata.id);
+        }
+        Ok(())
     }
 
     /// Mark the game as `Validating` in the DB and notify the frontend, so

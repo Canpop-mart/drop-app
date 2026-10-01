@@ -76,10 +76,21 @@ pub fn strip_pc_prefix(filename: &str) -> &str {
 /// The emulator sync path uses this to leave PC rows alone: a game can have
 /// both kinds (Drop runs Ludusavi for emulator titles too when the user asks
 /// it to), and a PC save restored into `drop-saves/…/saves` is in a directory
-/// the game does not read. The server applies the same rule to decide which
-/// rows are shareable across accounts, so the two definitions must agree.
+/// the game does not read.
 pub fn is_pc_namespaced_filename(filename: &str) -> bool {
     filename.starts_with(PC_SAVE_PREFIX) || filename.starts_with("pc/")
+}
+
+/// Whether a save lives where every Drop account on this device shares it.
+/// PC saves (wherever the game writes them) and the Switch NAND always do.
+/// Other emulator saves do only while the game's saves still resolve to the
+/// old shared `drop-saves/<game>` folder (`emu_root_shared`, from
+/// [`super::scope::emu_saves_root_is_shared`]); once they are under
+/// `drop-saves/<user>/` another account cannot have changed them.
+pub fn is_shared_between_accounts(filename: &str, emu_root_shared: bool) -> bool {
+    is_pc_namespaced_filename(filename)
+        || filename.starts_with(SWITCH_SAVE_PREFIX)
+        || emu_root_shared
 }
 
 /// Encode a PC save's path relative to `save_root` (the deepest directory all
@@ -273,16 +284,221 @@ const EMU_SCAN_MAX_DEPTH: usize = 12;
 /// files; hitting the ceiling logs and stops rather than hanging the launch.
 const EMU_SCAN_MAX_FILES: usize = 4000;
 
-/// Escape a relative path into a separator-free, reversible string.
+/// Characters `sanitize-filename` deletes wherever they appear in a name.
+/// `/` and `\` are absent: they are path separators here and are handled
+/// before this list is consulted.
+const SANITIZE_ILLEGAL: &[char] = &['?', '<', '>', ':', '*', '|', '"'];
+
+/// Whether `sanitize-filename` would delete `c` anywhere in a name: the
+/// illegal set above plus the C0 and C1 control characters.
+fn sanitize_strips(c: char) -> bool {
+    SANITIZE_ILLEGAL.contains(&c) || (c as u32) < 0x20 || (0x80..=0x9f).contains(&(c as u32))
+}
+
+/// Windows device names `sanitize-filename` blanks out entirely, with or
+/// without an extension.
+fn is_windows_reserved_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_lowercase();
+    matches!(stem.as_str(), "con" | "prn" | "aux" | "nul")
+        || ((stem.starts_with("com") || stem.starts_with("lpt"))
+            && stem.len() == 4
+            && stem.as_bytes()[3].is_ascii_digit())
+}
+
+fn push_percent(out: &mut String, c: char) {
+    let mut buf = [0u8; 4];
+    for byte in c.encode_utf8(&mut buf).as_bytes() {
+        out.push_str(&format!("%{byte:02X}"));
+    }
+}
+
+/// Escape a relative path into a separator-free, reversible string that the
+/// server stores byte for byte.
 ///
-/// `/` becomes `%2F` and `%` becomes `%25` so the result survives the server's
-/// `sanitize-filename` pass (which strips path separators) and still decodes
-/// unambiguously. A path with a single component and no `%` escapes to itself,
-/// which is what keeps rows written before nested paths were encoded matching
-/// the names the scan produces today.
+/// The server runs every uploaded name through `sanitize-filename`
+/// (`internal/cloudsaves/filename.ts`), which deletes path separators,
+/// `? < > : * | "`, control characters, trailing dots and spaces, and blanks
+/// Windows device names. A name it changed was stored under a different
+/// identity from the one the scan reports, so the save never matched its own
+/// cloud row: re-uploaded every launch, and downloaded back as a stray second
+/// file. Every one of those characters is percent-escaped here instead, so
+/// sanitizing changes nothing (up to its 255-byte cap).
+///
+/// `%` itself becomes `%25`. A single-component path with none of those
+/// characters escapes to itself, which keeps rows written before nested paths
+/// were encoded matching the names the scan produces today.
 fn escape_relpath(rel: &Path) -> String {
     let joined = rel.to_string_lossy().replace('\\', "/");
-    joined.replace('%', "%25").replace('/', "%2F")
+    let mut out = String::with_capacity(joined.len());
+    for c in joined.chars() {
+        match c {
+            '%' => out.push_str("%25"),
+            '/' => out.push_str("%2F"),
+            c if sanitize_strips(c) => push_percent(&mut out, c),
+            c => out.push(c),
+        }
+    }
+
+    // Trailing dots and spaces are stripped; a name of only dots is blanked.
+    let kept = out.trim_end_matches(['.', ' ']).len();
+    if kept < out.len() {
+        let tail: String = out[kept..]
+            .chars()
+            .map(|c| if c == '.' { "%2E" } else { "%20" })
+            .collect();
+        out.truncate(kept);
+        out.push_str(&tail);
+    }
+
+    // "con.srm" and friends are blanked outright. Escaping the first letter
+    // is enough to stop the name matching.
+    if is_windows_reserved_name(&out) {
+        let first = out.remove(0);
+        let mut escaped = String::new();
+        push_percent(&mut escaped, first);
+        out.insert_str(0, &escaped);
+    }
+    out
+}
+
+/// Longest name the server stores without cutting it (`sanitize-filename`
+/// truncates at 255 bytes). A longer name would be stored cut short, never
+/// match its own row again, and come back down as a different file, so the
+/// scans leave such files out instead (see [`split_too_long_names`]).
+pub const MAX_CLOUD_FILENAME_BYTES: usize = 255;
+
+/// A line-for-line port of the `sanitize-filename` package the server runs
+/// every uploaded name through (`internal/cloudsaves/filename.ts`), with its
+/// default empty replacement. The client never sanitizes what it uploads (it
+/// escapes, so sanitizing has nothing to do); this is for recognising the
+/// names older builds' uploads were stored under ([`legacy_cloud_name`]).
+pub(crate) fn sanitize_like_the_server(input: &str) -> String {
+    let mut s: String = input
+        .chars()
+        .filter(|&c| !matches!(c, '/' | '\\') && !sanitize_strips(c))
+        .collect();
+    if !s.is_empty() && s.chars().all(|c| c == '.') {
+        s.clear();
+    }
+    if is_windows_reserved_name(&s) {
+        s.clear();
+    }
+    let kept = s.trim_end_matches(['.', ' ']).len();
+    s.truncate(kept);
+    // truncate-utf8-bytes: at most 255 bytes, never splitting a character.
+    let mut end = s.len().min(MAX_CLOUD_FILENAME_BYTES);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+    s
+}
+
+/// The name an older build's upload of this same file was stored under, when
+/// that differs from `filename`.
+///
+/// Older builds escaped only `%` and `/`, and the server then deleted
+/// whatever else `sanitize-filename` strips, so "Zelda: X.srm" sits in the
+/// cloud as "Zelda X.srm". Nothing on disk has that name, so the row reads as
+/// cloud-only on every launch and a download would write it next to the real
+/// save as a stray file the game never opens. Callers use this to recognise
+/// such a row as an old copy of a local file and leave it alone.
+pub fn legacy_cloud_name(filename: &str) -> Option<String> {
+    let (prefix, body) = if let Some(b) = filename.strip_prefix(PC_SAVE_PREFIX) {
+        (PC_SAVE_PREFIX, b)
+    } else if let Some(b) = filename.strip_prefix(SWITCH_SAVE_PREFIX) {
+        (SWITCH_SAVE_PREFIX, b)
+    } else {
+        ("", filename)
+    };
+    let decoded = percent_decode_relpath(body);
+    let old_escape = decoded.replace('%', "%25").replace('/', "%2F");
+    let legacy = sanitize_like_the_server(&format!("{prefix}{old_escape}"));
+    (!legacy.is_empty() && legacy != filename).then_some(legacy)
+}
+
+/// Whether a scanned file's cloud name is short enough to be stored intact.
+/// Logs the file otherwise; the same rule on the server rejects such a name
+/// rather than cutting it.
+fn fits_in_a_cloud_name(filename: &str, path: &Path) -> bool {
+    if filename.len() <= MAX_CLOUD_FILENAME_BYTES {
+        return true;
+    }
+    warn!(
+        "[SAVE-SYNC] Not syncing {}: its cloud name would be {} bytes, over the server's {}",
+        path.display(),
+        filename.len(),
+        MAX_CLOUD_FILENAME_BYTES
+    );
+    false
+}
+
+/// Split a scan into the files that can be synced and the ones whose cloud
+/// name is too long to store intact (see [`MAX_CLOUD_FILENAME_BYTES`]). The
+/// plain scans drop the second list; the pre-launch sync uses it to tell the
+/// user, and to leave alone any row an older server stored cut short.
+pub fn split_too_long_names(files: Vec<LocalSaveFile>) -> (Vec<LocalSaveFile>, Vec<LocalSaveFile>) {
+    files
+        .into_iter()
+        .partition(|f| fits_in_a_cloud_name(&f.filename, &f.path))
+}
+
+/// Whether `%XX` decodes to a byte [`escape_relpath`] can have produced.
+///
+/// Decoding is limited to that set so a literal `%` sequence in a legacy name
+/// (one written before any escaping existed) is left alone, the same way the
+/// original two-escape decoder left it.
+fn is_escapable_byte(b: u8) -> bool {
+    b < 0x20
+        || matches!(
+            b,
+            b'%' | b'/' | b'.' | b' ' | b'c' | b'C' | b'p' | b'P' | b'a' | b'A' | b'n' | b'N'
+                | b'l' | b'L'
+        )
+        || SANITIZE_ILLEGAL.contains(&(b as char))
+}
+
+fn hex_byte(s: &[u8]) -> Option<u8> {
+    let hex = |c: u8| match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    };
+    Some(hex(*s.first()?)? << 4 | hex(*s.get(1)?)?)
+}
+
+/// Single-pass decoder for [`escape_relpath`].
+fn percent_decode_relpath(body: &str) -> String {
+    let bytes = body.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            // A C1 control character: its two UTF-8 bytes, both escaped.
+            if let (Some(0xC2), Some(b'%'), Some(lo)) = (
+                hex_byte(&bytes[i + 1..]),
+                bytes.get(i + 3).copied(),
+                bytes.get(i + 4..).and_then(hex_byte),
+            ) && (0x80..=0x9F).contains(&lo)
+            {
+                out.extend_from_slice(&[0xC2, lo]);
+                i += 6;
+                continue;
+            }
+            if let Some(b) = hex_byte(&bytes[i + 1..])
+                && is_escapable_byte(b)
+            {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    // Only ASCII bytes and whole UTF-8 sequences were produced, so this is
+    // lossless for anything `escape_relpath` wrote.
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Reverse [`escape_relpath`]. Returns `None` if the body is empty or decodes
@@ -300,9 +516,9 @@ fn unescape_relpath(body: &str) -> Option<PathBuf> {
     if body.is_empty() {
         return None;
     }
-    // Decode %2F first, then %25, so a literal "%2F" in a real filename
-    // (encoded as "%252F") does not turn into a separator.
-    let decoded = body.replace("%2F", "/").replace("%25", "%");
+    // One pass, so a literal "%2F" in a real filename (encoded as "%252F")
+    // does not turn into a separator.
+    let decoded = percent_decode_relpath(body);
     let rel = PathBuf::from(&decoded);
     if rel.is_absolute()
         || rel.has_root()
@@ -500,6 +716,17 @@ fn walk_saves(
 /// Bounded by [`EMU_SCAN_MAX_DEPTH`] and [`EMU_SCAN_MAX_FILES`] so a large
 /// NAND tree cannot stall the launch that triggers it.
 pub fn scan_emu_saves(
+    emu_root: &Path,
+    user_id: Option<&str>,
+    game_id: &str,
+    switch_title_id: Option<&str>,
+) -> Vec<LocalSaveFile> {
+    split_too_long_names(scan_emu_saves_all(emu_root, user_id, game_id, switch_title_id)).0
+}
+
+/// [`scan_emu_saves`] including files whose cloud name is too long to sync;
+/// pass the result through [`split_too_long_names`].
+pub fn scan_emu_saves_all(
     emu_root: &Path,
     user_id: Option<&str>,
     game_id: &str,
@@ -1175,23 +1402,130 @@ fn is_save_tagged(path: &Path, rules: &[ManifestPathRule]) -> bool {
     }
 }
 
+/// Whether a failed Ludusavi run was really "I don't know this game".
+///
+/// Checked against Ludusavi 0.29.1's source:
+///   * "No info for these games:" is the CLI message for unrecognised titles
+///     (`cli-unrecognized-games` in `lang/en-US.ftl`). Other UI languages
+///     translate it, which is why the JSON check below matters.
+///   * With `--api`, the same condition is reported in the JSON on stdout as
+///     a non-empty `errors.unknownGames` list (`ApiErrors` in
+///     `src/cli/report.rs`).
+///   * "No matching" is what this code matched before, kept so nothing that
+///     was already treated as "no saves" becomes an error.
+fn ludusavi_reports_unknown_game(stderr: &str, stdout: &[u8]) -> bool {
+    if stderr.contains("No info for these games") || stderr.contains("No matching") {
+        return true;
+    }
+    serde_json::from_slice::<serde_json::Value>(stdout)
+        .ok()
+        .and_then(|v| {
+            v.get("errors")?
+                .get("unknownGames")?
+                .as_array()
+                .map(|games| !games.is_empty())
+        })
+        .unwrap_or(false)
+}
+
+/// Why a PC save scan produced no list at all.
+///
+/// Distinct from an empty `Ok`: "Ludusavi looked and this game has no saves on
+/// this PC" and "Ludusavi could not look" used to be the same empty list, so a
+/// broken scan was reported as a game with no saves, and the launch sync then
+/// treated every cloud save as missing locally and pulled it down over the
+/// files the scan had failed to see.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PcScanError {
+    /// Ludusavi is not installed. A setup step the user has to take, reported
+    /// once per game by the launch path rather than as a failure every time.
+    LudusaviMissing,
+    /// Ludusavi is installed and the scan failed. The text says why.
+    Failed(String),
+}
+
+impl std::fmt::Display for PcScanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            // Worded to hit `describe_failure`'s Ludusavi-missing needle.
+            PcScanError::LudusaviMissing => write!(f, "Ludusavi not found on this system"),
+            PcScanError::Failed(reason) => write!(f, "{reason}"),
+        }
+    }
+}
+
+/// What every Ludusavi call for one game needs so it sees the same files the
+/// game's launch sees: the Steam app id (exact title resolution) and, for a
+/// Windows game run under Proton on Linux, Drop's per-game Wine prefix.
+///
+/// One definition for the launch, the exit scan and every Cloud Saves command.
+/// They used to compute these separately, and most passed neither, so the
+/// panel and the exit upload looked in different places from the launch.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PcScanContext {
+    pub steam_app_id: Option<String>,
+    pub wine_prefix: Option<PathBuf>,
+}
+
+/// Build the [`PcScanContext`] for `game_id`.
+///
+/// `target_platform` is the platform being launched when the caller knows it;
+/// `None` reads the installed version's platform from the database.
+///
+/// The prefix is resolved when this is called, not cached. A first Proton
+/// launch creates the prefix during the launch itself, so a context built
+/// before it has no prefix; the exit path builds a fresh one for that reason.
+pub fn pc_scan_context(
+    game_id: &str,
+    target_platform: Option<database::platform::Platform>,
+) -> PcScanContext {
+    let target = target_platform.or_else(|| {
+        database::borrow_db_checked()
+            .applications
+            .installed_game_version
+            .get(game_id)
+            .map(|meta| meta.target_platform)
+    });
+    let wine_prefix = match target {
+        Some(database::platform::Platform::Windows) => {
+            crate::goldberg::wine_prefix_for_game(game_id)
+        }
+        _ => None,
+    };
+    PcScanContext {
+        steam_app_id: steam_app_id_for_game(game_id),
+        wine_prefix,
+    }
+}
+
 /// Scan PC game saves using Ludusavi.
 /// `game_name` is the display name to search for; `steam_app_id` is optional.
 /// `wine_prefix`, when supplied, is passed to Ludusavi via `--wine-prefix`
 /// so it scans Drop's per-game Wine prefix in addition to its default
-/// scan locations (Steam compatdata, Lutris, Heroic). On native Linux
-/// games (and on Windows hosts) pass `None` to keep the default behaviour.
-/// Returns files as `LocalSaveFile` with save_type = "pc".
+/// scan locations (Steam compatdata, Lutris, Heroic). Build both with
+/// [`pc_scan_context`].
+/// Returns files as `LocalSaveFile` with save_type = "pc", or why the scan
+/// could not run. A game Ludusavi has no saves for is `Ok` and empty.
 pub fn scan_pc_saves(
     game_name: &str,
     steam_app_id: Option<&str>,
     wine_prefix: Option<&Path>,
-) -> Vec<LocalSaveFile> {
+) -> Result<Vec<LocalSaveFile>, PcScanError> {
+    scan_pc_saves_all(game_name, steam_app_id, wine_prefix).map(|f| split_too_long_names(f).0)
+}
+
+/// [`scan_pc_saves`] including files whose cloud name is too long to sync;
+/// pass the result through [`split_too_long_names`].
+pub fn scan_pc_saves_all(
+    game_name: &str,
+    steam_app_id: Option<&str>,
+    wine_prefix: Option<&Path>,
+) -> Result<Vec<LocalSaveFile>, PcScanError> {
     let ludusavi = match find_ludusavi() {
         Some(p) => p,
         None => {
             info!("[SAVE-SYNC] Ludusavi not found, skipping PC save scan");
-            return Vec::new();
+            return Err(PcScanError::LudusaviMissing);
         }
     };
 
@@ -1252,16 +1586,26 @@ pub fn scan_pc_saves(
         Ok(o) => o,
         Err(e) => {
             warn!("[SAVE-SYNC] Ludusavi command failed: {e}");
-            return Vec::new();
+            return Err(PcScanError::Failed(format!(
+                "Drop could not run Ludusavi to look for this game's saves: {e}"
+            )));
         }
     };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if !stderr.contains("No matching") {
-            warn!("[SAVE-SYNC] Ludusavi error: {}", stderr);
+        // Ludusavi exits non-zero for a title it has no entry for. That is a
+        // real answer ("no saves Drop can find"), not a failed scan, and must
+        // neither block the sync nor show an error.
+        if ludusavi_reports_unknown_game(&stderr, &output.stdout) {
+            info!("[SAVE-SYNC] Ludusavi has no entry for '{search_name}'; no PC saves to scan");
+            return Ok(Vec::new());
         }
-        return Vec::new();
+        warn!("[SAVE-SYNC] Ludusavi error: {}", stderr);
+        return Err(PcScanError::Failed(format!(
+            "Ludusavi could not scan for this game's saves: {}",
+            stderr.trim()
+        )));
     }
 
     // Parse the JSON output
@@ -1270,7 +1614,9 @@ pub fn scan_pc_saves(
         Ok(v) => v,
         Err(e) => {
             warn!("[SAVE-SYNC] Failed to parse Ludusavi output: {e}");
-            return Vec::new();
+            return Err(PcScanError::Failed(format!(
+                "Ludusavi's answer could not be read: {e}"
+            )));
         }
     };
 
@@ -1371,7 +1717,7 @@ pub fn scan_pc_saves(
         search_name,
         tag_dropped
     );
-    files
+    Ok(files)
 }
 
 // ── Manifest-driven restore destinations ───────────────────────────────
@@ -1902,12 +2248,12 @@ pub fn find_pc_save_destination(
     if canonical.is_none() {
         return Err(format!(
             "Ludusavi's list of games does not include {game_name:?}, so Drop does not know where \
-             this PC keeps {basename:?} and cannot put it back. Your save is still on your Drop \
-             server, and nothing on this PC was changed."
+             this device keeps {basename:?} and cannot put it back. Your save is still on your Drop \
+             server, and nothing on this device was changed."
         ));
     }
     Err(format!(
-        "Ludusavi lists {game_name:?}, but none of the save locations it names exist on this PC, \
+        "Ludusavi lists {game_name:?}, but none of the save locations it names exist on this device, \
          so Drop could not work out where to put {basename:?}. Install the game and launch it \
          once, then press Restore again. Your save stays on your Drop server either way."
     ))
@@ -2541,6 +2887,124 @@ mod tests {
             decode_pc_relpath(&encoded).unwrap(),
             Path::new("100%2Fnot-a-separator.sav")
         );
+    }
+
+    /// A game Ludusavi has no entry for is "no saves", never a failed scan,
+    /// whichever way Ludusavi says it.
+    #[test]
+    fn an_unknown_game_is_no_saves_not_a_failure() {
+        assert!(ludusavi_reports_unknown_game("No info for these games:\n  - Foo\n", b""));
+        assert!(ludusavi_reports_unknown_game("No matching game", b""));
+        assert!(ludusavi_reports_unknown_game(
+            "",
+            br#"{"errors":{"unknownGames":["Foo"]},"games":{}}"#
+        ));
+        assert!(!ludusavi_reports_unknown_game("permission denied", b"{}"));
+        assert!(!ludusavi_reports_unknown_game(
+            "",
+            br#"{"errors":{"unknownGames":[]}}"#
+        ));
+    }
+
+    /// The names the scan reports must be names the server stores unchanged,
+    /// or a save never matches its own cloud row. Each of these was mangled
+    /// before the escape set covered what `sanitize-filename` strips.
+    #[test]
+    fn every_encoded_name_survives_the_servers_sanitizer() {
+        let awkward = [
+            "Zelda: Link's Awakening.srm",
+            "What?.sav",
+            "a<b>c*d|e\"f.sav",
+            "save.",
+            "slot 1 ",
+            "...",
+            "con.srm",
+            "LPT1",
+            "nested/dir: two/save?.dat",
+            "tab\there.sav",
+            "c1\u{85}control.sav",
+            "100%.sav",
+            "plain.srm",
+        ];
+        for name in awkward {
+            let rel = Path::new(name);
+            for encoded in [
+                escape_relpath(rel),
+                encode_pc_filename(None, &Path::new("/r").join(rel)),
+                format!("{SWITCH_SAVE_PREFIX}{}", escape_relpath(rel)),
+            ] {
+                assert_eq!(
+                    sanitize_like_the_server(&encoded),
+                    encoded,
+                    "{name:?} encodes to {encoded:?}, which the server would store differently"
+                );
+            }
+            assert_eq!(
+                unescape_relpath(&escape_relpath(rel)).unwrap(),
+                Path::new(name),
+                "{name:?} did not round-trip"
+            );
+        }
+    }
+
+    /// An older build's upload of "Zelda: X.srm" is stored as "Zelda X.srm".
+    /// The scan must be able to say "that row is this file's old copy".
+    #[test]
+    fn the_legacy_name_of_an_escaped_file_is_what_older_builds_stored() {
+        let name = escape_relpath(Path::new("Zelda: X.srm"));
+        assert_eq!(legacy_cloud_name(&name).as_deref(), Some("Zelda X.srm"));
+        let pc = encode_pc_filename(None, Path::new("/r/dir/What?.sav"));
+        assert_eq!(legacy_cloud_name(&pc).as_deref(), Some("pc__What.sav"));
+        // Names that never needed the new escapes have no separate legacy name.
+        assert_eq!(legacy_cloud_name("Game.srm"), None);
+        assert_eq!(legacy_cloud_name("pc__slot1%2Fsave.dat"), None);
+    }
+
+    #[test]
+    fn names_too_long_for_the_server_are_refused() {
+        let long = "a".repeat(MAX_CLOUD_FILENAME_BYTES + 1);
+        assert!(!fits_in_a_cloud_name(&long, Path::new("/x")));
+        assert!(fits_in_a_cloud_name(&long[..MAX_CLOUD_FILENAME_BYTES], Path::new("/x")));
+        let file = |name: &str| LocalSaveFile {
+            filename: name.to_string(),
+            save_type: "pc".into(),
+            path: PathBuf::from("/x"),
+            data_hash: "h".into(),
+            size: 1,
+            modified_at: 0,
+        };
+        let (ok, refused) = split_too_long_names(vec![file("short.sav"), file(&long)]);
+        assert_eq!(ok.len(), 1);
+        assert_eq!(refused[0].filename, long);
+        // An older server stored such a name cut at 255 bytes; that cut name
+        // is what `legacy_cloud_name` reports, so the row can be recognised.
+        assert_eq!(legacy_cloud_name(&long).as_deref(), Some(&long[..MAX_CLOUD_FILENAME_BYTES]));
+    }
+
+    /// Plain names, the overwhelming majority, keep exactly the identity
+    /// earlier builds gave them, so existing cloud rows still match.
+    #[test]
+    fn ordinary_names_are_not_escaped() {
+        for name in ["Pokemon - Red Version (USA).srm", "save0.dat", "Game.state1"] {
+            assert_eq!(escape_relpath(Path::new(name)), name);
+        }
+    }
+
+    /// The server-side port has to agree with the real package on the cases
+    /// that matter, or the test above proves nothing.
+    #[test]
+    fn the_sanitizer_port_matches_the_package_on_known_inputs() {
+        // Outputs taken from sanitize-filename 1.6.3 under Node.
+        for (input, expected) in [
+            ("Zelda: X.srm", "Zelda X.srm"),
+            ("save.", "save"),
+            ("...", ""),
+            ("con.srm", ""),
+            ("a/b\\c", "abc"),
+            ("pc__con.srm", "pc__con.srm"),
+        ] {
+            assert_eq!(sanitize_like_the_server(input), expected, "{input:?}");
+        }
     }
 
     // ── Manifest-driven restore destinations ───────────────────────────

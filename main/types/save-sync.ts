@@ -10,6 +10,26 @@ export interface SaveConflict {
   cloudSize: number;
   cloudModifiedAt: string;
   cloudUploadedFrom: string;
+  /** Display name of the Drop account the cloud copy belongs to ("" if unknown). */
+  cloudOwnedBy?: string;
+  /**
+   * Set when the file on this device is exactly what another Drop account on
+   * this device last synced: that account's display name, or "" when Drop
+   * never learned it. Two accounts on one device share its save files.
+   */
+  localLastSyncedBy?: string | null;
+  /**
+   * Another Drop account also syncs this game on this device and the file is
+   * one they share (a PC save, the Switch NAND, or an emulator save still in
+   * the old shared folder), so the local copy may be
+   * that person's progress.
+   */
+  localMayBeOtherAccount?: boolean;
+  /**
+   * The cloud copy is stored under the name an older version of Drop gave
+   * this file. Keeping it writes it into this file.
+   */
+  cloudLegacyName?: string | null;
 }
 
 /**

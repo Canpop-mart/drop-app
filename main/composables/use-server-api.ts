@@ -7,6 +7,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { serverUrl } from "./use-server-fetch";
+import type { User } from "~/types";
 
 // ── Store types ─────────────────────────────────────────────────────────────
 
@@ -433,21 +434,49 @@ export interface CloudSaveListEntry {
   clientModifiedAt: string;
   uploadedAt: string;
   /**
-   * Display name of the account this row belongs to. PC saves are shared
-   * across every account on the server, so a row here is not necessarily
-   * yours. Empty against an older server that doesn't send the field.
+   * Display name of the account this row belongs to. Saves are per account,
+   * so this is always yours; empty against an older server.
    */
   ownedBy?: string;
-  /**
-   * Your own copy of this filename, when someone else's newer copy is what
-   * this row shows. Null when the row is already yours or you have no copy.
-   */
+  /** Only sent by older servers that shared PC saves across accounts. */
   shadowedSaveId?: string | null;
-  /**
-   * Other accounts that also have a save with this filename. Non-empty means
-   * a second copy exists that this row is hiding.
-   */
+  /** Only sent by older servers that shared PC saves across accounts. */
   alsoHeldBy?: string[];
+}
+
+/** One previous version of a cloud save (metadata only). */
+export interface CloudSaveRevision {
+  id: string;
+  saveType: string;
+  size: number;
+  dataHash: string;
+  /** Device these bytes were uploaded from. */
+  uploadedFrom: string;
+  clientModifiedAt: string;
+  /** When a newer upload or restore replaced this version. */
+  supersededAt: string;
+}
+
+/** A save's live version and its kept history, newest first. */
+export interface CloudSaveHistory {
+  current: {
+    id: string;
+    filename: string;
+    size: number;
+    dataHash: string;
+    uploadedFrom: string;
+    clientModifiedAt: string;
+    deletedAt?: string | null;
+  };
+  revisions: CloudSaveRevision[];
+}
+
+export interface CloudSaveRestoreResult {
+  restored: boolean;
+  alreadyCurrent?: boolean;
+  id: string;
+  filename: string;
+  dataHash: string;
 }
 
 export interface CloudSaveDownload {
@@ -462,10 +491,9 @@ export interface CloudSaveDownload {
  * "are my saves backed up", which used to need one request and one Ludusavi
  * scan per game to work out.
  *
- * One row per game you can READ, not per game you have backed up: PC saves are
- * shared across every account on a Drop server. Use `ownSaveCount` /
- * `ownSaveBytes` from `~/composables/cloud-save-ownership` for anything that
- * claims a backup is yours.
+ * Use `ownSaveCount` / `ownSaveBytes` from `~/composables/cloud-save-ownership`
+ * for anything that claims a backup is yours. Against a current server they
+ * equal the totals; an older one shared PC saves across accounts.
  */
 export interface CloudSaveGameSummary {
   gameId: string;
@@ -477,10 +505,7 @@ export interface CloudSaveGameSummary {
   lastUploadedAt: string;
   /** Client mtime of the newest save, ISO 8601. */
   lastModifiedAt: string;
-  /**
-   * How many counted files are another account's copy of a shared PC save.
-   * Non-zero means part of this total is not your own backup.
-   */
+  /** Another account's copies. Always 0 from a current server. */
   sharedCount: number;
   /**
    * How many counted files are yours. Absent on a server too old to report it,
@@ -778,6 +803,13 @@ export function useServerApi() {
       showcase: (id: string) =>
         apiFetch<UserShowcase>(`api/v1/user/${id}/showcase`),
 
+      /**
+       * Re-fetch the signed-in user in the app (Rust side) after a profile
+       * save, so games launched afterwards get the new display name. Returns
+       * the fresh user for `AppState.user`.
+       */
+      refreshSignedInUser: () => invoke<User>("refresh_user"),
+
       /** Update profile fields (display name, bio, theme). */
       update: (data: {
         displayName?: string;
@@ -962,12 +994,23 @@ export function useServerApi() {
        * clients delete their local copy on next sync. A re-upload of the
        * same filename revives the row. Idempotent for already-deleted ids.
        *
-       * A delete only ever removes YOUR copy. Resolves to `false` when the
-       * row belongs to another account and you have no copy of your own, so
-       * the caller can say that instead of reporting a success that changed
-       * nothing.
+       * A delete only ever removes YOUR copy. Resolves to `false` only
+       * against an older server that shared PC saves across accounts.
        */
       delete: (id: string) => invoke<boolean>("delete_cloud_save", { id }),
+
+      /** The previous versions the server kept of one save, newest first. */
+      history: (id: string) =>
+        invoke<CloudSaveHistory>("list_cloud_save_revisions", { id }),
+
+      /**
+       * Make a previous version the live cloud copy. The cloud only; the
+       * version it replaces goes into the history, so this can be undone.
+       */
+      restoreRevision: (revisionId: string) =>
+        invoke<CloudSaveRestoreResult>("restore_cloud_save_revision", {
+          revisionId,
+        }),
     },
   };
 }

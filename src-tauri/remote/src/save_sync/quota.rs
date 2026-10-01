@@ -190,7 +190,7 @@ pub fn quota_warning(projected_bytes: u64, limit_bytes: u64) -> Option<String> {
     }
     Some(format!(
         "Backing this up would put you at {} of your {} of cloud save space, so Drop did not \
-         start the upload. Your progress is still on this PC. Delete saves you no longer need \
+         start the upload. Your progress is still on this device. Delete saves you no longer need \
          from a game's Cloud Saves panel, or ask whoever runs your Drop server for more space.",
         format_bytes(projected_bytes),
         format_bytes(limit_bytes)
@@ -213,7 +213,7 @@ fn partial_quota_warning(skipped: &[String], limit_bytes: u64) -> String {
     }
     format!(
         "{} of this game's saves did not fit in your {} of cloud save space: {}. Everything else \
-         was backed up, and {} still on this PC. Delete saves you no longer need from a game's \
+         was backed up, and {} still on this device. Delete saves you no longer need from a game's \
          Cloud Saves panel, or ask whoever runs your Drop server for more space.",
         skipped.len(),
         format_bytes(limit_bytes),

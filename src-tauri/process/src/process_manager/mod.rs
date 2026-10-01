@@ -63,6 +63,19 @@ use crate::{
     },
 };
 
+/// Where a launch's playtime session stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlaytimeSlot {
+    /// `start_playtime` is still running (it retries for several seconds).
+    Starting,
+    /// The server opened this session.
+    Started(String),
+    /// `start_playtime` gave up. The exit path records the session whole.
+    Failed,
+    /// Incognito launch: nothing is reported, at start or at exit.
+    Incognito,
+}
+
 /// A game process Drop is currently tracking.
 pub struct RunningProcess {
     pub(crate) handle: Arc<SharedChild>,
@@ -79,7 +92,10 @@ pub struct RunningProcess {
     /// Set by [`ProcessManager::kill_game`] so the exit path can tell a
     /// user-requested kill apart from a crash.
     pub(crate) manually_killed: bool,
-    pub(crate) playtime_session_id: Arc<std::sync::Mutex<Option<String>>>,
+    /// Where this launch's async `start_playtime` has got to. Read by the
+    /// exit path, which stops the session, records the whole session when it
+    /// never started, or does nothing for an incognito launch.
+    pub(crate) playtime_session_id: Arc<std::sync::Mutex<PlaytimeSlot>>,
     /// Cancels the periodic playtime heartbeat task. Notified on exit.
     pub(crate) playtime_heartbeat_cancel: Arc<Notify>,
     pub(crate) achievement_poll_cancel: Option<Arc<Notify>>,
@@ -142,10 +158,18 @@ pub struct SaveSyncSnapshot {
     pub pre_hashes: HashMap<String, String>,
     /// Map of filename → original disk path (for PC saves from Ludusavi).
     pub pc_save_paths: HashMap<String, PathBuf>,
-    /// Drop's per-game Wine prefix (Linux + Windows-target games only).
-    /// Passed to Ludusavi via `--wine-prefix` so the exit-path re-scan can
-    /// see saves under Drop's prefix, not just Steam/Lutris/Heroic defaults.
-    pub wine_prefix: Option<PathBuf>,
+    /// The platform that was launched, for a PC game. The exit re-scan builds
+    /// its Ludusavi context (Wine prefix, Steam app id) from this afresh
+    /// rather than reusing the launch's: a first Proton launch creates the
+    /// prefix during the launch, so the context taken before it had no
+    /// prefix, and the exit scan could not see the very saves that session
+    /// created.
+    pub target_platform: Option<Platform>,
+    /// Files whose conflict was set aside rather than resolved (a streaming
+    /// launch, where nobody is at this screen to answer). The exit upload
+    /// skips them and leaves them out of the manifest, so both copies survive
+    /// and the next local launch asks.
+    pub deferred_conflicts: std::collections::HashSet<String>,
 }
 
 /// One launchable configuration of a game, surfaced to the frontend so the

@@ -12,7 +12,7 @@
             Cloud Save Conflict
           </h2>
           <p class="text-zinc-400 text-sm mb-1">
-            Some saves were changed both on this PC and in the cloud.
+            Some saves are different on this device and in the cloud.
           </p>
           <p
             v-if="secondsLeft !== undefined"
@@ -66,10 +66,16 @@
                   "
                   @click="choices[i] = 'keep_local'"
                 >
-                  <div class="text-sm font-medium text-zinc-200 mb-1">This PC</div>
+                  <div class="text-sm font-medium text-zinc-200 mb-1">This device</div>
                   <div class="text-xs text-zinc-400">
                     {{ formatSize(conflict.localSize) }} &middot;
                     {{ formatDate(conflict.localModifiedAt * 1000) }}
+                  </div>
+                  <div
+                    v-if="localOwnerText(conflict)"
+                    class="text-xs text-amber-300/90 mt-0.5"
+                  >
+                    {{ localOwnerText(conflict) }}
                   </div>
                 </button>
 
@@ -93,6 +99,18 @@
                     class="text-xs text-zinc-500 mt-0.5"
                   >
                     from {{ conflict.cloudUploadedFrom }}
+                  </div>
+                  <div
+                    v-if="conflict.cloudOwnedBy"
+                    class="text-xs text-zinc-500 mt-0.5"
+                  >
+                    Account: {{ conflict.cloudOwnedBy }}
+                  </div>
+                  <div
+                    v-if="conflictCloudNote(conflict)"
+                    class="text-xs text-amber-300/90 mt-0.5"
+                  >
+                    {{ conflictCloudNote(conflict) }}
                   </div>
                 </button>
               </div>
@@ -141,6 +159,10 @@ import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { invoke } from "@tauri-apps/api/core";
 import type { SaveConflict } from "~/types/save-sync";
+import {
+  conflictCloudNote,
+  conflictLocalNote,
+} from "~/composables/save-sync-state";
 
 const props = defineProps<{
   visible: boolean;
@@ -341,6 +363,11 @@ async function submit() {
   } finally {
     submitting.value = false;
   }
+}
+
+/** Same rule as the desktop dialog: say whose the file on this device may be. */
+function localOwnerText(conflict: SaveConflict): string {
+  return conflictLocalNote(conflict);
 }
 
 function formatSize(bytes: number): string {

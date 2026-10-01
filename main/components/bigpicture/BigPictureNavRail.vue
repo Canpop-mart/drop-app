@@ -25,6 +25,14 @@
     >
       <component :is="item.icon" class="size-6" />
 
+      <!-- Unread game request decisions. Display only. -->
+      <span
+        v-if="item.route === '/bigpicture/requests' && unreadRequestDecisions > 0"
+        class="absolute top-1.5 right-1.5 min-w-4 h-4 px-1 rounded-full bg-blue-500 text-[10px] font-bold leading-4 text-white text-center"
+      >
+        {{ unreadRequestDecisions }}
+      </span>
+
       <!-- Active indicator -->
       <div
         v-if="isActive(item.route)"
@@ -68,6 +76,9 @@ import { useBigPictureMode } from "~/composables/big-picture";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { useDeckMode } from "~/composables/deck-mode";
+import { useRequestNotifications } from "~/composables/request-notifications";
+
+const { unreadCount: unreadRequestDecisions } = useRequestNotifications();
 
 const router = useRouter();
 const { isGamescope: isGamescopeSession } = useDeckMode();

@@ -1989,6 +1989,7 @@ const tabs = computed(() => {
           loaded: mods.loaded.value,
           availableCount: mods.available.value.length,
           installedCount: mods.installedMods.value.length,
+          failed: mods.failed.value,
         })
       : true,
   );

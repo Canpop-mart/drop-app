@@ -190,6 +190,7 @@ pub fn record_synced_files(
                 synced_hash: file.data_hash.clone(),
                 cloud_id,
                 synced_at: now.clone(),
+                three_way_base: true,
             },
         );
         written += 1;
@@ -204,14 +205,22 @@ pub fn record_synced_files(
 ///
 /// `unsynced` names files that did NOT reach (or come from) the cloud this
 /// round, so they are left out rather than stamped with a hash they never
-/// agreed on.
+/// agreed on. That includes every conflict nobody resolved: recording one
+/// would make the local copy look like the agreed baseline, and the next
+/// launch's three-way check (see [`super::decide`]) would then quietly
+/// download the cloud copy over it.
+///
+/// `uploaded_ids` maps filename to cloud row id for files pushed before
+/// launch. The three-way check only trusts an entry that names its cloud row,
+/// so a file first uploaded here would otherwise never get one.
 pub fn update_manifest_after_sync(
     manifest: &mut SyncManifest,
     local_files: &[LocalSaveFile],
     sync_response: &SyncCheckResponse,
+    uploaded_ids: &HashMap<String, String>,
     unsynced: &[String],
 ) {
-    let cloud_ids: HashMap<String, String> = sync_response
+    let mut cloud_ids: HashMap<String, String> = sync_response
         .actions
         .iter()
         .filter_map(|a| {
@@ -220,6 +229,7 @@ pub fn update_manifest_after_sync(
                 .map(|c| (a.filename.clone(), c.id.clone()))
         })
         .collect();
+    cloud_ids.extend(uploaded_ids.iter().map(|(k, v)| (k.clone(), v.clone())));
     record_synced_files(manifest, local_files, &cloud_ids, unsynced);
 
     // Add cloud-only saves that were downloaded
@@ -237,11 +247,163 @@ pub fn update_manifest_after_sync(
                 synced_hash: cloud.data_hash.clone(),
                 cloud_id: Some(cloud.id.clone()),
                 synced_at: now.clone(),
+                three_way_base: true,
             },
         );
     }
 
     manifest.last_synced_at = Some(now);
+}
+
+/// File, inside one account's manifest directory, naming that account.
+///
+/// A dotfile with no `.json` extension so nothing that walks the manifest
+/// directories mistakes it for a game's manifest.
+const ACCOUNT_NAME_FILE: &str = ".account-name";
+
+/// Remember `display_name` as the name of the account whose sync state lives
+/// under `user_id`, so another account signed in on this PC later can be told
+/// whose copy a local save is. Best-effort: losing the label only costs the
+/// conflict prompt a name.
+pub fn record_account_name(user_id: &str, display_name: &str) {
+    let name = display_name.trim();
+    if user_id.is_empty() || name.is_empty() {
+        return;
+    }
+    let dir = database::db::DATA_ROOT_DIR.join(MANIFEST_DIR).join(user_id);
+    let path = dir.join(ACCOUNT_NAME_FILE);
+    if fs::read_to_string(&path).is_ok_and(|held| held.trim() == name) {
+        return;
+    }
+    if let Err(e) = fs::create_dir_all(&dir).and_then(|()| fs::write(&path, name)) {
+        warn!("[SAVE-SYNC] Could not record this account's name for its saves: {e}");
+    }
+}
+
+/// Whether any other Drop account has sync state for `game_id` on this device.
+///
+/// When one has, a save that changed here since this account's last sync may
+/// be that person's progress, and nothing can prove otherwise: their sync may
+/// have failed, so their manifest need not record the bytes. Callers then
+/// refuse to treat a local change as this account's own (no automatic upload)
+/// and ask instead.
+///
+/// Fails closed: only a manifest directory that does not exist means "no
+/// other account". One that exists but cannot be listed counts as "another
+/// account may share these files".
+///
+/// An account that has not synced anything on this device for
+/// [`OTHER_ACCOUNT_ACTIVE_FOR`] (a deleted account, a guest who visited once)
+/// no longer counts, so the rule does not stay on forever. Every sync rewrites
+/// that account's manifest for the game it launched, which is the activity
+/// measured.
+pub fn other_accounts_have_synced(current_user_id: &str, game_id: &str) -> bool {
+    other_accounts_have_synced_in(
+        &database::db::DATA_ROOT_DIR.join(MANIFEST_DIR),
+        current_user_id,
+        game_id,
+        SystemTime::now(),
+    )
+}
+
+/// How long another account's sync state on this device keeps the
+/// other-account rule on after its last sync here.
+pub const OTHER_ACCOUNT_ACTIVE_FOR: std::time::Duration =
+    std::time::Duration::from_secs(180 * 24 * 60 * 60);
+
+/// Whether anything in an account's manifest directory changed within
+/// [`OTHER_ACCOUNT_ACTIVE_FOR`] of `now`. Unreadable counts as active.
+fn account_recently_active(dir: &Path, now: SystemTime) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return true;
+    };
+    let cutoff = now.checked_sub(OTHER_ACCOUNT_ACTIVE_FOR).unwrap_or(UNIX_EPOCH);
+    entries.into_iter().any(|entry| match entry.and_then(|e| e.metadata()) {
+        Ok(meta) => meta.modified().map_or(true, |m| m >= cutoff),
+        Err(_) => true,
+    })
+}
+
+fn other_accounts_have_synced_in(
+    root: &Path,
+    current_user_id: &str,
+    game_id: &str,
+    now: SystemTime,
+) -> bool {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(e) => {
+            warn!(
+                "[SAVE-SYNC] Could not list {} ({e}); assuming another Drop account may share \
+                 this game's saves",
+                root.display()
+            );
+            return true;
+        }
+    };
+    let manifest_name = format!("{game_id}.json");
+    entries.into_iter().any(|entry| match entry {
+        Ok(entry) => {
+            entry.file_name().to_string_lossy() != current_user_id
+                && entry.file_type().map_or(true, |t| t.is_dir())
+                && !matches!(entry.path().join(&manifest_name).try_exists(), Ok(false))
+                && account_recently_active(&entry.path(), now)
+        }
+        // An entry that cannot be read could be another account's.
+        Err(_) => true,
+    })
+}
+
+/// Which *other* Drop account on this PC last synced exactly these bytes.
+///
+/// Two accounts on one PC share its PC save files and Switch NAND on disk,
+/// while each keeps its own manifest. If the file on disk hashes to what
+/// another account's manifest recorded at its last sync, that account's
+/// session is where the file came from. Returns that account's display name,
+/// or an empty string when it is known to be another account but its name was
+/// never recorded. `None` when no other account's manifest matches.
+pub fn local_copy_last_synced_by(
+    current_user_id: &str,
+    game_id: &str,
+    filename: &str,
+    local_hash: &str,
+) -> Option<String> {
+    if local_hash.is_empty() {
+        return None;
+    }
+    let root = database::db::DATA_ROOT_DIR.join(MANIFEST_DIR);
+    let entries = fs::read_dir(&root).ok()?;
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let other = entry.file_name().to_string_lossy().to_string();
+        if other == current_user_id {
+            continue;
+        }
+        let manifest = entry.path().join(format!("{game_id}.json"));
+        if fs::metadata(&manifest).map_or(true, |m| m.len() > MANIFEST_MAX_BYTES) {
+            continue;
+        }
+        let Ok(json) = fs::read_to_string(&manifest) else {
+            continue;
+        };
+        let Ok(parsed) = serde_json::from_str::<SyncManifest>(&json) else {
+            continue;
+        };
+        let matches = parsed
+            .files
+            .get(filename)
+            .is_some_and(|f| f.synced_hash.eq_ignore_ascii_case(local_hash));
+        if matches {
+            let name = fs::read_to_string(entry.path().join(ACCOUNT_NAME_FILE))
+                .map(|n| n.trim().to_string())
+                .unwrap_or_default();
+            return Some(name);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -407,6 +569,53 @@ mod tests {
             ..Default::default()
         };
         assert!(save_manifest(&manifest).is_err());
+    }
+
+    #[test]
+    fn another_accounts_manifest_for_the_game_means_shared() {
+        let root = std::env::temp_dir()
+            .join(format!("drop-manifest-shared-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // No manifest directory at all: nobody else.
+        assert!(!other_accounts_have_synced_in(&root, "me", "g1", SystemTime::now()));
+        fs::create_dir_all(root.join("me")).unwrap();
+        fs::write(root.join("me").join("g1.json"), "{}").unwrap();
+        assert!(!other_accounts_have_synced_in(&root, "me", "g1", SystemTime::now()));
+        fs::create_dir_all(root.join("other")).unwrap();
+        fs::write(root.join("other").join("g2.json"), "{}").unwrap();
+        assert!(!other_accounts_have_synced_in(&root, "me", "g1", SystemTime::now()));
+        fs::write(root.join("other").join("g1.json"), "{}").unwrap();
+        assert!(other_accounts_have_synced_in(&root, "me", "g1", SystemTime::now()));
+        // An account that has synced nothing here for half a year stops
+        // counting.
+        let later = SystemTime::now() + OTHER_ACCOUNT_ACTIVE_FOR + std::time::Duration::from_secs(60);
+        assert!(!other_accounts_have_synced_in(&root, "me", "g1", later));
+        let _ = fs::remove_dir_all(&root);
+        // A path that exists but is not a listable directory fails closed.
+        let file = std::env::temp_dir()
+            .join(format!("drop-manifest-notadir-{}", std::process::id()));
+        fs::write(&file, "x").unwrap();
+        assert!(other_accounts_have_synced_in(&file, "me", "g1", SystemTime::now()));
+        let _ = fs::remove_file(&file);
+    }
+
+    /// Entries written before the three-way check existed must load, and
+    /// load as untrusted: some of them stamped a declined conflict as synced.
+    /// New entries round-trip with the marker set.
+    #[test]
+    fn entries_from_older_builds_load_untrusted_and_new_ones_round_trip() {
+        let old = r#"{"gameId":"g1","files":{"a.srm":{"saveType":"save",
+            "syncedHash":"abc","cloudId":"row","syncedAt":"2026-06-10T17:00:24Z"}}}"#;
+        let manifest: SyncManifest = serde_json::from_str(old).unwrap();
+        assert!(!manifest.files["a.srm"].three_way_base);
+        assert!(manifest.files["a.srm"].trusted_base().is_none());
+
+        let mut fresh = SyncManifest::default();
+        record_synced_files(&mut fresh, &[file("a.srm", "abc")], &HashMap::new(), &[]);
+        let json = serde_json::to_string(&fresh).unwrap();
+        assert!(json.contains("\"threeWayBase\":true"), "{json}");
+        let back: SyncManifest = serde_json::from_str(&json).unwrap();
+        assert!(back.files["a.srm"].trusted_base().is_some());
     }
 
     /// Manifests on disk predate `appliedTombstones` and are keyed by the old

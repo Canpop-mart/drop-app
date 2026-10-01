@@ -182,9 +182,10 @@ impl ProcessManager<'_> {
     /// the local Running status flips so the UI still tracks the process —
     /// the difference is purely in what reaches the server.
     ///
-    /// When `streaming` is true, save-sync conflicts are auto-resolved to
-    /// `keep_local` instead of showing a UI dialog (which would appear on the
-    /// remote host PC where the user can't interact with it). If
+    /// When `streaming` is true, save-sync conflicts are set aside instead of
+    /// showing a UI dialog (which would appear on the remote host where the
+    /// user can't interact with it): both copies are kept, those files are not
+    /// uploaded, and the next local launch asks. If
     /// `config_override` is provided it temporarily replaces the game's local
     /// `user_configuration` so the receiver's settings (widescreen, quality, …)
     /// are applied on the host. Streaming never goes incognito — the receiver
@@ -363,20 +364,40 @@ impl ProcessManager<'_> {
         // game's executable for it. The override is relative to install_dir, the
         // same as the base command, so it absolutises identically below. Args
         // are preserved. Emulator launches are left alone (the ROM path must not
-        // be replaced). When the mod is uninstalled its ledger is gone, so this
-        // returns None and the game launches normally again.
-        if emulator.is_none()
-            && let Some(override_exe) = games::downloads::mod_data::find_launch_override(
+        // be replaced). Only a finished mod counts; a mod version with its own
+        // launch settings only for other platforms is skipped, a pure overlay
+        // applies whatever the game launches as, and with several the choice
+        // is stable (see decide_launch_override). When the mod is uninstalled
+        // its ledger is gone, so this returns None and the game launches
+        // normally again. The Proton fallback in STEP 4 rebuilds the command
+        // and decides again, for Windows.
+        let mod_version_platforms = |v: &str| -> Option<Vec<Platform>> {
+            let db: &database::Database = &db_lock;
+            db.applications.game_versions.get(v).map(|gv| {
+                gv.launches
+                    .iter()
+                    .map(|l| l.platform)
+                    .chain(gv.setups.iter().map(|s| s.platform))
+                    .collect()
+            })
+        };
+        let mod_override: Option<String> = if emulator.is_none() {
+            games::downloads::mod_data::find_launch_override(
                 std::path::Path::new(install_dir),
+                target_platform,
+                &mod_version_platforms,
             )
-        {
+        } else {
+            None
+        };
+        if let Some(override_exe) = &mod_override {
             info!("[LAUNCH] mod launch override active for {game_id}: {override_exe}");
             let _ = self.app_handle.emit("launch_trace", serde_json::json!({
                 "step": "2b_mod_launch_override",
                 "game_id": &game_id,
-                "override": &override_exe,
+                "override": override_exe,
             }));
-            target_command.command = override_exe;
+            target_command.command = override_exe.clone();
         }
 
         // ── STEP 2c: User executable override ──────────────────────────────
@@ -519,6 +540,13 @@ impl ProcessManager<'_> {
                     let compat = self
                         .fetch_process_handler(&db_lock, &Platform::Windows)
                         .map_err(|_| ProcessError::NoCompat)?;
+                    // The override that applies to a Windows launch: a mod
+                    // whose own launch settings are Linux-only does not.
+                    let win_mod_override = games::downloads::mod_data::find_launch_override(
+                        std::path::Path::new(install_dir),
+                        Platform::Windows,
+                        &mod_version_platforms,
+                    );
                     let win_launch_cmd = game_version
                         .launches
                         .iter()
@@ -527,10 +555,15 @@ impl ProcessManager<'_> {
                         .and_then(|lc| {
                             ParsedCommand::parse(lc.command.clone()).ok().map(|mut p| {
                                 // This branch rebuilds the command from the
-                                // server config, so re-apply the override here
+                                // server config, so re-apply the overrides
+                                // here (the user's pick wins, as in STEP 2c)
                                 // or falling back to Proton would silently
-                                // discard the user's pick.
+                                // discard them. The mod override is decided
+                                // again for Windows, which is also what the
+                                // game's platform is corrected to below.
                                 if let Some(exe) = &exe_override_abs {
+                                    p.command = exe.clone();
+                                } else if let Some(exe) = &win_mod_override {
                                     p.command = exe.clone();
                                 }
                                 p.make_absolute(PathBuf::from(install_dir));
@@ -837,15 +870,21 @@ impl ProcessManager<'_> {
         let game_id = meta.id.clone();
 
         // Start the playtime session asynchronously — never block launch.
-        // The id is stored in a shared mutex so the exit path can read it;
+        // The outcome is stored in a shared slot so the exit path can read it;
         // once established we kick off a heartbeat so the server can bound a
         // session whose stop never arrives (crash, kill -9, power loss).
         //
-        // In incognito mode this block is skipped entirely. The slot is
-        // still created (but never populated) so the exit path's
-        // `wait_for_session_id` will time out into the "no session — skip
-        // stop" branch, which is exactly the no-op we want.
-        let playtime_session_id = Arc::new(std::sync::Mutex::new(None::<String>));
+        // A start that fails is recorded as `Failed` rather than only logged:
+        // the exit path then sends the whole session in one call (queued on
+        // disk if that fails too) instead of the time being lost.
+        //
+        // In incognito mode no start is attempted and the slot says so, which
+        // the exit path takes as "report nothing".
+        let playtime_session_id = Arc::new(std::sync::Mutex::new(if incognito {
+            crate::process_manager::PlaytimeSlot::Incognito
+        } else {
+            crate::process_manager::PlaytimeSlot::Starting
+        }));
         let playtime_heartbeat_cancel = Arc::new(Notify::new());
         if incognito {
             info!("[LAUNCH] {game_id}: incognito — no playtime session will be opened");
@@ -859,13 +898,19 @@ impl ProcessManager<'_> {
                     Ok(sid) => {
                         info!("[LAUNCH] playtime session started: {sid}");
                         if let Ok(mut slot) = session_id_slot.lock() {
-                            *slot = Some(sid.clone());
+                            *slot = crate::process_manager::PlaytimeSlot::Started(sid.clone());
                         }
                         exit::run_playtime_heartbeat_loop(sid, hb_cancel).await;
                     }
-                    Err(e) => warn!(
-                        "[LAUNCH] could not start playtime session for {playtime_game_id}: {e}"
-                    ),
+                    Err(e) => {
+                        warn!(
+                            "[LAUNCH] could not start playtime session for {playtime_game_id}: \
+                             {e}; the session will be recorded when the game exits"
+                        );
+                        if let Ok(mut slot) = session_id_slot.lock() {
+                            *slot = crate::process_manager::PlaytimeSlot::Failed;
+                        }
+                    }
                 }
             });
         }
@@ -1026,24 +1071,21 @@ fn pre_launch_save_sync(
     .ok()
     .map(|g| g.m_name)?;
 
-    // Only feed Ludusavi a `--wine-prefix` when we know one applies:
-    // Linux host + Windows target. The prefix is created at launch time
-    // (see process_handlers.rs), so on first sync it may not yet exist —
-    // in that case we omit it and let Ludusavi fall back to defaults.
-    let wine_prefix = compute_wine_prefix_for(game_id, &req.target_platform);
-
+    // The Ludusavi context (Wine prefix for a Windows game under Proton, Steam
+    // app id) is built inside `sync_pc_saves` by the same helper every other
+    // save scan uses. On a first Proton launch the prefix does not exist yet;
+    // the exit path rebuilds the context once the game has created it.
     let _ = app_handle.emit("launch_trace", serde_json::json!({
         "step": "7d_pc_save_sync_start",
         "game_id": game_id,
         "game_name": &game_name,
-        "wine_prefix": wine_prefix.as_ref().map(|p| p.to_string_lossy().to_string()),
     }));
     let snap = save_sync_mod::sync_pc_saves(
         app_handle,
         &user_id,
         game_id,
         &game_name,
-        wine_prefix,
+        req.target_platform,
         req.streaming,
     );
     let _ = app_handle.emit("launch_trace", serde_json::json!({
@@ -1052,36 +1094,6 @@ fn pre_launch_save_sync(
         "has_snapshot": snap.is_some(),
     }));
     snap
-}
-
-/// Compute the Wine prefix path to feed to Ludusavi, if applicable.
-///
-/// Returns `Some(path)` only when ALL of the following hold:
-///   * Host OS is Linux.
-///   * Target platform is Windows (Drop's UMU/Proton launchers).
-///   * The prefix directory actually exists on disk — the prefix is
-///     created lazily at launch time by [`crate::process_handlers`], so
-///     a first-time sync (e.g. immediately after install) may legitimately
-///     have nothing there yet. In that case we return `None` and Ludusavi
-///     falls back to its default scan locations.
-#[cfg(target_os = "linux")]
-fn compute_wine_prefix_for(
-    game_id: &str,
-    target_platform: &Platform,
-) -> Option<PathBuf> {
-    if !matches!(target_platform, Platform::Windows) {
-        return None;
-    }
-    let pfx = database::db::DATA_ROOT_DIR.join("pfx").join(game_id);
-    if pfx.is_dir() { Some(pfx) } else { None }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn compute_wine_prefix_for(
-    _game_id: &str,
-    _target_platform: &Platform,
-) -> Option<PathBuf> {
-    None
 }
 
 /// Everything `build_command` produces — the spawnable `Command` plus the

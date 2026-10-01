@@ -303,8 +303,9 @@
             </aside>
           </div>
 
-          <!-- Mods — available (install) + installed (uninstall). Only shown
-               when the base game is installed and it has mods. -->
+          <!-- Mods — available (install / update) + on this game (resume /
+               uninstall). Only shown when the base game is installed and it
+               has mods, or when a list failed to load (to show the error). -->
           <div
             v-else-if="activeDetailTab === 'mods'"
             class="space-y-4"
@@ -313,8 +314,22 @@
               title="Available Mods"
               :badge="`${availableMods.length}`"
             >
+              <div
+                v-if="availableModsError"
+                class="flex items-center gap-3 py-2 text-sm text-red-400"
+              >
+                <span class="flex-1">
+                  Could not load the mods for this game. {{ availableModsError }}
+                </span>
+                <button
+                  class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm font-semibold text-zinc-100 transition-colors hover:bg-zinc-700 shrink-0"
+                  @click="loadAvailableMods()"
+                >
+                  Retry
+                </button>
+              </div>
               <p
-                v-if="availableMods.length === 0"
+                v-else-if="availableMods.length === 0"
                 class="text-sm text-zinc-400 py-2"
               >
                 No mods are available for this game yet.
@@ -349,16 +364,39 @@
                     </p>
                   </div>
                   <span
-                    v-if="isModInstalled(mod.id)"
-                    class="text-xs font-medium text-green-400 shrink-0"
+                    v-if="modCard(mod.id)?.downloading"
+                    class="text-xs font-medium text-blue-400 shrink-0"
                   >
-                    Installed
+                    Downloading
                   </span>
+                  <span
+                    v-else-if="modCard(mod.id)?.unfinished"
+                    class="text-xs font-medium text-amber-400 shrink-0"
+                  >
+                    Not finished
+                  </span>
+                  <template v-else-if="modCard(mod.id)?.installed">
+                    <span class="text-xs font-medium text-green-400 shrink-0">
+                      Installed
+                    </span>
+                    <button
+                      v-if="modCard(mod.id)?.updateAvailable"
+                      :disabled="modInstall.installingModId.value !== null"
+                      class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50 shrink-0"
+                      @click="runModAction(mod.id, 'update')"
+                    >
+                      {{
+                        modInstall.installingModId.value === mod.id
+                          ? "Updating…"
+                          : "Update"
+                      }}
+                    </button>
+                  </template>
                   <button
                     v-else
                     :disabled="modInstall.installingModId.value === mod.id"
                     class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50 shrink-0"
-                    @click="modInstall.installMod(mod)"
+                    @click="runModAction(mod.id, 'install')"
                   >
                     {{
                       modInstall.installingModId.value === mod.id
@@ -377,10 +415,34 @@
             </CollapsibleSection>
 
             <CollapsibleSection
-              v-if="installedModsCtl.installedMods.value.length > 0"
+              v-if="
+                installedModsCtl.installedMods.value.length > 0 ||
+                installedModsCtl.error.value
+              "
               title="Installed Mods"
               :badge="`${installedModsCtl.installedMods.value.length}`"
             >
+              <div
+                v-if="installedModsCtl.error.value"
+                class="flex items-center gap-3 py-2 text-sm text-red-400"
+              >
+                <span class="flex-1">
+                  Could not read the mods on this game.
+                  {{ installedModsCtl.error.value }}
+                </span>
+                <button
+                  class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm font-semibold text-zinc-100 transition-colors hover:bg-zinc-700 shrink-0"
+                  @click="installedModsCtl.refresh()"
+                >
+                  Retry
+                </button>
+              </div>
+              <p
+                v-if="installedModsCtl.actionError.value"
+                class="py-2 text-sm text-red-400"
+              >
+                {{ installedModsCtl.actionError.value }}
+              </p>
               <ul class="divide-y divide-zinc-800">
                 <li
                   v-for="m in installedModsCtl.installedMods.value"
@@ -391,17 +453,40 @@
                     <p class="text-sm font-medium text-zinc-100 truncate">
                       {{ installedModName(m.gameId) }}
                     </p>
-                    <p class="text-xs text-zinc-500">
+                    <p v-if="m.downloading" class="text-xs text-blue-400">
+                      Downloading
+                    </p>
+                    <p v-else-if="!m.complete" class="text-xs text-amber-400">
+                      Download not finished
+                    </p>
+                    <p v-else class="text-xs text-zinc-500">
                       {{ m.fileCount }}
                       {{ m.fileCount === 1 ? "file" : "files" }}
                     </p>
+                    <p
+                      v-if="modCard(m.gameId)?.launchNote"
+                      class="text-xs text-amber-400"
+                    >
+                      {{ modCard(m.gameId)?.launchNote }}
+                    </p>
                   </div>
                   <button
-                    :disabled="installedModsCtl.uninstallingModId.value === m.gameId"
-                    class="rounded-md bg-red-600/90 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-red-600 disabled:opacity-50 shrink-0"
-                    @click="modToUninstall = m.gameId"
+                    v-if="!m.complete && !m.downloading"
+                    :disabled="resumingModId === m.gameId"
+                    class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50 shrink-0"
+                    @click="runModAction(m.gameId, 'resume')"
                   >
-                    Uninstall
+                    Resume
+                  </button>
+                  <button
+                    :disabled="
+                      m.downloading ||
+                      installedModsCtl.uninstallingModId.value === m.gameId
+                    "
+                    class="rounded-md bg-red-600/90 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-red-600 disabled:opacity-50 shrink-0"
+                    @click="runModAction(m.gameId, m.complete ? 'uninstall' : 'remove')"
+                  >
+                    {{ m.complete ? "Uninstall" : "Remove" }}
                   </button>
                 </li>
               </ul>
@@ -603,7 +688,8 @@
             }}</span>
             from
             <span class="text-zinc-200 font-medium">{{ game.mName }}</span
-            >? Only this mod's files are removed. The base game isn't touched.
+            >? Files the mod added are deleted, and any game files it replaced
+            are put back.
           </p>
           <p
             v-if="modDependents(modToUninstall).length > 0"
@@ -768,6 +854,9 @@ import { useModInstall } from "~/composables/game-detail/use-mod-install";
 import { useInstalledMods } from "~/composables/game-detail/use-installed-mods";
 import {
   shouldShowModsTab,
+  buildModCards,
+  type ModAction,
+  type ModCard,
   resolveActiveTab,
   modDisplayName,
   modDependentNames,
@@ -842,16 +931,46 @@ const availableMods = ref<AvailableMod[]>([]);
 // Distinguishes "no mods" from "haven't asked yet", which is what decides
 // whether the Mods tab is hidden or still showing.
 const modsLoaded = ref(false);
+/** Why the server's mod list could not be loaded, or null. */
+const availableModsError = ref<string | null>(null);
 const modInstall = useModInstall(id);
 const installedModsCtl = useInstalledMods(id);
 const modToUninstall = ref<string | null>(null);
+const resumingModId = ref<string | null>(null);
+
+/** Server listing and on-disk ledgers folded together, for each mod's state. */
+const modCards = computed(() =>
+  buildModCards(availableMods.value, installedModsCtl.installedMods.value),
+);
+function modCard(modId: string): ModCard | undefined {
+  return modCards.value.find((c) => c.id === modId);
+}
+
+async function runModAction(modId: string, action: ModAction) {
+  switch (action) {
+    case "install":
+      await modInstall.installMod({ id: modId });
+      break;
+    case "update":
+      await modInstall.installMod({ id: modId }, { update: true });
+      break;
+    case "resume":
+      resumingModId.value = modId;
+      try {
+        await installedModsCtl.resume(modId);
+      } finally {
+        resumingModId.value = null;
+      }
+      break;
+    case "uninstall":
+    case "remove":
+      modToUninstall.value = modId;
+      break;
+  }
+}
 // Guards the destructive game uninstall behind a confirmation dialog — it
 // deletes every installed file, so a stray click must never trigger it.
 const gameUninstallOpen = ref(false);
-
-function isModInstalled(modId: string): boolean {
-  return installedModsCtl.installedMods.value.some((m) => m.gameId === modId);
-}
 
 /** Name for an installed mod (the ledger only stores ids), falling back to the
  *  id when the mod is no longer listed by the server. */
@@ -866,9 +985,10 @@ async function loadAvailableMods() {
     availableMods.value = await invoke<AvailableMod[]>("fetch_game_mods", {
       gameId: id,
     });
+    availableModsError.value = null;
   } catch (e) {
     console.warn("[library/[id]] failed to load available mods:", e);
-    availableMods.value = [];
+    availableModsError.value = String(e);
   } finally {
     modsLoaded.value = true;
   }
@@ -1008,6 +1128,9 @@ const visibleDetailTabs = computed(() =>
         loaded: modsLoaded.value,
         availableCount: availableMods.value.length,
         installedCount: installedModsCtl.installedMods.value.length,
+        failed:
+          availableModsError.value !== null ||
+          installedModsCtl.error.value !== null,
       });
     }
     return true;

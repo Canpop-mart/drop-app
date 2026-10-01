@@ -22,6 +22,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { devLog } from "~/composables/dev-mode";
 import type { BackupResult } from "~/types/save-sync";
+import {
+  heldOnSharedDeviceState,
+  saveSyncState,
+} from "~/composables/save-sync-state";
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -36,6 +40,20 @@ export interface LudusaviFile {
   path: string;
   size: number;
   modified: number;
+  /**
+   * The name this file is synced under (`pc__…`, its path relative to the
+   * game's save root). Null for a file only the common-locations fallback
+   * found, which launch sync does not upload.
+   */
+  cloudFilename?: string | null;
+  dataHash?: string | null;
+  /** What this account's sync manifest recorded at the last sync. */
+  syncedHash?: string | null;
+  syncedCloudId?: string | null;
+  /** Another Drop account on this device last synced these exact bytes. */
+  lastSyncedByOtherAccount?: string | null;
+  /** Another Drop account also syncs this game on this device. */
+  otherAccountsOnThisDevice?: boolean;
 }
 
 export interface CloudSaveEntry {
@@ -43,6 +61,7 @@ export interface CloudSaveEntry {
   filename: string;
   saveType: string;
   size: number;
+  dataHash?: string;
   clientModifiedAt: string;
   uploadedAt: string;
 }
@@ -332,6 +351,11 @@ export function useBpmGameSaves(
 
   // ── Ludusavi PC-game saves ────────────────────────────────────────────
   const pcSaves = ref<LudusaviFile[]>([]);
+  /**
+   * Why the PC save listing failed, or null. Kept apart from an empty list:
+   * "Drop could not look" must not read as "no saves on this device".
+   */
+  const pcSavesError = ref<string | null>(null);
   const pcSaveStatus = ref("");
   const ludusaviAvailable = ref(false);
   const ludusaviInstalling = ref(false);
@@ -366,6 +390,7 @@ export function useBpmGameSaves(
   }
 
   async function fetchPcSaves() {
+    pcSavesError.value = null;
     try {
       ludusaviAvailable.value = await invoke("check_ludusavi");
       // Independent of whether any saves are on disk right now: a backup is
@@ -377,8 +402,9 @@ export function useBpmGameSaves(
         { gameId, gameName: gameName.value },
       );
       pcSaves.value = result.files;
-    } catch {
+    } catch (e) {
       pcSaves.value = [];
+      pcSavesError.value = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -515,37 +541,64 @@ export function useBpmGameSaves(
   }
 
   const pcSyncStatus = ref<Record<string, string>>({});
+  /** Each save slot's cloud row, keyed by `group.name`. */
   const pcCloudSaves = ref<Record<string, CloudSaveEntry>>({});
   const pcCloudStatus = ref<Record<string, string>>({});
 
+  /**
+   * Match each save slot to its cloud row by the name the sync scanner gives
+   * the file (`cloudFilename`), which for a save in a subfolder is its path
+   * relative to the save root. Matching on the basename (`pc__${name}`) never
+   * found those, so they showed no status and could not be downloaded.
+   * A slot without a scanner name falls back to the basename, which is what a
+   * save at the top of its folder is called anyway.
+   *
+   * Status is the same three-way rule as the desktop panel and the launch
+   * sync (`saveSyncState`), not modification times, which disagree between
+   * machines.
+   */
   function refreshPcCloudStatus() {
-    const map: Record<string, CloudSaveEntry> = {};
+    const byFilename = new Map<string, CloudSaveEntry>();
+    const byBasename = new Map<string, CloudSaveEntry>();
     for (const cloud of cloudSaves.value) {
+      byFilename.set(cloud.filename, cloud);
       const base = stripPcCloudPrefix(cloud.filename);
-      if (base !== null) {
-        map[base.toLowerCase()] = cloud;
-      }
+      if (base !== null) byBasename.set(base.toLowerCase(), cloud);
     }
-    pcCloudSaves.value = map;
 
+    const map: Record<string, CloudSaveEntry> = {};
     const status: Record<string, string> = {};
     for (const group of pcSaveGroups.value) {
-      const cloud = map[group.name.toLowerCase()];
+      const key = group.primary?.cloudFilename;
+      const cloud = key
+        ? byFilename.get(key)
+        : byBasename.get(group.name.toLowerCase());
       if (!cloud) continue;
+      map[group.name] = cloud;
       if (!group.primary) {
         status[group.name] = "cloud-only";
-      } else {
-        const localModified = group.primary.modified * 1000;
-        const cloudModified = new Date(cloud.clientModifiedAt).getTime();
-        if (Math.abs(localModified - cloudModified) < 2000) {
-          status[group.name] = "synced";
-        } else if (cloudModified > localModified) {
-          status[group.name] = "cloud-newer";
-        } else {
-          status[group.name] = "local-newer";
-        }
+        continue;
       }
+      const state = saveSyncState(
+        {
+          dataHash: group.primary.dataHash ?? "",
+          syncedHash: group.primary.syncedHash,
+          syncedCloudId: group.primary.syncedCloudId,
+          lastSyncedByOtherAccount: group.primary.lastSyncedByOtherAccount,
+          otherAccountsOnThisDevice: group.primary.otherAccountsOnThisDevice,
+        },
+        { id: cloud.id, dataHash: cloud.dataHash ?? "" },
+      );
+      status[group.name] =
+        state === "synced"
+          ? "synced"
+          : state === "cloudNewer"
+            ? "cloud-newer"
+            : state === "localNewer"
+              ? "local-newer"
+              : "conflict";
     }
+    pcCloudSaves.value = map;
     pcCloudStatus.value = status;
   }
 
@@ -554,7 +607,19 @@ export function useBpmGameSaves(
 
   /** Whether a PC save group has a cloud counterpart (template helper). */
   function hasPcCloudSave(groupName: string): boolean {
-    return groupName.toLowerCase() in pcCloudSaves.value;
+    return groupName in pcCloudSaves.value;
+  }
+
+  /**
+   * A PC save only on this device, on a device where another Drop account
+   * also syncs this game: never backed up automatically (same rule as the
+   * launch sync and the desktop panel's Sync), only by its Upload button.
+   */
+  function pcHeldOnSharedDevice(group: PcSaveGroup): boolean {
+    return heldOnSharedDeviceState(
+      hasPcCloudSave(group.name) ? "synced" : "localOnly",
+      group.primary ?? null,
+    );
   }
 
   async function uploadPcSave(group: PcSaveGroup) {
@@ -562,13 +627,14 @@ export function useBpmGameSaves(
     pcSyncStatus.value[group.name] = "uploading";
     try {
       // `backup_saves` re-scans with Ludusavi and uploads the requested file
-      // through the JWT/cert-authed path. The `pc__` namespace prefix is the
-      // sanitize-safe identity the scanner emits, so a save backed up here and
-      // one backed up on desktop are the same cloud entry.
+      // through the JWT/cert-authed path. `cloudFilename` is the identity the
+      // scanner emits, so a save backed up here and one backed up on desktop
+      // are the same cloud entry. The basename form is only for a file the
+      // scanner did not name, and `backup_saves` matches it by basename.
       const result = await invoke<BackupResult>("backup_saves", {
         gameId,
         gameName: gameName.value,
-        filenames: [`pc__${group.name}`],
+        filenames: [group.primary.cloudFilename ?? `pc__${group.name}`],
       });
       if (result.errors.length > 0) onError(`Upload failed: ${result.errors[0]}`);
       await fetchCloudSaves();
@@ -582,7 +648,7 @@ export function useBpmGameSaves(
   }
 
   async function downloadPcSave(group: PcSaveGroup) {
-    const cloudEntry = pcCloudSaves.value[group.name.toLowerCase()];
+    const cloudEntry = pcCloudSaves.value[group.name];
     if (!cloudEntry) return;
     pcSyncStatus.value[group.name] = "downloading";
     try {
@@ -635,6 +701,8 @@ export function useBpmGameSaves(
     mergedSaves,
     // Ludusavi PC saves
     pcSaves,
+    pcSavesError,
+    fetchPcSaves,
     pcSaveStatus,
     hasPcBackup,
     pcSaveGroups,
@@ -647,6 +715,7 @@ export function useBpmGameSaves(
     pcSyncStatus,
     pcCloudStatus,
     hasPcCloudSave,
+    pcHeldOnSharedDevice,
     uploadPcSave,
     downloadPcSave,
     // Lifecycle

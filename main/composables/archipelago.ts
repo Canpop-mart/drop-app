@@ -1,6 +1,8 @@
 /**
  * Shared state + actions for Archipelago multiworld sessions, used by the
- * desktop Multiplayer page and (read-only) the Big Picture one.
+ * desktop Multiplayer page (ArchipelagoPanel) and the Big Picture one
+ * (BigPictureArchipelago), which can join, leave and set the connect address
+ * but not start a session or upload YAMLs.
  *
  * Mirrors `coop-room.ts` deliberately: same singleton-poll + `useState` shape,
  * so both tabs behave identically. The difference is what a session IS — co-op
@@ -16,6 +18,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
+import {
+  type ApZerotierStatus,
+  isSessionGoneError,
+  normaliseSessionCode,
+  parseLeaveError,
+  restoreRejoinPlan,
+} from "./archipelago-logic";
 
 export interface ApSessionInfo {
   sessionId: string;
@@ -31,7 +40,6 @@ export interface ApSlot {
   slotName: string | null;
   game: string | null;
   hasYaml: boolean;
-  validationError: string | null;
   uploadedAt: string | null;
   isHost: boolean;
   isSelf: boolean;
@@ -45,6 +53,8 @@ export interface ApSessionDetail {
   connectAddress: string | null;
   networkId: string | null;
   serverAddress: string | null;
+  /** False when the server's ZeroTier node doesn't report holding `serverAddress`. */
+  serverAddressVerified?: boolean;
   isHost: boolean;
   slots: ApSlot[];
   readyCount: number;
@@ -66,6 +76,28 @@ export function useArchipelago() {
   const sessionEnded = useState("apSessionEnded", () => false);
   const codeCopied = useState("apCodeCopied", () => false);
   const connectCopied = useState("apConnectCopied", () => false);
+
+  // Each failure has its own state so a failed fetch never looks like "no
+  // session", and each has its own retry.
+  /** The poll for the current session failed; the last good view stays up. */
+  const fetchError = useState("apFetchError", () => "");
+  /** Checking the server for an open session after a restart failed. */
+  const restoreError = useState("apRestoreError", () => "");
+  /** True while that check runs, so the start/join forms don't flash up. */
+  const restoring = useState("apRestoring", () => false);
+  /** Re-joining the overlay for a restored session failed. */
+  const reconnectError = useState("apReconnectError", () => "");
+  /**
+   * A restored session's overlay wasn't re-joined automatically because that
+   * might have needed a UAC or password prompt; the user presses Reconnect.
+   */
+  const reconnectNeeded = useState("apReconnectNeeded", () => false);
+  /** Re-joining needs the one-time ZeroTier setup, which Game Mode can't do. */
+  const desktopSetupNeeded = useState("apDesktopSetupNeeded", () => false);
+  /** The server didn't record a leave; the session is still open. */
+  const leaveError = useState("apLeaveError", () => "");
+  /** Loading the WebHost link and game list failed. */
+  const configError = useState("apConfigError", () => "");
 
   // WebHost integration (the separate container that owns YAML generation and
   // room hosting). Null/empty until loadConfig runs, or when the operator hasn't
@@ -111,28 +143,48 @@ export function useArchipelago() {
   const copyConnect = () =>
     copyText(detail.value?.connectAddress, connectCopied, "connect");
 
+  /** Forget the current session locally (it was left, closed or is gone). */
+  function clearSession() {
+    stopPolling();
+    session.value = null;
+    detail.value = null;
+    notice.value = "";
+    fetchError.value = "";
+    reconnectError.value = "";
+    reconnectNeeded.value = false;
+    desktopSetupNeeded.value = false;
+    leaveError.value = "";
+  }
+
+  /** This device is on the session's overlay (just created, joined or reconnected). */
+  function markConnected() {
+    reconnectError.value = "";
+    reconnectNeeded.value = false;
+    desktopSetupNeeded.value = false;
+  }
+
   async function refresh() {
     const id = session.value?.sessionId ?? detail.value?.sessionId;
     if (!id) return;
     try {
-      detail.value = await invoke<ApSessionDetail>("ap_session_get", {
+      const d = await invoke<ApSessionDetail>("ap_session_get", {
         sessionId: id,
       });
-      if (detail.value.status === "Closed") {
-        stopPolling();
-        session.value = null;
-        detail.value = null;
+      fetchError.value = "";
+      if (d.status === "Closed") {
+        clearSession();
         sessionEnded.value = true;
+      } else {
+        detail.value = d;
       }
     } catch (e) {
       // Mirrors co-op: a vanished session is a calm "ended", not an error.
-      if (errMessage(e).includes("session_not_found")) {
-        stopPolling();
-        session.value = null;
-        detail.value = null;
+      if (isSessionGoneError(errMessage(e))) {
+        clearSession();
         sessionEnded.value = true;
       } else {
         console.error("ap_session_get failed", e);
+        fetchError.value = errMessage(e);
       }
     }
   }
@@ -158,6 +210,8 @@ export function useArchipelago() {
       session.value = await invoke<ApSessionInfo>("ap_session_create", {
         name: name?.trim() || null,
       });
+      restoreError.value = "";
+      markConnected();
       await refresh();
       startPolling();
     } catch (e) {
@@ -167,9 +221,10 @@ export function useArchipelago() {
     }
   }
 
-  async function join(code: string) {
-    const c = code.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
-    if (busy.value || c.length === 0) return;
+  /** Join by code. Resolves true when this device is now in the session. */
+  async function join(code: string): Promise<boolean> {
+    const c = normaliseSessionCode(code);
+    if (busy.value || c.length === 0) return false;
     busy.value = true;
     error.value = "";
     notice.value = "";
@@ -178,10 +233,14 @@ export function useArchipelago() {
       session.value = await invoke<ApSessionInfo>("ap_session_join", {
         shortCode: c,
       });
+      restoreError.value = "";
+      markConnected();
       await refresh();
       startPolling();
+      return true;
     } catch (e) {
       error.value = errMessage(e);
+      return false;
     } finally {
       busy.value = false;
     }
@@ -248,10 +307,26 @@ export function useArchipelago() {
     }
   }
 
-  /** Host stores the connect string from the Archipelago room page. */
-  async function setConnect(address: string) {
+  /**
+   * Host stores the connect string from the Archipelago room page. Resolves
+   * true only when the server saved it, so callers keep the typed draft
+   * otherwise. Every false return leaves a reason in `error`.
+   */
+  async function setConnect(address: string): Promise<boolean> {
     const id = session.value?.sessionId ?? detail.value?.sessionId;
-    if (!id || busy.value || !address.trim()) return;
+    if (!id) {
+      error.value = "Not in a session any more, so the address wasn't saved.";
+      return false;
+    }
+    if (!address.trim()) {
+      error.value = "Enter the connect address first.";
+      return false;
+    }
+    if (busy.value) {
+      error.value =
+        "Something else is still in progress. Try saving the address again in a moment.";
+      return false;
+    }
     busy.value = true;
     error.value = "";
     notice.value = "";
@@ -261,8 +336,10 @@ export function useArchipelago() {
         connectAddress: address,
       });
       await refresh();
+      return true;
     } catch (e) {
       error.value = errMessage(e);
+      return false;
     } finally {
       busy.value = false;
     }
@@ -273,41 +350,128 @@ export function useArchipelago() {
     if (!id || busy.value) return;
     busy.value = true;
     error.value = "";
+    leaveError.value = "";
     try {
       await invoke("ap_session_leave", {
         sessionId: id,
         networkId: session.value?.networkId ?? detail.value?.networkId ?? null,
       });
+      clearSession();
     } catch (e) {
-      // The Rust side has already left what it could; this says what didn't
-      // happen (e.g. ZeroTier wasn't running to disconnect the overlay). Shown
-      // by ArchipelagoPanel on both surfaces.
-      error.value = errMessage(e);
+      const parsed = parseLeaveError(errMessage(e));
+      if (parsed.notRecorded) {
+        // The server still has us in the session and nothing local changed:
+        // keep it on screen so the leave can be retried.
+        leaveError.value = parsed.message;
+      } else {
+        // The server recorded the leave; this says what didn't happen locally
+        // (e.g. ZeroTier wasn't running to disconnect the overlay).
+        clearSession();
+        error.value = parsed.message;
+      }
     } finally {
-      stopPolling();
-      session.value = null;
-      detail.value = null;
-      notice.value = "";
       busy.value = false;
     }
   }
 
-  /** Re-attach to an open session after a client restart. */
+  /**
+   * Forget the session on this device only, for when a leave can't be
+   * recorded because the server is gone: leaves the overlay and clears the
+   * cached ids so Drop's own ZeroTier daemon can stop. The server isn't told.
+   */
+  async function forget() {
+    if (busy.value || !(session.value || detail.value)) return;
+    const networkId =
+      session.value?.networkId ?? detail.value?.networkId ?? null;
+    busy.value = true;
+    error.value = "";
+    notice.value = "";
+    try {
+      await invoke("ap_session_forget", { networkId });
+      clearSession();
+      notice.value =
+        "Removed the session from this device. The server may still list you in it.";
+    } catch (e) {
+      // The session is forgotten locally either way; this says what the
+      // overlay leave couldn't do.
+      clearSession();
+      error.value = `Removed the session from this device, but couldn't take this device off the Archipelago network: ${errMessage(e)}`;
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  /**
+   * Re-join the overlay for the session on screen (after a restart the local
+   * ZeroTier daemon may not be running, or not on the network). Joining a
+   * session you're already in is harmless on the server: it re-authorizes this
+   * device, records its node id and counts as activity. May show a UAC or
+   * password prompt, so restore() only calls it when none is needed.
+   */
+  async function reconnect() {
+    const code = detail.value?.shortCode;
+    if (!code || busy.value) return;
+    busy.value = true;
+    reconnectError.value = "";
+    try {
+      session.value = await invoke<ApSessionInfo>("ap_session_join", {
+        shortCode: code,
+      });
+      markConnected();
+    } catch (e) {
+      reconnectError.value = errMessage(e);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  /**
+   * Re-attach to an open session after a client restart. Its overlay is
+   * re-joined right away only when that can't prompt (see restoreRejoinPlan);
+   * otherwise the view offers Reconnect, or in Game Mode says the setup needs
+   * Desktop Mode. A failed check is shown as an error with a retry, not as
+   * "no session".
+   */
   async function restore() {
-    if (session.value || detail.value) return;
+    if (session.value || detail.value || restoring.value) return;
+    restoring.value = true;
+    restoreError.value = "";
+    let found: ApSessionDetail | null = null;
     try {
       const open_ = await invoke<Array<{ sessionId: string }>>(
         "ap_session_list",
       );
       const first = open_?.[0];
-      if (!first) return;
-      detail.value = await invoke<ApSessionDetail>("ap_session_get", {
-        sessionId: first.sessionId,
-      });
-      startPolling();
+      if (first) {
+        found = await invoke<ApSessionDetail>("ap_session_get", {
+          sessionId: first.sessionId,
+        });
+      }
     } catch (e) {
       console.error("ap_session_list failed", e);
+      restoreError.value = errMessage(e);
+    } finally {
+      restoring.value = false;
     }
+    // A join or create may have finished while we were asking.
+    if (!found || found.status === "Closed" || session.value || detail.value)
+      return;
+    detail.value = found;
+    startPolling();
+
+    let status: ApZerotierStatus | null = null;
+    try {
+      status = await invoke<ApZerotierStatus>("zerotier_status");
+    } catch (e) {
+      // Unknown state: offer Reconnect rather than risk a prompt.
+      console.error("zerotier_status failed", e);
+    }
+    // Left, forgotten or replaced while we asked.
+    if (detail.value?.sessionId !== found.sessionId || session.value) return;
+    const plan = restoreRejoinPlan(status);
+    if (plan === "auto") await reconnect();
+    else if (plan === "ask") reconnectNeeded.value = true;
+    else desktopSetupNeeded.value = true;
   }
 
   function dismissSessionEnded() {
@@ -329,8 +493,10 @@ export function useArchipelago() {
       webHostUrl.value = cfg.webHostUrl ?? null;
       supportedGames.value = Array.isArray(cfg.games) ? cfg.games : [];
       configLoaded.value = true;
+      configError.value = "";
     } catch (e) {
       console.error("ap_web_host failed", e);
+      configError.value = errMessage(e);
     }
   }
 
@@ -362,6 +528,14 @@ export function useArchipelago() {
     sessionEnded,
     codeCopied,
     connectCopied,
+    fetchError,
+    restoreError,
+    restoring,
+    reconnectError,
+    reconnectNeeded,
+    desktopSetupNeeded,
+    leaveError,
+    configError,
     webHostUrl,
     supportedGames,
     rawCode,
@@ -380,6 +554,8 @@ export function useArchipelago() {
     saveBundle,
     setConnect,
     leave,
+    forget,
+    reconnect,
     restore,
     dismissSessionEnded,
   };

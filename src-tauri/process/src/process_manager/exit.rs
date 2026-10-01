@@ -265,35 +265,44 @@ fn describe_exit(result: &Result<ExitStatus, std::io::Error>, manually_killed: b
     }
 }
 
+/// How long the exit path waits for an in-flight `start_playtime` to settle.
+/// The start retries three times with 2s and 4s backoffs, so it can still be
+/// running several seconds after a quick game exits. Waiting 3s used to cut
+/// it off and drop the session.
+const PLAYTIME_START_WAIT: Duration = Duration::from_secs(15);
+
 /// Spawn the async post-exit work: report the playtime stop, notify the
 /// server the session ended, and upload any saves that changed. Split out so
 /// [`ProcessManager::on_process_finish`] stays focused on state cleanup.
 ///
-/// Takes ownership of the session-id slot and save snapshot — a fast-exiting
-/// game can reach here before the async start task has stored the id, so the
-/// task below retries reading it; moving the `Arc<Mutex>` itself (rather than
-/// snapshotting the `Option`) preserves that race resolution.
+/// Takes ownership of the playtime slot and save snapshot — a fast-exiting
+/// game can reach here before the async start task has settled, so the task
+/// below waits for it; moving the `Arc<Mutex>` itself (rather than
+/// snapshotting it) is what lets it see the answer arrive.
 fn spawn_post_exit_sync(
     app_handle: tauri::AppHandle,
-    session_slot: Arc<std::sync::Mutex<Option<String>>>,
+    session_slot: Arc<std::sync::Mutex<crate::process_manager::PlaytimeSlot>>,
     snapshot: Option<crate::process_manager::SaveSyncSnapshot>,
     game_id: &str,
     elapsed: Duration,
 ) {
+    use crate::process_manager::PlaytimeSlot;
+
     let sync_game_id = game_id.to_string();
     let actual_duration_secs = elapsed.as_secs() as u32;
+    // Wall-clock start, for a session the server never opened. Taken now,
+    // before any waiting, so the wait does not shift it.
+    let started_at = chrono::Utc::now()
+        - chrono::Duration::from_std(elapsed).unwrap_or_else(|_| chrono::Duration::zero());
+    // Who played, for anything that has to be queued and replayed later: the
+    // queue only sends it while this same account is signed in. Read now,
+    // while the session's account is still the signed-in one.
+    let player = remote::save_sync::current_user_id();
 
     tauri::async_runtime::spawn(async move {
-        // start_playtime can take up to ~7s when retrying, but the first
-        // attempt usually lands sub-second — wait ~3s for the id.
-        //
-        // In incognito mode no `start_playtime` was ever launched, so the
-        // slot will time out empty. We use that absence as the signal to
-        // also skip the achievement-session-end notify below: an incognito
-        // launch leaves zero server-side traces.
-        let session_id = wait_for_session_id(&session_slot, Duration::from_secs(3)).await;
-        match &session_id {
-            Some(sid) => {
+        let session = wait_for_playtime_start(&session_slot, PLAYTIME_START_WAIT).await;
+        let reported = match &session {
+            PlaytimeSlot::Started(sid) => {
                 if let Err(e) =
                     remote::playtime::stop_playtime(sid, Some(actual_duration_secs)).await
                 {
@@ -302,19 +311,42 @@ fn spawn_post_exit_sync(
                     warn!(
                         "[EXIT] playtime stop failed after retries; queuing for later: {e}"
                     );
-                    remote::playtime::queue_pending_stop(sid, actual_duration_secs);
+                    remote::playtime::queue_pending_stop(
+                        sid,
+                        actual_duration_secs,
+                        player.as_deref(),
+                    );
                 }
+                true
             }
-            None => log::info!(
-                "[EXIT] no playtime session for {sync_game_id} ({actual_duration_secs}s) — \
-                 incognito launch, start_playtime failure, or fast-exit before start landed"
-            ),
-        }
+            PlaytimeSlot::Incognito => {
+                log::info!("[EXIT] incognito launch of {sync_game_id}: no playtime reported");
+                false
+            }
+            // The start failed, or is still retrying after the wait. Either
+            // way there is no session to stop, so record the whole thing. A
+            // start that lands later leaves an open session the daily cleanup
+            // closes; overlapping sessions are merged, not added, in totals.
+            PlaytimeSlot::Failed | PlaytimeSlot::Starting => {
+                log::info!(
+                    "[EXIT] no playtime session for {sync_game_id} ({session:?}); recording \
+                     {actual_duration_secs}s directly"
+                );
+                remote::playtime::record_session(
+                    player.as_deref(),
+                    &sync_game_id,
+                    started_at,
+                    actual_duration_secs,
+                )
+                .await;
+                false
+            }
+        };
 
         // Achievement session-end notify only matters if we opened a session.
         // Otherwise (incognito, or start_playtime never landed) there's
         // nothing on the server side to reconcile.
-        if session_id.is_some()
+        if reported
             && let Err(e) = remote::achievements::notify_session_end(&sync_game_id).await {
                 warn!("[EXIT] failed to notify session end for {sync_game_id}: {e}");
             }
@@ -371,7 +403,7 @@ async fn upload_changed_saves_for(
                 &snap.game_id,
                 PHASE_UPLOAD,
                 "This session's saves were not backed up, because the sync before launch did \
-                 not finish. Your progress is still on this PC. Back it up from the game's \
+                 not finish. Your progress is still on this device. Back it up from the game's \
                  Cloud Saves panel.",
                 true,
             );
@@ -389,11 +421,43 @@ async fn upload_changed_saves_for(
         ));
     }
     if let Some(name) = &snap.game_name {
-        current_saves.extend(remote::save_sync::scan_pc_saves(
+        // Built now, not at launch: a first Proton launch creates the game's
+        // Wine prefix during the session, and a context taken before it had
+        // no prefix, so this scan could not see the saves that session made.
+        let scan = remote::save_sync::pc_scan_context(&snap.game_id, snap.target_platform);
+        match remote::save_sync::scan_pc_saves(
             name,
-            None,
-            snap.wine_prefix.as_deref(),
-        ));
+            scan.steam_app_id.as_deref(),
+            scan.wine_prefix.as_deref(),
+        ) {
+            Ok(found) => current_saves.extend(found),
+            Err(remote::save_sync::PcScanError::LudusaviMissing) => {}
+            Err(remote::save_sync::PcScanError::Failed(reason)) => {
+                emit_sync_error(
+                    app_handle,
+                    &snap.game_id,
+                    PHASE_UPLOAD,
+                    &format!(
+                        "This session's saves were not backed up, because Drop could not look \
+                         for them. Your progress is still on this device. {reason}"
+                    ),
+                    true,
+                );
+                return;
+            }
+        }
+    }
+
+    // Conflicts a streaming launch set aside: neither copy was chosen, so
+    // neither may be overwritten. They stay out of the upload and out of the
+    // manifest until someone picks a side.
+    if !snap.deferred_conflicts.is_empty() {
+        info!(
+            "[SAVE-SYNC] Not uploading {} save(s) with an unresolved conflict for {}",
+            snap.deferred_conflicts.len(),
+            snap.game_id
+        );
+        current_saves.retain(|f| !snap.deferred_conflicts.contains(&f.filename));
     }
 
     // Ask what will fit before pushing it. The 413 the server would otherwise
@@ -484,25 +548,28 @@ async fn upload_changed_saves_for(
     }
 }
 
-/// Poll the playtime session-id mutex up to `timeout`, returning the id as
-/// soon as it is populated. Used by the stop path to dodge the race where a
-/// game exits before the async `start_playtime` task has stored the id.
+/// Poll the playtime slot until the start has settled (started, failed, or
+/// incognito) or `timeout` passes, and return what it holds. Used by the stop
+/// path to dodge the race where a game exits before the async
+/// `start_playtime` task has finished.
 ///
 /// Poll interval is 100ms — fast enough that a typical sub-second start
 /// barely delays the stop, slow enough that the wait doesn't burn CPU.
-pub(crate) async fn wait_for_session_id(
-    slot: &Arc<std::sync::Mutex<Option<String>>>,
+pub(crate) async fn wait_for_playtime_start(
+    slot: &Arc<std::sync::Mutex<crate::process_manager::PlaytimeSlot>>,
     timeout: Duration,
-) -> Option<String> {
+) -> crate::process_manager::PlaytimeSlot {
+    use crate::process_manager::PlaytimeSlot;
     let start = Instant::now();
     loop {
-        if let Ok(guard) = slot.lock()
-            && let Some(id) = guard.clone()
-        {
-            return Some(id);
-        }
-        if start.elapsed() >= timeout {
-            return None;
+        let held = match slot.lock() {
+            Ok(guard) => guard.clone(),
+            // The slot holds a plain enum and every writer replaces it whole,
+            // so a poisoned lock still holds a meaningful value.
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        if held != PlaytimeSlot::Starting || start.elapsed() >= timeout {
+            return held;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

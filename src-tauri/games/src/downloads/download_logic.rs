@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 #[cfg(unix)]
 use std::fs::{Permissions, set_permissions};
 use std::io::SeekFrom;
@@ -26,6 +26,8 @@ use tauri::Url;
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _, AsyncWriteExt as _};
 use tokio_util::io::StreamReader;
 use utils::path_guard;
+
+use super::download_agent::DownloadInformation;
 
 const READ_BUF_LEN: usize = 1024 * 1024;
 
@@ -202,4 +204,255 @@ pub async fn download_game_chunk(
     }
 
     Ok(true)
+}
+
+/// The size each file in `info` ends up, from the end of its last chunk entry
+/// in the manifest of the version that ships it (`file_list`).
+///
+/// Only complete for a manifest fetched WITHOUT `previous`: a delta leaves out
+/// chunks that hold only files unchanged since that version, so a large
+/// unchanged file can look shorter than it is.
+pub fn manifest_file_sizes(info: &DownloadInformation) -> HashMap<String, u64> {
+    let mut sizes: HashMap<String, u64> = HashMap::new();
+    for (version_id, manifest) in &info.manifests {
+        for chunk in manifest.chunks.values() {
+            for f in &chunk.files {
+                if info.file_list.get(&f.filename) != Some(version_id) {
+                    continue;
+                }
+                let end = (f.start as u64).saturating_add(f.length as u64);
+                let size = sizes.entry(f.filename.clone()).or_insert(0);
+                *size = (*size).max(end);
+            }
+        }
+    }
+    sizes
+}
+
+/// The files a download of `info` writes: every chunk entry whose file this
+/// version ships (`download_game_chunk` skips the rest).
+pub fn files_written_by(info: &DownloadInformation) -> HashSet<String> {
+    info.manifests
+        .iter()
+        .flat_map(|(version_id, manifest)| {
+            manifest.chunks.values().flat_map(move |chunk| {
+                chunk
+                    .files
+                    .iter()
+                    .filter(move |f| info.file_list.get(&f.filename) == Some(version_id))
+                    .map(|f| f.filename.clone())
+            })
+        })
+        .collect()
+}
+
+/// Cut every file in `written` back to its manifest size (`sizes`, from
+/// `manifest_file_sizes` over a FULL manifest) when it is longer.
+///
+/// `download_game_chunk` writes into an existing file in place, without
+/// truncating it, because one file can span several chunks written in any
+/// order. So when an update rewrites a file that got smaller (a mod's own
+/// file from its previous version, another mod's file it overwrites, or a
+/// base-game file updated in place), the old file's tail is left after the
+/// new content. Validation only checks that a file is long enough, so this is
+/// the step that removes it. Run once every chunk is on disk.
+///
+/// A file with no known size, or whose folder leads out of `base_path`
+/// through a symlink (an SD-card link on the Deck, say), is left alone and
+/// reported in the log. Only an error opening or cutting a file that needs it
+/// fails. Returns how many files were cut.
+pub fn trim_stale_tails(
+    base_path: &Path,
+    written: &HashSet<String>,
+    sizes: &HashMap<String, u64>,
+) -> Result<usize, std::io::Error> {
+    // Resolved only once a file actually needs cutting.
+    let mut base_real: Option<std::path::PathBuf> = None;
+    let mut trimmed = 0;
+    for name in written {
+        let Some(&size) = sizes.get(name) else {
+            log::warn!("no size for {name} in the full manifest; not checking it for a stale tail");
+            continue;
+        };
+        let Ok(path) = path_guard::join_within(base_path, Path::new(name)) else {
+            // download_game_chunk refuses this name, so it was never written.
+            continue;
+        };
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                // Missing: validation reports it. Anything else: it can't be
+                // looked at, so it isn't touched.
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    log::warn!("not checking {} for a stale tail: {e}", path.display());
+                }
+                continue;
+            }
+        };
+        if !meta.is_file() || meta.len() <= size {
+            continue;
+        }
+        let root = match &base_real {
+            Some(r) => r,
+            None => base_real.insert(base_path.canonicalize()?),
+        };
+        if path_guard::ensure_parent_within(root, &path).is_err() {
+            log::warn!(
+                "{} is {} bytes, more than the {size} it should be, but its folder leads outside {}; not cutting it",
+                path.display(),
+                meta.len(),
+                base_path.display()
+            );
+            continue;
+        }
+        std::fs::OpenOptions::new().write(true).open(&path)?.set_len(size)?;
+        debug!("cut stale tail from {} ({} -> {size} bytes)", path.display(), meta.len());
+        trimmed += 1;
+    }
+    Ok(trimmed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use droplet_rs::manifest::{FileEntry, Manifest};
+    use std::io::{Seek, Write};
+
+    fn entry(name: &str, start: usize, length: usize) -> FileEntry {
+        FileEntry {
+            filename: name.to_string(),
+            start,
+            length,
+            permissions: 0,
+        }
+    }
+
+    fn info(version: &str, chunks: Vec<(&str, Vec<FileEntry>)>) -> DownloadInformation {
+        let mut file_list = HashMap::new();
+        let chunks: HashMap<String, ChunkData> = chunks
+            .into_iter()
+            .map(|(id, files)| {
+                for f in &files {
+                    file_list.insert(f.filename.clone(), version.to_string());
+                }
+                (
+                    id.to_string(),
+                    ChunkData {
+                        files,
+                        checksum: String::new(),
+                        iv: [0; 16],
+                    },
+                )
+            })
+            .collect();
+        let mut manifests = HashMap::new();
+        manifests.insert(
+            version.to_string(),
+            Manifest {
+                version: version.to_string(),
+                chunks,
+                size: 0,
+                key: [0; 16],
+            },
+        );
+        DownloadInformation {
+            file_list,
+            manifests,
+            install_size: 0,
+            download_size: 0,
+        }
+    }
+
+    /// Exactly how `download_game_chunk` writes a file region: open without
+    /// truncating, seek to the entry's start, write.
+    fn write_in_place(path: &Path, start: u64, bytes: &[u8]) {
+        let mut f = std::fs::OpenOptions::new()
+            .truncate(false)
+            .write(true)
+            .create(true)
+            .open(path)
+            .unwrap();
+        f.seek(std::io::SeekFrom::Start(start)).unwrap();
+        f.write_all(bytes).unwrap();
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("drop-trim-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_shorter_rewritten_file_has_no_stale_tail() {
+        let dir = scratch("shorter");
+        let file = dir.join("config.json");
+        // Version 1 of the mod wrote a long file.
+        write_in_place(&file, 0, b"{\"old\": \"a much longer first version\"}");
+        // Version 2 rewrites it in place with shorter content, across two
+        // chunks written out of order.
+        let v2 = b"{\"new\": 1}";
+        write_in_place(&file, 5, &v2[5..]);
+        write_in_place(&file, 0, &v2[..5]);
+        let tail = std::fs::read(&file).unwrap();
+        assert!(tail.len() > v2.len(), "the in-place write left the old tail");
+
+        let manifest = info(
+            "v2",
+            vec![
+                ("c2", vec![entry("config.json", 5, v2.len() - 5)]),
+                ("c1", vec![entry("config.json", 0, 5)]),
+            ],
+        );
+        let sizes = manifest_file_sizes(&manifest);
+        assert_eq!(sizes.get("config.json"), Some(&(v2.len() as u64)));
+        let written = files_written_by(&manifest);
+        assert_eq!(trim_stale_tails(&dir, &written, &sizes).unwrap(), 1);
+        assert_eq!(std::fs::read(&file).unwrap(), v2);
+        // Running it again changes nothing.
+        assert_eq!(trim_stale_tails(&dir, &written, &sizes).unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn files_this_download_does_not_write_are_left_alone() {
+        let dir = scratch("untouched");
+        std::fs::write(dir.join("other.dll"), b"another mod's longer file").unwrap();
+        std::fs::write(dir.join("mine.dll"), b"exact").unwrap();
+        let mut manifest = info("v2", vec![("c1", vec![entry("mine.dll", 0, 5), entry("other.dll", 0, 3)])]);
+        // other.dll ships in an older version: this download skips it.
+        manifest.file_list.insert("other.dll".to_string(), "v1".to_string());
+        let sizes = manifest_file_sizes(&manifest);
+        let written = files_written_by(&manifest);
+        assert!(!written.contains("other.dll"));
+        assert_eq!(trim_stale_tails(&dir, &written, &sizes).unwrap(), 0);
+        assert_eq!(std::fs::read(dir.join("other.dll")).unwrap(), b"another mod's longer file");
+        assert_eq!(std::fs::read(dir.join("mine.dll")).unwrap(), b"exact");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_without_a_known_size_is_not_cut() {
+        let dir = scratch("unknown");
+        std::fs::write(dir.join("big.pak"), b"0123456789").unwrap();
+        let written: HashSet<String> = ["big.pak".to_string()].into_iter().collect();
+        assert_eq!(trim_stale_tails(&dir, &written, &HashMap::new()).unwrap(), 0);
+        assert_eq!(std::fs::read(dir.join("big.pak")).unwrap().len(), 10);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn never_cuts_a_file_reached_through_a_symlink_out_of_the_folder() {
+        let dir = scratch("symlink");
+        let outside = scratch("symlink-outside");
+        std::fs::write(outside.join("save.dat"), b"precious save data").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("Saves")).unwrap();
+        let written: HashSet<String> = ["Saves/save.dat".to_string()].into_iter().collect();
+        let sizes: HashMap<String, u64> = [("Saves/save.dat".to_string(), 2)].into_iter().collect();
+        assert_eq!(trim_stale_tails(&dir, &written, &sizes).unwrap(), 0);
+        assert_eq!(std::fs::read(outside.join("save.dat")).unwrap(), b"precious save data");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
 }

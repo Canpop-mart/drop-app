@@ -262,6 +262,9 @@
         <p v-if="saveError" class="text-sm text-red-400 mr-auto">
           {{ saveError }}
         </p>
+        <p v-else-if="saveNote" class="text-sm text-amber-400 mr-auto">
+          {{ saveNote }}
+        </p>
         <p v-else-if="saveOk" class="text-sm text-green-400 mr-auto">
           Saved!
         </p>
@@ -280,6 +283,21 @@
         </button>
       </div>
     </template>
+
+    <!-- Load failed. No editor: its fields would be empty and Save would
+         write the blanks over the real profile. -->
+    <div
+      v-else
+      class="flex min-h-[40vh] flex-col items-center justify-center gap-4 text-sm text-zinc-400"
+    >
+      <p>{{ loadError }}</p>
+      <button
+        class="rounded-md bg-zinc-800/60 px-4 py-2 font-medium text-zinc-200 ring-1 ring-zinc-700/60 transition-colors hover:bg-zinc-800"
+        @click="load"
+      >
+        Try again
+      </button>
+    </div>
   </div>
 </template>
 
@@ -297,19 +315,23 @@ import {
 } from "~/composables/use-server-api";
 import { objectImageUrl } from "~/composables/use-object";
 import ProfilePicturePicker from "~/components/ProfilePicturePicker.vue";
+import { useProfileTheme } from "~/composables/use-profile-theme";
 import {
   PROFILE_THEME_PRESETS,
+  isCustomProfileTheme,
   resolveAccentHex,
-  useProfileTheme,
-} from "~/composables/use-profile-theme";
+} from "~/composables/profile-themes";
+import { useAppState } from "~/composables/app-state";
 
 useHead({ title: "Edit profile" });
 
 const router = useRouter();
 const api = useServerApi();
+const state = useAppState();
 
 const loading = ref(true);
 const profile = ref<UserProfile | null>(null);
+const loadError = ref("");
 
 const displayName = ref("");
 const bio = ref("");
@@ -326,16 +348,14 @@ const bannerPreview = ref<string | null>(null);
 const saving = ref(false);
 const saveError = ref<string | null>(null);
 const saveOk = ref(false);
+// Saved, but with something the user should know (shown instead of "Saved!").
+const saveNote = ref<string | null>(null);
 
-const presetList = Object.entries(PROFILE_THEME_PRESETS).map(([id, p]) => ({
-  id,
-  label: p.label,
-  accent: p.accent,
-}));
+const presetList = PROFILE_THEME_PRESETS;
 
 // Accent state — `selectedTheme` holds either a preset key or a #hex string.
 const customColor = ref("#3b82f6");
-const isCustom = computed(() => /^#[0-9a-f]{6}$/i.test(selectedTheme.value));
+const isCustom = computed(() => isCustomProfileTheme(selectedTheme.value));
 const { vars: previewVars } = useProfileTheme(() => selectedTheme.value);
 
 function selectPreset(id: string) {
@@ -365,6 +385,10 @@ function objectUrl(id: string): string {
 function onAvatarSelected(newObjectId: string) {
   if (profile.value) {
     profile.value.profilePictureObjectId = newObjectId;
+  }
+  // The header avatar reads the app state, not this page.
+  if (state.value?.user) {
+    state.value.user.profilePictureObjectId = newObjectId;
   }
   saveError.value = null;
 }
@@ -399,12 +423,15 @@ async function onBannerSelect(e: Event) {
 
 async function save() {
   saveError.value = null;
+  saveNote.value = null;
   saveOk.value = false;
   saving.value = true;
+  const nameChanged = displayName.value !== initial.value.displayName;
   try {
+    // Every field is sent as-is: an empty bio is how the bio gets cleared.
     await api.profile.update({
-      displayName: displayName.value || undefined,
-      bio: bio.value || undefined,
+      displayName: displayName.value,
+      bio: bio.value,
       profileTheme: selectedTheme.value,
     });
     initial.value = {
@@ -412,12 +439,27 @@ async function save() {
       bio: bio.value,
       theme: selectedTheme.value,
     };
+    // Games get the display name from the user the app cached at startup, and
+    // the header shows the app state's copy. Refresh both.
+    try {
+      const fresh = await api.profile.refreshSignedInUser();
+      if (state.value) state.value.user = fresh;
+    } catch (e) {
+      console.warn("[PROFILE] Could not refresh the signed-in user:", e);
+      if (nameChanged) {
+        saveNote.value =
+          "Saved. Restart Drop for games to show your new name.";
+      }
+    }
     saveOk.value = true;
     // Brief flash, then return to the profile page so the user sees the
-    // updated state immediately. 800ms is enough to read "Saved!".
-    setTimeout(() => {
-      router.push("/profile");
-    }, 800);
+    // updated state immediately. 800ms is enough to read "Saved!". A note
+    // stays on screen instead, so it can be read.
+    if (!saveNote.value) {
+      setTimeout(() => {
+        router.push("/profile");
+      }, 800);
+    }
   } catch (e) {
     saveError.value =
       "Save failed: " + (e instanceof Error ? e.message : String(e));
@@ -426,7 +468,10 @@ async function save() {
   }
 }
 
-onMounted(async () => {
+async function load() {
+  loading.value = true;
+  loadError.value = "";
+  profile.value = null;
   try {
     const me = await api.profile.me();
     profile.value = me;
@@ -440,11 +485,13 @@ onMounted(async () => {
       theme: selectedTheme.value,
     };
   } catch (e) {
-    saveError.value =
+    loadError.value =
       "Couldn't load your profile. " +
       (e instanceof Error ? e.message : String(e));
   } finally {
     loading.value = false;
   }
-});
+}
+
+onMounted(load);
 </script>

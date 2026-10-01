@@ -28,6 +28,8 @@ export function useBpmMods(parentGameId: string) {
   // Distinguishes "no mods" from "haven't asked yet", which is what decides
   // whether the Mods tab is hidden or still showing.
   const loaded = ref(false);
+  /** Why the server's mod list could not be loaded, or null. */
+  const availableError = ref<string | null>(null);
 
   const installedCtl = useInstalledMods(parentGameId);
 
@@ -98,9 +100,10 @@ export function useBpmMods(parentGameId: string) {
       available.value = await invoke<AvailableMod[]>("fetch_game_mods", {
         gameId: parentGameId,
       });
+      availableError.value = null;
     } catch (e) {
       console.warn("[bpm-mods] failed to load available mods:", e);
-      available.value = [];
+      availableError.value = String(e);
     } finally {
       loaded.value = true;
     }
@@ -138,6 +141,16 @@ export function useBpmMods(parentGameId: string) {
     uninstallingModId: installedCtl.uninstallingModId,
     modError: installCtl.modError,
     installMod: (modId: string) => installCtl.installMod({ id: modId }),
+    updateMod: (modId: string) =>
+      installCtl.installMod({ id: modId }, { update: true }),
+    resumeMod: (modId: string) => installedCtl.resume(modId),
+    availableError,
+    installedError: installedCtl.error,
+    actionError: installedCtl.actionError,
+    /** Either list failed to load (drives the tab staying visible). */
+    failed: computed(
+      () => availableError.value !== null || installedCtl.error.value !== null,
+    ),
     prereqNames,
     prereqOpen,
     answerPrereqs,

@@ -11,6 +11,7 @@ use remote::{
 };
 use serde::{Deserialize, Serialize};
 use std::fs::remove_dir_all;
+use std::path::Path;
 use std::thread::spawn;
 use tauri::AppHandle;
 use utils::app_emit;
@@ -140,6 +141,54 @@ pub fn set_partially_installed_db(
     }
 }
 
+/// Forget a mod's install state: status Remote, no installed version, no
+/// per-install records, no transient status. Its files are handled by the
+/// caller (`mod_data::remove_mod`, or the base game's folder being deleted).
+pub fn clear_mod_install_state(db: &mut Database, mod_game_id: &str) {
+    transition_from_db(db, mod_game_id, StatusKind::Remote);
+    db.applications
+        .transient_statuses
+        .retain(|k, _| k.id != mod_game_id);
+    let versions: Vec<String> = db
+        .applications
+        .installs_for_game(mod_game_id)
+        .into_iter()
+        .map(|r| r.version_id.clone())
+        .collect();
+    for version in versions {
+        db.applications.remove_install(mod_game_id, &version);
+    }
+    db.applications.installed_game_version.remove(mod_game_id);
+    db.applications
+        .game_statuses
+        .insert(mod_game_id.to_string(), GameDownloadStatus::Remote {});
+}
+
+/// Mods recorded as installed inside `install_dir`: every ledger under its
+/// `.mods/`, plus any mod whose recorded install folder sits inside it (covers
+/// a ledger that was lost). Read BEFORE the folder is deleted.
+fn mods_installed_under(db: &Database, install_dir: &Path) -> Vec<String> {
+    let mut ids: Vec<String> = match crate::downloads::mod_data::installed_ledgers(install_dir) {
+        Ok(ledgers) => ledgers.into_iter().map(|l| l.game_id).collect(),
+        Err(e) => {
+            warn!("could not list mods under {}: {e}", install_dir.display());
+            Vec::new()
+        }
+    };
+    for (id, meta) in &db.applications.installed_game_version {
+        if meta.download_type != DownloadType::Mod || ids.contains(id) {
+            continue;
+        }
+        if let Some(GameDownloadStatus::Installed { install_dir: dir, .. }) =
+            db.applications.game_statuses.get(id)
+            && Path::new(dir).starts_with(install_dir)
+        {
+            ids.push(id.clone());
+        }
+    }
+    ids
+}
+
 pub fn uninstall_game_logic(meta: DownloadableMetadata, app_handle: &AppHandle) {
     debug!("triggered uninstall for agent");
     let mut db_handle = borrow_db_mut_checked();
@@ -179,10 +228,21 @@ pub fn uninstall_game_logic(meta: DownloadableMetadata, app_handle: &AppHandle) 
 
     let app_handle = app_handle.clone();
     spawn(move || {
-        if let Err(e) = remove_dir_all(install_dir) {
+        // Mods overlay into this folder, so deleting it deletes them too. Note
+        // which ones first: their own statuses would otherwise keep saying
+        // "installed" with nothing on disk.
+        let orphaned_mods = mods_installed_under(&borrow_db_checked(), Path::new(&install_dir));
+        let removed = remove_dir_all(&install_dir);
+        if let Err(e) = &removed {
             error!("{e}");
         }
         let mut db_handle = borrow_db_mut_checked();
+        if removed.is_ok() {
+            for mod_id in &orphaned_mods {
+                debug!("clearing install state of mod {mod_id}: its base game was uninstalled");
+                clear_mod_install_state(&mut db_handle, mod_id);
+            }
+        }
         db_handle.applications.transient_statuses.remove(&meta);
         db_handle
             .applications

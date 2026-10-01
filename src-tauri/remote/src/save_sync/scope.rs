@@ -182,6 +182,16 @@ pub fn resolve_emu_saves_root(
     legacy
 }
 
+/// Whether this account's emulator saves for `game_id` resolve to the old
+/// shared `drop-saves/<game>` folder ([`resolve_emu_saves_root`]) rather than
+/// a per-account one. Until a `.drop-owner` claim exists, every account adopts
+/// that folder, so another account can have changed what is in it.
+pub fn emu_saves_root_is_shared(emu_root: &Path, user_id: Option<&str>, game_id: &str) -> bool {
+    user_id.is_some()
+        && resolve_emu_saves_root(emu_root, user_id, game_id)
+            == emu_saves_root(emu_root, None, game_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +202,20 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Unclaimed legacy saves are adopted by every account, so they count as
+    /// shared; once this account has its own folder they do not.
+    #[test]
+    fn unclaimed_legacy_emulator_saves_are_shared() {
+        let emu = tmpdir("shared-legacy");
+        fs::create_dir_all(emu_saves_root(&emu, None, "g1").join("saves")).unwrap();
+        assert!(emu_saves_root_is_shared(&emu, Some("u1"), "g1"));
+        // Signed out there is no other-account rule to apply.
+        assert!(!emu_saves_root_is_shared(&emu, None, "g1"));
+        fs::create_dir_all(emu_saves_root(&emu, Some("u1"), "g1")).unwrap();
+        assert!(!emu_saves_root_is_shared(&emu, Some("u1"), "g1"));
+        let _ = fs::remove_dir_all(&emu);
     }
 
     #[test]

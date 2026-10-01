@@ -119,16 +119,16 @@
         <!-- Profile Theme -->
         <div>
           <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-3">Profile Theme</p>
-          <div class="grid grid-cols-4 sm:grid-cols-8 gap-3">
+          <div class="grid grid-cols-5 gap-3">
             <button
-              v-for="theme in profileThemes"
+              v-for="theme in PROFILE_THEME_PRESETS"
               :key="theme.id"
-              :ref="(el: any) => registerContent(el, { onSelect: () => { selectedTheme = theme.id; } })"
+              :ref="(el: any) => registerContent(el, { onSelect: () => selectPresetTheme(theme.id) })"
               class="flex flex-col items-center gap-2 p-3 rounded-xl border-2 transition-all"
               :class="selectedTheme === theme.id
                 ? 'border-blue-500 bg-zinc-800/80 shadow-lg shadow-blue-500/10'
                 : 'border-transparent bg-zinc-800/30 hover:border-zinc-600'"
-              @click="selectedTheme = theme.id"
+              @click="selectPresetTheme(theme.id)"
             >
               <div
                 class="w-full h-8 rounded-lg"
@@ -138,7 +138,29 @@
                 {{ theme.label }}
               </span>
             </button>
+            <!-- Custom colour: typed as #rrggbb on the keyboard. -->
+            <button
+              :ref="(el: any) => registerContent(el, { onSelect: openCustomColour })"
+              class="flex flex-col items-center gap-2 p-3 rounded-xl border-2 transition-all"
+              :class="customThemeSelected
+                ? 'border-blue-500 bg-zinc-800/80 shadow-lg shadow-blue-500/10'
+                : 'border-transparent bg-zinc-800/30 hover:border-zinc-600'"
+              @click="openCustomColour"
+            >
+              <div
+                class="w-full h-8 rounded-lg"
+                :style="{ background: customThemeSelected
+                  ? `linear-gradient(135deg, ${themeColors.from}, ${themeColors.to})`
+                  : 'conic-gradient(from 0deg, #ef4444, #f59e0b, #22c55e, #06b6d4, #3b82f6, #a855f7, #ef4444)' }"
+              />
+              <span class="text-[10px] font-medium" :class="customThemeSelected ? 'text-blue-400' : 'text-zinc-500'">
+                {{ customThemeSelected ? selectedTheme : "Custom" }}
+              </span>
+            </button>
           </div>
+          <p v-if="customHexInvalid" class="text-xs text-red-400 mt-2">
+            Not a colour. Type it as # and six hex digits, for example #3b82f6.
+          </p>
         </div>
 
         <!-- Game Showcase -->
@@ -307,7 +329,7 @@
             <!-- Game list -->
             <div v-if="pickerMode === 'game' || !pickerSelectedGameId" class="flex-1 overflow-y-auto space-y-1 min-h-0">
               <button
-                v-for="game in filteredPickerGames"
+                v-for="game in pickerGames"
                 :key="game.id"
                 :ref="(el: any) => registerPicker(el, { onSelect: () => onPickerGameSelect(game) })"
                 class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-left transition-colors"
@@ -324,11 +346,26 @@
                 <div v-else class="size-8 rounded-lg bg-zinc-700 shrink-0" />
                 <span class="text-zinc-200 truncate">{{ game.mName }}</span>
               </button>
-              <p v-if="gamesLoadFailed" class="text-sm text-red-400 p-3 text-center">
-                Could not load the game list.
-              </p>
-              <p v-else-if="filteredPickerGames.length === 0" class="text-sm text-zinc-500 p-3 text-center">
+              <div v-if="pickerSearching && pickerGames.length === 0" class="flex items-center justify-center p-6">
+                <div class="size-6 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+              </div>
+              <div v-else-if="pickerListFailed" class="flex flex-col items-center gap-3 p-3">
+                <p class="text-sm text-red-400 text-center">
+                  {{ pickerSearch.trim() ? "Could not search games." : "Could not load the game list." }}
+                </p>
+                <button
+                  :ref="(el: any) => registerPicker(el, { onSelect: retryPickerList })"
+                  class="px-4 py-2 rounded-xl text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+                  @click="retryPickerList"
+                >
+                  Try again
+                </button>
+              </div>
+              <p v-else-if="pickerGames.length === 0" class="text-sm text-zinc-500 p-3 text-center">
                 No games found
+              </p>
+              <p v-else-if="pickerMoreHint" class="text-xs text-zinc-500 p-3 text-center">
+                {{ pickerMoreHint }}
               </p>
             </div>
 
@@ -336,6 +373,16 @@
             <div v-else-if="pickerMode === 'achievement' && pickerSelectedGameId" class="flex-1 overflow-y-auto space-y-1 min-h-0">
               <div v-if="achievementsLoading" class="flex items-center justify-center p-6">
                 <div class="size-6 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+              </div>
+              <div v-else-if="achievementsLoadFailed" class="flex flex-col items-center gap-3 p-3">
+                <p class="text-sm text-red-400 text-center">Could not load this game's achievements.</p>
+                <button
+                  :ref="(el: any) => registerPicker(el, { onSelect: retryAchievements })"
+                  class="px-4 py-2 rounded-xl text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700 transition-colors"
+                  @click="retryAchievements"
+                >
+                  Try again
+                </button>
               </div>
               <template v-else>
                 <button
@@ -355,7 +402,7 @@
                   </div>
                 </button>
                 <p v-if="pickerAchievements.length === 0" class="text-sm text-zinc-500 p-3 text-center">
-                  No achievements found for this game
+                  You have not unlocked any achievements in this game yet.
                 </p>
               </template>
             </div>
@@ -430,34 +477,18 @@ import {
   untouchedCount,
   type ShowcaseEntry,
 } from "~/composables/bigpicture/showcase-merge";
+import {
+  PROFILE_THEME_PRESETS,
+  isCustomProfileTheme,
+  normalizeProfileTheme,
+  resolveThemeGradient,
+} from "~/composables/profile-themes";
 
 definePageMeta({ layout: "bigpicture" });
 
 function objectUrl(id: string): string {
   return objectImageUrl(id);
 }
-
-const THEME_MAP: Record<string, { from: string; to: string }> = {
-  default: { from: "#1e3a5f", to: "#581c87" },
-  ocean: { from: "#0c4a6e", to: "#164e63" },
-  sunset: { from: "#9a3412", to: "#831843" },
-  forest: { from: "#14532d", to: "#1a2e05" },
-  ember: { from: "#7c2d12", to: "#451a03" },
-  arctic: { from: "#0e7490", to: "#1e40af" },
-  midnight: { from: "#1e1b4b", to: "#0f172a" },
-  rose: { from: "#9f1239", to: "#4c0519" },
-};
-
-const profileThemes = [
-  { id: "default", label: "Default", from: "#1e3a5f", to: "#581c87" },
-  { id: "ocean", label: "Ocean", from: "#0c4a6e", to: "#164e63" },
-  { id: "sunset", label: "Sunset", from: "#9a3412", to: "#831843" },
-  { id: "forest", label: "Forest", from: "#14532d", to: "#1a2e05" },
-  { id: "ember", label: "Ember", from: "#7c2d12", to: "#451a03" },
-  { id: "arctic", label: "Arctic", from: "#0e7490", to: "#1e40af" },
-  { id: "midnight", label: "Midnight", from: "#1e1b4b", to: "#0f172a" },
-  { id: "rose", label: "Rose", from: "#9f1239", to: "#4c0519" },
-];
 
 const router = useRouter();
 const state = useAppState();
@@ -489,14 +520,32 @@ const bannerUploading = ref(false);
 
 const bannerFileInput = ref<HTMLInputElement | null>(null);
 
-const themeColors = computed(
-  () => THEME_MAP[selectedTheme.value] ?? THEME_MAP.default,
-);
+const themeColors = computed(() => resolveThemeGradient(selectedTheme.value));
+const customThemeSelected = computed(() => isCustomProfileTheme(selectedTheme.value));
+// What was last typed for a custom colour, kept so a typo can be pointed out.
+const customHexDraft = ref("");
+// Pointed out once typing is done, not while the keyboard is still open.
+const customHexInvalid = computed(() => {
+  const draft = customHexDraft.value.trim();
+  if (draft === "" || draft === "#") return false;
+  if (keyboardVisible.value && keyboardField.value === "customColour") return false;
+  return !isCustomProfileTheme(hexFromDraft(draft));
+});
+
+function selectPresetTheme(id: string) {
+  selectedTheme.value = id;
+  customHexDraft.value = "";
+}
+
+function hexFromDraft(raw: string): string {
+  const v = raw.trim();
+  return v.startsWith("#") ? v : `#${v}`;
+}
 
 // ── On-screen keyboard ────────────────────────────────────────────────────
 
 const keyboardVisible = ref(false);
-const keyboardField = ref<"displayName" | "bio" | null>(null);
+const keyboardField = ref<"displayName" | "bio" | "pickerSearch" | "customColour" | null>(null);
 const keyboardValue = ref("");
 const keyboardPlaceholder = ref("");
 
@@ -513,12 +562,30 @@ function onKeyboardInput(val: string) {
     displayName.value = val.slice(0, 64);
   } else if (keyboardField.value === "bio") {
     bio.value = val.slice(0, 500);
+  } else if (keyboardField.value === "pickerSearch") {
+    pickerSearch.value = val;
+    schedulePickerSearch();
+  } else if (keyboardField.value === "customColour") {
+    customHexDraft.value = val.slice(0, 7);
+    keyboardValue.value = customHexDraft.value;
+    const hex = normalizeProfileTheme(hexFromDraft(customHexDraft.value));
+    if (hex) selectedTheme.value = hex;
   }
 }
 
 function closeKeyboard() {
+  // Search as soon as typing ends rather than waiting out the debounce.
+  if (keyboardField.value === "pickerSearch") runPickerSearch();
   keyboardVisible.value = false;
   keyboardField.value = null;
+}
+
+function openCustomColour() {
+  keyboardField.value = "customColour";
+  customHexDraft.value = customThemeSelected.value ? selectedTheme.value : "#";
+  keyboardValue.value = customHexDraft.value;
+  keyboardPlaceholder.value = "#3b82f6";
+  keyboardVisible.value = true;
 }
 
 // ── Showcase slots ────────────────────────────────────────────────────────
@@ -633,26 +700,117 @@ const pickerOpen = ref(false);
 const pickerMode = ref<"game" | "achievement">("game");
 const pickerSlotIndex = ref(0);
 const pickerSearch = ref("");
-const pickerSelectedGameId = ref<string | null>(null);
+// The picked game itself, not its id: search results replace the list, and
+// the pick must survive that.
+const pickerSelectedGame = ref<StoreGame | null>(null);
+const pickerSelectedGameId = computed(() => pickerSelectedGame.value?.id ?? null);
+// The first page of the store by name, shown before anything is typed.
 const allGames = ref<StoreGame[]>([]);
+const allGamesCount = ref(0);
 const achievementsLoading = ref(false);
+const achievementsLoadFailed = ref(false);
 
-type AchOption = { id: string; title: string; description?: string; iconUrl?: string };
+type AchOption = {
+  id: string;
+  title: string;
+  description?: string;
+  iconUrl?: string;
+  unlocked?: boolean;
+};
 const pickerAchievements = ref<AchOption[]>([]);
 
-const filteredPickerGames = computed(() => {
-  const q = pickerSearch.value.toLowerCase();
-  if (!q) return allGames.value.slice(0, 30);
-  return allGames.value.filter((g) => g.mName.toLowerCase().includes(q)).slice(0, 30);
+// ── Picker search (server-side, so every game in the store can be found) ──
+
+const PICKER_PAGE = 50;
+const pickerResults = ref<StoreGame[]>([]);
+const pickerResultCount = ref(0);
+const pickerSearching = ref(false);
+const pickerSearchFailed = ref(false);
+let pickerSearchSeq = 0;
+let pickerSearchTimer: ReturnType<typeof setTimeout> | null = null;
+
+const pickerGames = computed(() =>
+  pickerSearch.value.trim() ? pickerResults.value : allGames.value,
+);
+const pickerListFailed = computed(() =>
+  pickerSearch.value.trim() ? pickerSearchFailed.value : gamesLoadFailed.value,
+);
+const pickerMoreHint = computed(() => {
+  const total = pickerSearch.value.trim() ? pickerResultCount.value : allGamesCount.value;
+  const shown = pickerGames.value.length;
+  if (total <= shown) return "";
+  return pickerSearch.value.trim()
+    ? `Showing ${shown} of ${total} matches. Type more to narrow it down.`
+    : `Showing the first ${shown} of ${total} games. Search to find the rest.`;
 });
+
+function schedulePickerSearch() {
+  if (pickerSearchTimer) clearTimeout(pickerSearchTimer);
+  pickerSearchTimer = setTimeout(runPickerSearch, 300);
+}
+
+async function runPickerSearch() {
+  if (pickerSearchTimer) clearTimeout(pickerSearchTimer);
+  pickerSearchTimer = null;
+  const q = pickerSearch.value.trim();
+  // Newer searches win; an older response arriving late is dropped.
+  const seq = ++pickerSearchSeq;
+  if (!q) {
+    pickerSearching.value = false;
+    pickerSearchFailed.value = false;
+    pickerResults.value = [];
+    pickerResultCount.value = 0;
+    return;
+  }
+  pickerSearching.value = true;
+  pickerSearchFailed.value = false;
+  try {
+    const res = await api.store.browse({ q, sort: "name", order: "asc", take: PICKER_PAGE });
+    if (seq !== pickerSearchSeq) return;
+    pickerResults.value = res.results ?? [];
+    pickerResultCount.value = res.count ?? pickerResults.value.length;
+  } catch (err) {
+    if (seq !== pickerSearchSeq) return;
+    console.error("[BPM:PROFILE] Game search failed:", err);
+    pickerResults.value = [];
+    pickerSearchFailed.value = true;
+  } finally {
+    if (seq === pickerSearchSeq) pickerSearching.value = false;
+  }
+}
+
+async function loadPickerGames() {
+  try {
+    const res = await api.store.browse({ sort: "name", order: "asc", take: PICKER_PAGE });
+    allGames.value = res.results ?? [];
+    allGamesCount.value = res.count ?? allGames.value.length;
+    gamesLoadFailed.value = false;
+  } catch (err) {
+    console.error("[BPM:PROFILE] Failed to load the game list:", err);
+    gamesLoadFailed.value = true;
+  }
+}
+
+function retryPickerList() {
+  if (pickerSearch.value.trim()) runPickerSearch();
+  else loadPickerGames();
+}
+
+function resetPicker(mode: "game" | "achievement", idx: number) {
+  pickerMode.value = mode;
+  pickerSlotIndex.value = idx;
+  pickerSelectedGame.value = null;
+  pickerSearch.value = "";
+  pickerResults.value = [];
+  pickerSearchFailed.value = false;
+  ++pickerSearchSeq;
+  pickerAchievements.value = [];
+  achievementsLoadFailed.value = false;
+}
 
 function openGamePicker(idx: number) {
   if (showcaseFull.value) return;
-  pickerMode.value = "game";
-  pickerSlotIndex.value = idx;
-  pickerSelectedGameId.value = null;
-  pickerSearch.value = "";
-  pickerAchievements.value = [];
+  resetPicker("game", idx);
   pickerOpen.value = true;
   nextTick(() => {
     focusNav.restrictFocus("picker");
@@ -662,11 +820,7 @@ function openGamePicker(idx: number) {
 
 function openAchievementPicker(idx: number) {
   if (showcaseFull.value) return;
-  pickerMode.value = "achievement";
-  pickerSlotIndex.value = idx;
-  pickerSelectedGameId.value = null;
-  pickerSearch.value = "";
-  pickerAchievements.value = [];
+  resetPicker("achievement", idx);
   pickerOpen.value = true;
   nextTick(() => {
     focusNav.restrictFocus("picker");
@@ -675,51 +829,68 @@ function openAchievementPicker(idx: number) {
 }
 
 function closePicker() {
+  if (pickerSearchTimer) clearTimeout(pickerSearchTimer);
+  pickerSearchTimer = null;
   pickerOpen.value = false;
   focusNav.unrestrictFocus("content");
 }
 
 function openPickerSearch() {
-  // Use on-screen keyboard for picker search
-  keyboardField.value = null; // special mode: picker search
+  keyboardField.value = "pickerSearch";
   keyboardValue.value = pickerSearch.value;
   keyboardPlaceholder.value = "Search games...";
   keyboardVisible.value = true;
 }
 
 function pickerGoBackToGames() {
-  pickerSelectedGameId.value = null;
+  pickerSelectedGame.value = null;
+  achievementsLoading.value = false;
   pickerAchievements.value = [];
+  achievementsLoadFailed.value = false;
 }
 
 function onPickerGameSelect(game: StoreGame) {
-  if (pickerMode.value === "game") {
-    pickerSelectedGameId.value = game.id;
-    return;
-  }
-  // Achievement mode — select game, then load achievements
-  pickerSelectedGameId.value = game.id;
+  pickerSelectedGame.value = game;
+  if (pickerMode.value === "game") return;
+  // Achievement mode: the game is picked, now list its achievements.
   loadGameAchievements(game.id);
 }
 
 async function loadGameAchievements(gameId: string) {
   achievementsLoading.value = true;
+  achievementsLoadFailed.value = false;
+  pickerAchievements.value = [];
   try {
-    const url = serverUrl(`api/v1/games/${gameId}/achievements`);
-    const res = await fetch(url);
-    if (res.ok) {
-      pickerAchievements.value = await res.json();
+    const res = await fetch(serverUrl(`api/v1/games/${gameId}/achievements`));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const all = (await res.json()) as AchOption[];
+    // Only unlocked ones: the server refuses to showcase anything else.
+    if (pickerSelectedGameId.value === gameId) {
+      pickerAchievements.value = all.filter((a) => a.unlocked);
     }
-  } catch {
-    pickerAchievements.value = [];
+  } catch (err) {
+    console.error("[BPM:PROFILE] Failed to load achievements:", err);
+    if (pickerSelectedGameId.value === gameId) achievementsLoadFailed.value = true;
   } finally {
-    achievementsLoading.value = false;
+    if (pickerSelectedGameId.value === gameId) achievementsLoading.value = false;
   }
 }
 
+function retryAchievements() {
+  if (pickerSelectedGameId.value) loadGameAchievements(pickerSelectedGameId.value);
+}
+
+function slotGame(game: StoreGame) {
+  return {
+    id: game.id,
+    mName: game.mName,
+    mIconObjectId: game.mIconObjectId,
+    mCoverObjectId: game.mCoverObjectId,
+  };
+}
+
 function confirmGamePick() {
-  if (!pickerSelectedGameId.value) return;
-  const game = allGames.value.find((g) => g.id === pickerSelectedGameId.value);
+  const game = pickerSelectedGame.value;
   if (!game) return;
 
   gameSlots.value[pickerSlotIndex.value] = {
@@ -728,30 +899,21 @@ function confirmGamePick() {
     itemId: null,
     title: game.mName,
     data: null,
-    game: {
-      id: game.id,
-      mName: game.mName,
-      mIconObjectId: game.mIconObjectId,
-      mCoverObjectId: game.mCoverObjectId,
-    },
+    game: slotGame(game),
   };
   closePicker();
 }
 
 function confirmAchievementPick(ach: AchOption) {
-  const game = allGames.value.find((g) => g.id === pickerSelectedGameId.value);
+  const game = pickerSelectedGame.value;
+  if (!game) return;
   achievementSlots.value[pickerSlotIndex.value] = {
     type: "Achievement",
-    gameId: pickerSelectedGameId.value,
+    gameId: game.id,
     itemId: ach.id,
     title: ach.title,
     data: { iconUrl: ach.iconUrl, description: ach.description },
-    game: game ? {
-      id: game.id,
-      mName: game.mName,
-      mIconObjectId: game.mIconObjectId,
-      mCoverObjectId: game.mCoverObjectId,
-    } : null,
+    game: slotGame(game),
   };
   closePicker();
 }
@@ -835,12 +997,29 @@ function clearSaveResult() {
   saveFailed.value = false;
 }
 
-function showSaveResult(message: string, failed: boolean) {
+function showSaveResult(message: string, failed: boolean, sticky = failed) {
   clearSaveResult();
   saveMessage.value = message;
   saveFailed.value = failed;
-  // Failures stay until the next attempt so they can't be missed.
-  if (!failed) saveMessageTimer = setTimeout(clearSaveResult, 3000);
+  // Failures (and anything else that must be read) stay until the next
+  // attempt so they can't be missed.
+  if (!sticky) saveMessageTimer = setTimeout(clearSaveResult, 3000);
+}
+
+/**
+ * After a profile save: refresh the signed-in user the app holds, so games
+ * launched from now on get the new display name and the header shows it.
+ * Returns a note for the user when that failed and the name changed.
+ */
+async function refreshSignedInUser(nameChanged: boolean): Promise<string> {
+  try {
+    const fresh = await api.profile.refreshSignedInUser();
+    if (state.value) state.value.user = fresh;
+    return "";
+  } catch (err) {
+    console.warn("[BPM:PROFILE] Could not refresh the signed-in user:", err);
+    return nameChanged ? " Restart Drop for games to show your new name." : "";
+  }
 }
 
 async function saveProfile() {
@@ -867,6 +1046,11 @@ async function saveProfile() {
       return;
     }
     profileSaved = true;
+    const nameChanged = displayName.value !== profile.value.displayName;
+    profile.value.displayName = displayName.value;
+    profile.value.bio = bio.value;
+    profile.value.profileTheme = selectedTheme.value;
+    const refreshNote = await refreshSignedInUser(nameChanged);
 
     const filledGames = gameSlots.value
       .filter((s): s is LocalShowcaseItem => s !== null)
@@ -890,7 +1074,7 @@ async function saveProfile() {
     if (!showcaseRes.ok) {
       const why = await serverErrorText(showcaseRes);
       console.error("[BPM:PROFILE] Showcase PUT failed:", showcaseRes.status, why);
-      showSaveResult(`Profile saved, but the showcase failed: ${why}`, true);
+      showSaveResult(`Profile saved, but the showcase failed: ${why}.${refreshNote}`, true);
       return;
     }
     // What the server now holds is the baseline for the next save, and the
@@ -900,7 +1084,7 @@ async function saveProfile() {
     const saved = await showcaseRes.json().catch(() => null);
     applyStoredShowcase(saved?.items ?? items, knownGameMap());
 
-    showSaveResult("Profile saved!", false);
+    showSaveResult(`Profile saved!${refreshNote}`, false, !!refreshNote);
   } catch (err) {
     console.error("[BPM:PROFILE] Save failed:", err);
     showSaveResult(
@@ -961,10 +1145,10 @@ async function loadProfile() {
       return;
     }
 
-    const [profileRes, showcaseRes, gamesRes] = await Promise.all([
+    const [profileRes, showcaseRes] = await Promise.all([
       getJson(serverUrl(`api/v1/user/${userId}`)),
       getJson(serverUrl(`api/v1/user/${userId}/showcase`)),
-      getJson(serverUrl("api/v1/store?sort=name&order=asc&take=200")),
+      loadPickerGames(),
     ]);
 
     // Without both of these the editor would start from blanks, and Save
@@ -978,9 +1162,6 @@ async function loadProfile() {
     displayName.value = profileRes.displayName ?? "";
     bio.value = profileRes.bio ?? "";
     selectedTheme.value = profileRes.profileTheme ?? "default";
-
-    gamesLoadFailed.value = !gamesRes;
-    allGames.value = gamesRes?.results ?? [];
 
     applyStoredShowcase(showcaseRes.items ?? []);
   } catch (err) {

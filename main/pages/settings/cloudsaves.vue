@@ -147,10 +147,10 @@
             <p class="text-xs text-zinc-500">
               Backed up {{ timeAgo(Date.parse(game.lastUploadedAt)) }}
             </p>
-            <!-- PC saves are read across every account on this server, so a
-                 count here is not necessarily all your own work. The "none of
-                 these are yours" case is the one that used to read as a
-                 backup. -->
+            <!-- Only an older server, which shared PC saves across accounts,
+                 can report another account's copies here. Against one, the
+                 "none of these are yours" case is the one that used to read
+                 as a backup. -->
             <p
               v-if="ownSaveCount(game) === 0"
               class="mt-1 text-xs text-amber-400/80"
@@ -214,31 +214,22 @@
       </div>
 
       <!-- Who a synced save belongs to. This is not a setting, it's the model,
-           and it needs saying before someone finds a housemate's progress in
-           their library. -->
+           and the shared-files case needs saying before someone meets it as a
+           conflict prompt. -->
       <div class="rounded-lg border border-zinc-700 bg-zinc-800/40 p-4">
         <h3 class="text-sm font-medium leading-6 text-zinc-100">
-          Who your saves are shared with
+          Who can see your saves
         </h3>
         <p class="mt-2 text-sm leading-6 text-zinc-400">
-          Emulator saves are backed up to your account alone. Nobody else
-          signed in to this Drop server can see your copy.
+          Your cloud saves belong to your account alone. Nobody else signed in
+          to this Drop server can see them.
         </p>
         <p class="mt-2 text-sm leading-6 text-zinc-400">
-          Switch games are the exception on this computer. Their saves live
-          inside the emulator's own system storage, which every account here
-          shares, so a second account playing the same game is playing the same
-          save file and will back up its own copy of it.
-        </p>
-        <p class="mt-2 text-sm leading-6 text-zinc-400">
-          PC game saves are shared with everyone on this Drop server, because
-          Drop finds them by where the game puts them on this computer rather
-          than by who is signed in. If two accounts have the same PC save, the
-          one played most recently is the one everyone sees.
-        </p>
-        <p class="mt-2 text-sm leading-6 text-zinc-400">
-          Deleting a shared PC save removes your copy only. If another account
-          still has it, the save can come back the next time you sync.
+          On each device, PC game saves and Switch saves sit in one place no
+          matter who is signed in to Drop. If two accounts play the same game
+          here, they play the same save files, and each account backs up its
+          own copy. After switching accounts Drop may ask which copy to keep,
+          and it says whose each copy is.
         </p>
       </div>
 
@@ -386,10 +377,10 @@ const failureList = computed(() =>
   Object.values(failures.value).sort((a, b) => b.at - a.at),
 );
 
-// Own rows only, everywhere a number claims a backup. The summary lists every
-// game this account can READ, and PC saves are readable across every account on
-// the server, so a second user on a family server would otherwise be told nine
-// games are backed up when they own none of it.
+// Own rows only, everywhere a number claims a backup. A current server only
+// returns the caller's own rows, but an older one read PC saves across every
+// account, and a second user on a family server would then be told nine games
+// are backed up when they own none of it.
 const ownedGames = computed(() => summaries.value.filter(hasOwnSaves));
 const totalFiles = computed(() =>
   ownedGames.value.reduce((n, g) => n + ownSaveCount(g), 0),

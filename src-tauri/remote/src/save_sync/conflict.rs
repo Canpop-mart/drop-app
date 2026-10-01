@@ -22,6 +22,11 @@ pub fn snapshot_hashes(files: &[LocalSaveFile]) -> HashMap<String, String> {
 /// Build the list of conflicts from the sync-check response + local file info.
 /// Only `"conflict"` actions with both a matching local file and cloud save
 /// become a [`SaveConflict`].
+///
+/// `local_last_synced_by` is left `None` and `local_may_be_other_account`
+/// `false`; the caller fills them in with
+/// [`super::manifest::local_copy_last_synced_by`], which reads other accounts'
+/// manifests off disk and so does not belong in this pure step.
 pub fn extract_conflicts(
     sync_response: &SyncCheckResponse,
     local_files: &[LocalSaveFile],
@@ -47,6 +52,10 @@ pub fn extract_conflicts(
                 cloud_size: cloud.size,
                 cloud_modified_at: cloud.client_modified_at.clone(),
                 cloud_uploaded_from: cloud.uploaded_from.clone(),
+                cloud_owned_by: cloud.owned_by.clone(),
+                local_last_synced_by: None,
+                local_may_be_other_account: false,
+                cloud_legacy_name: (cloud.filename != a.filename).then(|| cloud.filename.clone()),
             })
         })
         .collect()
@@ -131,6 +140,10 @@ mod tests {
             cloud_size: 1,
             cloud_modified_at: String::new(),
             cloud_uploaded_from: "other".to_string(),
+            cloud_owned_by: String::new(),
+            local_last_synced_by: None,
+            local_may_be_other_account: false,
+            cloud_legacy_name: None,
         }
     }
 

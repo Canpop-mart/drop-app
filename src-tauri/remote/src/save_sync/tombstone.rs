@@ -17,15 +17,26 @@ use std::collections::HashMap;
 
 use super::{SyncManifest, Tombstone};
 
-/// Does `deleted_from` name the device we are running on?
+/// Was this tombstone issued by the device we are running on?
 ///
-/// An empty `deletedFrom` comes from a server old enough not to record one.
-/// We cannot tell whose delete it was, so it is treated as someone else's and
-/// applied — the alternative silently drops real cross-device deletes.
-/// Comparison ignores case because a hostname's casing is not stable across
-/// the places it gets read from.
-fn is_self_issued(deleted_from: &str, this_device: &str) -> bool {
-    let issued_by = deleted_from.trim();
+/// Matched on the client registration id when the tombstone carries one: it
+/// is what the server authenticated the delete with, so it cannot drift. The
+/// display name it used to be matched on can — a renamed device stopped
+/// recognising its own deletes and unlinked the local file, and two devices
+/// sharing a hostname each thought the other's delete was their own.
+///
+/// Only a tombstone with no id (written before the server recorded one) falls
+/// back to the name. An empty `deletedFrom` there comes from a server old
+/// enough not to record a name either; we cannot tell whose delete it was, so
+/// it is treated as someone else's and applied, because the alternative
+/// silently drops real cross-device deletes. Name comparison ignores case
+/// because a hostname's casing is not stable across the places it gets read
+/// from.
+fn is_self_issued(t: &Tombstone, this_device: &str, this_client_id: Option<&str>) -> bool {
+    if let Some(issued_by) = t.deleted_from_client_id.as_deref().filter(|id| !id.is_empty()) {
+        return this_client_id.is_some_and(|here| here == issued_by);
+    }
+    let issued_by = t.deleted_from.trim();
     let here = this_device.trim();
     !issued_by.is_empty() && !here.is_empty() && issued_by.eq_ignore_ascii_case(here)
 }
@@ -54,16 +65,20 @@ pub struct TombstonePlan<'a> {
 
 /// Split `tombstones` into the ones this device should act on and the ones it
 /// should only record. See the module docs for why both filters exist.
+///
+/// `this_device` is this device's display name and `this_client_id` its Drop
+/// client registration id; see [`is_self_issued`] for which one is used when.
 pub fn plan_tombstones<'a>(
     tombstones: &'a [Tombstone],
     manifest: &SyncManifest,
     this_device: &str,
+    this_client_id: Option<&str>,
 ) -> TombstonePlan<'a> {
     let mut plan = TombstonePlan::default();
     for t in tombstones {
         if already_applied(&manifest.applied_tombstones, t) {
             plan.replays += 1;
-        } else if is_self_issued(&t.deleted_from, this_device) {
+        } else if is_self_issued(t, this_device, this_client_id) {
             plan.self_issued.push(t);
         } else {
             plan.apply.push(t);
@@ -93,6 +108,14 @@ mod tests {
             filename: filename.to_string(),
             deleted_at: deleted_at.to_string(),
             deleted_from: deleted_from.to_string(),
+            deleted_from_client_id: None,
+        }
+    }
+
+    fn tomb_by(filename: &str, deleted_from: &str, client_id: &str) -> Tombstone {
+        Tombstone {
+            deleted_from_client_id: Some(client_id.to_string()),
+            ..tomb(filename, "t", deleted_from)
         }
     }
 
@@ -106,7 +129,7 @@ mod tests {
     #[test]
     fn a_delete_this_device_issued_is_not_applied_here() {
         let tombs = vec![tomb("gen.sav", "2026-08-01T00:00:00Z", "Marts PC")];
-        let plan = plan_tombstones(&tombs, &manifest(), "Marts PC");
+        let plan = plan_tombstones(&tombs, &manifest(), "Marts PC", None);
         assert!(plan.apply.is_empty());
         assert_eq!(plan.self_issued.len(), 1);
     }
@@ -114,14 +137,14 @@ mod tests {
     #[test]
     fn device_name_comparison_ignores_case_and_padding() {
         let tombs = vec![tomb("gen.sav", "t", " MARTS-pc ")];
-        let plan = plan_tombstones(&tombs, &manifest(), "marts-PC");
+        let plan = plan_tombstones(&tombs, &manifest(), "marts-PC", None);
         assert!(plan.apply.is_empty(), "{plan:?}");
     }
 
     #[test]
     fn a_delete_from_another_device_is_applied() {
         let tombs = vec![tomb("gen.sav", "t", "Steam Deck")];
-        let plan = plan_tombstones(&tombs, &manifest(), "Marts PC");
+        let plan = plan_tombstones(&tombs, &manifest(), "Marts PC", None);
         assert_eq!(plan.apply.len(), 1);
         assert!(plan.self_issued.is_empty());
     }
@@ -131,7 +154,7 @@ mod tests {
         // Pre-T5 servers don't send `deletedFrom`. Applying is the safe
         // default: skipping would break real cross-device deletes.
         let tombs = vec![tomb("gen.sav", "t", "")];
-        let plan = plan_tombstones(&tombs, &manifest(), "Marts PC");
+        let plan = plan_tombstones(&tombs, &manifest(), "Marts PC", None);
         assert_eq!(plan.apply.len(), 1);
     }
 
@@ -140,13 +163,13 @@ mod tests {
         let tombs = vec![tomb("gen.sav", "2026-08-01T00:00:00Z", "Steam Deck")];
         let mut m = manifest();
 
-        let plan = plan_tombstones(&tombs, &m, "Marts PC");
+        let plan = plan_tombstones(&tombs, &m, "Marts PC", None);
         assert_eq!(plan.apply.len(), 1);
         record_applied(&mut m, plan.apply[0]);
 
         // The server keeps re-sending it for 30 days; every later launch is
         // a no-op instead of a second delete.
-        let replay = plan_tombstones(&tombs, &m, "Marts PC");
+        let replay = plan_tombstones(&tombs, &m, "Marts PC", None);
         assert!(replay.apply.is_empty());
         assert_eq!(replay.replays, 1);
     }
@@ -159,20 +182,39 @@ mod tests {
 
         // Same filename, new delete: the user re-uploaded and deleted again.
         let second = vec![tomb("gen.sav", "2026-08-09T12:00:00Z", "Steam Deck")];
-        assert_eq!(plan_tombstones(&second, &m, "Marts PC").apply.len(), 1);
+        assert_eq!(plan_tombstones(&second, &m, "Marts PC", None).apply.len(), 1);
     }
 
     #[test]
     fn self_issued_tombstones_survive_a_device_rename() {
         let tombs = vec![tomb("gen.sav", "t", "Marts PC")];
         let mut m = manifest();
-        let plan = plan_tombstones(&tombs, &m, "Marts PC");
+        let plan = plan_tombstones(&tombs, &m, "Marts PC", None);
         for t in &plan.self_issued {
             record_applied(&mut m, t);
         }
         // Renaming the device would otherwise turn our own delete into a
         // foreign one and unlink the local file.
-        let after_rename = plan_tombstones(&tombs, &m, "Marts Desktop");
+        let after_rename = plan_tombstones(&tombs, &m, "Marts Desktop", None);
         assert!(after_rename.apply.is_empty());
+    }
+
+    /// With an id on the tombstone the name no longer decides anything: a
+    /// renamed device still knows its own delete, and a second device that
+    /// happens to share the name does not mistake it for its own.
+    #[test]
+    fn a_tombstone_with_a_client_id_is_matched_by_id_not_name() {
+        let tombs = vec![tomb_by("gen.sav", "Marts PC", "client-pc")];
+
+        let renamed = plan_tombstones(&tombs, &manifest(), "Marts Desktop", Some("client-pc"));
+        assert!(renamed.apply.is_empty());
+        assert_eq!(renamed.self_issued.len(), 1);
+
+        let namesake = plan_tombstones(&tombs, &manifest(), "Marts PC", Some("client-deck"));
+        assert_eq!(namesake.apply.len(), 1, "another device with the same name");
+
+        // A device that cannot say who it is applies a foreign-looking delete.
+        let unpaired = plan_tombstones(&tombs, &manifest(), "Marts PC", None);
+        assert_eq!(unpaired.apply.len(), 1);
     }
 }

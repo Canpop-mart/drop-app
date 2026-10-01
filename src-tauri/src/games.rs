@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::nonpoison::Mutex;
 
@@ -12,13 +12,16 @@ use games::{
     collections::collection::Collection,
     downloads::error::LibraryError,
     exe_scan::{self, ExecutableCandidate},
-    downloads::mod_data::{MODS_DIR, ModData, moddata_path},
-    library::{FetchGameStruct, Game, get_current_meta, push_game_update, uninstall_game_logic},
+    downloads::mod_agent::mods_changed_event,
+    downloads::mod_data::{self, MODS_DIR},
+    library::{
+        FetchGameStruct, Game, clear_mod_install_state, get_current_meta, push_game_update,
+        uninstall_game_logic,
+    },
     state::{GameStatusManager, GameStatusWithTransient},
-    status::{StatusKind, transition_from_db},
 };
 use log::{info, warn};
-use utils::{app_emit, path_guard};
+use utils::app_emit;
 use process::PROCESS_MANAGER;
 use process::parser::ParsedCommand;
 use remote::{
@@ -551,55 +554,11 @@ fn parent_install_dir(parent_game_id: &str) -> Result<PathBuf, LibraryError> {
     }
 }
 
-/// Files claimed by OTHER installed mods of the same parent. Under
-/// last-installed-wins overlay, a file one mod overwrote may still be needed by
-/// another mod, so uninstall must not remove a file another `.moddata` claims.
-fn other_mod_files(mods_dir: &Path, exclude_mod_id: &str) -> HashSet<String> {
-    let mut claimed = HashSet::new();
-    let exclude_file = format!("{exclude_mod_id}.moddata");
-    let Ok(entries) = std::fs::read_dir(mods_dir) else {
-        return claimed;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.ends_with(".moddata") || name == exclude_file {
-            continue;
-        }
-        if let Ok(m) = ModData::read(&entry.path()) {
-            for f in m.get_installed_files() {
-                claimed.insert(f);
-            }
-        }
-    }
-    claimed
-}
-
-/// Clear a mod's install state after its files are removed: mark it Remote, drop
-/// its installed version, and refresh the UI.
-fn finish_mod_uninstall(mod_game_id: &str, app_handle: &AppHandle) {
-    let mut db = borrow_db_mut_checked();
-    transition_from_db(&db, mod_game_id, StatusKind::Remote);
-    db.applications
-        .transient_statuses
-        .retain(|k, _| k.id != mod_game_id);
-    db.applications.installed_game_version.remove(mod_game_id);
-    db.applications
-        .game_statuses
-        .insert(mod_game_id.to_string(), GameDownloadStatus::Remote {});
-    push_game_update(
-        app_handle,
-        &mod_game_id.to_string(),
-        None,
-        GameStatusManager::fetch_state(&mod_game_id.to_string(), &db),
-    );
-    drop(db);
-    app_emit!(app_handle, "update_library", ());
-}
-
-/// Uninstall a mod: remove exactly the files it wrote into the parent's install
-/// dir (skipping any still claimed by another mod), delete its ledger, and reset
-/// its status. The base game is never touched.
+/// Uninstall a mod, or remove what an unfinished install left behind: put back
+/// every base-game file it overwrote, delete the files it added (leaving any
+/// another mod still lists), delete its ledger, and reset its status. Refused
+/// while the mod is downloading. If some files cannot be handled, the error
+/// says so and the mod stays listed so the user can try again.
 #[tauri::command]
 pub fn uninstall_mod(
     mod_game_id: String,
@@ -607,106 +566,168 @@ pub fn uninstall_mod(
     app_handle: AppHandle,
 ) -> Result<(), LibraryError> {
     let parent_dir = parent_install_dir(&parent_game_id)?;
-    let mods_dir = parent_dir.join(MODS_DIR);
-    let meta_path = moddata_path(&parent_dir, &mod_game_id);
-
-    let moddata = match ModData::read(&meta_path) {
-        Ok(m) => m,
-        Err(_) => {
-            // No ledger — nothing to remove from disk. Still clear any lingering
-            // status so the UI doesn't show it as installed.
-            finish_mod_uninstall(&mod_game_id, &app_handle);
-            return Ok(());
+    // Mods on this game, by their ledgers. Read before the database lock.
+    let siblings: Vec<String> = mod_data::installed_ledgers(&parent_dir)
+        .map(|l| l.into_iter().map(|m| m.game_id).collect())
+        .unwrap_or_default();
+    {
+        let db = borrow_db_checked();
+        let busy = |id: &str| db.applications.transient_statuses.keys().any(|k| k.id == id);
+        if busy(&mod_game_id) {
+            warn!("refusing to uninstall mod {mod_game_id}: it is downloading");
+            return Err(LibraryError::ModBusy);
         }
-    };
-
-    let claimed_by_others = other_mod_files(&mods_dir, &mod_game_id);
-
-    // Files were overlaid into the ledger's base_path (install_dir/modRoot), so
-    // remove them relative to that — not the raw install dir. This also cleans
-    // up installs made before modRoot existed, whose base_path is the root.
-    let overlay_dir = &moddata.base_path;
-    for rel in moddata.get_installed_files() {
-        if claimed_by_others.contains(&rel) {
-            continue;
-        }
-        let path = match path_guard::join_within(overlay_dir, Path::new(&rel)) {
-            Ok(p) => p,
-            Err(e) => {
-                warn!("skipping unsafe mod file path {rel:?}: {e}");
-                continue;
-            }
-        };
-        if path.exists()
-            && let Err(e) = std::fs::remove_file(&path)
-        {
-            warn!("failed to remove mod file {}: {e}", path.display());
+        // While a base-game or another mod's download runs (or waits in the
+        // queue), which files are whose is changing under us, and a running
+        // game has its files open. A stopped, failed or partial download is
+        // not refused: the base game hands files back chunk by chunk before
+        // recording each one, so the files a mod lists are still its own, and
+        // removing a mod must stay possible whatever state the game is in.
+        if busy(&parent_game_id) || siblings.iter().any(|id| busy(id)) {
+            warn!("refusing to uninstall mod {mod_game_id}: game {parent_game_id} or one of its mods is busy");
+            return Err(LibraryError::GameBusy);
         }
     }
 
-    if let Err(e) = std::fs::remove_file(&meta_path) {
-        warn!("failed to remove mod ledger {}: {e}", meta_path.display());
-    }
+    let result = mod_data::remove_mod(&parent_dir, &mod_game_id);
+    app_emit!(&app_handle, &mods_changed_event(&parent_game_id), ());
+    let outcome = result.map_err(|why| {
+        warn!("uninstall of mod {mod_game_id} incomplete: {why}");
+        LibraryError::ModFiles(why)
+    })?;
+    info!(
+        "uninstalled mod {mod_game_id}: {} file(s) removed, {} original(s) restored, {} left to other mods",
+        outcome.removed, outcome.restored, outcome.kept_for_other_mods
+    );
 
-    finish_mod_uninstall(&mod_game_id, &app_handle);
+    let mut db = borrow_db_mut_checked();
+    clear_mod_install_state(&mut db, &mod_game_id);
+    push_game_update(
+        &app_handle,
+        &mod_game_id,
+        None,
+        GameStatusManager::fetch_state(&mod_game_id, &db),
+    );
+    drop(db);
+    app_emit!(&app_handle, "update_library", ());
     Ok(())
 }
 
-/// A single installed mod, as surfaced to the client UI.
-#[derive(Serialize, Encode, Decode)]
+/// A mod found on the base game's disk, as surfaced to the client UI.
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledMod {
     pub game_id: String,
     pub version: String,
     pub file_count: usize,
+    /// The download finished. False for a cancelled, failed or running one,
+    /// which the UI offers to resume or remove instead of calling installed.
+    pub complete: bool,
+    /// A download of this mod is queued or running right now.
+    pub downloading: bool,
+    /// What `download_mod` needs to resume this exact install.
+    pub platform: Platform,
+    pub mod_install_dir: String,
+    pub launch_override: Option<String>,
+    /// Set when the mod has a launch override that a launch of the game, as
+    /// it is installed now, would not use: "platform" (the mod has its own
+    /// launch settings, none for the game's platform), "unfinished", or
+    /// "otherMod" (then `launch_override_winner` names the mod whose is used).
+    pub launch_override_skipped: Option<String>,
+    pub launch_override_winner: Option<String>,
 }
 
-/// List the mods currently installed onto a base game, read from the `.moddata`
+/// The platforms a mod version (by version id) has its own launch or setup
+/// settings for, from the version recorded when it was installed. None when
+/// that version was never recorded. See `mod_data::decide_launch_override`.
+pub fn mod_version_platforms(db: &database::Database, version_id: &str) -> Option<Vec<Platform>> {
+    db.applications.game_versions.get(version_id).map(|v| {
+        v.launches
+            .iter()
+            .map(|l| l.platform)
+            .chain(v.setups.iter().map(|s| s.platform))
+            .collect()
+    })
+}
+
+/// List the mods on a base game, finished or not, read from the `.moddata`
 /// ledgers under the parent's install dir (the source of truth for what is on
-/// disk).
+/// disk). Errors when the folder exists but cannot be read, so the UI can tell
+/// "no mods" from "could not look".
 #[tauri::command]
 pub fn list_installed_mods(parent_game_id: String) -> Result<Vec<InstalledMod>, LibraryError> {
     let parent_dir = parent_install_dir(&parent_game_id)?;
-    let mods_dir = parent_dir.join(MODS_DIR);
-    info!(
-        "list_installed_mods: scanning {} for parent {parent_game_id}",
-        mods_dir.display()
-    );
+    let ledgers = mod_data::installed_ledgers(&parent_dir).map_err(|e| {
+        warn!(
+            "list_installed_mods: cannot read {} ({e})",
+            parent_dir.join(MODS_DIR).display()
+        );
+        LibraryError::ModFiles(format!("could not read the mods folder: {e}"))
+    })?;
 
-    let mut mods = Vec::new();
-    let entries = match std::fs::read_dir(&mods_dir) {
-        Ok(e) => e,
-        Err(e) => {
-            // No .mods dir yet usually means no mods installed.
-            info!(
-                "list_installed_mods: cannot read {} ({e}) — reporting 0 mods",
-                mods_dir.display()
-            );
-            return Ok(mods);
-        }
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if !name.to_string_lossy().ends_with(".moddata") {
-            continue;
-        }
-        match ModData::read(&entry.path()) {
-            Ok(m) => mods.push(InstalledMod {
-                game_id: m.game_id.clone(),
-                version: m.game_version.clone(),
-                file_count: m.get_installed_files().len(),
+    let db = borrow_db_checked();
+    // Which overrides a launch of the game as installed now would skip, so the
+    // Mods tab can say so instead of it only showing up in the log.
+    let skipped: HashMap<String, mod_data::OverrideSkip> = db
+        .applications
+        .installed_game_version
+        .get(&parent_game_id)
+        .map(|parent| parent.target_platform)
+        .and_then(|platform| {
+            mod_data::decide_launch_override(&parent_dir, platform, &|v: &str| mod_version_platforms(&db, v))
+                .map_err(|e| warn!("list_installed_mods: cannot check launch overrides: {e}"))
+                .ok()
+        })
+        .map(|d| d.skipped.into_iter().map(|(id, _, why)| (id, why)).collect())
+        .unwrap_or_default();
+    let mods: Vec<InstalledMod> = ledgers
+        .into_iter()
+        .map(|m| InstalledMod {
+            launch_override_skipped: skipped.get(&m.game_id).map(|why| {
+                match why {
+                    mod_data::OverrideSkip::Platform => "platform",
+                    mod_data::OverrideSkip::Unfinished => "unfinished",
+                    mod_data::OverrideSkip::OtherMod(_) => "otherMod",
+                }
+                .to_string()
             }),
-            Err(e) => warn!(
-                "list_installed_mods: failed to read {} ({e})",
-                entry.path().display()
-            ),
-        }
-    }
+            launch_override_winner: match skipped.get(&m.game_id) {
+                Some(mod_data::OverrideSkip::OtherMod(winner)) => Some(winner.clone()),
+                _ => None,
+            },
+            complete: mod_data::ledger_is_complete(&parent_dir, &m),
+            downloading: db
+                .applications
+                .transient_statuses
+                .keys()
+                .any(|k| k.id == m.game_id),
+            mod_install_dir: mod_data::overlay_rel(&parent_dir, &m).unwrap_or_default(),
+            file_count: m.get_installed_files().len(),
+            game_id: m.game_id,
+            version: m.game_version,
+            platform: m.target_platform,
+            launch_override: m.launch_override,
+        })
+        .collect();
     info!(
-        "list_installed_mods: found {} mod(s) for parent {parent_game_id}",
-        mods.len()
+        "list_installed_mods: {} mod(s) on parent {parent_game_id}, {} unfinished",
+        mods.len(),
+        mods.iter().filter(|m| !m.complete).count()
     );
     Ok(mods)
+}
+
+/// The platform the base game is installed for, so a mod is installed for the
+/// same one when the server offers it (a mod version with its own launch
+/// settings only applies its launch override to launches of those platforms).
+/// None when the base game is not installed.
+#[tauri::command]
+pub fn mod_parent_platform(parent_game_id: String) -> Option<Platform> {
+    borrow_db_checked()
+        .applications
+        .installed_game_version
+        .get(&parent_game_id)
+        .map(|m| m.target_platform)
 }
 
 #[tauri::command]
@@ -738,6 +759,10 @@ pub struct ModListing {
     // keeps older-server responses (which omit it) deserialising.
     #[serde(default)]
     pub required_mods: Vec<ModRequirement>,
+    // The mod's newest version id, to offer Update when the installed ledger
+    // is older. None from older servers, which simply never offer Update.
+    #[serde(default)]
+    pub latest_version_id: Option<String>,
 }
 
 /// List the mods available for a base game. Fetched via a command (not a raw
@@ -1319,15 +1344,13 @@ pub async fn list_cloud_saves(
         .map_err(|e| e.to_string())
 }
 
-/// One summary row per game the signed-in user can READ cloud saves for: file
+/// One summary row per game the signed-in user has cloud saves for: file
 /// count, size, and when it last reached the server.
 ///
-/// Readable, not owned. PC saves are shared across every account on a Drop
-/// server, so a housemate's backup of a game this user has never launched comes
-/// back here too. `ownCount` / `ownBytes` are the caller's own share of each
-/// row and are what any surface claiming "your saves are backed up" has to
-/// count; `fileCount` / `totalBytes` are what a listing of that game would
-/// show.
+/// `ownCount` / `ownBytes` are what any surface claiming "your saves are
+/// backed up" counts. On a server that reads saves per account they equal
+/// `fileCount` / `totalBytes`; an older server that shared PC saves across
+/// accounts could report less.
 ///
 /// Same auth reasoning as [`list_cloud_saves`]. This is what makes "are my
 /// saves backed up" answerable for a whole library in one request, instead of
@@ -1368,12 +1391,35 @@ pub async fn download_cloud_save(id: String) -> Result<String, String> {
 /// the deleting device so other clients delete their local copy on next
 /// sync.
 ///
-/// Returns whether the caller had a copy to delete. A shared PC save's row can
-/// belong to another account, and a delete only ever tombstones your own row,
-/// so `false` means there was nothing of yours behind that row.
+/// Returns whether the caller had a copy to delete. Only an older server, which
+/// shared PC saves across accounts, can answer `false`.
 #[tauri::command]
 pub async fn delete_cloud_save(id: String) -> Result<bool, String> {
     remote::save_sync::delete_cloud_save(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The previous versions the server kept of one cloud save (newest first),
+/// plus the live one. Through Rust for the same auth reason as
+/// [`list_cloud_saves`].
+#[tauri::command]
+pub async fn list_cloud_save_revisions(
+    id: String,
+) -> Result<remote::save_sync::CloudSaveHistory, String> {
+    remote::save_sync::list_cloud_save_revisions(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Make a previous version the live cloud copy. The cloud only: the panel
+/// downloads it afterwards if the user wants it on this device too. The
+/// version being replaced goes into the history, so this can be undone.
+#[tauri::command]
+pub async fn restore_cloud_save_revision(
+    revision_id: String,
+) -> Result<remote::save_sync::CloudSaveRestoreResult, String> {
+    remote::save_sync::restore_cloud_save_revision(&revision_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1383,18 +1429,33 @@ pub async fn delete_cloud_save(id: String) -> Result<bool, String> {
 /// emulator is installed). Pure read: no upload, no disk mutation. Shared
 /// by the manual-sync command and the "show local saves" scan so both use
 /// identical detection.
+///
+/// The Ludusavi half uses the same context as the launch (Wine prefix and
+/// Steam app id, see `remote::save_sync::pc_scan_context`). It used to pass no
+/// prefix, so for a Proton game the panel looked somewhere other than where
+/// the launch did and listed its saves as missing.
+///
+/// `Err` when Ludusavi is installed and the scan failed. That is not the same
+/// as "no saves": a caller showing an empty list for it would tell the user
+/// their saves are gone, and Sync would then pull every cloud copy down over
+/// files the scan could not see. A missing Ludusavi is `Ok` (PC half empty);
+/// the panels prompt for the install separately.
 fn scan_all_local_saves(
     game_id: &str,
     game_name: &str,
-) -> Vec<remote::save_sync::LocalSaveFile> {
+) -> Result<Vec<remote::save_sync::LocalSaveFile>, String> {
     let mut out = Vec::new();
 
-    let steam_app_id = find_steam_app_id(game_id);
-    out.extend(remote::save_sync::scan_pc_saves(
+    let scan = remote::save_sync::pc_scan_context(game_id, None);
+    match remote::save_sync::scan_pc_saves(
         game_name,
-        steam_app_id.as_deref(),
-        None,
-    ));
+        scan.steam_app_id.as_deref(),
+        scan.wine_prefix.as_deref(),
+    ) {
+        Ok(found) => out.extend(found),
+        Err(remote::save_sync::PcScanError::LudusaviMissing) => {}
+        Err(remote::save_sync::PcScanError::Failed(reason)) => return Err(reason),
+    }
 
     // `scan_emu_saves` walks both `drop-saves/<user_id>/<game_id>` and the
     // Switch NAND roots, so it needs the emulator install root, not the saves
@@ -1408,7 +1469,7 @@ fn scan_all_local_saves(
         ));
     }
 
-    out
+    Ok(out)
 }
 
 /// Best-effort Switch title id for a game, read out of its launch command or
@@ -1443,8 +1504,12 @@ fn find_switch_title_id(game_id: &str) -> Option<String> {
 /// One locally-detected save file, for the panel's unified status list.
 ///
 /// `data_hash` lets the panel compare a local file against its cloud
-/// counterpart (matched by `filename`) to decide whether a save is Synced
-/// (hashes equal) or in Conflict (both present, hashes differ).
+/// counterpart (matched by `filename`). `synced_hash` / `synced_cloud_id` are
+/// what this account's sync manifest recorded for the file at its last sync
+/// (only from entries this build wrote, see `SyncFileEntry::three_way_base`),
+/// which is the third point the panel needs to tell "only the cloud changed"
+/// (download), "only this PC changed" (upload) and a real conflict apart. The
+/// frontend applies the same rule as `remote::save_sync::three_way_verdict`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSaveEntry {
@@ -1453,6 +1518,45 @@ pub struct LocalSaveEntry {
     pub size: u64,
     pub modified_at: u64,
     pub data_hash: String,
+    pub synced_hash: Option<String>,
+    pub synced_cloud_id: Option<String>,
+    /// Set when the file changed since this account's last sync and its bytes
+    /// are what another Drop account on this device last synced: that
+    /// account's name, or "" if unknown. Shown so the user knows whose copy
+    /// the local file is.
+    pub last_synced_by_other_account: Option<String>,
+    /// Another Drop account also syncs this game on this device and this is
+    /// a file they share (a PC save, the Switch NAND, or an emulator save still
+    /// in the old shared folder). A local change can
+    /// then be that person's progress, so the panels show it as a conflict
+    /// rather than offering to back it up as this account's, and Sync does not
+    /// back up a file only on this device: the same rule the launch sync
+    /// applies.
+    pub other_accounts_on_this_device: bool,
+    /// The name an older build's upload of this file is stored under in the
+    /// cloud, when that differs from `filename` (see
+    /// `remote::save_sync::legacy_cloud_name`). The panel keeps such a row out
+    /// of Sync's automatic download, as the launch sync does.
+    pub legacy_cloud_name: Option<String>,
+}
+
+/// [`remote::save_sync::local_copy_last_synced_by`], asked only for a file
+/// that changed since this account's last sync (the one case where the answer
+/// changes what the panels show), so a large NAND scan does not read every
+/// other account's manifest once per file.
+fn other_account_copy(
+    user_id: Option<&str>,
+    game_id: &str,
+    filename: &str,
+    data_hash: &str,
+    synced_hash: Option<&str>,
+) -> Option<String> {
+    let user_id = user_id?;
+    let changed = synced_hash.is_some_and(|h| !h.eq_ignore_ascii_case(data_hash));
+    if !changed {
+        return None;
+    }
+    remote::save_sync::local_copy_last_synced_by(user_id, game_id, filename, data_hash)
 }
 
 /// Scan and return this game's local save files WITHOUT uploading — so the
@@ -1466,20 +1570,56 @@ pub async fn scan_local_game_saves(
 ) -> Result<Vec<LocalSaveEntry>, String> {
     // Same multi-second Ludusavi scan as the manual sync — keep it off the
     // main thread so the panel's refresh never freezes the UI.
-    tokio::task::spawn_blocking(move || {
-        scan_all_local_saves(&game_id, &game_name)
+    tokio::task::spawn_blocking(move || -> Result<Vec<LocalSaveEntry>, String> {
+        let user_id = remote::save_sync::current_user_id();
+        let manifest = user_id
+            .as_ref()
+            .map(|user_id| remote::save_sync::load_manifest(user_id, &game_id));
+        let shared = user_id
+            .as_deref()
+            .is_some_and(|u| remote::save_sync::other_accounts_have_synced(u, &game_id));
+        // Emulator saves are shared too while they still sit in the old
+        // shared folder; see `remote::save_sync::emu_saves_root_is_shared`.
+        let emu_root_shared = find_emulator_root(&game_id).is_some_and(|root| {
+            remote::save_sync::emu_saves_root_is_shared(&root, user_id.as_deref(), &game_id)
+        });
+        let found = scan_all_local_saves(&game_id, &game_name)?;
+        Ok(found
             .into_iter()
-            .map(|f| LocalSaveEntry {
-                filename: f.filename,
-                save_type: f.save_type,
-                size: f.size,
-                modified_at: f.modified_at,
-                data_hash: f.data_hash,
+            .map(|f| {
+                let recorded = manifest.as_ref().and_then(|m| m.files.get(&f.filename));
+                // Only entries this build wrote are a usable last-sync record
+                // for the panels' three-way state; see
+                // `SyncFileEntry::three_way_base`. Any entry is good enough to
+                // say whose copy the file is.
+                let synced = recorded.and_then(|e| e.trusted_base());
+                LocalSaveEntry {
+                    other_accounts_on_this_device: shared
+                        && remote::save_sync::is_shared_between_accounts(
+                            &f.filename,
+                            emu_root_shared,
+                        ),
+                    legacy_cloud_name: remote::save_sync::legacy_cloud_name(&f.filename),
+                    last_synced_by_other_account: other_account_copy(
+                        user_id.as_deref(),
+                        &game_id,
+                        &f.filename,
+                        &f.data_hash,
+                        recorded.map(|e| e.synced_hash.as_str()),
+                    ),
+                    synced_hash: synced.map(|e| e.synced_hash.clone()),
+                    synced_cloud_id: synced.and_then(|e| e.cloud_id.clone()),
+                    filename: f.filename,
+                    save_type: f.save_type,
+                    size: f.size,
+                    modified_at: f.modified_at,
+                    data_hash: f.data_hash,
+                }
             })
-            .collect()
+            .collect())
     })
     .await
-    .map_err(|e| format!("Local save scan task failed: {e}"))
+    .map_err(|e| format!("Local save scan task failed: {e}"))?
 }
 
 /// Whether Drop knows where a game keeps its saves at all.
@@ -1621,7 +1761,12 @@ pub async fn sync_game_saves_now(
         .ok_or_else(|| "Sign in to sync saves.".to_string())?;
 
     // Same detection the panel's refresh shows — PC (Ludusavi) + emulator.
-    let scanned = scan_all_local_saves(&game_id, &game_name);
+    let scanned = tokio::task::spawn_blocking({
+        let (game_id, game_name) = (game_id.clone(), game_name.clone());
+        move || scan_all_local_saves(&game_id, &game_name)
+    })
+    .await
+    .map_err(|e| format!("Local save scan task failed: {e}"))??;
 
     if scanned.is_empty() {
         return Ok(0);
@@ -1696,7 +1841,12 @@ pub async fn backup_saves(
 
     let wanted: std::collections::HashSet<&str> =
         filenames.iter().map(|s| s.as_str()).collect();
-    let found = scan_all_local_saves(&game_id, &game_name);
+    let found = tokio::task::spawn_blocking({
+        let (game_id, game_name) = (game_id.clone(), game_name.clone());
+        move || scan_all_local_saves(&game_id, &game_name)
+    })
+    .await
+    .map_err(|e| format!("Local save scan task failed: {e}"))??;
     let mut targets: Vec<remote::save_sync::LocalSaveFile> = found
         .iter()
         .filter(|f| wanted.contains(f.filename.as_str()))
@@ -1786,10 +1936,9 @@ pub struct BackupResult {
 ///
 /// The frontend's per-game Cloud Saves panel hits this for `saveType == "pc"`
 /// entries. The cloud filename comes back namespaced (e.g. `"pc__<basename>"`);
-/// we strip the prefix, look up the game name from the cache, compute the Wine prefix the
-/// same way the launch pipeline does (Linux host + Windows target +
-/// `$DATA_ROOT/pfx/{game_id}` exists), and ask Ludusavi where that basename
-/// would live on disk. Then `write_downloaded_pc_save` (which already
+/// we strip the prefix, look up the game name from the cache, build the same
+/// Ludusavi context the launch uses (`remote::save_sync::pc_scan_context`), and
+/// ask Ludusavi where that file would live on disk. Then `write_downloaded_pc_save` (which already
 /// handles `.bak` backups and missing parent dirs) does the write.
 ///
 /// Errors are user-facing — they end up in the panel's per-row toast.
@@ -1825,28 +1974,6 @@ pub fn restore_pc_cloud_save(
             .to_string()
     })?;
 
-    // Wine prefix lookup mirrors `compute_wine_prefix_for` in launch.rs
-    // (private there, intentionally duplicated here to keep the launch flow
-    // contained). Only relevant on Linux; on other hosts the prefix is None
-    // and Ludusavi uses its default scan locations.
-    #[cfg(target_os = "linux")]
-    let wine_prefix = {
-        let installed = database::borrow_db_checked()
-            .applications
-            .installed_game_version
-            .get(&game_id)
-            .map(|meta| meta.target_platform);
-        match installed {
-            Some(database::platform::Platform::Windows) => {
-                let pfx = database::db::DATA_ROOT_DIR.join("pfx").join(&game_id);
-                if pfx.is_dir() { Some(pfx) } else { None }
-            }
-            _ => None,
-        }
-    };
-    #[cfg(not(target_os = "linux"))]
-    let wine_prefix: Option<std::path::PathBuf> = None;
-
     // The install directory anchors the manifest's `<base>` placeholder, which
     // is how games that save next to their own executable resolve on a machine
     // that has never run them. Absent when the game isn't installed here, and
@@ -1858,11 +1985,13 @@ pub fn restore_pc_cloud_save(
         _ => None,
     };
 
-    // Same identifier every other Ludusavi call site passes. Without it the
-    // resolution drops to `--normalized`, which cannot tell a game from its
-    // remaster, and tier 3 of the resolver will happily write to a folder
-    // nothing on this disk vouches for.
-    let steam_app_id = find_steam_app_id(&game_id);
+    // Same context every other Ludusavi call site uses: the Steam app id (so
+    // the title resolves exactly, not by `--normalized`, which cannot tell a
+    // game from its remaster) and the per-game Wine prefix for a Windows game
+    // under Proton.
+    let scan = remote::save_sync::pc_scan_context(&game_id, None);
+    let steam_app_id = scan.steam_app_id;
+    let wine_prefix = scan.wine_prefix;
 
     let dest = remote::save_sync::find_pc_save_destination(
         &game_name,
@@ -1907,10 +2036,27 @@ pub struct LudusaviSaveInfo {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LudusaviFile {
     pub path: String,
     pub size: u64,
     pub modified: u64,
+    /// The name this file has in the cloud: the same `pc__…` identity the
+    /// launch sync uploads it under, which for a save in a subfolder is its
+    /// path relative to the game's save root, not its basename. `None` for a
+    /// file only the common-locations fallback found; launch sync does not
+    /// upload those.
+    pub cloud_filename: Option<String>,
+    /// MD5 of the file, when it came from the sync scanner.
+    pub data_hash: Option<String>,
+    /// What this account's sync manifest recorded at the last sync, for the
+    /// same three-way status the desktop panel shows.
+    pub synced_hash: Option<String>,
+    pub synced_cloud_id: Option<String>,
+    /// As on `LocalSaveEntry`.
+    pub last_synced_by_other_account: Option<String>,
+    /// As on `LocalSaveEntry`.
+    pub other_accounts_on_this_device: bool,
 }
 
 /// Ludusavi release info for auto-download.
@@ -2253,172 +2399,95 @@ fn find_steam_app_id(game_id: &str) -> Option<String> {
 
 /// List PC game save locations using Ludusavi.
 /// Returns the files Ludusavi finds for this game.
+///
+/// Built on the same scan the launch sync uses (`scan_pc_saves` with the
+/// shared context: Steam app id and Wine prefix), so every file comes back
+/// with the cloud filename it is synced under. Big Picture used to run its own
+/// Ludusavi pass and key files on their basename, while the sync names a save
+/// by its path relative to the game's save root, so any save in a subfolder
+/// never matched its cloud row and could not show a status or be downloaded.
+/// The cost: config-only files the sync deliberately skips (settings,
+/// keybinds) are no longer listed either. "Backup All" still copies them.
+///
+/// `Err` when Ludusavi is missing or the scan failed, so the caller can show
+/// why instead of an empty list.
 #[tauri::command]
 pub async fn list_pc_game_saves(
     game_id: String,
     game_name: String,
 ) -> Result<LudusaviSaveInfo, String> {
-    // Ludusavi shells out to several multi-second filesystem scans (name
-    // resolution + up to three `backup --preview` passes + a manifest parse).
-    // Run them on a blocking thread so Tauri's main thread — and, in Big
-    // Picture Mode, the gamepad poll loop — isn't frozen while they run.
+    // Ludusavi shells out to several multi-second filesystem scans. Run them on
+    // a blocking thread so Tauri's main thread — and, in Big Picture Mode, the
+    // gamepad poll loop — isn't frozen while they run.
     tokio::task::spawn_blocking(move || -> Result<LudusaviSaveInfo, String> {
-    let ludusavi = find_ludusavi().ok_or("Ludusavi not installed")?;
-
-    // Try Steam App ID first (more accurate), fall back to game name
-    let app_id = find_steam_app_id(&game_id);
-
-    // Resolve the game's canonical manifest title before the exact-match
-    // backup. Ludusavi's `backup` matches names exactly + case-sensitively,
-    // so Drop's branded display names ("LEGO® Batman™: Legacy of the Dark
-    // Knight") never hit the manifest's canonical title ("Lego Batman:
-    // Legacy of the Dark Knight") and the scan silently returns nothing.
-    //
-    // Precedence mirrors Ludusavi's own `find`: Steam ID (exact identifier)
-    // → `--normalized` (ignores caps, ®/™, edition/year suffixes).
-    let first_title = |stdout: &[u8]| -> Option<String> {
-        let s = String::from_utf8_lossy(stdout);
-        serde_json::from_str::<serde_json::Value>(&s).ok().and_then(|v| {
-            v.get("games")?
-                .as_object()?
-                .keys()
-                .next()
-                .map(|k| k.to_string())
-        })
-    };
-
-    let resolved_name = app_id
-        .as_ref()
-        .and_then(|id| {
-            let o = std::process::Command::new(&ludusavi)
-                .args(["find", "--api", "--steam-id", id])
-                .output()
-                .ok()?;
-            if o.status.success() {
-                first_title(&o.stdout)
-            } else {
-                None
+        let scan = remote::save_sync::pc_scan_context(&game_id, None);
+        let found = remote::save_sync::scan_pc_saves(
+            &game_name,
+            scan.steam_app_id.as_deref(),
+            scan.wine_prefix.as_deref(),
+        )
+        .map_err(|e| match e {
+            remote::save_sync::PcScanError::LudusaviMissing => {
+                "Ludusavi not installed".to_string()
             }
-        })
-        .or_else(|| {
-            // Normalized display-name resolution — the fix for branded /
-            // trademark-laden titles that exact matching misses.
-            let o = std::process::Command::new(&ludusavi)
-                .args(["find", "--api", "--normalized", &game_name])
-                .output()
-                .ok()?;
-            if o.status.success() {
-                first_title(&o.stdout)
-            } else {
-                None
-            }
-        });
+            remote::save_sync::PcScanError::Failed(reason) => reason,
+        })?;
 
-    let search_name = resolved_name.as_deref().unwrap_or(&game_name);
-    log::info!(
-        "[LUDUSAVI] Resolved game name: '{}' (from Steam ID {:?}, display '{}')",
-        search_name,
-        app_id,
-        game_name
-    );
-
-    // Use "backup --preview --api" which actually scans the filesystem.
-    // Try the resolved name first, then the original name, then subtitle-stripped.
-    let mut output = std::process::Command::new(&ludusavi)
-        .args(["backup", "--preview", "--api", search_name])
-        .output();
-
-    // If the resolved name failed or found nothing, try name variants
-    let needs_retry = output.as_ref()
-        .map(|o| !o.status.success() || o.stdout.len() < 50)
-        .unwrap_or(true);
-
-    if needs_retry && search_name != game_name {
-        log::info!("[LUDUSAVI] Retrying with original name: '{}'", game_name);
-        output = std::process::Command::new(&ludusavi)
-            .args(["backup", "--preview", "--api", &game_name])
-            .output();
-    }
-
-    // Try subtitle-stripped version
-    let short_name = game_name.split(" - ").next().unwrap_or(&game_name).trim();
-    let needs_retry2 = output.as_ref()
-        .map(|o| !o.status.success() || o.stdout.len() < 50)
-        .unwrap_or(true);
-
-    if needs_retry2 && short_name != game_name && short_name != search_name {
-        log::info!("[LUDUSAVI] Retrying with short name: '{}'", short_name);
-        output = std::process::Command::new(&ludusavi)
-            .args(["backup", "--preview", "--api", short_name])
-            .output();
-    }
-
-    let output = output.map_err(|e| format!("Failed to run Ludusavi: {e}"))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    log::info!(
-        "[LUDUSAVI] find command for '{}' (app_id: {:?}) — status: {}, stdout: [{}], stderr: {}",
-        game_name,
-        app_id,
-        output.status,
-        stdout.trim(),
-        if stderr.is_empty() { "(empty)" } else { &stderr }
-    );
-
-    if !output.status.success() {
-        // "No matching games" is not an error, just means no saves found
-        if stderr.contains("No matching") || stdout.is_empty() {
-            return Ok(LudusaviSaveInfo {
-                files: vec![],
-                game_name: game_name.clone(),
-            });
-        }
-        return Err(format!("Ludusavi error: {}", stderr));
-    }
-
-    // Parse Ludusavi JSON API output
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .map_err(|e| format!("Failed to parse Ludusavi output: {e}"))?;
-
-    let mut files = Vec::new();
-    let mut resolved_name = game_name.clone();
-
-    if let Some(games) = json.get("games").and_then(|g| g.as_object()) {
-        for (name, game_data) in games {
-            resolved_name = name.clone();
-            if let Some(game_files) = game_data.get("files").and_then(|f| f.as_object()) {
-                for (path, file_data) in game_files {
-                    // Ludusavi reports size under `bytes`, not `size`.
-                    let size = file_data.get("bytes").and_then(|s| s.as_u64()).unwrap_or(0);
-                    files.push(LudusaviFile {
-                        path: path.clone(),
-                        size,
-                        modified: 0, // Ludusavi doesn't always provide this
-                    });
+        let user_id = remote::save_sync::current_user_id();
+        let manifest = user_id
+            .as_ref()
+            .map(|user_id| remote::save_sync::load_manifest(user_id, &game_id));
+        let shared = user_id
+            .as_deref()
+            .is_some_and(|u| remote::save_sync::other_accounts_have_synced(u, &game_id));
+        let files: Vec<LudusaviFile> = found
+            .into_iter()
+            .map(|f| {
+                // As in `scan_local_game_saves`: only a trusted entry is a
+                // three-way base, any entry can say whose copy this is.
+                let recorded = manifest.as_ref().and_then(|m| m.files.get(&f.filename));
+                let synced = recorded.and_then(|e| e.trusted_base());
+                LudusaviFile {
+                    other_accounts_on_this_device: shared
+                        && remote::save_sync::is_shared_between_accounts(&f.filename, false),
+                    last_synced_by_other_account: other_account_copy(
+                        user_id.as_deref(),
+                        &game_id,
+                        &f.filename,
+                        &f.data_hash,
+                        recorded.map(|e| e.synced_hash.as_str()),
+                    ),
+                    path: f.path.to_string_lossy().to_string(),
+                    size: f.size,
+                    modified: f.modified_at,
+                    synced_hash: synced.map(|e| e.synced_hash.clone()),
+                    synced_cloud_id: synced.and_then(|e| e.cloud_id.clone()),
+                    cloud_filename: Some(f.filename),
+                    data_hash: Some(f.data_hash),
                 }
+            })
+            .collect();
+
+        // If Ludusavi found nothing, try common save locations as a fallback.
+        if files.is_empty() {
+            log::info!(
+                "[LUDUSAVI] No files found via Ludusavi, scanning common save locations for '{}'",
+                game_name
+            );
+            let common_saves = scan_common_save_locations(&game_name, scan.steam_app_id.as_deref());
+            if !common_saves.is_empty() {
+                log::info!("[LUDUSAVI] Found {} files in common locations", common_saves.len());
+                return Ok(LudusaviSaveInfo {
+                    files: common_saves,
+                    game_name: game_name.clone(),
+                });
             }
         }
-    }
 
-    // If Ludusavi found nothing, try common save locations as a fallback
-    if files.is_empty() {
-        log::info!("[LUDUSAVI] No files found via Ludusavi, scanning common save locations for '{}'", game_name);
-        let common_saves = scan_common_save_locations(&game_name, app_id.as_deref());
-        if !common_saves.is_empty() {
-            log::info!("[LUDUSAVI] Found {} files in common locations", common_saves.len());
-            return Ok(LudusaviSaveInfo {
-                files: common_saves,
-                game_name: game_name.clone(),
-            });
-        }
-    }
-
-    Ok(LudusaviSaveInfo {
-        files,
-        game_name: resolved_name,
-    })
+        Ok(LudusaviSaveInfo {
+            files,
+            game_name,
+        })
     })
     .await
     .map_err(|e| format!("Ludusavi scan task failed: {e}"))?
@@ -2560,6 +2629,12 @@ fn scan_dir_for_saves(
                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                         .map(|d| d.as_secs())
                         .unwrap_or(0),
+                    cloud_filename: None,
+                    data_hash: None,
+                    synced_hash: None,
+                    synced_cloud_id: None,
+                    last_synced_by_other_account: None,
+                    other_accounts_on_this_device: false,
                 });
             }
         }
@@ -2666,7 +2741,10 @@ fn backup_pc_game_saves_blocking(game_id: &str, game_name: &str) -> Result<Strin
 
     let game_id = game_id.to_string();
     let game_name = game_name.to_string();
-    let app_id = find_steam_app_id(&game_id);
+    // Same context as the launch: without the Wine prefix, a Proton game's
+    // saves (inside Drop's per-game prefix) were invisible to the backup.
+    let scan = remote::save_sync::pc_scan_context(&game_id, None);
+    let app_id = scan.steam_app_id.clone();
 
     // Resolve canonical name from Steam ID (backup doesn't accept --steam-id)
     let resolved_name = if let Some(ref id) = app_id {
@@ -2684,9 +2762,12 @@ fn backup_pc_game_saves_blocking(game_id: &str, game_name: &str) -> Result<Strin
     };
     let search_name = resolved_name.as_deref().unwrap_or(&game_name);
 
-    let output = std::process::Command::new(&ludusavi)
-        .args(["backup", "--api", "--force", "--path"])
-        .arg(&staging_dir)
+    let mut backup = std::process::Command::new(&ludusavi);
+    backup.args(["backup", "--api", "--force", "--path"]).arg(&staging_dir);
+    if let Some(prefix) = &scan.wine_prefix {
+        backup.arg("--wine-prefix").arg(prefix);
+    }
+    let output = backup
         .arg(search_name)
         .output()
         .map_err(|e| format!("Failed to run Ludusavi: {e}"))?;
@@ -2737,6 +2818,10 @@ pub fn has_pc_save_backup(game_id: String) -> bool {
 }
 
 /// Restore a game's PC saves from the backup `backup_pc_game_saves` made.
+///
+/// No Wine prefix is passed here, deliberately: Ludusavi's `restore` takes
+/// none. It puts each file back at the absolute path its backup recorded,
+/// which for a Proton game is already inside the prefix the backup scanned.
 #[tauri::command]
 pub async fn restore_pc_game_saves(game_id: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || restore_pc_game_saves_blocking(&game_id))

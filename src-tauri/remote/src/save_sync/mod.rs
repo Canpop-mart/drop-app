@@ -7,9 +7,12 @@
 //!   2. Compute MD5 of each file — [`scan::md5_file`]
 //!   3. POST to `/api/v1/client/saves/sync-check` with local state — [`api::check_sync`]
 //!   4. Server compares hashes and returns verdicts: download / upload / conflict / synced
-//!   5. If conflicts: emit a Tauri event and **block** until the UI resolves them — [`conflict`]
-//!   6. Download cloud saves that are newer — [`api::bulk_download`]
-//!   7. Update the local sync manifest — [`manifest`]
+//!   5. A server "conflict" where only one side changed since the last sync
+//!      (per the manifest) becomes a plain download or upload — [`decide`]
+//!   6. Remaining conflicts: emit a Tauri event and **block** until the UI
+//!      resolves them, or set them aside on a streaming launch — [`conflict`]
+//!   7. Download cloud saves that are newer — [`api::bulk_download`]
+//!   8. Update the local sync manifest — [`manifest`]
 //!
 //! **Post-exit**:
 //!   1. Re-scan local saves, compare MD5 against the pre-launch snapshot
@@ -28,6 +31,9 @@
 //! * [`api`]      — the three Drop-server save endpoints.
 //! * [`conflict`] — turning a sync-check response into UI conflicts and
 //!   applying the user's resolutions.
+//! * [`decide`]   — the three-way verdict (local, cloud, last synced) that
+//!   turns a server "conflict" into a plain download or upload when only one
+//!   side changed.
 //!
 //! The feature is opt-in: every path here is gated on the
 //! `cloud_saves_enabled` setting, which defaults to false. Nothing in this
@@ -41,6 +47,7 @@ use serde::{Deserialize, Serialize};
 pub mod api;
 pub mod backup;
 pub mod conflict;
+pub mod decide;
 pub mod manifest;
 pub mod quota;
 pub mod scan;
@@ -50,8 +57,10 @@ pub mod tombstone;
 // Re-export every public item so existing `remote::save_sync::*` call sites in
 // the `process` crate (and elsewhere) keep compiling without edits.
 pub use api::{
+    CloudSaveCurrentVersion, CloudSaveHistory, CloudSaveRestoreResult, CloudSaveRevision,
     UploadFailure, bulk_download, changed_files, check_sync, delete_cloud_save,
-    download_cloud_save, list_cloud_save_summaries, list_cloud_saves, upload_changed_saves,
+    download_cloud_save, list_cloud_save_revisions, list_cloud_save_summaries, list_cloud_saves,
+    restore_cloud_save_revision, upload_changed_saves,
 };
 pub use backup::{
     backup_existing, is_backup_artifact, remove_save_file, replace_save_file, write_atomic,
@@ -59,25 +68,32 @@ pub use backup::{
 pub use conflict::{
     any_conflict_deferred, apply_conflict_resolutions, extract_conflicts, snapshot_hashes,
 };
+pub use decide::{SyncVerdict, reclassify_with_manifest, three_way_verdict};
 pub use manifest::{
-    load_manifest, manifest_path, record_synced_files, save_manifest, update_manifest_after_sync,
+    load_manifest, local_copy_last_synced_by, manifest_path, other_accounts_have_synced,
+    record_account_name,
+    record_synced_files, save_manifest, update_manifest_after_sync,
 };
 pub use quota::{
     QuotaPlan, fetch_quota, format_bytes, plan_within_quota, preflight_quota, projected_usage,
     quota_warning,
 };
 pub use scan::{
-    DROP_SAVES_DIR, PcSaveCoverage, SWITCH_SAVE_PREFIX, common_save_root, decode_emu_relpath,
+    DROP_SAVES_DIR, PcSaveCoverage, PcScanContext, PcScanError, SWITCH_SAVE_PREFIX,
+    common_save_root, decode_emu_relpath, pc_scan_context,
     decode_pc_relpath, decode_switch_relpath, delete_local_emu_save_for_tombstone,
     delete_local_pc_save_for_tombstone, emu_saves_root, encode_pc_filename,
-    find_pc_save_destination, is_denylisted_cloud_filename, is_pc_namespaced_filename,
+    MAX_CLOUD_FILENAME_BYTES, find_pc_save_destination, is_denylisted_cloud_filename,
+    is_pc_namespaced_filename, is_shared_between_accounts, legacy_cloud_name,
+    scan_emu_saves_all, scan_pc_saves_all, split_too_long_names,
     is_save_denylisted, ludusavi_available, md5_file, pc_save_coverage,
     scan_emu_saves, scan_pc_saves, steam_app_id_for_game, switch_cloud_row_in_scope,
     switch_title_id_from_path, write_downloaded_pc_save, write_downloaded_save,
 };
 pub use scope::{
     ClaimVerdict, OWNER_CLAIM_FILE, SAVE_SCOPE_MIGRATION_VERSION, USER_ROOT_MARKER, claim_verdict,
-    ensure_user_root, is_user_root, read_claim, resolve_emu_saves_root, write_claim,
+    emu_saves_root_is_shared, ensure_user_root, is_user_root, read_claim, resolve_emu_saves_root,
+    write_claim,
 };
 pub use tombstone::{TombstonePlan, plan_tombstones, record_applied};
 
@@ -125,6 +141,29 @@ pub struct SyncFileEntry {
     pub cloud_id: Option<String>,
     /// Timestamp of last successful sync (ISO 8601)
     pub synced_at: String,
+    /// True only on entries written by a build that keeps unanswered
+    /// conflicts out of the manifest.
+    ///
+    /// Older builds recorded a dismissed or timed-out conflict as synced, at
+    /// the local hash and against the conflicting cloud row. Read as a
+    /// last-sync record, such an entry says "only the cloud changed", and the
+    /// three-way check ([`decide::three_way_verdict`]) would download the
+    /// cloud copy over the save the user declined to give up. So `synced_hash`
+    /// is only used as a base when this is set; every other entry is treated
+    /// as "no record" until a successful sync rewrites it.
+    ///
+    /// `#[serde(default)]` so every manifest already on disk still loads (as
+    /// `false`, i.e. untrusted).
+    #[serde(default)]
+    pub three_way_base: bool,
+}
+
+impl SyncFileEntry {
+    /// The hash both sides last agreed on, when this entry can be trusted to
+    /// say so. See [`SyncFileEntry::three_way_base`].
+    pub fn trusted_base(&self) -> Option<&SyncFileEntry> {
+        self.three_way_base.then_some(self)
+    }
 }
 
 // ── Local file snapshot ────────────────────────────────────────────────
@@ -170,10 +209,15 @@ pub struct Tombstone {
     pub filename: String,
     /// ISO 8601 timestamp of the soft-delete.
     pub deleted_at: String,
-    /// Hostname / friendly device name that initiated the delete.
-    /// May be empty.
+    /// Hostname / friendly device name that initiated the delete, for
+    /// display. May be empty.
     #[serde(default)]
     pub deleted_from: String,
+    /// The Drop client registration (this device's `client_id`) that issued
+    /// the delete. What a device recognises its own tombstones by; `None` on
+    /// tombstones from before the server recorded it, and from older servers.
+    #[serde(default)]
+    pub deleted_from_client_id: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, Serialize)]
@@ -198,28 +242,21 @@ pub struct CloudSaveMeta {
     pub uploaded_at: String,
     /// Display name of the Drop account the row belongs to.
     ///
-    /// PC saves are read across every account on the server, because Drop
-    /// finds them by where the game writes them on this machine rather than
-    /// by who is signed in. When two accounts hold the same filename the
-    /// newest one wins, and this is what lets the UI say whose copy that was.
+    /// Saves are read strictly per account now, so this is the signed-in
+    /// user's own name. It is still worth carrying: two accounts on one PC
+    /// share that PC's save files on disk, and the conflict prompt names whose
+    /// cloud copy it is showing.
     ///
     /// `#[serde(default)]` so an older server that doesn't send the field
     /// still parses; the UI treats an empty name as "don't show an owner".
     #[serde(default)]
     pub owned_by: String,
-    /// The caller's own row for this filename, when another account's row won
-    /// the collision and is what `id` points at.
-    ///
-    /// A losing row used to vanish from every read surface its owner had, so
-    /// their own save could not be listed, deleted, or walked back through the
-    /// revision history. Present here, it says "you also have a copy of this".
+    /// Another account's row shadowing the caller's. Only an older server,
+    /// which read PC saves across accounts, ever sends one.
     #[serde(default)]
     pub shadowed_save_id: Option<String>,
-    /// Display names of the other accounts holding a save with this filename.
-    ///
-    /// Non-empty means a second copy exists that this row is hiding. Without
-    /// it, a clock running five minutes fast on another machine silently makes
-    /// the honest copy invisible with nothing anywhere saying it is there.
+    /// Other accounts holding a save with this filename. Only an older
+    /// server, which read PC saves across accounts, ever sends any.
     #[serde(default)]
     pub also_held_by: Vec<String>,
 }
@@ -240,19 +277,13 @@ pub struct CloudSaveGameSummary {
     pub last_uploaded_at: String,
     /// ISO 8601 client mtime of the newest save.
     pub last_modified_at: String,
-    /// How many of the counted files are another account's copy of a shared
-    /// PC save. Non-zero means part of this total is not the caller's own
-    /// backup, and a page that hid that would let someone mistake a
-    /// housemate's progress for their own safety net.
+    /// How many of the counted files are another account's copy. Always 0
+    /// from a server that reads saves per account; an older server that read
+    /// PC saves across accounts could send more.
     #[serde(default)]
     pub shared_count: u32,
     /// How many of the counted files the caller has backed up themselves.
-    ///
-    /// The endpoint answers "what can you read", and PC saves are readable
-    /// across every account on the server, so `file_count` can be entirely a
-    /// housemate's work. Zero here means this game is in the list without the
-    /// caller having backed up any of it, and nothing may badge it or add it
-    /// to a "games backed up" total.
+    /// Equal to `file_count` on a per-account server.
     ///
     /// `None` on a server too old to send it, which is not the same as zero.
     /// The frontend falls back to `file_count - shared_count` there rather
@@ -313,6 +344,25 @@ pub struct SaveConflict {
     pub cloud_size: i64,
     pub cloud_modified_at: String,
     pub cloud_uploaded_from: String,
+    /// Display name of the Drop account the cloud copy belongs to. Empty when
+    /// the server did not say.
+    pub cloud_owned_by: String,
+    /// When the file on disk is exactly what a *different* Drop account on
+    /// this PC last synced, that account's display name (or an empty string
+    /// when Drop never learned the name). Two accounts on one PC share that
+    /// PC's save files, so after switching accounts the local copy can be the
+    /// other person's progress, and the prompt has to say so.
+    pub local_last_synced_by: Option<String>,
+    /// Another Drop account also syncs this game on this device and this file
+    /// is one they share (a PC save, the Switch NAND, or an emulator save still
+    /// in the old shared folder), so the local copy may
+    /// be that person's progress. The prompt then says so rather than "changed
+    /// on both sides".
+    pub local_may_be_other_account: bool,
+    /// Set when the cloud copy is stored under the name an older build of
+    /// Drop gave this file: that old name. Keeping the cloud copy writes it
+    /// into this file.
+    pub cloud_legacy_name: Option<String>,
 }
 
 /// The frontend sends this back after the user resolves conflicts.
@@ -367,6 +417,27 @@ pub fn current_user_id() -> Option<String> {
         .ok()
         .map(|u| u.id().to_string())
         .filter(|id| !id.is_empty())
+}
+
+/// This device's Drop client registration id, or `None` when not paired.
+///
+/// The server stamps it on every tombstone this device creates, and it is what
+/// [`tombstone::plan_tombstones`] recognises this device's own deletes by.
+pub fn current_client_id() -> Option<String> {
+    database::borrow_db_checked()
+        .auth
+        .as_ref()
+        .map(|a| a.client_id.clone())
+        .filter(|id| !id.is_empty())
+}
+
+/// The signed-in account's display name, for labelling this account's sync
+/// state on disk (see [`manifest::record_account_name`]).
+pub fn current_user_display_name() -> Option<String> {
+    crate::cache::get_cached_object::<::client::user::User>("user")
+        .ok()
+        .map(|u| u.display_name().to_string())
+        .filter(|n| !n.trim().is_empty())
 }
 
 /// Get current time as an ISO 8601 string.

@@ -68,14 +68,14 @@ const PHASE_CONFLICT: &str = "conflict";
 /// laptop off wifi is the user's own connection, a server that is down is
 /// somebody's machine to go and start.
 const MSG_OFFLINE: &str =
-    "This PC is not on a network, so this game's saves were not synced. Your progress is safe \
-     on this PC. Reconnect, then press Sync in the game's Cloud Saves panel.";
+    "This device is not on a network, so this game's saves were not synced. Your progress is \
+     safe on this device. Drop tries again the next time you start the game while connected.";
 
 /// The network is up but the Drop server did not answer.
 const MSG_SERVER_UNREACHABLE: &str =
     "Drop could not reach your server, so this game's saves were not synced. Your progress is \
-     safe on this PC. Check the server is running, then press Sync in the game's Cloud Saves \
-     panel.";
+     safe on this device. Check the server is running. Drop tries again the next time you start \
+     the game.";
 
 /// The user is out of cloud storage. Names the two things that actually free
 /// some up: their own deletes, and their server admin.
@@ -89,8 +89,8 @@ const MSG_QUOTA_FULL: &str =
 /// which would not have freed a single byte on the disk that was actually
 /// full.
 const MSG_DISK_FULL: &str =
-    "This PC has run out of disk space, so the save could not be written. Free up space on this \
-     drive, then press Sync in the game's Cloud Saves panel.";
+    "This device has run out of disk space, so the save could not be written. Free up space on \
+     this drive. Drop tries again the next time you start the game.";
 
 /// PC save discovery needs Ludusavi and Drop does not bundle it. Without this
 /// the scan returns an empty list, which is indistinguishable from "this game
@@ -100,12 +100,24 @@ const MSG_LUDUSAVI_MISSING: &str =
      so nothing was backed up for this game. Open the game's Cloud Saves panel and choose \
      Install Ludusavi.";
 
+/// The server took longer than Drop waits before a launch, which is not the
+/// same as this PC being offline. A timeout used to be reported as "not on a
+/// network", which sent people off to check a connection that was fine.
+const MSG_SERVER_TIMEOUT: &str =
+    "Your Drop server took too long to answer, so this game's saves were not synced. Your \
+     progress is safe on this device. Drop tries again the next time you start the game.";
+
+/// The pre-launch upload ran out of time.
+const MSG_UPLOAD_TIMEOUT: &str =
+    "Backing up this game's saves before launch took too long, so they were not all backed up. \
+     Drop tries again when the game exits. Your progress is safe on this device.";
+
 /// A download that ran out of time is worth its own line: the game launched on
 /// whatever this PC already had, and nothing will be uploaded afterwards, so
 /// the cloud copy is intact and the two are simply out of step.
 const MSG_DOWNLOAD_TIMEOUT: &str =
     "Downloading this game's cloud saves took too long, so it started with the copy already on \
-     this PC. Nothing was uploaded afterwards, so the cloud copy is untouched.";
+     this device. Nothing was uploaded afterwards, so the cloud copy is untouched.";
 
 /// Tell the frontend a save-sync step failed. Also logs, so drop.log keeps the
 /// full picture for anyone reading it after the fact.
@@ -148,7 +160,8 @@ const MSG_SIGNED_OUT: &str =
 ///     server storage was full.
 ///   * "network is unreachable" is this PC being off the network; "failed to
 ///     connect" is the server not answering. One is a wifi icon, the other is a
-///     machine to go and start.
+///     machine to go and start. A timeout is neither: the server is up and
+///     slow, and it gets its own message.
 pub(crate) fn describe_failure(raw: &str) -> (String, bool) {
     let low = raw.to_ascii_lowercase();
     let has = |needles: &[&str]| needles.iter().any(|n| low.contains(n));
@@ -235,12 +248,15 @@ pub(crate) fn describe_failure(raw: &str) -> (String, bool) {
     ]) {
         return (MSG_OFFLINE.to_string(), true);
     }
+    // A server that answered too slowly is not a server that is down, and
+    // saying "could not reach" sends people to restart a machine that is up.
+    if has(&["timed out", "timeout"]) {
+        return (MSG_SERVER_TIMEOUT.to_string(), true);
+    }
     if has(&[
         "connect",
         "unreachable",
         "refused",
-        "timed out",
-        "timeout",
         "unavailable",
         "network",
     ]) {
@@ -259,7 +275,10 @@ fn describe_remote_error(e: &remote::error::RemoteAccessError) -> (String, bool)
     if e.is_auth_error() {
         return (MSG_SIGNED_OUT.to_string(), false);
     }
-    if matches!(e, E::ServerUnavailable(_) | E::Timeout) {
+    if matches!(e, E::Timeout) {
+        return (MSG_SERVER_TIMEOUT.to_string(), true);
+    }
+    if matches!(e, E::ServerUnavailable(_)) {
         return (MSG_SERVER_UNREACHABLE.to_string(), true);
     }
     let (message, retryable) = describe_failure(&e.to_string());
@@ -386,9 +405,19 @@ where
     })
 }
 
-/// Resolve a set of save conflicts, either by auto-picking `keep_local`
-/// (streaming — the dialog would surface on the unattended host) or by
-/// emitting a UI event and blocking on the resolution channel.
+/// Told when a streaming launch sets conflicts aside. Recorded on the Cloud
+/// Saves settings page like any other sync failure, and the conflict itself
+/// is still there to be answered on the next launch here that is not a
+/// stream (a host that only ever streams never gets one), or from the panel.
+const MSG_STREAMING_DEFERRED: &str =
+    "Some of this game's saves differ between this device and the cloud, and nobody was here \
+     to choose while it was streaming. Drop kept both copies and did not upload those files. \
+     Drop asks which to keep the next time the game is started on this device without \
+     streaming, or you can keep either copy from the game's Cloud Saves panel.";
+
+/// Resolve a set of save conflicts by emitting a UI event and blocking on the
+/// resolution channel. (A streaming launch never gets here; see
+/// [`handle_conflicts_and_collect`].)
 ///
 /// Returns `None` when the user never answered. That is deliberately NOT the
 /// same as "keep local": keeping local uploads this device's copy over the
@@ -398,26 +427,7 @@ fn resolve_conflicts(
     app: &AppHandle,
     game_id: &str,
     conflicts: &[remote::save_sync::SaveConflict],
-    streaming: bool,
 ) -> Option<Vec<remote::save_sync::ConflictResolution>> {
-    let keep_all_local = || {
-        conflicts
-            .iter()
-            .map(|c| remote::save_sync::ConflictResolution {
-                filename: c.filename.clone(),
-                choice: "keep_local".to_string(),
-            })
-            .collect::<Vec<_>>()
-    };
-
-    if streaming {
-        info!(
-            "[SAVE-SYNC] Streaming mode — auto-resolving {} conflicts to keep_local",
-            conflicts.len()
-        );
-        return Some(keep_all_local());
-    }
-
     // Emit the conflict event so the UI can show its dialog. The topic is
     // global, not `save_sync_conflict/{game_id}`: the launch can come from
     // anywhere, and a per-game topic was only heard by a page mounted for that
@@ -463,23 +473,24 @@ fn resolve_conflicts(
 /// the files the user kept on a conflict, and the files the server said were
 /// local-only (`action == "upload"`).
 ///
-/// Returns the filenames that did NOT make it. The caller drops those from the
-/// pre-launch snapshot so the exit path treats them as new and tries again —
-/// otherwise a file that failed here and then went unchanged during the
-/// session would never be uploaded at all.
+/// Returns the cloud row id of every file that made it, and the filenames that
+/// did NOT. The caller drops the failures from the pre-launch snapshot so the
+/// exit path treats them as new and tries again — otherwise a file that failed
+/// here and then went unchanged during the session would never be uploaded at
+/// all. The ids go into the manifest, which the three-way check needs.
 fn upload_kept_local(
     app: &AppHandle,
     game_id: &str,
     local_saves: &[remote::save_sync::LocalSaveFile],
     keep_filenames: &[String],
-) -> Vec<String> {
+) -> (HashMap<String, String>, Vec<String>) {
     let files: Vec<remote::save_sync::LocalSaveFile> = local_saves
         .iter()
         .filter(|f| keep_filenames.contains(&f.filename))
         .cloned()
         .collect();
     if files.is_empty() {
-        return Vec::new();
+        return (HashMap::new(), Vec::new());
     }
     let all_names = || files.iter().map(|f| f.filename.clone()).collect::<Vec<_>>();
     // Empty pre-hashes => everything is treated as changed and uploaded.
@@ -495,16 +506,19 @@ fn upload_kept_local(
                 files.len()
             );
             emit_upload_failures(app, game_id, &errs, files.len(), "before launch");
-            errs.into_iter().map(|e| e.filename).collect()
+            (
+                uploaded.into_iter().collect(),
+                errs.into_iter().map(|e| e.filename).collect(),
+            )
         }
         Ok(Err(e)) => {
             let (message, retryable) = describe_remote_error(&e);
             emit_sync_error(app, game_id, PHASE_UPLOAD, &message, retryable);
-            all_names()
+            (HashMap::new(), all_names())
         }
         Err(()) => {
-            emit_sync_error(app, game_id, PHASE_UPLOAD, MSG_OFFLINE, true);
-            all_names()
+            emit_sync_error(app, game_id, PHASE_UPLOAD, MSG_UPLOAD_TIMEOUT, true);
+            (HashMap::new(), all_names())
         }
     }
 }
@@ -554,12 +568,18 @@ fn collect_upload_filenames(
 /// as synced at a hash that never crossed the wire is what turned it into
 /// fiction: an entry claiming five files synced at a timestamp whose log line
 /// reads "No saves changed during session".
+///
+/// `unresolved` is every conflict nobody chose a side for. Recording one would
+/// make this disk's copy look like the agreed baseline, and the next launch's
+/// three-way check would then download the cloud copy over it without asking.
 fn unsynced_filenames(
     sync_result: &remote::save_sync::SyncCheckResponse,
     failed_uploads: &[String],
+    unresolved: &[String],
     downloads_ok: bool,
 ) -> Vec<String> {
     let mut out = failed_uploads.to_vec();
+    out.extend(unresolved.iter().cloned());
     if !downloads_ok {
         out.extend(sync_result.cloud_only.iter().map(|c| c.filename.clone()));
         out.extend(
@@ -654,9 +674,12 @@ pub fn sync_emulator_saves(
     streaming: bool,
 ) -> Option<SaveSyncSnapshot> {
     let emu_path = std::path::Path::new(emu_dir);
+    label_this_account(user_id);
     let title_id = rom_path.and_then(remote::save_sync::switch_title_id_from_path);
-    let local_saves =
-        remote::save_sync::scan_emu_saves(emu_path, Some(user_id), game_id, title_id.as_deref());
+    let (local_saves, too_long) = remote::save_sync::split_too_long_names(
+        remote::save_sync::scan_emu_saves_all(emu_path, Some(user_id), game_id, title_id.as_deref()),
+    );
+    report_too_long_names(app, game_id, &too_long);
     let pre_hashes = remote::save_sync::snapshot_hashes(&local_saves);
 
     // A failed/timed-out sync yields a snapshot flagged `synced_ok: false`:
@@ -671,10 +694,11 @@ pub fn sync_emulator_saves(
         switch_title_id: title_id.clone(),
         pre_hashes: pre_hashes.clone(),
         pc_save_paths: HashMap::new(),
-        wine_prefix: None,
+        target_platform: None,
+        deferred_conflicts: Default::default(),
     };
 
-    let sync_result = match block_with_timeout(
+    let mut sync_result = match block_with_timeout(
         SYNC_NET_TIMEOUT,
         remote::save_sync::check_sync(game_id, &local_saves),
     ) {
@@ -685,33 +709,55 @@ pub fn sync_emulator_saves(
             return Some(local_only_snapshot());
         }
         Err(()) => {
-            emit_sync_error(app, game_id, PHASE_CHECK, MSG_OFFLINE, true);
+            emit_sync_error(app, game_id, PHASE_CHECK, MSG_SERVER_TIMEOUT, true);
             return Some(local_only_snapshot());
         }
     };
 
+    // The manifest holds what each file looked like at the last sync, which
+    // is what turns a server "conflict" into a plain download or upload when
+    // only one side changed. Loaded once here and reused for the tombstones
+    // and the final write below.
+    let mut manifest = remote::save_sync::load_manifest(user_id, game_id);
+    remote::save_sync::reclassify_with_manifest(&mut sync_result, &manifest);
+    let emu_root_shared =
+        remote::save_sync::emu_saves_root_is_shared(emu_path, Some(user_id), game_id);
+    let held = apply_shared_device_rule(&mut sync_result, user_id, game_id, emu_root_shared);
+    let legacy = resolve_legacy_rows(&mut sync_result, &local_saves, &too_long, &manifest);
+
     let conflict = handle_conflicts_and_collect(
         app,
+        user_id,
         game_id,
         &sync_result,
         &local_saves,
         streaming,
+        emu_root_shared,
     );
+    let took_legacy = settle_legacy_conflicts(&legacy, &conflict, &mut manifest);
     let mut to_upload = conflict.uploads;
-    to_upload.extend(collect_upload_filenames(&sync_result));
+    to_upload.extend(
+        collect_upload_filenames(&sync_result)
+            .into_iter()
+            .filter(|f| !held.contains(f)),
+    );
     let mut failed_uploads: Vec<String> = Vec::new();
+    let mut uploaded_ids: HashMap<String, String> = HashMap::new();
     if !to_upload.is_empty() {
         info!(
             "[SAVE-SYNC] Backing up {} local save(s) for game {game_id} before launch",
             to_upload.len()
         );
-        failed_uploads = upload_kept_local(app, game_id, &local_saves, &to_upload);
+        (uploaded_ids, failed_uploads) =
+            upload_kept_local(app, game_id, &local_saves, &to_upload);
     }
     let download_ids =
         collect_download_ids(&sync_result, conflict.downloads, title_id.as_deref());
 
     let mut synced_ok = conflict.resolved;
     let mut failed_writes: Vec<String> = Vec::new();
+    // Local names actually written this launch.
+    let mut written: Vec<String> = Vec::new();
     let mut restored = 0usize;
     if !download_ids.is_empty() {
         info!(
@@ -723,7 +769,10 @@ pub fn sync_emulator_saves(
             remote::save_sync::bulk_download(&download_ids),
         ) {
             Ok(Ok(downloaded)) => {
-                for (filename, save_type, hash, data) in &downloaded {
+                for (cloud_name, save_type, hash, data) in &downloaded {
+                    // An older build's row for a local file is written into
+                    // that file, not next to it under the old name.
+                    let filename = legacy.targets.get(cloud_name).unwrap_or(cloud_name);
                     // Hard guard, not just the bandwidth filter in
                     // `collect_download_ids`: a file the scan deliberately
                     // refuses to see must never be written back.
@@ -757,6 +806,7 @@ pub fn sync_emulator_saves(
                     ) {
                         Ok(path) => {
                             restored += 1;
+                            written.push(filename.clone());
                             info!("[SAVE-SYNC] Downloaded save: {}", path.display());
                         }
                         Err(e) => {
@@ -802,21 +852,25 @@ pub fn sync_emulator_saves(
 
     // Apply server tombstones: saves the user deleted from *another* device
     // get removed locally (after a backup). Runs AFTER downloads so a race
-    // where the same filename is on both lists still ends up deleted. The
-    // manifest is loaded first because applying a tombstone records it there,
-    // which is what stops the server replaying the same delete every launch.
-    let mut manifest = remote::save_sync::load_manifest(user_id, game_id);
+    // where the same filename is on both lists still ends up deleted.
+    // Applying a tombstone records it in the manifest, which is what stops
+    // the server replaying the same delete every launch.
     apply_emu_tombstones(emu_path, user_id, game_id, &sync_result.tombstones, &mut manifest);
 
     // Re-scan post-download and persist the manifest.
     let updated =
         remote::save_sync::scan_emu_saves(emu_path, Some(user_id), game_id, title_id.as_deref());
-    let mut unsynced = unsynced_filenames(&sync_result, &failed_uploads, synced_ok);
+    let mut unsynced =
+        unsynced_filenames(&sync_result, &failed_uploads, &conflict.unresolved, synced_ok);
+    let took_legacy = record_legacy_rows_taken(&took_legacy, &written, &mut manifest);
     unsynced.extend(failed_writes);
+    unsynced.extend(held);
+    unsynced.extend(took_legacy.iter().cloned());
     remote::save_sync::update_manifest_after_sync(
         &mut manifest,
         &updated,
         &sync_result,
+        &uploaded_ids,
         &unsynced,
     );
     if let Err(e) = remote::save_sync::save_manifest(&manifest) {
@@ -827,7 +881,7 @@ pub fn sync_emulator_saves(
     // from the snapshot: the exit path then treats it as new and retries,
     // instead of comparing it against itself and concluding nothing changed.
     let mut post_hashes = remote::save_sync::snapshot_hashes(&updated);
-    post_hashes.retain(|name, _| !failed_uploads.contains(name));
+    post_hashes.retain(|name, _| !failed_uploads.contains(name) && !took_legacy.contains(name));
 
     Some(SaveSyncSnapshot {
         emu_root: Some(emu_path.to_path_buf()),
@@ -838,7 +892,8 @@ pub fn sync_emulator_saves(
         switch_title_id: title_id,
         pre_hashes: post_hashes,
         pc_save_paths: HashMap::new(),
-        wine_prefix: None,
+        target_platform: None,
+        deferred_conflicts: conflict.unresolved.into_iter().collect(),
     })
 }
 
@@ -917,10 +972,10 @@ fn install_dir_for(game_id: &str) -> Option<PathBuf> {
 }
 
 /// Pre-launch sync for a **PC/native** game discovered via Ludusavi.
-/// `game_name` is the display name Ludusavi keys on.
-/// `wine_prefix`, when present, is forwarded to Ludusavi via `--wine-prefix`
-/// so saves under Drop's per-game prefix are visible (Linux host launching
-/// a Windows-target game).
+/// `game_name` is the display name Ludusavi keys on. `target_platform` is the
+/// platform being launched; the Ludusavi context (Steam app id, and the Wine
+/// prefix for a Windows game under Proton) is built from it with
+/// [`remote::save_sync::pc_scan_context`], the same as every other scan.
 ///
 /// A game with no discoverable saves still gets a snapshot, with empty
 /// `pre_hashes`. Returning `None` there meant the exit path was skipped
@@ -932,9 +987,12 @@ pub fn sync_pc_saves(
     user_id: &str,
     game_id: &str,
     game_name: &str,
-    wine_prefix: Option<PathBuf>,
+    target_platform: database::platform::Platform,
     streaming: bool,
 ) -> Option<SaveSyncSnapshot> {
+    label_this_account(user_id);
+    let scan = remote::save_sync::pc_scan_context(game_id, Some(target_platform));
+    let wine_prefix = scan.wine_prefix.clone();
     // Without Ludusavi there is no PC save discovery at all, and the scan's
     // empty list is indistinguishable from "this game has no saves". Said once
     // per game per app run: the condition lasts until they install it, and a
@@ -943,12 +1001,45 @@ pub fn sync_pc_saves(
         emit_sync_error(app, game_id, PHASE_CHECK, MSG_LUDUSAVI_MISSING, false);
     }
 
-    let pc_saves = remote::save_sync::scan_pc_saves(
+    let (pc_saves, too_long) = match remote::save_sync::scan_pc_saves_all(
         game_name,
-        None,
+        scan.steam_app_id.as_deref(),
         wine_prefix.as_deref(),
-    );
+    ) {
+        Ok(found) => remote::save_sync::split_too_long_names(found),
+        // Already said once per run above; with nothing to scan, the cloud
+        // side still syncs as it always has.
+        Err(remote::save_sync::PcScanError::LudusaviMissing) => (Vec::new(), Vec::new()),
+        Err(remote::save_sync::PcScanError::Failed(reason)) => {
+            // An empty list here would make every cloud save look missing
+            // locally and pull it down over files the scan simply could not
+            // see. Sync nothing instead, and block the exit upload too.
+            emit_sync_error(
+                app,
+                game_id,
+                PHASE_CHECK,
+                &format!(
+                    "Drop could not look for this game's saves on this device, so nothing was \
+                     synced. {reason}"
+                ),
+                true,
+            );
+            return Some(SaveSyncSnapshot {
+                emu_root: None,
+                user_id: user_id.to_string(),
+                game_id: game_id.to_string(),
+                game_name: Some(game_name.to_string()),
+                synced_ok: false,
+                switch_title_id: None,
+                pre_hashes: HashMap::new(),
+                pc_save_paths: HashMap::new(),
+                target_platform: Some(target_platform),
+                deferred_conflicts: Default::default(),
+            });
+        }
+    };
 
+    report_too_long_names(app, game_id, &too_long);
     let pre_hashes = remote::save_sync::snapshot_hashes(&pc_saves);
     let pc_paths: HashMap<String, PathBuf> = pc_saves
         .iter()
@@ -964,10 +1055,11 @@ pub fn sync_pc_saves(
         switch_title_id: None,
         pre_hashes: pre_hashes.clone(),
         pc_save_paths: pc_paths.clone(),
-        wine_prefix: wine_prefix.clone(),
+        target_platform: Some(target_platform),
+        deferred_conflicts: Default::default(),
     };
 
-    let sync_result = match block_with_timeout(
+    let mut sync_result = match block_with_timeout(
         SYNC_NET_TIMEOUT,
         remote::save_sync::check_sync(game_id, &pc_saves),
     ) {
@@ -978,22 +1070,41 @@ pub fn sync_pc_saves(
             return Some(local_only_snapshot());
         }
         Err(()) => {
-            emit_sync_error(app, game_id, PHASE_CHECK, MSG_OFFLINE, true);
+            emit_sync_error(app, game_id, PHASE_CHECK, MSG_SERVER_TIMEOUT, true);
             return Some(local_only_snapshot());
         }
     };
 
-    let conflict =
-        handle_conflicts_and_collect(app, game_id, &sync_result, &pc_saves, streaming);
+    // Same three-way pass as the emulator path; see there.
+    let mut manifest = remote::save_sync::load_manifest(user_id, game_id);
+    remote::save_sync::reclassify_with_manifest(&mut sync_result, &manifest);
+    let held = apply_shared_device_rule(&mut sync_result, user_id, game_id, false);
+    let legacy = resolve_legacy_rows(&mut sync_result, &pc_saves, &too_long, &manifest);
+
+    let conflict = handle_conflicts_and_collect(
+        app,
+        user_id,
+        game_id,
+        &sync_result,
+        &pc_saves,
+        streaming,
+        false,
+    );
+    let took_legacy = settle_legacy_conflicts(&legacy, &conflict, &mut manifest);
     let mut to_upload = conflict.uploads;
-    to_upload.extend(collect_upload_filenames(&sync_result));
+    to_upload.extend(
+        collect_upload_filenames(&sync_result)
+            .into_iter()
+            .filter(|f| !held.contains(f)),
+    );
     let mut failed_uploads: Vec<String> = Vec::new();
+    let mut uploaded_ids: HashMap<String, String> = HashMap::new();
     if !to_upload.is_empty() {
         info!(
             "[SAVE-SYNC] Backing up {} local PC save(s) for game {game_id} before launch",
             to_upload.len()
         );
-        failed_uploads = upload_kept_local(app, game_id, &pc_saves, &to_upload);
+        (uploaded_ids, failed_uploads) = upload_kept_local(app, game_id, &pc_saves, &to_upload);
     }
     // No title id: a PC game's cloud must never hand this path a `switch__`
     // row, and decoding one here would aim an emulator NAND path at the PC
@@ -1013,12 +1124,9 @@ pub fn sync_pc_saves(
     // Restore button uses.
     let needs_catalogue = save_root.is_none() && !download_ids.is_empty();
     let install_dir = needs_catalogue.then(|| install_dir_for(game_id)).flatten();
-    let steam_app_id = needs_catalogue
-        .then(|| remote::save_sync::steam_app_id_for_game(game_id))
-        .flatten();
     let mut catalogue_dest = CloudOnlyPcDest {
         game_name,
-        steam_app_id: steam_app_id.as_deref(),
+        steam_app_id: scan.steam_app_id.as_deref(),
         install_dir: install_dir.as_deref(),
         wine_prefix: wine_prefix.as_deref(),
         root: None,
@@ -1031,6 +1139,8 @@ pub fn sync_pc_saves(
     // modal per file is the spam `emit_upload_failures` exists to avoid.
     let mut unplaceable: Vec<String> = Vec::new();
     let mut unplaceable_reason: Option<String> = None;
+    // Local names actually written this launch.
+    let mut written: Vec<String> = Vec::new();
     let mut restored = 0usize;
     if !download_ids.is_empty() {
         match block_with_timeout(
@@ -1038,7 +1148,10 @@ pub fn sync_pc_saves(
             remote::save_sync::bulk_download(&download_ids),
         ) {
             Ok(Ok(downloaded)) => {
-                for (filename, _save_type, hash, data) in &downloaded {
+                for (cloud_name, _save_type, hash, data) in &downloaded {
+                    // An older build's row for a local file is written into
+                    // that file, not next to it under the old name.
+                    let filename = legacy.targets.get(cloud_name).unwrap_or(cloud_name);
                     if remote::save_sync::is_denylisted_cloud_filename(filename) {
                         warn!("[SAVE-SYNC] Refusing to write untracked cloud file {filename}");
                         continue;
@@ -1081,6 +1194,7 @@ pub fn sync_pc_saves(
                     ) {
                         Ok(p) => {
                             restored += 1;
+                            written.push(filename.clone());
                             info!("[SAVE-SYNC] Downloaded PC save: {}", p.display());
                         }
                         Err(e) => {
@@ -1113,14 +1227,14 @@ pub fn sync_pc_saves(
     // resolver gave for the first of them.
     if !unplaceable.is_empty() {
         let reason = unplaceable_reason.unwrap_or_else(|| {
-            "Drop could not work out where this PC keeps this game's saves.".to_string()
+            "Drop could not work out where this device keeps this game's saves.".to_string()
         });
         emit_sync_error(
             app,
             game_id,
             PHASE_DOWNLOAD,
             &format!(
-                "{} cloud save(s) for this game could not be put back on this PC. {reason}",
+                "{} cloud save(s) for this game could not be put back on this device. {reason}",
                 unplaceable.len()
             ),
             false,
@@ -1142,26 +1256,51 @@ pub fn sync_pc_saves(
     // Apply server tombstones for PC saves. Resolve the local path via the
     // pre-launch scan map; if the filename isn't known locally, there's
     // nothing to delete and we just log.
-    let mut manifest = remote::save_sync::load_manifest(user_id, game_id);
     apply_pc_tombstones(&pc_paths, &sync_result.tombstones, &mut manifest);
 
-    let updated = remote::save_sync::scan_pc_saves(
+    let updated = match remote::save_sync::scan_pc_saves(
         game_name,
-        None,
+        scan.steam_app_id.as_deref(),
         wine_prefix.as_deref(),
-    );
-    let mut unsynced = unsynced_filenames(&sync_result, &failed_uploads, synced_ok);
+    ) {
+        Ok(found) => found,
+        Err(remote::save_sync::PcScanError::LudusaviMissing) => Vec::new(),
+        Err(remote::save_sync::PcScanError::Failed(reason)) => {
+            // Without the post-download picture there is no baseline the exit
+            // upload could safely diff against.
+            emit_sync_error(
+                app,
+                game_id,
+                PHASE_CHECK,
+                &format!(
+                    "Drop could not re-check this game's saves after syncing, so this \
+                     session's saves will not be backed up when it ends. {reason}"
+                ),
+                true,
+            );
+            synced_ok = false;
+            pc_saves.clone()
+        }
+    };
+    let mut unsynced =
+        unsynced_filenames(&sync_result, &failed_uploads, &conflict.unresolved, synced_ok);
+    let took_legacy = record_legacy_rows_taken(&took_legacy, &written, &mut manifest);
     unsynced.extend(failed_writes);
+    unsynced.extend(held);
+    unsynced.extend(took_legacy.iter().cloned());
     remote::save_sync::update_manifest_after_sync(
         &mut manifest,
         &updated,
         &sync_result,
+        &uploaded_ids,
         &unsynced,
     );
-    let _ = remote::save_sync::save_manifest(&manifest);
+    if let Err(e) = remote::save_sync::save_manifest(&manifest) {
+        warn!("[SAVE-SYNC] Failed to save manifest: {e}");
+    }
 
     let mut post_hashes = remote::save_sync::snapshot_hashes(&updated);
-    post_hashes.retain(|name, _| !failed_uploads.contains(name));
+    post_hashes.retain(|name, _| !failed_uploads.contains(name) && !took_legacy.contains(name));
 
     Some(SaveSyncSnapshot {
         emu_root: None,
@@ -1175,7 +1314,8 @@ pub fn sync_pc_saves(
             .iter()
             .map(|f| (f.filename.clone(), f.path.clone()))
             .collect(),
-        wine_prefix,
+        target_platform: Some(target_platform),
+        deferred_conflicts: conflict.unresolved.into_iter().collect(),
     })
 }
 
@@ -1192,7 +1332,13 @@ fn tombstones_for_this_device<'a>(
     manifest: &mut remote::save_sync::SyncManifest,
 ) -> Vec<&'a remote::save_sync::Tombstone> {
     let this_device = remote::save_sync::machine_name();
-    let plan = remote::save_sync::plan_tombstones(tombstones, manifest, &this_device);
+    let this_client = remote::save_sync::current_client_id();
+    let plan = remote::save_sync::plan_tombstones(
+        tombstones,
+        manifest,
+        &this_device,
+        this_client.as_deref(),
+    );
 
     for t in &plan.self_issued {
         info!(
@@ -1325,24 +1471,349 @@ struct ConflictOutcome {
     /// caller must treat the whole sync as incomplete: the conflicted files
     /// still differ from the cloud, so uploading whatever this session writes
     /// would overwrite the version nobody chose to discard.
+    ///
+    /// A streaming launch sets its conflicts aside instead and stays `true`:
+    /// the rest of the game's saves sync normally, and only the files in
+    /// `unresolved` are held back.
     resolved: bool,
+    /// Every conflicted filename nobody chose a side for. Kept out of the
+    /// manifest, and out of the exit upload, so both copies survive.
+    unresolved: Vec<String>,
+}
+
+/// See `remote::save_sync::is_shared_between_accounts`. `emu_root_shared`
+/// is true when this game's emulator saves resolved to the old shared folder
+/// (`remote::save_sync::emu_saves_root_is_shared`); always false for a PC game.
+fn is_shared_on_device(filename: &str, emu_root_shared: bool) -> bool {
+    remote::save_sync::is_shared_between_accounts(filename, emu_root_shared)
+}
+
+/// The other-account rule for a device where another Drop account also
+/// syncs this game.
+///
+/// Two accounts on one device share its PC save files and Switch NAND, and
+/// emulator saves still in the old shared folder (`emu_root_shared`). After
+/// the other person plays, the file here has changed since *this* account's
+/// last sync while this account's cloud copy has not, which the three-way rule
+/// reads as "only this device changed: upload". That would put the other
+/// person's progress into this account's cloud, and from there onto this
+/// account's other devices, without asking. Matching the bytes against the
+/// other account's manifest is not enough: if their own sync failed, their
+/// manifest never recorded those bytes. So this fails closed whenever another
+/// account has recent sync state for the game here
+/// (`remote::save_sync::other_accounts_have_synced`):
+///   * a reclassified upload (an "upload" carrying a cloud row with a hash,
+///     which the server never sends, so always one `reclassify_with_manifest`
+///     made) goes back to being a conflict, and the user is asked;
+///   * a file with no cloud copy at all is not uploaded automatically: it may
+///     be the other person's save. Its name is returned so the caller leaves
+///     it out of the upload and out of the manifest. The exit upload still
+///     pushes what this session changed, which is this account's own play, and
+///     the Cloud Saves panel can still back it up by hand.
+///
+/// A download is left alone: it only happens when the bytes here are exactly
+/// this account's own last-synced copy.
+fn apply_shared_device_rule(
+    sync_result: &mut remote::save_sync::SyncCheckResponse,
+    user_id: &str,
+    game_id: &str,
+    emu_root_shared: bool,
+) -> Vec<String> {
+    let mut held = Vec::new();
+    let mut shared: Option<bool> = None;
+    for action in sync_result.actions.iter_mut() {
+        if action.action != "upload" || !is_shared_on_device(&action.filename, emu_root_shared) {
+            continue;
+        }
+        let is_shared = *shared.get_or_insert_with(|| {
+            remote::save_sync::other_accounts_have_synced(user_id, game_id)
+        });
+        if !is_shared {
+            return held;
+        }
+        let reclassified = action
+            .cloud_save
+            .as_ref()
+            .is_some_and(|c| !c.data_hash.is_empty());
+        if reclassified {
+            info!(
+                "[SAVE-SYNC] {}: another Drop account also syncs this game on this device, \
+                 asking instead of uploading the local change",
+                action.filename
+            );
+            action.action = "conflict".to_string();
+        } else if action.cloud_save.is_none() {
+            info!(
+                "[SAVE-SYNC] {}: not backing up automatically, it is not in this account's cloud \
+                 and another Drop account also syncs this game on this device",
+                action.filename
+            );
+            held.push(action.filename.clone());
+        }
+    }
+    held
+}
+
+/// What [`resolve_legacy_rows`] decided about cloud rows stored under an
+/// older build's name.
+#[derive(Default)]
+struct LegacyPlan {
+    /// Cloud name to the local file a download of that row is written to.
+    targets: HashMap<String, String>,
+    /// Rows turned into a conflict against a local file, by local filename.
+    conflicts: Vec<(String, remote::save_sync::CloudSaveMeta)>,
+}
+
+/// Handle cloud-only rows that are an older build's copy of a file on disk.
+///
+/// Older builds uploaded names the server's sanitizer changed ("Zelda: X.srm"
+/// stored as "Zelda X.srm"), and names over 255 bytes stored cut short. The
+/// scan now names files so the server keeps the name intact, which leaves the
+/// old row matching nothing: it reads as cloud-only on every launch, and
+/// downloading it as itself writes a stray second file the game never reads.
+///
+/// Such a row is taken off the cloud-only list. Then:
+///   * Same bytes as the local file, or as that file's own cloud row, or
+///     bytes this account already chose about (a trusted manifest entry under
+///     the old name with that hash): nothing to do.
+///   * Otherwise it may be newer progress from a device still on an older
+///     build, so the local file's "synced" or "upload" action becomes a
+///     conflict against this row, and keeping the cloud copy writes it into
+///     the local file's path ([`LegacyPlan::targets`]).
+///   * When the local file already has a download or a conflict of its own,
+///     or the old name fits more than one local file, the row waits: it is
+///     looked at again next launch.
+///   * The cut copy of a file whose name is too long to sync
+///     (`too_long`) is never downloaded.
+///
+/// The row itself stays in the cloud and in the Cloud Saves panel.
+fn resolve_legacy_rows(
+    sync_result: &mut remote::save_sync::SyncCheckResponse,
+    local_saves: &[remote::save_sync::LocalSaveFile],
+    too_long: &[remote::save_sync::LocalSaveFile],
+    manifest: &remote::save_sync::SyncManifest,
+) -> LegacyPlan {
+    let mut by_legacy: HashMap<String, Vec<&remote::save_sync::LocalSaveFile>> = HashMap::new();
+    for f in local_saves {
+        if let Some(name) = remote::save_sync::legacy_cloud_name(&f.filename) {
+            by_legacy.entry(name).or_default().push(f);
+        }
+    }
+    let cut: std::collections::HashSet<String> = too_long
+        .iter()
+        .filter_map(|f| remote::save_sync::legacy_cloud_name(&f.filename))
+        .collect();
+    let mut plan = LegacyPlan::default();
+    if by_legacy.is_empty() && cut.is_empty() {
+        return plan;
+    }
+    let same = |a: &str, b: &str| !a.is_empty() && a.eq_ignore_ascii_case(b);
+
+    let rows = std::mem::take(&mut sync_result.cloud_only);
+    for row in rows {
+        if cut.contains(&row.filename) {
+            info!(
+                "[SAVE-SYNC] Not downloading {}: it is a cut-short copy of a save whose name is \
+                 too long to sync",
+                row.filename
+            );
+            continue;
+        }
+        let Some(locals) = by_legacy.get(&row.filename) else {
+            sync_result.cloud_only.push(row);
+            continue;
+        };
+        let [local] = locals.as_slice() else {
+            info!(
+                "[SAVE-SYNC] Not downloading {}: an older build's name that fits more than one \
+                 save on this device",
+                row.filename
+            );
+            continue;
+        };
+        let handled = manifest
+            .files
+            .get(&row.filename)
+            .and_then(|e| e.trusted_base())
+            .is_some_and(|e| same(&e.synced_hash, &row.data_hash));
+        let Some(action) = sync_result
+            .actions
+            .iter_mut()
+            .find(|a| a.filename == local.filename)
+        else {
+            continue;
+        };
+        let own_row_same = action
+            .cloud_save
+            .as_ref()
+            .is_some_and(|c| same(&c.data_hash, &row.data_hash));
+        if same(&row.data_hash, &local.data_hash) || own_row_same || handled {
+            info!(
+                "[SAVE-SYNC] Leaving {}: an older build's copy of {} that holds nothing newer",
+                row.filename, local.filename
+            );
+            continue;
+        }
+        if action.action != "synced" && action.action != "upload" {
+            info!(
+                "[SAVE-SYNC] {} differs from {}, the older build's copy of it; deciding after \
+                 that file's own {} this launch",
+                row.filename, local.filename, action.action
+            );
+            continue;
+        }
+        info!(
+            "[SAVE-SYNC] {} (an older build's name for {}) holds different bytes; asking which \
+             to keep",
+            row.filename, local.filename
+        );
+        action.action = "conflict".to_string();
+        action.local_hash = Some(local.data_hash.clone());
+        action.cloud_save = Some(row.clone());
+        plan.targets.insert(row.filename.clone(), local.filename.clone());
+        plan.conflicts.push((local.filename.clone(), row));
+    }
+    plan
+}
+
+/// After the conflicts are answered. A legacy conflict answered "keep this
+/// device's copy" is recorded under the old name, so the same row is not asked
+/// about again until its bytes change. Returns the ones answered "keep the
+/// cloud copy": [`record_legacy_rows_taken`] records those once the write has
+/// landed.
+fn settle_legacy_conflicts(
+    plan: &LegacyPlan,
+    conflict: &ConflictOutcome,
+    manifest: &mut remote::save_sync::SyncManifest,
+) -> Vec<(String, remote::save_sync::CloudSaveMeta)> {
+    let mut took_cloud = Vec::new();
+    for (local, row) in &plan.conflicts {
+        if conflict.unresolved.contains(local) {
+            continue;
+        }
+        if conflict.downloads.contains(&row.id) {
+            took_cloud.push((local.clone(), row.clone()));
+        } else {
+            record_legacy_row(manifest, row);
+        }
+    }
+    took_cloud
+}
+
+/// Record legacy rows whose bytes were written into their local file this
+/// launch (`written`); one whose download or write failed is asked again.
+/// Returns the local files that took a row's bytes. They are left out of this
+/// launch's manifest and out of the exit snapshot, so the exit upload (or the
+/// next launch) puts the chosen bytes into the file's own cloud row instead of
+/// the manifest pairing them with a row that does not hold them.
+fn record_legacy_rows_taken(
+    took: &[(String, remote::save_sync::CloudSaveMeta)],
+    written: &[String],
+    manifest: &mut remote::save_sync::SyncManifest,
+) -> Vec<String> {
+    let mut taken = Vec::new();
+    for (local, row) in took {
+        if !written.contains(local) {
+            continue;
+        }
+        record_legacy_row(manifest, row);
+        taken.push(local.clone());
+    }
+    taken
+}
+
+fn record_legacy_row(
+    manifest: &mut remote::save_sync::SyncManifest,
+    row: &remote::save_sync::CloudSaveMeta,
+) {
+    manifest.files.insert(
+        row.filename.clone(),
+        remote::save_sync::SyncFileEntry {
+            save_type: row.save_type.clone(),
+            synced_hash: row.data_hash.clone(),
+            cloud_id: Some(row.id.clone()),
+            synced_at: chrono::Utc::now().to_rfc3339(),
+            three_way_base: true,
+        },
+    );
+}
+
+/// Saves whose name is too long to sync, told once per game per app run.
+static LONG_NAMES_WARNED: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+/// Tell the user (once per game per run) which saves cannot be synced
+/// because their names are too long for the server.
+fn report_too_long_names(
+    app: &AppHandle,
+    game_id: &str,
+    too_long: &[remote::save_sync::LocalSaveFile],
+) {
+    let Some(first) = too_long.first() else {
+        return;
+    };
+    let first_time = {
+        let mut guard = match LONG_NAMES_WARNED.lock() {
+            Ok(g) => g,
+            // Saying it again is the harmless side of a poisoned lock.
+            Err(e) => e.into_inner(),
+        };
+        guard
+            .get_or_insert_with(std::collections::HashSet::new)
+            .insert(game_id.to_string())
+    };
+    if !first_time {
+        return;
+    }
+    let name = first
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| first.path.display().to_string());
+    emit_sync_error(
+        app,
+        game_id,
+        PHASE_CHECK,
+        &too_long_names_message(too_long.len(), &name),
+        false,
+    );
+}
+
+fn too_long_names_message(count: usize, first: &str) -> String {
+    format!(
+        "{count} of this game's save files cannot be backed up, because the path to them is too \
+         long for your Drop server to store. The first is {first}."
+    )
+}
+
+/// Remember this account's display name next to its sync state, so the
+/// conflict prompt of another account on this PC can say whose copy a local
+/// file is. See `remote::save_sync::local_copy_last_synced_by`.
+fn label_this_account(user_id: &str) {
+    if let Some(name) = remote::save_sync::current_user_display_name() {
+        remote::save_sync::record_account_name(user_id, &name);
+    }
 }
 
 /// Shared conflict path for both emulator and PC syncs: extract conflicts,
-/// resolve them (UI or auto), and turn the answers into work lists.
+/// resolve them (UI, or set aside when streaming), and turn the answers into
+/// work lists.
 fn handle_conflicts_and_collect(
     app: &AppHandle,
+    user_id: &str,
     game_id: &str,
     sync_result: &remote::save_sync::SyncCheckResponse,
     local_saves: &[remote::save_sync::LocalSaveFile],
     streaming: bool,
+    emu_root_shared: bool,
 ) -> ConflictOutcome {
     let none = || ConflictOutcome {
         downloads: Vec::new(),
         uploads: Vec::new(),
         resolved: true,
+        unresolved: Vec::new(),
     };
-    let conflicts = remote::save_sync::extract_conflicts(sync_result, local_saves);
+    let mut conflicts = remote::save_sync::extract_conflicts(sync_result, local_saves);
     if conflicts.is_empty() {
         return none();
     }
@@ -1350,10 +1821,51 @@ fn handle_conflicts_and_collect(
         "[SAVE-SYNC] {} conflicts detected for game {game_id}",
         conflicts.len()
     );
+    let names: Vec<String> = conflicts.iter().map(|c| c.filename.clone()).collect();
 
-    let Some(resolutions) = resolve_conflicts(app, game_id, &conflicts, streaming) else {
+    // Streaming: the dialog would appear on a host nobody is sitting at.
+    // Picking a side for them (this used to be "keep local") overwrote the
+    // other device's cloud copy with nobody having chosen to. Set the
+    // conflicts aside instead: both copies stay, those files are not
+    // uploaded, and the next launch on this PC asks.
+    if streaming {
+        info!(
+            "[SAVE-SYNC] Streaming launch: setting {} conflict(s) aside for {game_id}; both \
+             copies are kept",
+            conflicts.len()
+        );
+        emit_sync_error(app, game_id, PHASE_CONFLICT, MSG_STREAMING_DEFERRED, false);
+        return ConflictOutcome {
+            unresolved: names,
+            ..none()
+        };
+    }
+
+    // Two Drop accounts on one PC share its save files on disk. If the file
+    // here is exactly what another account last synced, say so: "This PC"
+    // alone does not tell anyone that the copy is somebody else's progress.
+    // When another account also syncs this game here, a shared file's local
+    // copy may be that person's progress even with no record of the bytes,
+    // and the prompt says so instead of claiming both sides changed.
+    let mut shared: Option<bool> = None;
+    for c in &mut conflicts {
+        c.local_last_synced_by = remote::save_sync::local_copy_last_synced_by(
+            user_id,
+            game_id,
+            &c.filename,
+            &c.local_hash,
+        );
+        if is_shared_on_device(&c.filename, emu_root_shared) {
+            c.local_may_be_other_account = *shared.get_or_insert_with(|| {
+                remote::save_sync::other_accounts_have_synced(user_id, game_id)
+            });
+        }
+    }
+
+    let Some(resolutions) = resolve_conflicts(app, game_id, &conflicts) else {
         return ConflictOutcome {
             resolved: false,
+            unresolved: names,
             ..none()
         };
     };
@@ -1367,6 +1879,7 @@ fn handle_conflicts_and_collect(
         );
         return ConflictOutcome {
             resolved: false,
+            unresolved: names,
             ..none()
         };
     }
@@ -1382,6 +1895,7 @@ fn handle_conflicts_and_collect(
         downloads,
         uploads,
         resolved: true,
+        unresolved: Vec::new(),
     }
 }
 
@@ -1457,6 +1971,7 @@ mod tests {
                 filename: "deleted.srm".to_string(),
                 deleted_at: "2026-06-10T17:00:24Z".to_string(),
                 deleted_from: "Steam Deck".to_string(),
+                deleted_from_client_id: None,
             }],
         );
         assert_eq!(collect_upload_filenames(&res), vec!["kept.srm"]);
@@ -1474,14 +1989,140 @@ mod tests {
 
         // Downloads succeeded: only the rejected upload is held back.
         assert_eq!(
-            unsynced_filenames(&res, &["rejected.srm".to_string()], true),
+            unsynced_filenames(&res, &["rejected.srm".to_string()], &[], true),
             vec!["rejected.srm"]
         );
 
         // Downloads failed: nothing local mirrors those cloud rows either.
-        let mut names = unsynced_filenames(&res, &["rejected.srm".to_string()], false);
+        let mut names = unsynced_filenames(&res, &["rejected.srm".to_string()], &[], false);
         names.sort();
         assert_eq!(names, vec!["old.srm", "onlycloud.srm", "rejected.srm"]);
+    }
+
+    fn local(filename: &str, hash: &str) -> remote::save_sync::LocalSaveFile {
+        remote::save_sync::LocalSaveFile {
+            filename: filename.into(),
+            save_type: "save".into(),
+            path: PathBuf::from("/s").join(filename),
+            data_hash: hash.into(),
+            size: 1,
+            modified_at: 0,
+        }
+    }
+
+    fn cloud_with_hash(id: &str, filename: &str, hash: &str) -> CloudSaveMeta {
+        CloudSaveMeta {
+            data_hash: hash.into(),
+            ..cloud(id, filename)
+        }
+    }
+
+    /// An older build's copy of a local file holding the same bytes is left
+    /// alone: not downloaded as a stray second file, not asked about.
+    #[test]
+    fn an_older_builds_identical_copy_is_left_alone() {
+        let file = local("Zelda%3A X.srm", "same");
+        let mut res = response(
+            vec![action("Zelda%3A X.srm", "upload", None)],
+            Vec::new(),
+        );
+        res.cloud_only = vec![
+            cloud_with_hash("c-old", "Zelda X.srm", "same"),
+            cloud("c-other", "Other.srm"),
+        ];
+        let manifest = remote::save_sync::SyncManifest::default();
+        let plan = resolve_legacy_rows(&mut res, &[file], &[], &manifest);
+        assert!(plan.targets.is_empty());
+        assert_eq!(res.actions[0].action, "upload");
+        assert_eq!(collect_download_ids(&res, Vec::new(), None), vec!["c-other"]);
+    }
+
+    /// Different bytes under the old name may be newer progress from a device
+    /// still on an older build: ask, and write a kept cloud copy into the
+    /// local file rather than next to it.
+    #[test]
+    fn an_older_builds_different_copy_is_a_conflict_against_the_local_file() {
+        let file = local("Zelda%3A X.srm", "mine");
+        let mut res = response(
+            vec![action("Zelda%3A X.srm", "synced", Some(cloud_with_hash("c-new", "Zelda%3A X.srm", "mine")))],
+            Vec::new(),
+        );
+        res.cloud_only = vec![cloud_with_hash("c-old", "Zelda X.srm", "theirs")];
+        let mut manifest = remote::save_sync::SyncManifest::default();
+        let plan = resolve_legacy_rows(&mut res, std::slice::from_ref(&file), &[], &manifest);
+        assert!(res.cloud_only.is_empty());
+        assert_eq!(res.actions[0].action, "conflict");
+        assert_eq!(res.actions[0].cloud_save.as_ref().unwrap().id, "c-old");
+        assert_eq!(plan.targets.get("Zelda X.srm").map(String::as_str), Some("Zelda%3A X.srm"));
+        let conflicts = remote::save_sync::extract_conflicts(&res, std::slice::from_ref(&file));
+        assert_eq!(conflicts[0].cloud_legacy_name.as_deref(), Some("Zelda X.srm"));
+
+        // Answered "keep cloud": remembered under the old name once the bytes
+        // are written into the local file, not before.
+        let outcome = ConflictOutcome {
+            downloads: vec!["c-old".into()],
+            uploads: Vec::new(),
+            resolved: true,
+            unresolved: Vec::new(),
+        };
+        let took = settle_legacy_conflicts(&plan, &outcome, &mut manifest);
+        assert!(!manifest.files.contains_key("Zelda X.srm"));
+        // Not written (the download failed): nothing recorded, asked again.
+        assert!(record_legacy_rows_taken(&took, &[], &mut manifest).is_empty());
+        assert!(!manifest.files.contains_key("Zelda X.srm"));
+        let taken =
+            record_legacy_rows_taken(&took, &["Zelda%3A X.srm".to_string()], &mut manifest);
+        assert_eq!(taken, vec!["Zelda%3A X.srm"]);
+        assert!(manifest.files["Zelda X.srm"].trusted_base().is_some());
+
+        // Next launch the same row is not asked about again.
+        let mut again = response(
+            vec![action("Zelda%3A X.srm", "upload", None)],
+            Vec::new(),
+        );
+        again.cloud_only = vec![cloud_with_hash("c-old", "Zelda X.srm", "theirs")];
+        let plan = resolve_legacy_rows(&mut again, &[local("Zelda%3A X.srm", "other")], &[], &manifest);
+        assert!(plan.conflicts.is_empty());
+        assert_eq!(again.actions[0].action, "upload");
+    }
+
+    /// A row an older server stored cut at 255 bytes is never downloaded as
+    /// a stray file next to the save whose name is too long to sync.
+    #[test]
+    fn a_cut_short_row_is_not_downloaded() {
+        let long = local(&"a".repeat(300), "h");
+        let mut res = response(Vec::new(), Vec::new());
+        res.cloud_only = vec![cloud("c-cut", &"a".repeat(255))];
+        let manifest = remote::save_sync::SyncManifest::default();
+        resolve_legacy_rows(&mut res, &[], &[long], &manifest);
+        assert!(res.cloud_only.is_empty());
+    }
+
+    #[test]
+    fn only_pc_and_switch_saves_are_shared_between_accounts() {
+        assert!(is_shared_on_device("pc__slot.sav", false));
+        assert!(is_shared_on_device("switch__save%2F0000.bin", false));
+        assert!(!is_shared_on_device("Zelda.srm", false));
+        // Still in the old shared drop-saves/<game> folder: shared too.
+        assert!(is_shared_on_device("Zelda.srm", true));
+        let message = too_long_names_message(2, "slot.sav");
+        assert!(message.contains("slot.sav"));
+        assert!(!message.contains('\u{2014}'));
+    }
+
+    /// A conflict nobody answered must never be recorded as synced. If it
+    /// were, the next launch's three-way check would see "local unchanged
+    /// since the last sync" and download the cloud copy over it unasked.
+    #[test]
+    fn an_unanswered_conflict_is_never_recorded_as_synced() {
+        let res = response(
+            vec![action("both.srm", "conflict", Some(cloud("c3", "both.srm")))],
+            Vec::new(),
+        );
+        assert_eq!(
+            unsynced_filenames(&res, &[], &["both.srm".to_string()], true),
+            vec!["both.srm"]
+        );
     }
 
     /// Every cause worth telling a user apart, recognised from the text its
@@ -1517,6 +2158,15 @@ mod tests {
             );
             assert_eq!(retryable, expected_retryable, "{raw:?}");
         }
+    }
+
+    /// A slow server is reported as slow, not as offline or down.
+    #[test]
+    fn a_timeout_is_reported_as_a_timeout() {
+        let (message, retryable) = describe_failure("operation timed out");
+        assert_eq!(message, MSG_SERVER_TIMEOUT);
+        assert!(retryable);
+        assert!(!message.contains("not on a network"));
     }
 
     /// The five the user is most likely to hit, each landing on its own
@@ -1557,7 +2207,7 @@ mod tests {
             "There is not enough space on the disk. (os error 112)",
         ] {
             let (message, _) = describe_failure(raw);
-            assert!(message.contains("This PC has run out of disk space"), "{raw}");
+            assert!(message.contains("This device has run out of disk space"), "{raw}");
             assert!(!message.contains("cloud save storage"), "{raw} -> {message}");
         }
     }
@@ -1619,6 +2269,9 @@ mod tests {
             MSG_LUDUSAVI_MISSING,
             MSG_SIGNED_OUT,
             MSG_DOWNLOAD_TIMEOUT,
+            MSG_SERVER_TIMEOUT,
+            MSG_UPLOAD_TIMEOUT,
+            MSG_STREAMING_DEFERRED,
         ] {
             assert!(!msg.is_empty());
             assert!(!msg.contains('\u{2014}'), "em-dash in {msg:?}");

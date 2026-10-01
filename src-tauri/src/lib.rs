@@ -357,6 +357,7 @@ pub fn run() {
             auth_initiate,
             auth_initiate_code,
             retry_connect,
+            refresh_user,
             manual_recieve_handshake,
             sign_out,
             // Remote
@@ -398,6 +399,8 @@ pub fn run() {
             cloud_save_quota,
             download_cloud_save,
             delete_cloud_save,
+            list_cloud_save_revisions,
+            restore_cloud_save_revision,
             sync_game_saves_now,
             backup_saves,
             scan_local_game_saves,
@@ -422,6 +425,7 @@ pub fn run() {
             uninstall_game,
             uninstall_mod,
             list_installed_mods,
+            mod_parent_platform,
             scan_game_executables,
             // Processes
             launch_game,
@@ -509,7 +513,8 @@ pub fn run() {
             ap_yaml_upload,
             ap_connect_set,
             ap_bundle_save,
-            ap_session_leave
+            ap_session_leave,
+            ap_session_forget
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -881,6 +886,18 @@ pub async fn recieve_handshake(app: AppHandle, path: String) {
     // it does nothing while signed out, so the first launch after an update
     // may well have deferred it.
     save_scope_migration::run();
+
+    // Playtime queued for this account (perhaps while another one was
+    // signed in) is only ever sent while it is signed in, so a sign-in is
+    // the moment to send it, not the next app start.
+    if matches!(app_status, AppStatus::SignedIn) {
+        tauri::async_runtime::spawn(async {
+            let (succ, fail) = ::remote::playtime::drain_pending_stops().await;
+            if succ + fail > 0 {
+                info!("playtime queue drained after sign-in: {succ} ok, {fail} deferred");
+            }
+        });
+    }
 
     app_emit!(&app, "auth/finished", ());
 }

@@ -2,20 +2,16 @@
  * Telling "this game has saves on the server" apart from "your saves for this
  * game are backed up".
  *
- * `/saves/summary` returns one row per game the caller can READ. PC saves are
- * shared across every account on a Drop server, so on a two-account family
- * server the second user gets a row for every PC game the first one has ever
- * played, with `fileCount > 0` and none of it theirs. Counting those rows is
- * how a tile ends up wearing a cloud badge for a game its owner has never
- * launched, and how a settings page tells someone nine games are backed up when
- * they own none of it.
- *
- * Every surface that asserts a backup belongs to the user goes through here.
+ * A current Drop server reads saves strictly per account, so the two are the
+ * same and `ownCount` equals `fileCount`. An older server read PC saves across
+ * every account, and on a family server the second user got a row for every
+ * PC game the first had played, none of it theirs. Every surface that asserts
+ * a backup belongs to the user still goes through here, so it stays right
+ * against either.
  *
  * The fallback exists because a Drop server can be older than its client.
  * `ownCount` is absent there, and `fileCount - sharedCount` is the closest
- * honest answer the old shape can give: it undercounts a save of yours that a
- * housemate's newer copy is currently shadowing, which is the safe direction.
+ * honest answer the old shape can give.
  */
 import type { CloudSaveGameSummary } from "~/composables/use-server-api";
 
