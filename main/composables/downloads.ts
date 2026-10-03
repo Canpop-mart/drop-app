@@ -1,6 +1,7 @@
 import type { DownloadableMetadata } from "~/types";
 import { useListen } from "./useListen";
 import { devLog } from "./dev-mode";
+import { clearUpdating, isUpdating } from "./update-tracking";
 
 export type QueueState = {
   queue: Array<{
@@ -58,13 +59,29 @@ export function useDownloadListeners() {
   useListen<string>("download_complete", (event) => {
     const completed = useCompletedDownloads();
     const gameId = event.payload;
-    devLog("download", `complete: ${gameId}`);
-    if (!completed.value.some((c) => c.gameId === gameId)) {
-      completed.value = [
-        { gameId, completedAt: Date.now() },
-        ...completed.value,
-      ].slice(0, 50);
-    }
+    // An in-place update completes through the same event; remember which it
+    // was so the history and the toast don't call it an install.
+    const kind: CompletedDownload["kind"] = isUpdating(gameId)
+      ? "update"
+      : "install";
+    clearUpdating(gameId);
+    devLog("download", `complete: ${gameId} (${kind})`);
+    // One entry per game, the newest first. An update of a game installed
+    // earlier in the session replaces that entry rather than being dropped,
+    // so it still shows (and the Big Picture toast still fires).
+    completed.value = [
+      { gameId, completedAt: Date.now(), kind },
+      ...completed.value.filter((c) => c.gameId !== gameId),
+    ].slice(0, 50);
+  });
+
+  // A failed download is the one at the front of the queue (the manager
+  // reports the error before taking it off). If that was an update, it is no
+  // longer one: without this a later fresh install of the same game would be
+  // labelled as an update. The payload is only the error text.
+  useListen<string>("download_error", () => {
+    const front = useQueueState().value.queue.at(0)?.meta.id;
+    if (front) clearUpdating(front);
   });
 
   // Throttle stats logs to at most one per second. State updates still go
@@ -90,6 +107,8 @@ export const useDownloadHistory = () =>
 export type CompletedDownload = {
   gameId: string;
   completedAt: number; // Unix ms timestamp
+  /** An in-place update rather than an install. Absent on older entries. */
+  kind?: "install" | "update";
 };
 
 export const useCompletedDownloads = () =>

@@ -356,6 +356,10 @@ pub struct VersionDownloadOption {
     // serde(default) pass-through reasoning as the mod placement fields above.
     #[serde(default)]
     required_mods: Vec<VersionDownloadOptionRequiredMod>,
+    // The version's current revision (in-place updates). Absent on servers
+    // from before revisions; passed through to the frontend as `revision`.
+    #[serde(default)]
+    pub revision: Option<u32>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -536,6 +540,13 @@ pub fn uninstall_game(
     if meta.download_type == DownloadType::Mod {
         warn!("refusing to uninstall mod {game_id} as a game; use uninstall_mod");
         return Err(LibraryError::IsMod(game_id));
+    }
+
+    // An in-place update stages into and swaps files inside the install
+    // folder; deleting it underneath would fail the update half-way.
+    if games::downloads::update::update_active(&game_id) {
+        warn!("refusing to uninstall {game_id} while an update of it is queued or running");
+        return Err(LibraryError::GameBusy);
     }
 
     uninstall_game_logic(meta, &app_handle);

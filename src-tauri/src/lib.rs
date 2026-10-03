@@ -192,6 +192,18 @@ async fn setup(handle: AppHandle) -> AppState {
     // transient layer on load — what reconciliation fixes is the *persistent*
     // status disagreeing with the filesystem (e.g. a half-finished uninstall
     // that deleted files but left the directory, or a vanished install dir).
+    // In-place updates swap files with launches held off; the process
+    // manager lives in this crate's dependency graph above `games`, so the
+    // gate is handed down from here.
+    ::games::downloads::update::set_launch_gate(Box::new(|game_ids, f| {
+        let process_manager = ::process::PROCESS_MANAGER.lock();
+        f(game_ids.iter().any(|id| process_manager.is_game_active(id)));
+    }));
+    // Finish or undo an update commit a crash interrupted, BEFORE the
+    // reconcile below: mid-commit an install's `.dropdata` can sit in the
+    // staging folder, which the reconcile would read as a broken install.
+    ::games::downloads::update::recover_all_at_startup();
+
     {
         let mut db_handle = borrow_db_mut_checked();
         reconcile_on_startup(&mut db_handle);
@@ -417,6 +429,11 @@ pub fn run() {
             // Downloads
             download_game,
             download_mod,
+            // In-place updates
+            updates::check_for_updates,
+            updates::plan_game_update,
+            updates::apply_game_update,
+            updates::recover_game_update,
             resume_download,
             move_download_in_queue,
             pause_downloads,

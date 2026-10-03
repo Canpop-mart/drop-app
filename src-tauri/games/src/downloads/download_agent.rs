@@ -140,7 +140,7 @@ const PROTECTED_DATA_DIRS_ANY_DEPTH: &[&str] = &[
 
 /// Whether a path (POSIX-relative to the install dir) is runtime user data the
 /// stale-file sweep must never delete. See the two lists above.
-fn is_protected_user_data(relative: &str) -> bool {
+pub(crate) fn is_protected_user_data(relative: &str) -> bool {
     // Manifest keys are meant to be POSIX, but the path is joined with the OS
     // separator rules, so a `\\` or a `./` in a key would still name a real
     // nested directory on Windows. Judge the components the OS will see.
@@ -202,6 +202,53 @@ pub struct DownloadInformation {
     pub manifests: HashMap<String, Manifest>,
     pub install_size: u64,
     pub download_size: u64,
+    /// The version revision this manifest belongs to. Absent on servers from
+    /// before in-place updates.
+    #[serde(default)]
+    pub revision: Option<u32>,
+}
+
+/// The server's download manifest for `version`. With `previous`, chunks
+/// already present from that version are left out of the download.
+pub(crate) async fn fetch_download_info(
+    game_id: &str,
+    version: &str,
+    previous: Option<&str>,
+) -> Result<DownloadInformation, ApplicationDownloadError> {
+    let client = DROP_CLIENT_ASYNC.clone();
+    let url = generate_url(
+        &["/api/v1/client/game/manifest"],
+        &[
+            ("id", game_id),
+            ("version", version),
+            ("previous", previous.unwrap_or("")),
+        ],
+    )
+    .map_err(ApplicationDownloadError::Communication)?;
+
+    let response = client
+        .get(url)
+        .header("Authorization", generate_authorization_header()?)
+        .send()
+        .await
+        .map_err(|e| ApplicationDownloadError::Communication(e.into()))?;
+
+    if response.status() != 200 {
+        return Err(ApplicationDownloadError::Communication(
+            RemoteAccessError::ManifestDownloadFailed(
+                response.status(),
+                response
+                    .text()
+                    .await
+                    .unwrap_or_else(|e| format!("<failed to read error body: {e}>")),
+            ),
+        ));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|e| ApplicationDownloadError::Communication(e.into()))
 }
 
 pub struct GameDownloadAgent {
@@ -379,40 +426,7 @@ impl GameDownloadAgent {
         version: &str,
         previous: Option<&str>,
     ) -> Result<DownloadInformation, ApplicationDownloadError> {
-        let client = DROP_CLIENT_ASYNC.clone();
-        let url = generate_url(
-            &["/api/v1/client/game/manifest"],
-            &[
-                ("id", &self.metadata.id),
-                ("version", version),
-                ("previous", previous.unwrap_or("")),
-            ],
-        )
-        .map_err(ApplicationDownloadError::Communication)?;
-
-        let response = client
-            .get(url)
-            .header("Authorization", generate_authorization_header()?)
-            .send()
-            .await
-            .map_err(|e| ApplicationDownloadError::Communication(e.into()))?;
-
-        if response.status() != 200 {
-            return Err(ApplicationDownloadError::Communication(
-                RemoteAccessError::ManifestDownloadFailed(
-                    response.status(),
-                    response
-                        .text()
-                        .await
-                        .unwrap_or_else(|e| format!("<failed to read error body: {e}>")),
-                ),
-            ));
-        }
-
-        response
-            .json()
-            .await
-            .map_err(|e| ApplicationDownloadError::Communication(e.into()))
+        fetch_download_info(&self.metadata.id, version, previous).await
     }
 
     /// Remove files an earlier version of this game installed into this same
@@ -582,6 +596,26 @@ impl GameDownloadAgent {
         let base_path = &self.dropdata.base_path;
         self.remove_files_dropped_since_previous_version(file_list)
             .await?;
+
+        // A repair after an in-place update: files the player chose to keep
+        // in that update get a .bak before the game's copy is written back.
+        let about_to_write: HashSet<String> = manifests_chunks
+            .iter()
+            .flat_map(|(version_id, chunks, _)| {
+                chunks
+                    .iter()
+                    .filter(|(id, _)| !completed_chunks.get(*id).copied().unwrap_or(false))
+                    .flat_map(move |(_, chunk)| {
+                        chunk
+                            .files
+                            .iter()
+                            .filter(move |f| file_list.get(&f.filename) == Some(version_id))
+                            .map(|f| f.filename.clone())
+                    })
+            })
+            .collect();
+        crate::downloads::update::back_up_kept_files(base_path, &self.metadata.version, &about_to_write)
+            .map_err(|e| ApplicationDownloadError::IoError(Arc::new(std::io::Error::other(e))))?;
 
         let local_completed_chunks = completed_chunks.clone();
 
@@ -1069,7 +1103,18 @@ impl Downloadable for GameDownloadAgent {
         )
         .await
         {
-            Ok(_) => {}
+            Ok(_) => {
+                // What was installed, for the next in-place update to compare
+                // against. Best effort: it never fails the install.
+                let revision = lock!(self.dl_info).as_ref().and_then(|i| i.revision);
+                crate::downloads::update::record_fresh_baseline(
+                    &self.metadata.id,
+                    &self.metadata.version,
+                    &self.dropdata.base_path,
+                    revision,
+                )
+                .await;
+            }
             Err(e) => {
                 error!("could not mark game as complete: {e}");
                 send!(

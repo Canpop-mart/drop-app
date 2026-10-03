@@ -53,6 +53,9 @@ pub enum ApplicationDownloadError {
     /// landed, and the old behaviour (start from an empty ledger) quietly
     /// re-downloaded multi-gigabyte games.
     UnreadableDropData(String),
+    /// An in-place update could not be applied. The string says why and is
+    /// shown as is; the install is unchanged unless it says otherwise.
+    UpdateFailed(String),
 }
 
 impl Display for ApplicationDownloadError {
@@ -92,6 +95,7 @@ impl Display for ApplicationDownloadError {
                      complete correctly — re-download the game to repair it."
                 )
             }
+            ApplicationDownloadError::UpdateFailed(why) => write!(f, "{why}"),
             ApplicationDownloadError::UnreadableDropData(path) => {
                 write!(
                     f,

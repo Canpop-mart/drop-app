@@ -14,11 +14,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Game } from "~/types";
 import type { VersionOption } from "~/composables/game";
+import { isLatestForPlatform } from "~/composables/game-detail/update-review";
 
 export function useGameInstall(game: Game) {
   const installFlowOpen = ref(false);
   // `undefined` = still loading; `null` / `[]` = none available (error UI).
   const versionOptions = ref<Array<VersionOption> | undefined | null>();
+  // Every version the server offers, installed or not (latest first). The
+  // picker hides installed ones, so "Latest" there can be an older version.
+  const allVersionOptions = ref<Array<VersionOption>>([]);
   const installDirs = ref<Array<string> | undefined>();
   const installLoading = ref(false);
   const installError = ref<string | undefined>();
@@ -54,6 +58,7 @@ export function useGameInstall(game: Game) {
         { gameId: game.id },
       );
       const installedIds = new Set(installed.map((i) => i.versionId));
+      allVersionOptions.value = allOptions;
       versionOptions.value = allOptions.filter(
         (o) => !installedIds.has(o.versionId),
       );
@@ -98,7 +103,13 @@ export function useGameInstall(game: Game) {
       installLoading.value = true;
       const versionOption =
         versionOptions.value[Math.max(installVersionIndex.value, 0)];
-      const isLatest = installVersionIndex.value === -1;
+      // "Latest" only enables updates when it really is the newest version for
+      // its platform. With the newest already installed, "Latest" in the
+      // picker resolves to an older one, which would otherwise be flagged
+      // "update available" as soon as it finished installing.
+      const isLatest =
+        installVersionIndex.value === -1 &&
+        isLatestForPlatform(allVersionOptions.value, versionOption.versionId);
 
       const downloads = [
         { gameId: game.id, versionId: versionOption.versionId },

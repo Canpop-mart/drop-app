@@ -300,6 +300,14 @@ impl DropData {
         self.write_to(&self.base_path);
     }
 
+    /// Write this ledger into `dir` (not necessarily `base_path`), reporting
+    /// failure instead of logging it. The in-place updater stages the new
+    /// version's ledger this way before swapping it in.
+    pub(crate) fn try_write_to(&self, dir: &Path) -> io::Result<()> {
+        let bytes = pot::to_vec(&self).map_err(io::Error::other)?;
+        crate::downloads::update::baseline::write_file_atomic(&dir.join(DROPDATA_PATH), &bytes)
+    }
+
     fn write_to(&self, dir: &Path) {
         let manifest_raw = match pot::to_vec(&self) {
             Ok(data) => data,
@@ -613,6 +621,29 @@ mod tests {
             None,
         )
         .write();
+    }
+
+    /// The in-place updater stages the new version's ledger with
+    /// `try_write_to` and swaps it in. It must read back as that version with
+    /// every chunk done and no previous version, or a later repair would run
+    /// the dropped-file sweep against the old version.
+    #[test]
+    fn a_staged_ledger_reads_back_as_the_new_version_with_no_previous() {
+        let dir = scratch_dir("staged_ledger");
+        let staged = dir.join("staging");
+        std::fs::create_dir_all(&staged).unwrap();
+        ledger_in(&dir, "g", "v1");
+        let next = DropData::new("g".into(), "v2".into(), Platform::Windows, dir.clone(), None);
+        next.set_contexts(&[("c1".to_string(), true), ("c2".to_string(), true)]);
+        next.try_write_to(&staged).unwrap();
+        std::fs::rename(staged.join(DROPDATA_PATH), dir.join(DROPDATA_PATH)).unwrap();
+
+        let read = DropData::generate("g".into(), "v2".into(), Platform::Windows, dir.clone()).unwrap();
+        assert_eq!(read.game_version, "v2");
+        assert_eq!(read.previously_installed_version, None);
+        assert_eq!(read.base_path, dir);
+        assert!(read.get_contexts().values().all(|d| *d));
+        assert_eq!(read.get_contexts().len(), 2);
     }
 
     /// The download agent deletes files the previous version shipped and this

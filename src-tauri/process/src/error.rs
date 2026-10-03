@@ -63,6 +63,11 @@ pub enum ProcessError {
     /// antivirus (Defender) quarantining a game exe or crack DLL. Carries
     /// the missing path.
     LaunchTargetMissing(String),
+    /// An in-place update of this install was interrupted mid-swap and could
+    /// be neither finished nor undone (a live update holds launches off
+    /// itself, so this is only ever a stuck one). Startup retries it; the
+    /// `recover_game_update` command sets it aside.
+    UpdateInProgress,
 }
 
 impl Display for ProcessError {
@@ -107,6 +112,11 @@ impl Display for ProcessError {
                  platform is set to Windows and that Proton is configured in settings.",
                 binary
             ),
+            ProcessError::UpdateInProgress => {
+                "This game's last update did not finish, and Drop could not finish or undo it. \
+                 Restart Drop to try again. Your files from before the update are kept in the \
+                 game folder's .drop-update folder."
+            }
             ProcessError::LaunchTargetMissing(path) => &format!(
                 "Launch file is missing: '{}'. It may have been removed by antivirus \
                  (Windows Defender). Verify or re-download the game, and consider adding \

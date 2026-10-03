@@ -189,6 +189,8 @@ import {
 } from "@heroicons/vue/20/solid";
 import { invoke } from "@tauri-apps/api/core";
 import { type DownloadableMetadata, type Game, type GameStatus } from "~/types";
+import { queueItemLabel } from "~/composables/game-detail/update-review";
+import { isUpdating } from "~/composables/update-tracking";
 
 const windowWidth = ref(window.innerWidth);
 window.addEventListener("resize", (event) => {
@@ -262,7 +264,12 @@ function itemStatusLabel(el: (typeof queue.value.queue)[number]): string {
   if (isCancelling(el.meta.id)) return "Cancelling…";
   if (transitioning.value === "pausing") return "Pausing…";
   if (transitioning.value === "resuming") return "Resuming…";
-  return el.status;
+  // An in-place update rides the same queue; say so instead of "Downloading".
+  return queueItemLabel(el.status, {
+    // unref: the ref is unwrapped when read through the reactive `games`.
+    gameStatusType: unref(games.value[el.meta.id]?.status)?.type,
+    updating: isUpdating(el.meta.id),
+  });
 }
 
 type ListIterable = { element: (typeof queue.value.queue)[0]; index: number };

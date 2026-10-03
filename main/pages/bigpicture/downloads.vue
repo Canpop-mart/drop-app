@@ -123,7 +123,7 @@
             {{ gameNames[item.meta.id]?.name || item.meta.id }}
           </p>
           <div class="flex items-center gap-2 mt-0.5">
-            <span class="text-xs text-zinc-500">{{ item.status }}</span>
+            <span class="text-xs text-zinc-500">{{ queueItemLabel(item.status, { updating: isUpdating(item.meta.id) }) }}</span>
             <span v-if="item.dl_current > 0" class="text-xs text-zinc-600">
               {{ formatBytes(Math.min(item.dl_current, item.dl_max)) }} /
               {{ formatBytes(item.dl_max) }}
@@ -184,7 +184,7 @@
 
           <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600/10">
             <CheckCircleIcon class="size-4 text-green-500" />
-            <span class="text-xs font-medium text-green-400">Installed</span>
+            <span class="text-xs font-medium text-green-400">{{ completionLabel(item.kind) }}</span>
           </div>
         </div>
       </div>
@@ -220,6 +220,11 @@ import { useBpFocusableGroup } from "~/composables/bp-focusable";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import BigPictureDialog from "~/components/bigpicture/BigPictureDialog.vue";
+import {
+  completionLabel,
+  queueItemLabel,
+} from "~/composables/game-detail/update-review";
+import { isUpdating } from "~/composables/update-tracking";
 definePageMeta({ layout: "bigpicture" });
 const queueState = useQueueState();
 const statsState = useStatsState();

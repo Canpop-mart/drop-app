@@ -37,24 +37,26 @@
           "
           class="mt-1"
         >
+          <!-- A republish of a pinned version is still an update, so the
+               flag is checked before "pinned". -->
           <div
-            v-if="!version?.userConfiguration?.enableUpdates"
+            v-if="updateAvailable"
+            class="inline-flex items-center gap-x-1 text-xs text-zinc-400"
+          >
+            Update available <ArrowDownTrayIcon class="size-3 text-blue-600" />
+          </div>
+          <div
+            v-else-if="!version?.userConfiguration?.enableUpdates"
             class="inline-flex items-center gap-x-1 text-xs text-zinc-400"
           >
             Version pinned
             <WrenchIcon class="size-3 text-blue-600" />
           </div>
           <div
-            v-else-if="!status.update_available"
-            class="inline-flex items-center gap-x-1 text-xs text-zinc-400"
-          >
-            Up to date <CheckCircleIcon class="size-3 text-green-600" />
-          </div>
-          <div
             v-else
             class="inline-flex items-center gap-x-1 text-xs text-zinc-400"
           >
-            Update available <ArrowDownTrayIcon class="size-3 text-blue-600" />
+            Up to date <CheckCircleIcon class="size-3 text-green-600" />
           </div>
         </div>
 
@@ -92,10 +94,13 @@
                no way to stop it again. Requesting a stream needs a device to
                request it from, and that picker only exists in Big Picture, which
                is where remote play is driven from. -->
+          <!-- Update opens the change review and updates the existing
+               install in place. Installing a version side by side is
+               "Install another version" below the header. -->
           <button
-            v-if="status.type === 'Installed' && status.update_available"
+            v-if="status.type === 'Installed' && updateAvailable"
             class="transition-transform duration-300 hover:scale-105 active:scale-95 inline-flex gap-x-2 items-center rounded-md bg-blue-600 px-6 font-semibold text-white shadow-xl backdrop-blur-sm hover:bg-blue-700 uppercase font-display"
-            @click="$emit('install')"
+            @click="$emit('update')"
           >
             Update <ArrowDownTrayIcon class="size-5" />
           </button>
@@ -274,10 +279,15 @@ const props = defineProps<{
   // the Play button and disables the launch action.
   launchInFlight?: boolean;
   prepStatus?: string;
+  // Some install of this game has an update (per-install flags from
+  // `fetch_game_installs`, or the current install's status flag).
+  updateAvailable?: boolean;
 }>();
 
 defineEmits<{
   (e: "install"): void;
+  // The Update button: the page opens the in-place update review.
+  (e: "update"): void;
   (e: "launch"): void;
   // Hidden Shift+click activation on the Play button — re-emitted up
   // so the page can route it to launchCtl.launchIncognito().

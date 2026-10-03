@@ -273,6 +273,12 @@ impl ProcessManager<'_> {
         self.processes.contains_key(game_id)
     }
 
+    /// Whether this game is running or part-way through launching. The
+    /// in-place updater refuses to swap files under it.
+    pub fn is_game_active(&self, game_id: &str) -> bool {
+        self.processes.contains_key(game_id) || self.pending_launches.contains(game_id)
+    }
+
     /// Whether ANY game is running or part-way through launching.
     ///
     /// The save-scope migration renames save directories out from under

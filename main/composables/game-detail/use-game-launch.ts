@@ -18,11 +18,23 @@ import {
   describeLaunchFailure,
   isBenignLaunchError,
 } from "~/composables/launch-failure";
+import { isStuckUpdateError } from "~/composables/game-detail/update-review";
 import { InstalledType } from "~/types";
 import type { Game, GameStatus } from "~/types";
 import type { LaunchResult } from "~/composables/game";
 
-export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
+export function useGameLaunch(
+  game: Game,
+  status: Ref<GameStatus>,
+  options?: {
+    /**
+     * A launch was refused because an update of this install is stuck. The
+     * page offers "Repair update" instead of the plain error modal. `version`
+     * is the install the launch targeted (undefined: the current install).
+     */
+    onStuckUpdate?: (version: string | undefined, message: string) => void;
+  },
+) {
   // ── Launch-options modal ────────────────────────────────────────────────
   // `launchOptions` doubles as the modal's open state: `undefined` = closed.
   const launchOptions = ref<Array<{ name: string }> | undefined>(undefined);
@@ -177,6 +189,13 @@ export function useGameLaunch(game: Game, status: Ref<GameStatus>) {
       // Benign — the first invoke already started the game.
       if (isBenignLaunchError(e)) return;
       console.error("[LAUNCH] launch_game rejected:", e);
+      if (options?.onStuckUpdate && isStuckUpdateError(e)) {
+        options.onStuckUpdate(
+          useVersion,
+          e instanceof Error ? e.message : String(e),
+        );
+        return;
+      }
       notifyLaunchFailure("run", e);
     } finally {
       launchInFlight.value = false;

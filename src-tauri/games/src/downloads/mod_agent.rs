@@ -1025,7 +1025,7 @@ mod tests {
             "v2".to_string(),
             Manifest { version: "v2".to_string(), chunks, size: 0, key: [0; 16] },
         );
-        let delta = DownloadInformation { file_list, manifests, install_size: 0, download_size: 0 };
+        let delta = DownloadInformation { file_list, manifests, install_size: 0, download_size: 0, revision: None };
         let incoming = run_writes(&delta);
         assert_eq!(incoming, vec!["H.dll".to_string()]);
 

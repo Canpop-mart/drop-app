@@ -53,9 +53,11 @@
       :players="friendsExcludingMe"
       :launch-in-flight="launchCtl.launchInFlight.value"
       :prep-status="launchCtl.prepStatus.value"
+      :update-available="updateAvailable"
       @install="installCtl.openInstallFlow()"
-      @launch="launchCtl.launch(selectedVersionId ?? undefined)"
-      @launch-incognito="launchCtl.launchIncognito()"
+      @update="openUpdateReview()"
+      @launch="requestPlay(false)"
+      @launch-incognito="requestPlay(true)"
       @queue="goToQueue()"
       @kill="launchCtl.kill()"
       @resume="launchCtl.resumeDownload()"
@@ -126,6 +128,17 @@
                   >Update available</span
                 >
               </span>
+            </button>
+            <button
+              v-if="
+                inst.updateAvailable &&
+                inst.installType !== 'PartiallyInstalled'
+              "
+              type="button"
+              class="shrink-0 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500"
+              @click="updateCtl.review(inst.versionId)"
+            >
+              Update
             </button>
             <button
               type="button"
@@ -520,6 +533,123 @@
     :game-compat="gameCompat"
   />
 
+  <!-- In-place update review (the header's Update button). -->
+  <GameDetailUpdateReviewModal
+    :update="updateCtl"
+    :game-name="game.mName"
+    :version-name="versionLabel"
+  />
+  <!-- Play with an update pending. -->
+  <Transition
+    enter-active-class="ease-out duration-200"
+    enter-from-class="opacity-0"
+    enter-to-class="opacity-100"
+    leave-active-class="ease-in duration-150"
+    leave-from-class="opacity-100"
+    leave-to-class="opacity-0"
+  >
+    <div
+      v-if="playPrompt"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      @click.self="playPrompt = null"
+    >
+      <div
+        class="w-full max-w-sm rounded-xl bg-zinc-900 border border-zinc-700 shadow-2xl"
+      >
+        <div class="px-6 py-5">
+          <h3 class="text-base font-semibold font-display text-zinc-100">
+            Update available
+          </h3>
+          <p class="mt-2 text-sm text-zinc-400">
+            There is an update for
+            <span class="text-zinc-200 font-medium">{{ game.mName }}</span
+            >. Update it before playing?
+          </p>
+        </div>
+        <div class="flex justify-end gap-3 border-t border-zinc-700 px-6 py-4">
+          <button
+            @click="playPrompt = null"
+            class="rounded-md px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            @click="playAnyway"
+            class="rounded-md px-4 py-2 text-sm font-medium text-zinc-100 bg-zinc-700 hover:bg-zinc-600 transition-colors"
+          >
+            Play anyway
+          </button>
+          <button
+            @click="updateFirst"
+            class="rounded-md px-4 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 transition-colors"
+          >
+            Update first
+          </button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+  <!-- A launch refused because an update is stuck: offer the way out. -->
+  <div
+    v-if="repairCtl.state.value"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+    @click.self="repairCtl.state.value.kind !== 'running' && repairCtl.close()"
+  >
+    <div
+      class="w-full max-w-md rounded-xl bg-zinc-900 border border-zinc-700 shadow-2xl"
+    >
+      <div class="px-6 py-5">
+        <h3 class="text-base font-semibold font-display text-zinc-100">
+          Update did not finish
+        </h3>
+        <p
+          v-if="repairCtl.state.value.kind === 'offer'"
+          class="mt-2 text-sm text-zinc-400"
+        >
+          {{ repairCtl.state.value.message }}
+          Repair update tries once more to finish or undo it, and otherwise
+          moves the unfinished update out of the way so the game can start.
+          Nothing is deleted.
+        </p>
+        <p
+          v-else-if="repairCtl.state.value.kind === 'running'"
+          class="mt-2 text-sm text-zinc-400"
+        >
+          Repairing...
+        </p>
+        <p
+          v-else-if="repairCtl.state.value.kind === 'done'"
+          class="mt-2 text-sm text-zinc-300"
+        >
+          {{ repairCtl.state.value.text }}
+        </p>
+        <p v-else class="mt-2 text-sm text-red-300">
+          Could not repair the update. {{ repairCtl.state.value.message }}
+        </p>
+      </div>
+      <div class="flex justify-end gap-3 border-t border-zinc-700 px-6 py-4">
+        <button
+          :disabled="repairCtl.state.value.kind === 'running'"
+          @click="repairCtl.close()"
+          class="rounded-md px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-50"
+        >
+          Close
+        </button>
+        <button
+          v-if="
+            repairCtl.state.value.kind === 'offer' ||
+            repairCtl.state.value.kind === 'error'
+          "
+          @click="repairCtl.repair()"
+          class="rounded-md px-4 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 transition-colors"
+        >
+          {{
+            repairCtl.state.value.kind === "error" ? "Try again" : "Repair update"
+          }}
+        </button>
+      </div>
+    </div>
+  </div>
   <!-- Launch-options picker. -->
   <GameDetailLaunchOptionsModal
     :open="launchCtl.launchOptionsOpen.value"
@@ -853,6 +983,14 @@ import { useGameConfig } from "~/composables/game-detail/use-game-config";
 import { useModInstall } from "~/composables/game-detail/use-mod-install";
 import { useInstalledMods } from "~/composables/game-detail/use-installed-mods";
 import {
+  useGameUpdate,
+  useUpdateRepair,
+} from "~/composables/game-detail/use-game-update";
+import {
+  pickUpdateInstall,
+  shouldAskBeforePlay,
+} from "~/composables/game-detail/update-review";
+import {
   shouldShowModsTab,
   buildModCards,
   type ModAction,
@@ -918,7 +1056,9 @@ function openDescriptionImage(event: MouseEvent) {
 
 // ── Composables ──────────────────────────────────────────────────────────
 const installCtl = useGameInstall(game);
-const launchCtl = useGameLaunch(game, status);
+const launchCtl = useGameLaunch(game, status, {
+  onStuckUpdate: (version, message) => offerUpdateRepair(version, message),
+});
 const stats = useGameStats(game.id);
 const config = useGameConfig(game, version);
 
@@ -1026,6 +1166,9 @@ type InstalledVersion = {
   updateAvailable: boolean;
 };
 const installs = ref<InstalledVersion[]>([]);
+// False until `fetch_game_installs` answers, and again when it fails: an
+// unknown install list must never make Play ask about an update.
+const installsKnown = ref(false);
 const versionLabels = ref<Record<string, string>>({});
 const versionToUninstall = ref<string | null>(null);
 // The version the main Play button launches (multi-version install). Defaults
@@ -1037,6 +1180,7 @@ async function refreshInstalls() {
     installs.value = await invoke<InstalledVersion[]>("fetch_game_installs", {
       gameId: id,
     });
+    installsKnown.value = true;
     // Keep the Play-button selection pointed at a still-installed version.
     if (installs.value.length > 0) {
       const stillValid = installs.value.some(
@@ -1049,6 +1193,7 @@ async function refreshInstalls() {
   } catch (e) {
     console.warn("[library/[id]] failed to load installs:", e);
     installs.value = [];
+    installsKnown.value = false;
   }
 }
 
@@ -1072,6 +1217,90 @@ function versionLabel(versionId: string | null): string {
   if (!versionId) return "";
   return versionLabels.value[versionId] || versionId;
 }
+
+// ── In-place updates ─────────────────────────────────────────────────────
+const updateCtl = useGameUpdate(id);
+
+/** The install Play launches: the selected one, else the current install. */
+const launchVersionId = computed<string | null>(() => {
+  if (selectedVersionId.value) return selectedVersionId.value;
+  return status.value.type === "Installed" ? status.value.version_id : null;
+});
+
+/** The install Update acts on; falls back to the current install's own flag
+ *  when the install list could not be read. */
+const updateInstallId = computed<string | null>(() => {
+  const picked = pickUpdateInstall(installs.value, launchVersionId.value);
+  if (picked) return picked;
+  if (status.value.type === "Installed" && status.value.update_available) {
+    return status.value.version_id;
+  }
+  return null;
+});
+const updateAvailable = computed(() => updateInstallId.value !== null);
+
+function openUpdateReview() {
+  const v = updateInstallId.value;
+  if (v) void updateCtl.review(v);
+}
+
+// "Update first / Play anyway". Holds whether the pending launch is incognito.
+const playPrompt = ref<{ incognito: boolean } | null>(null);
+
+function requestPlay(incognito: boolean) {
+  if (
+    shouldAskBeforePlay(
+      installsKnown.value ? installs.value : null,
+      launchVersionId.value,
+    )
+  ) {
+    playPrompt.value = { incognito };
+    return;
+  }
+  startPlay(incognito);
+}
+
+function startPlay(incognito: boolean) {
+  if (incognito) launchCtl.launchIncognito();
+  else launchCtl.launch(selectedVersionId.value ?? undefined);
+}
+
+function playAnyway() {
+  const p = playPrompt.value;
+  playPrompt.value = null;
+  if (p) startPlay(p.incognito);
+}
+
+function updateFirst() {
+  playPrompt.value = null;
+  const v = launchVersionId.value;
+  if (v) void updateCtl.review(v);
+}
+
+// "Repair update" for a launch refused because an update is stuck.
+const repairCtl = useUpdateRepair(id);
+
+function offerUpdateRepair(version: string | undefined, message: string) {
+  const v = version ?? launchVersionId.value;
+  if (v) {
+    repairCtl.offer(v, message);
+    return;
+  }
+  // No install to point the repair at: show the error as it is. Its text only
+  // names restarting Drop.
+  createModal(
+    ModalType.Notification,
+    { title: "Update did not finish", description: message, buttonText: "Close" },
+    (_e, c) => c(),
+  );
+}
+
+// The update check flips per-install flags and re-emits the game's status
+// (`update_game/<id>`); re-read the installs so Update and the Play prompt
+// follow without a reload.
+watch(status, () => {
+  refreshInstalls();
+});
 
 async function confirmUninstallVersion() {
   const v = versionToUninstall.value;

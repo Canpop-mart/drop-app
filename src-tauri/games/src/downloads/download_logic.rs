@@ -179,8 +179,11 @@ pub async fn download_game_chunk(
             }
         }
 
+        // Only for a file this call wrote: one it skipped may not exist here
+        // (the in-place updater writes a chunk's selected files into an
+        // empty staging folder) and belongs to another version otherwise.
         #[cfg(unix)]
-        {
+        if should_write {
             drop(file_handle);
             let permissions = if file.permissions == 0 {
                 0o744
@@ -360,6 +363,7 @@ mod tests {
             manifests,
             install_size: 0,
             download_size: 0,
+            revision: None,
         }
     }
 

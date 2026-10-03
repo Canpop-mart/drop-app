@@ -17,7 +17,7 @@
           </div>
           <div class="flex-1 min-w-0 text-left">
             <div class="text-xs font-semibold text-green-400 uppercase tracking-wide">
-              Installed
+              {{ completionLabel(current.kind) }}
             </div>
             <div class="text-sm font-medium text-zinc-100 truncate">
               {{ current.name }}
@@ -37,11 +37,13 @@ import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useCompletedDownloads, useQueueState } from "~/composables/downloads";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { invoke } from "@tauri-apps/api/core";
+import { completionLabel } from "~/composables/game-detail/update-review";
 
 interface ToastEntry {
   gameId: string;
   name: string;
   at: number;
+  kind?: "install" | "update";
 }
 
 const completed = useCompletedDownloads();
@@ -95,7 +97,12 @@ watch(
     for (const entry of fresh) {
       if (entry.completedAt > lastSeenAt) lastSeenAt = entry.completedAt;
       const name = await resolveGameName(entry.gameId);
-      toastQueue.value.push({ gameId: entry.gameId, name, at: entry.completedAt });
+      toastQueue.value.push({
+        gameId: entry.gameId,
+        name,
+        at: entry.completedAt,
+        kind: entry.kind,
+      });
     }
     if (!current.value) showNext();
   },

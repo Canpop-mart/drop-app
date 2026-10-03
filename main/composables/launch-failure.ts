@@ -76,6 +76,14 @@ export function describeLaunchFailure(
     return identified("Missing a required program", msg);
   }
 
+  // An interrupted in-place update that could be neither finished nor undone
+  // (ProcessError::UpdateInProgress). The game pages offer "Repair update"
+  // next to this; the sentence itself only names restarting Drop, which
+  // works everywhere.
+  if (msg.includes("last update did not finish")) {
+    return identified("Update did not finish", msg);
+  }
+
   // Missing files.
   if (msg.includes("game file is missing")) {
     return identified("Game file missing", msg);

@@ -594,6 +594,17 @@ fn claims_by_others(install_dir: &Path, exclude: &str) -> Result<HashMap<String,
 /// inside `base_path`. The caller must then assume any unknown file might
 /// belong to a mod.
 pub fn mod_owned_files(base_path: &Path) -> Result<HashSet<String>, String> {
+    Ok(mod_owned_files_spelled(base_path)?
+        .into_iter()
+        .map(|f| f.to_lowercase())
+        .collect())
+}
+
+/// [`mod_owned_files`], spelt as the ledgers spell them rather than
+/// lower-cased. The in-place updater matches these case-sensitively on
+/// filesystems that are (Linux, the Deck), where `Config/x.cfg` claimed by a
+/// mod and the player's `config/x.cfg` are two different files.
+pub fn mod_owned_files_spelled(base_path: &Path) -> Result<HashSet<String>, String> {
     let ledgers = read_ledgers(base_path).map_err(|e| format!("could not read {MODS_DIR}: {e}"))?;
 
     let mut owned = HashSet::new();
@@ -607,7 +618,7 @@ pub fn mod_owned_files(base_path: &Path) -> Result<HashSet<String>, String> {
             ));
         }
         let prefix = overlay_rel(base_path, &ledger)?;
-        owned.extend(files.into_iter().map(|f| root_rel(&prefix, &f).to_lowercase()));
+        owned.extend(files.into_iter().map(|f| root_rel(&prefix, &f)));
     }
     Ok(owned)
 }

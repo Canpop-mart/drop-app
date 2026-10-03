@@ -85,6 +85,10 @@ fn launch_game_inner(
     incognito: bool,
     version: Option<String>,
 ) -> Result<LaunchResult, ProcessError> {
+    // Finish or undo an update commit a crash interrupted in this install, so
+    // the launch sees whole files. If it can't be, the launch is refused
+    // (ProcessError::UpdateInProgress) rather than run on a half-swapped game.
+    games::downloads::update::recover_before_launch(&id, version.as_deref());
     let result = run_launch(id, index, streaming, config_override, incognito, version);
 
     if let Err(err) = &result

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { devLog } from "./dev-mode";
+import { clearUpdating, markUpdating } from "./update-tracking";
 import type {
   Game,
   GameStatus,
@@ -49,6 +50,12 @@ const subscribeGameStatus = (gameId: string) => {
     if (gameStatusRegistry[gameId]) {
       gameStatusRegistry[gameId].value = parseStatus(payload.status);
     }
+    // Only the in-place update agent reports `Updating`, and only a fresh
+    // install reports `Downloading`: keep the queue's update labels honest
+    // (see update-tracking.ts).
+    const transient = payload.status?.[1]?.type;
+    if (transient === "Updating") markUpdating(gameId);
+    else if (transient === "Downloading") clearUpdating(gameId);
     if (payload.version && gameRegistry[gameId]) {
       gameRegistry[gameId].version.value = payload.version;
     }

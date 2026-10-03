@@ -265,6 +265,12 @@ impl ProcessManager<'_> {
             (meta, version_name, install_dir, install_type)
         };
 
+        // An in-place update swaps files with launches held off; a journal
+        // still here means one was interrupted mid-swap and not yet undone.
+        if games::downloads::update::launch_blocked(std::path::Path::new(install_dir)) {
+            return Err(ProcessError::UpdateInProgress);
+        }
+
         let game_version = db_lock
             .applications
             .game_versions

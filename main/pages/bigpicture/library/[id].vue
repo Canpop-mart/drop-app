@@ -38,13 +38,13 @@
           <!-- ── Installed: Play button with dropdown ── -->
           <div v-if="status?.type === 'Installed' && status.install_type.type === 'Installed'" class="relative inline-flex">
             <div
-              :ref="(el: any) => registerAction(el, { onSelect: launchGame, onContext: togglePlayMenu })"
+              :ref="(el: any) => registerAction(el, { onSelect: requestPlay, onContext: togglePlayMenu })"
               class="bp-focus-delegate inline-flex cursor-pointer"
             >
               <span class="bp-focus-ring inline-flex rounded-xl">
                 <button
                   class="inline-flex items-center pl-8 pr-4 py-4 text-lg gap-3 font-semibold rounded-l-xl transition-all shadow-lg bg-blue-600 hover:bg-blue-400 text-white shadow-blue-600/20 hover:shadow-blue-500/30 hover:scale-105"
-                  @click.stop="launchGame"
+                  @click.stop="requestPlay"
                 >
                   <PlayIcon class="size-6" />
                   Play
@@ -142,6 +142,18 @@
             Stop
           </button>
 
+          <!-- ── Update: an install has an in-place update. Opens the review
+               rows below the banner (no modal). ── -->
+          <button
+            v-if="status?.type === 'Installed' && updateInstallId"
+            :ref="(el: any) => registerAction(el, { onSelect: openUpdateReview })"
+            class="inline-flex items-center px-6 py-4 text-lg gap-3 bg-blue-600/80 hover:bg-blue-500 text-white font-semibold rounded-xl transition-colors shadow-lg"
+            @click="openUpdateReview"
+          >
+            <ArrowPathIcon class="size-6" />
+            Update
+          </button>
+
           <!-- Launch status line — visible during launch and for the first
                few moments after the game is Running (until user dismisses). -->
           <div
@@ -152,15 +164,15 @@
             {{ launchStatus }}
           </div>
 
-          <!-- ── Downloading/Queued: Status ── -->
+          <!-- ── Downloading/Queued/Updating/Validating: Status ── -->
           <button
-            v-if="status?.type === 'Downloading' || status?.type === 'Queued'"
+            v-if="inFlightLabel"
             class="inline-flex items-center px-8 py-4 text-lg gap-3 font-semibold rounded-xl cursor-not-allowed"
             style="background-color: rgba(59,130,246,0.2); color: rgb(147,197,253)"
             disabled
           >
             <ArrowDownTrayIcon class="size-6 animate-bounce" />
-            {{ status?.type === "Downloading" ? "Downloading..." : "Queued" }}
+            {{ inFlightLabel }}
           </button>
 
           <!-- ── Not installed here, but installed on another device:
@@ -202,7 +214,9 @@
               status.type !== 'Installed' &&
               status.type !== 'Running' &&
               status.type !== 'Downloading' &&
-              status.type !== 'Queued'
+              status.type !== 'Queued' &&
+              status.type !== 'Updating' &&
+              status.type !== 'Validating'
             "
             class="relative inline-flex"
           >
@@ -389,6 +403,312 @@
         </div>
       </div>
     </div>
+
+    <!-- A launch refused because an update is stuck: "Repair update" as
+         plain focusable rows, no modal and no input lock. -->
+    <section
+      v-if="repairState"
+      class="mx-8 mt-6 rounded-2xl border border-amber-500/30 bg-zinc-900/80 p-6"
+    >
+      <p class="text-lg font-semibold text-zinc-100">Update did not finish</p>
+      <p v-if="repairState.kind === 'offer'" class="mt-1 text-sm text-zinc-400">
+        {{ repairState.message }}
+        Repair update tries once more to finish or undo it, and otherwise moves
+        the unfinished update out of the way so the game can start. Nothing is
+        deleted.
+      </p>
+      <p v-else-if="repairState.kind === 'running'" class="mt-1 text-sm text-zinc-400">
+        Repairing...
+      </p>
+      <p v-else-if="repairState.kind === 'done'" class="mt-1 text-sm text-zinc-300">
+        {{ repairState.text }}
+      </p>
+      <p v-else class="mt-1 text-sm text-red-300">
+        Could not repair the update. {{ repairState.message }}
+      </p>
+      <div class="mt-4 flex flex-wrap gap-3">
+        <button
+          v-if="repairState.kind === 'offer' || repairState.kind === 'error' || repairState.kind === 'running'"
+          :ref="(el: any) => registerReviewEl(el, 'repair-run', { onSelect: runUpdateRepair })"
+          class="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+          @click="runUpdateRepair"
+        >
+          {{ repairState.kind === "error" ? "Try again" : repairState.kind === "running" ? "Repairing..." : "Repair update" }}
+        </button>
+        <button
+          :ref="(el: any) => registerReviewEl(el, 'repair-close', { onSelect: closeUpdateRepair })"
+          class="px-6 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+          @click="closeUpdateRepair"
+        >
+          Close
+        </button>
+      </div>
+    </section>
+
+    <!-- Play with an update pending: plain focusable buttons, no modal. -->
+    <section
+      v-if="playPromptOpen"
+      class="mx-8 mt-6 rounded-2xl border border-blue-500/30 bg-zinc-900/80 p-6"
+    >
+      <p class="text-lg font-semibold text-zinc-100">Update available</p>
+      <p class="mt-1 text-sm text-zinc-400">
+        There is an update for {{ game?.mName ?? "this game" }}. Update it before playing?
+      </p>
+      <div class="mt-4 flex flex-wrap gap-3">
+        <button
+          :ref="(el: any) => registerReviewEl(el, 'prompt-update', { onSelect: updateFirst })"
+          class="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+          @click="updateFirst"
+        >
+          Update first
+        </button>
+        <button
+          :ref="(el: any) => registerReviewEl(el, 'prompt-play', { onSelect: playAnyway })"
+          class="px-6 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold"
+          @click="playAnyway"
+        >
+          Play anyway
+        </button>
+        <button
+          :ref="(el: any) => registerReviewEl(el, 'prompt-cancel', { onSelect: closePlayPrompt })"
+          class="px-6 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400"
+          @click="closePlayPrompt"
+        >
+          Cancel
+        </button>
+      </div>
+    </section>
+
+    <!-- In-place update review as plain focusable rows (no modal, no input
+         lock). Conflicts are a two-column grid, paged, keyed by path. -->
+    <section
+      v-if="reviewPhase.kind !== 'idle'"
+      class="mx-8 mt-6 rounded-2xl border border-zinc-700/50 bg-zinc-900/80 p-6"
+    >
+      <p class="text-lg font-semibold text-zinc-100">
+        Update {{ game?.mName ?? "" }}
+      </p>
+
+      <!-- What "Repair update" did, above the re-checked review. -->
+      <p
+        v-if="updateCtl.repairNote.value && reviewPhase.kind !== 'repairing'"
+        class="mt-3 rounded-lg bg-blue-500/10 px-4 py-2 text-sm text-blue-200"
+      >
+        {{ updateCtl.repairNote.value }}
+      </p>
+
+      <div
+        v-if="reviewPhase.kind === 'loading' || reviewPhase.kind === 'repairing'"
+        class="mt-3 flex items-center gap-3 text-sm text-zinc-400"
+      >
+        <span class="h-4 w-4 rounded-full border-2 border-zinc-500/40 border-t-blue-400 animate-spin" />
+        {{
+          reviewPhase.kind === "repairing"
+            ? "Repairing the unfinished update..."
+            : "Checking what the update changes..."
+        }}
+      </div>
+
+      <p
+        v-else-if="reviewPhase.kind === 'error'"
+        class="mt-3 text-sm text-red-300"
+      >
+        {{ REVIEW_ERROR_LEAD[reviewPhase.during] }}
+        {{ reviewPhase.message }}
+      </p>
+
+      <p
+        v-else-if="reviewPhase.kind === 'up_to_date'"
+        class="mt-3 text-sm text-zinc-300"
+      >
+        This install is already up to date.
+      </p>
+
+      <template v-else-if="reviewPlan">
+        <p class="mt-2 text-sm text-zinc-400">{{ targetLine(reviewPlan, versionLabel) }}</p>
+        <div class="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+          <span class="text-zinc-200">{{ countsLine(reviewPlan) }}</span>
+          <span class="text-zinc-400">{{ downloadLine(reviewPlan) }}</span>
+        </div>
+        <p
+          v-if="reviewPlan.baselineSource === 'none'"
+          class="mt-3 rounded-lg bg-amber-500/10 px-4 py-2 text-sm text-amber-300"
+        >
+          {{ BASELINE_NONE_NOTE }}
+        </p>
+
+        <!-- Files replaced or removed with the player's copy kept as .bak:
+             information only. The list is paged like the conflicts and its
+             rows are focusable so a pad can read through it. -->
+        <template v-if="backupLine(reviewPlan)">
+          <div class="mt-4 flex flex-wrap items-center gap-3">
+            <p class="text-sm text-zinc-300">{{ backupLine(reviewPlan) }}</p>
+            <button
+              :ref="(el: any) => registerReviewEl(el, 'backup-toggle', { onSelect: toggleBackups })"
+              class="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-200"
+              @click="toggleBackups"
+            >
+              {{ showBackups ? "Hide files" : `Show files (${reviewPlan.backupPaths.length})` }}
+            </button>
+          </div>
+          <template v-if="showBackups">
+            <div class="mt-3 grid grid-cols-2 gap-3">
+              <div
+                v-for="path in pagedBackups"
+                :key="path"
+                :ref="(el: any) => registerReviewEl(el, 'backup:' + path, { onSelect: () => {} })"
+                class="min-w-0 rounded-xl bg-zinc-800/60 px-4 py-2.5"
+              >
+                <span class="block truncate font-mono text-sm text-zinc-200">{{ path }}</span>
+              </div>
+            </div>
+            <div v-if="backupPages > 1" class="mt-3 flex items-center gap-3">
+              <button
+                :ref="(el: any) => registerReviewEl(el, 'bpage-prev', { onSelect: () => setBackupPage(backupPage - 1) })"
+                class="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-200"
+                :class="{ 'opacity-40': backupPage === 0 }"
+                @click="setBackupPage(backupPage - 1)"
+              >
+                Previous page
+              </button>
+              <span class="text-sm text-zinc-400">
+                Page {{ backupPage + 1 }} of {{ backupPages }}
+              </span>
+              <button
+                :ref="(el: any) => registerReviewEl(el, 'bpage-next', { onSelect: () => setBackupPage(backupPage + 1) })"
+                class="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-200"
+                :class="{ 'opacity-40': backupPage >= backupPages - 1 }"
+                @click="setBackupPage(backupPage + 1)"
+              >
+                Next page
+              </button>
+            </div>
+          </template>
+        </template>
+
+        <template v-if="reviewPlan.conflicts.length > 0">
+          <p class="mt-4 text-sm text-zinc-300">
+            {{ reviewPlan.conflicts.length }}
+            {{ reviewPlan.conflicts.length === 1 ? "file" : "files" }} you changed or
+            added {{ reviewPlan.conflicts.length === 1 ? "is" : "are" }} touched by this
+            update. A switches between Take update and Keep mine.
+          </p>
+          <div class="mt-3 flex flex-wrap gap-3">
+            <button
+              :ref="(el: any) => registerReviewEl(el, 'all-take', { onSelect: () => updateCtl.chooseEvery('take_update') })"
+              class="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-200"
+              @click="updateCtl.chooseEvery('take_update')"
+            >
+              Take update for all
+            </button>
+            <button
+              :ref="(el: any) => registerReviewEl(el, 'all-keep', { onSelect: () => updateCtl.chooseEvery('keep_mine') })"
+              class="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-200"
+              @click="updateCtl.chooseEvery('keep_mine')"
+            >
+              Keep mine for all
+            </button>
+          </div>
+
+          <div class="mt-3 grid grid-cols-2 gap-3">
+            <button
+              v-for="c in pagedConflicts"
+              :key="c.path"
+              :ref="(el: any) => registerReviewEl(el, 'conflict:' + c.path, { onSelect: () => updateCtl.toggle(c.path), onFocus: () => (lastConflictPath = c.path) })"
+              class="min-w-0 rounded-xl px-4 py-3 text-left transition-colors"
+              :class="
+                reviewChoices[c.path]
+                  ? 'bg-zinc-800/80 hover:bg-zinc-700'
+                  : 'bg-amber-500/10 hover:bg-amber-500/20 ring-1 ring-amber-500/30'
+              "
+              @click="updateCtl.toggle(c.path)"
+            >
+              <span class="block truncate font-mono text-sm text-zinc-100">{{ c.path }}</span>
+              <span class="block text-xs text-zinc-500">{{ CONFLICT_KIND_LABEL[c.kind] }}</span>
+              <span
+                class="mt-1 block text-sm font-semibold"
+                :class="reviewChoices[c.path] ? 'text-blue-300' : 'text-amber-300'"
+              >
+                {{ reviewChoices[c.path] ? RESOLUTION_LABEL[reviewChoices[c.path]] : "Not chosen" }}
+              </span>
+              <span class="block text-xs text-zinc-400">
+                {{ resolutionDetail(c.kind, reviewChoices[c.path]) }}
+              </span>
+            </button>
+          </div>
+
+          <!-- Pager: both buttons stay rendered on every page so focus never
+               loses its element when the page changes. -->
+          <div
+            v-if="conflictPages > 1"
+            class="mt-3 flex items-center gap-3"
+          >
+            <button
+              :ref="(el: any) => registerReviewEl(el, 'page-prev', { onSelect: () => setConflictPage(conflictPage - 1) })"
+              class="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-200"
+              :class="{ 'opacity-40': conflictPage === 0 }"
+              @click="setConflictPage(conflictPage - 1)"
+            >
+              Previous page
+            </button>
+            <span class="text-sm text-zinc-400">
+              Page {{ conflictPage + 1 }} of {{ conflictPages }}
+            </span>
+            <button
+              :ref="(el: any) => registerReviewEl(el, 'page-next', { onSelect: () => setConflictPage(conflictPage + 1) })"
+              class="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-200"
+              :class="{ 'opacity-40': conflictPage >= conflictPages - 1 }"
+              @click="setConflictPage(conflictPage + 1)"
+            >
+              Next page
+            </button>
+          </div>
+        </template>
+      </template>
+
+      <div class="mt-5 flex flex-wrap items-center gap-3">
+        <button
+          v-if="reviewPhase.kind === 'ready' || reviewPhase.kind === 'applying'"
+          :ref="(el: any) => registerReviewEl(el, 'apply', { onSelect: applyUpdate })"
+          class="px-6 py-3 rounded-xl font-semibold text-white"
+          :class="updateCtl.canApply.value ? 'bg-blue-600 hover:bg-blue-500' : 'bg-blue-600/40'"
+          @click="applyUpdate"
+        >
+          {{ reviewPhase.kind === "applying" ? "Starting..." : "Apply update" }}
+        </button>
+        <!-- An earlier update is stuck: repair it, then re-check. -->
+        <button
+          v-if="reviewPhase.kind === 'error' && reviewPhase.needsRecovery"
+          :ref="(el: any) => registerReviewEl(el, 'review-repair', { onSelect: () => updateCtl.repairThenRecheck() })"
+          class="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 font-semibold text-white"
+          @click="updateCtl.repairThenRecheck()"
+        >
+          Repair update
+        </button>
+        <button
+          v-if="reviewPhase.kind === 'error'"
+          :ref="(el: any) => registerReviewEl(el, 'recheck', { onSelect: () => updateCtl.recheck() })"
+          class="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 font-semibold text-white"
+          @click="updateCtl.recheck()"
+        >
+          Check again
+        </button>
+        <button
+          :ref="(el: any) => registerReviewEl(el, 'close', { onSelect: closeUpdateReview })"
+          class="px-6 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+          @click="closeUpdateReview"
+        >
+          {{ reviewPhase.kind === "up_to_date" ? "Close" : "Cancel" }}
+        </button>
+        <span
+          v-if="reviewPhase.kind === 'ready' && updateCtl.unresolved.value.length > 0"
+          class="text-sm text-amber-300"
+        >
+          Choose for {{ updateCtl.unresolved.value.length }} more
+          {{ updateCtl.unresolved.value.length === 1 ? "file" : "files" }}
+        </span>
+      </div>
+    </section>
 
     <!-- Playtime & Achievement stats bar -->
     <div v-if="game && (gamePlaytime || achievements.length > 0)" class="px-8 pt-4 flex items-center gap-6">
@@ -946,6 +1266,7 @@ import {
   PlayIcon,
   StopIcon,
   ArrowDownTrayIcon,
+  ArrowPathIcon,
   TrophyIcon,
   SignalIcon,
 } from "@heroicons/vue/24/solid";
@@ -973,6 +1294,31 @@ function objectUrl(id: string): string {
 }
 
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
+import {
+  useGameUpdate,
+  useUpdateRepair,
+} from "~/composables/game-detail/use-game-update";
+import {
+  BASELINE_NONE_NOTE,
+  CONFLICT_KIND_LABEL,
+  RESOLUTION_LABEL,
+  backupLine,
+  checkOutcome,
+  checkOutcomeText,
+  clampPage,
+  countsLine,
+  downloadLine,
+  isLatestForPlatform,
+  isStuckUpdateError,
+  pageCount,
+  pageForPath,
+  pageSlice,
+  pickUpdateInstall,
+  resolutionDetail,
+  shouldAskBeforePlay,
+  targetLine,
+} from "~/composables/game-detail/update-review";
+import { isUpdating } from "~/composables/update-tracking";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useStreaming } from "~/composables/useStreaming";
@@ -1056,8 +1402,32 @@ const showRemotePlayButton = computed(() => {
     type !== "Installed" &&
     type !== "Running" &&
     type !== "Downloading" &&
-    type !== "Queued"
+    type !== "Queued" &&
+    type !== "Updating" &&
+    type !== "Validating"
   );
+});
+
+/**
+ * The disabled progress button's label while something is in the queue for
+ * this game, or null. An in-place update reports `Updating` itself; its
+ * `Queued` and `Validating` look like an install's, so the update marker
+ * decides the wording there.
+ */
+const inFlightLabel = computed<string | null>(() => {
+  const updating = isUpdating(gameId);
+  switch (status.value?.type) {
+    case "Downloading":
+      return "Downloading...";
+    case "Queued":
+      return updating ? "Update queued" : "Queued";
+    case "Updating":
+      return "Updating...";
+    case "Validating":
+      return updating ? "Applying update..." : "Validating...";
+    default:
+      return null;
+  }
 });
 const hasRemoteInstallTargets = computed(() => installTargets.value.length > 0);
 
@@ -1169,7 +1539,7 @@ function runMenuItem(item: PlayMenuItem | undefined) {
   if (!item || item.disabled) return;
   switch (item.kind) {
     case "play-local":
-      launchGame();
+      requestPlay();
       break;
     case "install-local":
       downloadGame();
@@ -1497,7 +1867,10 @@ async function installSelectedVersion() {
         Math.max(downloadDirs.value.length - 1, 0),
       ),
       targetPlatform: vo.platform,
-      enableUpdates: true,
+      // Only the newest version for its platform follows updates, as on the
+      // desktop. An older one with updates on was flagged "update available"
+      // the moment it finished installing.
+      enableUpdates: isLatestForPlatform(versionOptions.value ?? [], vo.versionId),
     });
     showInfoToast(`Installing ${versionLabel(vo.versionId)}`);
     showOptions.value = false;
@@ -1516,6 +1889,7 @@ async function loadInstalledVersions() {
       "fetch_game_installs",
       { gameId },
     );
+    installedVersionsKnown.value = true;
     if (
       activeVersionId.value &&
       !installedVersions.value.some((i) => i.versionId === activeVersionId.value)
@@ -1526,8 +1900,219 @@ async function loadInstalledVersions() {
   } catch (e) {
     console.warn("[BPM:GAME] fetch_game_installs failed:", e);
     installedVersions.value = [];
+    installedVersionsKnown.value = false;
   }
 }
+
+// ── In-place updates ──────────────────────────────────────────────────────
+// The review is rows inside the page, not an overlay: no input lock is taken
+// anywhere in this section, so there is nothing to leak. Focus moves by
+// identity (each row's key, a conflict's path), never by index.
+const updateCtl = useGameUpdate(gameId);
+// False until `fetch_game_installs` answers, and again when it fails: an
+// unknown install list must never make Play ask about an update.
+const installedVersionsKnown = ref(false);
+
+/** The install Play launches: the chosen one, else the current install. */
+const launchVersionId = computed<string | null>(() => {
+  if (activeVersionId.value) return activeVersionId.value;
+  const s = status.value;
+  return s?.type === "Installed" ? s.version_id : null;
+});
+
+/** The install Update acts on; the current install's own flag covers a
+ *  failed install-list read. */
+const updateInstallId = computed<string | null>(() => {
+  const picked = pickUpdateInstall(installedVersions.value, launchVersionId.value);
+  if (picked) return picked;
+  const s = status.value;
+  return s?.type === "Installed" && s.update_available ? s.version_id : null;
+});
+
+const reviewPhase = computed(() => updateCtl.phase.value);
+/** The sentence before the engine's error, by what was being attempted. */
+const REVIEW_ERROR_LEAD = {
+  plan: "Could not check this update.",
+  apply: "The update was not started.",
+  repair: "Could not repair the update.",
+} as const;
+const reviewPlan = computed(() => updateCtl.plan.value);
+const reviewChoices = computed(() => updateCtl.choices.value);
+const conflictPage = ref(0);
+const conflictPages = computed(() => pageCount(updateCtl.conflicts.value.length));
+const pagedConflicts = computed(() =>
+  pageSlice(updateCtl.conflicts.value, conflictPage.value),
+);
+// The conflict row that last had focus, to land back on it after a re-check.
+const lastConflictPath = ref<string | null>(null);
+
+// Rows by key, for moving focus to a specific one. Plain object, not
+// reactive: DOM refs set from :ref callbacks during render would loop.
+const reviewEls: Record<string, HTMLElement> = {};
+function registerReviewEl(
+  el: any,
+  key: string,
+  options: { onSelect: () => void; onFocus?: () => void },
+) {
+  if (el) {
+    const node = (el.$el ?? el) as HTMLElement;
+    if (node instanceof HTMLElement) reviewEls[key] = node;
+  }
+  registerAction(el, options);
+}
+function focusReviewEl(...keys: string[]) {
+  nextTick(() => {
+    for (const key of keys) {
+      const node = reviewEls[key];
+      if (node?.isConnected && focusNav.focusElement(node)) return;
+    }
+  });
+}
+
+function openUpdateReview() {
+  const v = updateInstallId.value;
+  if (!v) return;
+  closePlayPrompt();
+  void updateCtl.review(v);
+}
+
+function closeUpdateReview() {
+  updateCtl.close();
+  showBackups.value = false;
+  backupPage.value = 0;
+  lastConflictPath.value = null;
+  conflictPage.value = 0;
+}
+
+function setConflictPage(page: number) {
+  conflictPage.value = clampPage(page, updateCtl.conflicts.value.length);
+}
+
+// A plan landed (first time, or a re-check): show the page holding the row
+// the player was on and put focus there, else on the first choice to make,
+// else on Apply.
+watch(reviewPhase, (phase, prev) => {
+  if (phase.kind === "ready" && prev?.kind === "loading") {
+    const list = updateCtl.conflicts.value;
+    conflictPage.value = pageForPath(list, lastConflictPath.value, conflictPage.value);
+    const target =
+      list.find((c) => c.path === lastConflictPath.value) ??
+      pagedConflicts.value[0];
+    focusReviewEl(
+      ...(target ? [`conflict:${target.path}`] : []),
+      "apply",
+      "close",
+    );
+  } else if (phase.kind === "error") {
+    focusReviewEl(
+      ...(phase.needsRecovery ? ["review-repair"] : []),
+      "recheck",
+      "close",
+    );
+  } else if (phase.kind === "up_to_date") {
+    focusReviewEl("close");
+  }
+});
+
+async function applyUpdate() {
+  if (reviewPhase.value.kind !== "ready") return;
+  if (!updateCtl.canApply.value) {
+    showInfoToast(
+      `Choose Take update or Keep mine for ${updateCtl.unresolved.value.length} more file(s) first`,
+    );
+    const first = updateCtl.unresolved.value[0];
+    if (first) {
+      setConflictPage(pageForPath(updateCtl.conflicts.value, first, conflictPage.value));
+      focusReviewEl(`conflict:${first}`);
+    }
+    return;
+  }
+  const queued = await updateCtl.apply();
+  if (queued) {
+    closeUpdateReview();
+    showInfoToast("Update queued. Progress is on the Downloads page.");
+  }
+}
+
+// Files kept as .bak (information only), paged like the conflicts.
+const showBackups = ref(false);
+const backupPage = ref(0);
+const backupPaths = computed(() => updateCtl.plan.value?.backupPaths ?? []);
+const backupPages = computed(() => pageCount(backupPaths.value.length));
+const pagedBackups = computed(() => pageSlice(backupPaths.value, backupPage.value));
+function setBackupPage(page: number) {
+  backupPage.value = clampPage(page, backupPaths.value.length);
+}
+function toggleBackups() {
+  showBackups.value = !showBackups.value;
+  backupPage.value = clampPage(backupPage.value, backupPaths.value.length);
+}
+// A re-check can shrink the list: keep the page in range.
+watch(backupPaths, (list) => {
+  backupPage.value = clampPage(backupPage.value, list.length);
+});
+
+// ── A stuck update ("Repair update") ──────────────────────────────────────
+const repairCtl = useUpdateRepair(gameId);
+const repairState = computed(() => repairCtl.state.value);
+
+function offerUpdateRepair(message: string) {
+  const v = launchVersionId.value;
+  if (!v) return false;
+  closePlayPrompt();
+  repairCtl.offer(v, message);
+  focusReviewEl("repair-run");
+  return true;
+}
+
+async function runUpdateRepair() {
+  await repairCtl.repair();
+  focusReviewEl("repair-run", "repair-close");
+  // The install may have moved version (a finished update); re-read it.
+  void loadInstalledVersions();
+}
+
+function closeUpdateRepair() {
+  repairCtl.close();
+}
+
+// ── Play with an update pending ───────────────────────────────────────────
+const playPromptOpen = ref(false);
+
+function requestPlay() {
+  if (
+    shouldAskBeforePlay(
+      installedVersionsKnown.value ? installedVersions.value : null,
+      launchVersionId.value,
+    )
+  ) {
+    playPromptOpen.value = true;
+    focusReviewEl("prompt-update");
+    return;
+  }
+  launchGame();
+}
+
+function closePlayPrompt() {
+  playPromptOpen.value = false;
+}
+
+function playAnyway() {
+  closePlayPrompt();
+  launchGame();
+}
+
+function updateFirst() {
+  closePlayPrompt();
+  const v = launchVersionId.value;
+  if (v) void updateCtl.review(v);
+}
+
+// The update check flips per-install flags and re-emits this game's status;
+// re-read the installs so the Update button and the Play prompt follow.
+watch(status, () => {
+  void loadInstalledVersions();
+});
 
 // ── Options menu: gamepad-navigable list ──────────────────────────────────
 interface OptionsMenuItem {
@@ -2627,6 +3212,10 @@ async function launchGame() {
       launchError.value = null;
       return;
     }
+    // A stuck update: offer "Repair update" rows instead of the dialog.
+    if (isStuckUpdateError(e) && offerUpdateRepair(e instanceof Error ? e.message : String(e))) {
+      return;
+    }
     // Auto-run diagnostics on any launch failure for debug logs
     runDiagnostics();
     const failure = describeLaunchFailure(e, game.value?.mName);
@@ -2755,12 +3344,27 @@ function goToRecommendation(recId: string) {
   navigateTo(target);
 }
 
+// "Check for Updates" in the options menu. Every outcome is said out loud:
+// it used to swallow the error, so a failed check looked like "no update".
 async function checkForUpdates() {
+  showInfoToast(checkOutcomeText({ kind: "checking" }));
+  let error: string | null = null;
   try {
     await invoke("check_for_updates", { gameId });
   } catch (e) {
-    console.error("Failed to check for updates:", e);
+    console.error("[BPM:GAME] check_for_updates failed:", e);
+    error = e instanceof Error ? e.message : String(e);
   }
+  await loadInstalledVersions();
+  let outcome = checkOutcome(
+    error,
+    installedVersionsKnown.value ? installedVersions.value : null,
+  );
+  // The install list could not be read: fall back to the game's own flag.
+  if (!error && !installedVersionsKnown.value && updateInstallId.value) {
+    outcome = { kind: "available" };
+  }
+  showInfoToast(checkOutcomeText(outcome));
 }
 </script>
 

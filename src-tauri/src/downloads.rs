@@ -177,6 +177,16 @@ pub async fn download_mod(
             return Err(ApplicationDownloadError::InvalidCommand);
         }
 
+        // An in-place update of the base game stages into and swaps files in
+        // the same folder, and planned around the mods it saw.
+        if games::downloads::update::update_active(&parent_game_id) {
+            warn!(
+                "not queueing mod {}: an update of {parent_game_id} is queued or running",
+                meta.id
+            );
+            return Err(ApplicationDownloadError::InvalidCommand);
+        }
+
         // The base game must be fully installed; the mod overlays into its dir.
         match db.applications.game_statuses.get(&parent_game_id) {
             Some(GameDownloadStatus::Installed {
