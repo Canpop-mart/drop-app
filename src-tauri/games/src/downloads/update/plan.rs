@@ -16,7 +16,10 @@
 //! |                   | same as T                 | nothing                 |
 //! |                   | missing                   | download                |
 //! |                   | anything else             | conflict `changed_both` |
-//! | in both, same     | anything                  | nothing                 |
+//! | in both, same     | anything (B verified)     | nothing                 |
+//! |                   | missing (B unverified)    | download                |
+//! |                   | same as T (B unverified)  | nothing                 |
+//! |                   | else (B unverified)       | replace, keep `.bak`    |
 //! | in B, not in T    | same as B                 | delete                  |
 //! |                   | missing                   | nothing                 |
 //! |                   | anything else             | conflict `removed_edited` |
@@ -31,10 +34,17 @@
 //!   (replace, no conflict; the mod's copy, which may hold player edits, is
 //!   kept as `.bak`); when the target drops it, it stays the mod's (not
 //!   deleted). Either way it is never a conflict.
-//! - A baseline entry with an unknown hash (`""`: the server's first snapshot
-//!   of a folder edited before hashing) can't tell whether the player changed
-//!   the file. The owner's rule: the update wins and the player's copy is
-//!   kept as `.bak`, without a conflict (see [`Plan::backup_paths`]).
+//! - A baseline entry this client never confirmed on this disk can't tell
+//!   whether the player changed the file or the install simply has an older
+//!   copy: an unknown hash (`""`, the server's first snapshot of a folder
+//!   edited before hashing), or no mtime (a baseline from the server, used
+//!   by installs from before in-place updates, or one recorded without
+//!   checking). The owner's rule: the update wins and the file on disk is
+//!   kept as `.bak`, without a conflict (see [`Plan::backup_paths`]). Where
+//!   the table says "conflict", such an entry gives that instead. Conflicts
+//!   are only raised where Drop knows the player changed the file. Files the
+//!   player chose "keep mine" for are the exception: their entries have no
+//!   mtime on purpose, and they stay the player's.
 //!
 //! After the table: a file standing where the update needs a folder is
 //! removed first (kept as `.bak` unless it is exactly the old shipped file),
@@ -230,7 +240,10 @@ impl Plan {
     /// `<file>.bak`, without asking, because Drop can't tell whether the
     /// player changed them:
     /// - the server doesn't know what the install originally had there
-    ///   (`sha256: ""` in the baseline, from a folder edited before hashing);
+    ///   (`sha256: ""` in the baseline, from a folder edited before hashing),
+    ///   or this client never checked the baseline entry on this disk (no
+    ///   mtime: a baseline from the server, or an older install's), so the
+    ///   file may be an older copy rather than the player's edit;
     /// - a Drop-managed mod had replaced it (it may also hold player edits);
     /// - a folder of the update has to go where the file is.
     ///
@@ -410,6 +423,10 @@ pub struct PlanInput<'a> {
     pub mod_owned: &'a HashSet<String>,
     /// Whether the install's filesystem ignores case (`cfg!(windows)`).
     pub case_insensitive: bool,
+    /// Files the player chose "keep mine" for in an earlier update (the
+    /// local baseline's `keptMine`), spelt as the target spells them. Their
+    /// baseline entry has no mtime on purpose; see `plan_unchanged`.
+    pub kept_mine: &'a HashSet<String>,
 }
 
 /// How the disk compares to the baseline and target versions of a file.
@@ -515,6 +532,7 @@ struct Ctx<'a> {
     disk: &'a dyn DiskView,
     is_protected: &'a dyn Fn(&str) -> bool,
     mod_owned: HashSet<String>,
+    kept_mine: HashSet<String>,
     fold: Fold,
 }
 
@@ -523,6 +541,22 @@ impl Ctx<'_> {
         normalize_path(p)
             .map(|n| self.mod_owned.contains(&self.fold.key(&n)))
             .unwrap_or(false)
+    }
+
+    fn kept_by_player(&self, p: &str) -> bool {
+        normalize_path(p)
+            .map(|n| self.kept_mine.contains(&self.fold.key(&n)))
+            .unwrap_or(false)
+    }
+
+    /// Whether this client never confirmed the baseline entry against this
+    /// disk, so a different file there can't be told apart from an older
+    /// copy the install was given. True for an unknown hash, and for an entry
+    /// with no mtime: a baseline from the server, or one an earlier update
+    /// recorded without checking. Not for files the player chose "keep mine"
+    /// for, whose entries have no mtime on purpose.
+    fn unverified(&self, b: &BaselineFile) -> bool {
+        b.sha256.is_empty() || (b.mtime.is_none() && !self.kept_by_player(&b.path))
     }
 }
 
@@ -535,6 +569,7 @@ pub fn plan(input: PlanInput<'_>) -> Result<Plan, PlanError> {
         is_protected,
         mod_owned,
         case_insensitive,
+        kept_mine,
     } = input;
     let fold = Fold(case_insensitive);
 
@@ -553,6 +588,11 @@ pub fn plan(input: PlanInput<'_>) -> Result<Plan, PlanError> {
         disk,
         is_protected,
         mod_owned: mod_owned
+            .iter()
+            .filter_map(|p| normalize_path(p).ok())
+            .map(|n| fold.key(&n))
+            .collect(),
+        kept_mine: kept_mine
             .iter()
             .filter_map(|p| normalize_path(p).ok())
             .map(|n| fold.key(&n))
@@ -664,12 +704,7 @@ fn plan_both(plan: &mut Plan, ctx: &Ctx<'_>, b: &BaselineFile, t: &RemoteFile) -
     let renamed = normalize_path(&b.path)? != normalize_path(&t.path)?;
     let changed = !same_hash(&b.sha256, &t.sha256) || renamed;
     if !changed {
-        // The player's own edits to a file the update does not change stay
-        // theirs; the disk is not even looked at. The baseline's mtime is
-        // carried over, so an edit made before this update is still seen as
-        // one by the next.
-        plan.kept.push((t.clone(), b.mtime));
-        return Ok(());
+        return plan_unchanged(plan, ctx, b, t);
     }
 
     let disk_path = b.path.clone();
@@ -690,7 +725,7 @@ fn plan_both(plan: &mut Plan, ctx: &Ctx<'_>, b: &BaselineFile, t: &RemoteFile) -
     }
 
     let seen = look(ctx.disk, &disk_path, Some(b), Some(t))?;
-    let unknown_base = b.sha256.is_empty();
+    let unknown_base = ctx.unverified(b) && !ctx.kept_by_player(&t.path);
     match seen.state {
         OnDisk::Missing => plan.writes.push(write(t, false, None, None)),
         OnDisk::Base => {
@@ -714,9 +749,9 @@ fn plan_both(plan: &mut Plan, ctx: &Ctx<'_>, b: &BaselineFile, t: &RemoteFile) -
             };
             plan.writes.push(write(t, false, Some(existing), None));
         }
-        // What the install had here is unknown (see `Plan::backup_paths`):
-        // the update wins and the player's copy is kept as .bak, without a
-        // conflict to decide.
+        // What the install had here is unknown or was never checked on this
+        // disk (see `Ctx::unverified`): the update wins and the file on disk
+        // is kept as .bak, without a conflict to decide.
         OnDisk::Other if unknown_base => plan.writes.push(write_with_backup(t, false, disk_path)),
         OnDisk::Other => {
             let existing = Existing {
@@ -726,6 +761,50 @@ fn plan_both(plan: &mut Plan, ctx: &Ctx<'_>, b: &BaselineFile, t: &RemoteFile) -
             plan.writes
                 .push(write(t, false, Some(existing), Some(ConflictKind::ChangedBoth)));
         }
+    }
+    Ok(())
+}
+
+/// A file the update does not change (same hash in B and T).
+///
+/// When this client verified the baseline entry on this disk (it has an
+/// mtime), what is on disk now is either that content or the player's own
+/// edit, and either way it stays: the disk is not even looked at. The mtime
+/// is carried over, so an edit made before this update still reads as one.
+///
+/// Without an mtime the entry is only the server's word for what the install
+/// has: a baseline fetched from the server (installs from before in-place
+/// updates), or one an earlier update recorded without checking. That says
+/// nothing about this disk, which may still hold an older copy of the file
+/// (the version's folder changed before its fingerprints were recorded, and
+/// this install was made before that). So the file is checked:
+/// - missing: downloaded;
+/// - the shipped content: kept, and the next baseline records its mtime;
+/// - anything else: the update's copy is written and the one on disk is kept
+///   as `.bak` (Drop can't tell an older copy from a player edit; see
+///   [`Plan::backup_paths`]).
+///
+/// Files the player chose "keep mine" for also have no mtime, on purpose:
+/// they stay as they are. So do protected data and files a Drop-managed mod
+/// has claimed, as for any unchanged file.
+fn plan_unchanged(plan: &mut Plan, ctx: &Ctx<'_>, b: &BaselineFile, t: &RemoteFile) -> Result<(), PlanError> {
+    if !ctx.unverified(b)
+        || ctx.kept_by_player(&t.path)
+        || (ctx.is_protected)(&t.path)
+        || (ctx.is_protected)(&b.path)
+        || ctx.owned_by_mod(&b.path)
+        || ctx.owned_by_mod(&t.path)
+    {
+        plan.kept.push((t.clone(), b.mtime));
+        return Ok(());
+    }
+    let seen = look(ctx.disk, &b.path, Some(b), Some(t))?;
+    match seen.state {
+        OnDisk::Missing => plan.writes.push(write(t, false, None, None)),
+        OnDisk::Base | OnDisk::Target => plan.kept.push((t.clone(), stat_mtime(seen.stat))),
+        // A different file, or a folder or link where the file should be (the
+        // folder rules after the table deal with those, as for any write).
+        OnDisk::Other => plan.writes.push(write_with_backup(t, false, b.path.clone())),
     }
     Ok(())
 }
@@ -755,8 +834,9 @@ fn plan_removed(plan: &mut Plan, ctx: &Ctx<'_>, b: &BaselineFile) -> Result<(), 
                 backup: false,
             });
         }
-        // Unknown original: removed, but the player's copy is kept as .bak.
-        OnDisk::Target | OnDisk::Other if b.sha256.is_empty() => plan.deletes.push(DeleteOp {
+        // Unknown or unchecked original (see `Ctx::unverified`): removed, but
+        // the file on disk is kept as .bak.
+        OnDisk::Target | OnDisk::Other if ctx.unverified(b) => plan.deletes.push(DeleteOp {
             existing: existing(Expect::Present),
             conflict: None,
             keep_bak: true,
@@ -1072,8 +1152,137 @@ mod tests {
             is_protected: protected,
             mod_owned: mods,
             case_insensitive: d.case_insensitive,
+            kept_mine: &HashSet::new(),
         })
         .expect("plan")
+    }
+
+    fn run_kept(b: &[BaselineFile], t: &[RemoteFile], d: &MemDisk, kept_mine: &[&str]) -> Plan {
+        let kept: HashSet<String> = kept_mine.iter().map(|s| s.to_string()).collect();
+        plan(PlanInput {
+            baseline: b,
+            target: t,
+            disk: d,
+            is_protected: &never_protected,
+            mod_owned: &HashSet::new(),
+            case_insensitive: d.case_insensitive,
+            kept_mine: &kept,
+        })
+        .expect("plan")
+    }
+
+    // ── Unchanged files whose baseline was never checked on this disk ──
+    //
+    // The bug these cover (6.1.0, a Minecraft pack): the install was made
+    // before the version's fingerprints were recorded and still had an older
+    // mods/gates.jar. Its first in-place update took the server's earliest
+    // snapshot as the baseline, which already listed the new gates.jar; the
+    // update did not change it, so the disk was never looked at, and the
+    // baseline written afterwards claimed the new jar was installed. Every
+    // later update then believed it.
+
+    #[test]
+    fn an_unverified_unchanged_file_that_differs_on_disk_is_replaced_keeping_a_bak() {
+        let b = [base("mods/gates.jar", "gates-new", None)];
+        let t = [remote("mods/gates.jar", "gates-new"), remote("mods/burrowers.jar", "burrow")];
+        let d = MemDisk::with(&[("mods/gates.jar", "gates-old-build")]);
+        let p = run(&b, &t, &d);
+        let w = p
+            .writes
+            .iter()
+            .find(|w| w.file.path == "mods/gates.jar")
+            .expect("gates.jar must be written");
+        assert!(w.backup && w.conflict.is_none(), "{w:#?}");
+        assert_eq!(p.backup_paths(), vec!["mods/gates.jar".to_string()]);
+        assert!(p.writes.iter().any(|w| w.file.path == "mods/burrowers.jar" && w.added));
+        assert!(p.conflicts().is_empty());
+    }
+
+    #[test]
+    fn an_unverified_unchanged_file_already_right_is_kept_and_gets_verified() {
+        let b = [base("mods/gates.jar", "gates-new", None)];
+        let t = [remote("mods/gates.jar", "gates-new")];
+        let mut d = MemDisk::with(&[("mods/gates.jar", "gates-new")]);
+        d.files.get_mut("mods/gates.jar").unwrap().1 = Some(42);
+        let p = run(&b, &t, &d);
+        assert!(p.writes.is_empty(), "{p:#?}");
+        assert_eq!(p.kept, vec![(remote("mods/gates.jar", "gates-new"), Some(42))]);
+    }
+
+    #[test]
+    fn an_unverified_unchanged_file_that_is_missing_is_downloaded() {
+        let b = [base("mods/gates.jar", "gates-new", None)];
+        let t = [remote("mods/gates.jar", "gates-new")];
+        let d = MemDisk::with(&[]);
+        let p = run(&b, &t, &d);
+        let w = only_write(&p);
+        assert!(w.existing.is_none() && !w.backup && w.conflict.is_none(), "{w:#?}");
+    }
+
+    #[test]
+    fn a_verified_unchanged_file_the_player_edited_stays_theirs_without_hashing() {
+        let b = [base("config/x.cfg", "pack", Some(1))];
+        let t = [remote("config/x.cfg", "pack")];
+        let mut d = MemDisk::with(&[("config/x.cfg", "player edit")]);
+        d.files.get_mut("config/x.cfg").unwrap().1 = Some(99);
+        let p = run(&b, &t, &d);
+        assert!(p.writes.is_empty(), "{p:#?}");
+        assert!(d.hashed.borrow().is_empty());
+    }
+
+    #[test]
+    fn an_unverified_changed_file_that_differs_on_disk_is_replaced_not_asked() {
+        // Next revision changes the jar while this install still has a copy
+        // older than its (server) baseline: not the player's edit as far as
+        // Drop can tell, so no conflict; the update wins, .bak kept.
+        let b = [base("mods/gates.jar", "gates-new", None)];
+        let t = [remote("mods/gates.jar", "gates-newer")];
+        let d = MemDisk::with(&[("mods/gates.jar", "gates-old-build")]);
+        let p = run(&b, &t, &d);
+        let w = only_write(&p);
+        assert!(w.backup && w.conflict.is_none(), "{w:#?}");
+        assert!(p.conflicts().is_empty());
+    }
+
+    #[test]
+    fn an_unverified_removed_file_that_differs_on_disk_is_removed_keeping_a_bak() {
+        // gates-1.0.0.jar renamed to gates-1.0.1.jar on the server: the old,
+        // drifted jar must not stay loadable next to the new one.
+        let b = [base("mods/gates-1.0.0.jar", "gates-new", None)];
+        let t = [remote("mods/gates-1.0.1.jar", "gates-101")];
+        let d = MemDisk::with(&[("mods/gates-1.0.0.jar", "gates-old-build")]);
+        let p = run(&b, &t, &d);
+        assert_eq!(p.deletes.len(), 1, "{p:#?}");
+        assert!(p.deletes[0].keep_bak && p.deletes[0].backup && p.deletes[0].conflict.is_none());
+        assert!(p.conflicts().is_empty());
+    }
+
+    #[test]
+    fn a_kept_mine_file_the_update_changes_is_still_asked_about() {
+        let b = [base("config/x.cfg", "pack", None)];
+        let t = [remote("config/x.cfg", "pack2")];
+        let d = MemDisk::with(&[("config/x.cfg", "player edit")]);
+        let p = run_kept(&b, &t, &d, &["config/x.cfg"]);
+        assert_eq!(only_write(&p).conflict, Some(ConflictKind::ChangedBoth));
+    }
+
+    #[test]
+    fn a_kept_mine_file_is_not_replaced_even_though_its_entry_has_no_mtime() {
+        let b = [base("config/x.cfg", "pack", None)];
+        let t = [remote("config/x.cfg", "pack")];
+        let d = MemDisk::with(&[("config/x.cfg", "player edit")]);
+        let p = run_kept(&b, &t, &d, &["config/x.cfg"]);
+        assert!(p.writes.is_empty(), "{p:#?}");
+        assert_eq!(p.kept, vec![(remote("config/x.cfg", "pack"), None)]);
+    }
+
+    #[test]
+    fn an_unverified_unchanged_protected_file_is_left_alone() {
+        let b = [base("saves/slot1.dat", "pack", None)];
+        let t = [remote("saves/slot1.dat", "pack")];
+        let d = MemDisk::with(&[("saves/slot1.dat", "progress")]);
+        let p = run_with(&b, &t, &d, &|p: &str| p.starts_with("saves/"), &HashSet::new());
+        assert!(p.writes.is_empty(), "{p:#?}");
     }
 
     fn only_write(p: &Plan) -> &WriteOp {
@@ -1137,6 +1346,7 @@ mod tests {
             is_protected: &never_protected,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
+            kept_mine: &HashSet::new(),
         });
         assert!(matches!(r, Err(PlanError::InTheWay(ref p)) if p == "config"), "{r:?}");
     }
@@ -1185,7 +1395,7 @@ mod tests {
     fn changed_by_both_is_a_conflict() {
         let d = MemDisk::with(&[("config/pack.toml", "player")]);
         let p = run(
-            &[base("config/pack.toml", "v1", None)],
+            &[base("config/pack.toml", "v1", Some(1))],
             &[remote("config/pack.toml", "v2")],
             &d,
         );
@@ -1195,7 +1405,7 @@ mod tests {
     #[test]
     fn a_size_matching_neither_side_is_a_conflict_without_hashing() {
         let d = MemDisk::with(&[("big.pak", "a much longer edited file")]);
-        let p = run(&[base("big.pak", "v1", None)], &[remote("big.pak", "v2")], &d);
+        let p = run(&[base("big.pak", "v1", Some(1))], &[remote("big.pak", "v2")], &d);
         assert_eq!(only_write(&p).conflict, Some(ConflictKind::ChangedBoth));
         assert!(d.hashed.borrow().is_empty());
     }
@@ -1237,7 +1447,7 @@ mod tests {
     #[test]
     fn removed_but_edited_is_a_conflict() {
         let d = MemDisk::with(&[("config/old.cfg", "edited")]);
-        let p = run(&[base("config/old.cfg", "orig", None)], &[], &d);
+        let p = run(&[base("config/old.cfg", "orig", Some(1))], &[], &d);
         assert_eq!(p.deletes[0].conflict, Some(ConflictKind::RemovedEdited));
         assert_eq!(p.deletes[0].existing.expect, Expect::Present);
     }
@@ -1258,7 +1468,9 @@ mod tests {
                 panic!("listed {rel}")
             }
         }
-        let b = [base("same.txt", "x", None)];
+        // Verified on this disk (it has an mtime), so the unchanged file is
+        // not looked at either.
+        let b = [base("same.txt", "x", Some(1))];
         let t = [remote("same.txt", "x")];
         let p = plan(PlanInput {
             baseline: &b,
@@ -1267,6 +1479,7 @@ mod tests {
             is_protected: &never_protected,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
+            kept_mine: &HashSet::new(),
         })
         .unwrap();
         assert!(p.writes.is_empty() && p.deletes.is_empty() && p.dropped.is_empty());
@@ -1308,9 +1521,9 @@ mod tests {
         ]);
         let p = run(
             &[
-                base("changed.cfg", "c1", None),
-                base("removed.cfg", "r1", None),
-                base("plain.jar", "v1", None),
+                base("changed.cfg", "c1", Some(1)),
+                base("removed.cfg", "r1", Some(1)),
+                base("plain.jar", "v1", Some(1)),
             ],
             &[
                 remote("added.cfg", "a2"),
@@ -1361,11 +1574,13 @@ mod tests {
         // previous target hash with no mtime, the disk still has the player's
         // content. A further change to the file conflicts again; no change
         // leaves it alone.
+        // The sidecar lists it in keptMine, which is what keeps it the
+        // player's even though its entry has no mtime.
         let d = MemDisk::with(&[("changed.cfg", "mine")]);
         let b = [base("changed.cfg", "c2", None)];
-        let p = run(&b, &[remote("changed.cfg", "c3")], &d);
+        let p = run_kept(&b, &[remote("changed.cfg", "c3")], &d, &["changed.cfg"]);
         assert_eq!(only_write(&p).conflict, Some(ConflictKind::ChangedBoth));
-        let p = run(&b, &[remote("changed.cfg", "c2")], &d);
+        let p = run_kept(&b, &[remote("changed.cfg", "c2")], &d, &["changed.cfg"]);
         assert!(p.writes.is_empty());
     }
 
@@ -1543,7 +1758,7 @@ mod tests {
         let d = MemDisk::with(&[("Config/x.cfg", "mod"), ("config/x.cfg", "player")]);
         let owned: HashSet<String> = ["Config/x.cfg".to_string()].into();
         let p = run_with(
-            &[base("config/x.cfg", "v1", None)],
+            &[base("config/x.cfg", "v1", Some(1))],
             &[remote("config/x.cfg", "v2")],
             &d,
             &never_protected,
@@ -1591,6 +1806,7 @@ mod tests {
                 is_protected: &never_protected,
                 mod_owned: &HashSet::new(),
                 case_insensitive: false,
+                kept_mine: &HashSet::new(),
             });
             assert!(matches!(r, Err(PlanError::BadPath(_))), "{bad:?}");
         }
@@ -1605,6 +1821,7 @@ mod tests {
             is_protected: &never_protected,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
+            kept_mine: &HashSet::new(),
         });
         assert!(matches!(r, Err(PlanError::Duplicate(_))));
     }
@@ -1745,6 +1962,7 @@ mod tests {
             is_protected: &saves_protected,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
+            kept_mine: &HashSet::new(),
         });
         assert!(matches!(r, Err(PlanError::InTheWay(ref p)) if p == "saves/slot"), "{r:?}");
     }
@@ -1775,6 +1993,7 @@ mod tests {
             is_protected: &never_protected,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
+            kept_mine: &HashSet::new(),
         });
         assert!(matches!(r, Err(PlanError::InTheWay(ref p)) if p == "data"), "{r:?}");
     }
@@ -1792,6 +2011,7 @@ mod tests {
             is_protected: &never_protected,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
+            kept_mine: &HashSet::new(),
         });
         assert!(matches!(r, Err(PlanError::Linked(ref p)) if p == "Data"), "{r:?}");
         // Files under the link the update does not change are fine.

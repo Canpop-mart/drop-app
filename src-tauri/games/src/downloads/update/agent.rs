@@ -1028,6 +1028,7 @@ mod tests {
             is_protected: &crate::downloads::download_agent::is_protected_user_data,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
+            kept_mine: &read_sidecar(install).unwrap().unwrap().kept_mine.into_iter().collect(),
         })
         .unwrap()
     }

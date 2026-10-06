@@ -384,12 +384,15 @@ pub struct Prepared {
 
 /// The baseline for an install: its sidecar when that matches the install,
 /// else the server's earliest snapshot of the installed version, else empty.
+/// Also the files the player chose "keep mine" for (only a local sidecar has
+/// any).
 async fn load_baseline(
     install: &InstallRef,
-) -> Result<(Vec<BaselineFile>, BaselineSource, Option<u32>), UpdateError> {
+) -> Result<(Vec<BaselineFile>, BaselineSource, Option<u32>, HashSet<String>), UpdateError> {
     match baseline::read_sidecar(&install.install_dir) {
         Ok(Some(s)) if s.game_id == install.game_id && s.version_id == install.version_id => {
-            return Ok((s.files, BaselineSource::Local, Some(s.revision)));
+            let kept_mine = s.kept_mine.into_iter().collect();
+            return Ok((s.files, BaselineSource::Local, Some(s.revision), kept_mine));
         }
         Ok(Some(s)) => warn!(
             "{}: ignoring baseline for {}/{} in {}; the install is {}",
@@ -409,14 +412,14 @@ async fn load_baseline(
     match fetch_revision_files(&install.version_id, RevisionQuery::Earliest).await? {
         Some(r) => {
             let files = r.files.iter().map(|f| BaselineFile::from_remote(f, None)).collect();
-            Ok((files, BaselineSource::Server, Some(r.revision)))
+            Ok((files, BaselineSource::Server, Some(r.revision), HashSet::new()))
         }
         None => {
             warn!(
                 "{}: no baseline for version {}; every difference will be a conflict and nothing is removed",
                 install.game_id, install.version_id
             );
-            Ok((Vec::new(), BaselineSource::None, None))
+            Ok((Vec::new(), BaselineSource::None, None, HashSet::new()))
         }
     }
 }
@@ -477,7 +480,7 @@ pub async fn prepare(game_id: &str, install_version_id: &str, to_version_id: &st
     let target = fetch_revision_files(to_version_id, RevisionQuery::Current)
         .await?
         .ok_or(UpdateError::NoFileList)?;
-    let (baseline_files, baseline_source, from_revision) = load_baseline(&install).await?;
+    let (baseline_files, baseline_source, from_revision, kept_mine) = load_baseline(&install).await?;
     match manifest.revision {
         None => return Err(UpdateError::ServerUnsupported),
         Some(r) if r != target.revision => {
@@ -511,6 +514,7 @@ pub async fn prepare(game_id: &str, install_version_id: &str, to_version_id: &st
             is_protected: &is_protected_user_data,
             mod_owned: &mod_owned,
             case_insensitive: cfg!(windows),
+            kept_mine: &kept_mine,
         })
         .map_err(|e| UpdateError::Plan(e.to_string()))
     })
