@@ -86,6 +86,13 @@
                 <p class="text-xs text-amber-300">{{ BASELINE_NONE_NOTE }}</p>
               </div>
 
+              <div
+                v-if="skippedLinkedLine(plan)"
+                class="rounded-md bg-amber-500/10 p-3 outline outline-1 outline-amber-500/20"
+              >
+                <p class="text-xs text-amber-300">{{ skippedLinkedLine(plan) }}</p>
+              </div>
+
               <!-- Files replaced or removed with the player's copy kept as
                    .bak: information only, no choice. -->
               <div v-if="backupLine(plan)" class="space-y-2">
@@ -248,6 +255,7 @@ import {
   CONFLICT_KIND_LABEL,
   RESOLUTION_LABEL,
   backupLine,
+  skippedLinkedLine,
   countsLine,
   downloadLine,
   resolutionDetail,

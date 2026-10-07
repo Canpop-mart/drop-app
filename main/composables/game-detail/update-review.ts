@@ -38,6 +38,12 @@ export type UpdatePlan = {
    */
   backupPaths: string[];
   baselineSource: "local" | "server" | "none";
+  /**
+   * Player-data folders (install-relative) that are links, often to an SD
+   * card, where this update has files to change but leaves them as they are.
+   * The rest of the update applies. Optional: older builds don't send it.
+   */
+  skippedLinkedFolders?: string[];
 };
 
 /** `recover_game_update`'s result. */
@@ -304,6 +310,16 @@ export function backupLine(plan: UpdatePlan): string | null {
   return n === 1
     ? "1 file will be replaced or removed. Drop can't tell whether you changed it, so your copy is kept as .bak"
     : `${n} files will be replaced or removed. Drop can't tell whether you changed them, so your copies are kept as .bak`;
+}
+
+/** The informational line for `skippedLinkedFolders`, or null when there are none. */
+export function skippedLinkedLine(plan: UpdatePlan): string | null {
+  const folders = plan.skippedLinkedFolders ?? [];
+  if (folders.length === 0) return null;
+  const names = folders.join(", ");
+  return folders.length === 1
+    ? `Files in ${names} won't be updated because that folder is a link to another location. The rest of the update still applies.`
+    : `Files in ${names} won't be updated because those folders are links to another location. The rest of the update still applies.`;
 }
 
 /** "3 added, 12 updated, 1 removed". */

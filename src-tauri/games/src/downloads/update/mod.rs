@@ -36,7 +36,9 @@ use serde::{Deserialize, Serialize};
 use serde_with::SerializeDisplay;
 use tauri::AppHandle;
 
-use crate::downloads::download_agent::{DownloadInformation, fetch_download_info, is_protected_user_data};
+use crate::downloads::download_agent::{
+    DownloadInformation, fetch_download_info, is_drop_runtime_data, is_player_data_folder,
+};
 use crate::downloads::mod_data::mod_owned_files_spelled;
 use crate::library::push_game_update;
 use crate::state::GameStatusManager;
@@ -368,6 +370,12 @@ pub struct UpdatePlan {
     /// `updateCount` / `removeCount`.
     pub backup_paths: Vec<String>,
     pub baseline_source: BaselineSource,
+    /// Player-data folders (install-relative, `user` or `user/nand`, say)
+    /// that are links, often to an SD card, where this update changes
+    /// nothing although it has files to update there. The rest of the update
+    /// applies; those files stay as they are until the folder is a real
+    /// folder again. Empty when there are none. (`skippedLinkedFolders`)
+    pub skipped_linked_folders: Vec<String>,
 }
 
 pub struct Prepared {
@@ -382,17 +390,29 @@ pub struct Prepared {
     pub game_version: GameVersion,
 }
 
+struct LoadedBaseline {
+    files: Vec<BaselineFile>,
+    source: BaselineSource,
+    revision: Option<u32>,
+    /// Files the player chose "keep mine" for (only a local sidecar has any).
+    kept_mine: HashSet<String>,
+    /// The sidecar says this install was healed already (see
+    /// `Sidecar::healed_protected_folders`).
+    healed: bool,
+}
+
 /// The baseline for an install: its sidecar when that matches the install,
 /// else the server's earliest snapshot of the installed version, else empty.
-/// Also the files the player chose "keep mine" for (only a local sidecar has
-/// any).
-async fn load_baseline(
-    install: &InstallRef,
-) -> Result<(Vec<BaselineFile>, BaselineSource, Option<u32>, HashSet<String>), UpdateError> {
+async fn load_baseline(install: &InstallRef) -> Result<LoadedBaseline, UpdateError> {
     match baseline::read_sidecar(&install.install_dir) {
         Ok(Some(s)) if s.game_id == install.game_id && s.version_id == install.version_id => {
-            let kept_mine = s.kept_mine.into_iter().collect();
-            return Ok((s.files, BaselineSource::Local, Some(s.revision), kept_mine));
+            return Ok(LoadedBaseline {
+                files: s.files,
+                source: BaselineSource::Local,
+                revision: Some(s.revision),
+                kept_mine: s.kept_mine.into_iter().collect(),
+                healed: s.healed_protected_folders,
+            });
         }
         Ok(Some(s)) => warn!(
             "{}: ignoring baseline for {}/{} in {}; the install is {}",
@@ -412,14 +432,26 @@ async fn load_baseline(
     match fetch_revision_files(&install.version_id, RevisionQuery::Earliest).await? {
         Some(r) => {
             let files = r.files.iter().map(|f| BaselineFile::from_remote(f, None)).collect();
-            Ok((files, BaselineSource::Server, Some(r.revision), HashSet::new()))
+            Ok(LoadedBaseline {
+                files,
+                source: BaselineSource::Server,
+                revision: Some(r.revision),
+                kept_mine: HashSet::new(),
+                healed: false,
+            })
         }
         None => {
             warn!(
                 "{}: no baseline for version {}; every difference will be a conflict and nothing is removed",
                 install.game_id, install.version_id
             );
-            Ok((Vec::new(), BaselineSource::None, None, HashSet::new()))
+            Ok(LoadedBaseline {
+                files: Vec::new(),
+                source: BaselineSource::None,
+                revision: None,
+                kept_mine: HashSet::new(),
+                healed: false,
+            })
         }
     }
 }
@@ -480,7 +512,7 @@ pub async fn prepare(game_id: &str, install_version_id: &str, to_version_id: &st
     let target = fetch_revision_files(to_version_id, RevisionQuery::Current)
         .await?
         .ok_or(UpdateError::NoFileList)?;
-    let (baseline_files, baseline_source, from_revision, kept_mine) = load_baseline(&install).await?;
+    let loaded = load_baseline(&install).await?;
     match manifest.revision {
         None => return Err(UpdateError::ServerUnsupported),
         Some(r) if r != target.revision => {
@@ -491,6 +523,18 @@ pub async fn prepare(game_id: &str, install_version_id: &str, to_version_id: &st
         }
         Some(_) => {}
     }
+
+    let previously_shipped = match revisions_to_heal_from(loaded.source, loaded.healed, loaded.revision) {
+        Some(last) => fetch_previously_shipped(game_id, &install.version_id, last).await?,
+        None => HashMap::new(),
+    };
+    let LoadedBaseline {
+        files: baseline_files,
+        source: baseline_source,
+        revision: from_revision,
+        kept_mine,
+        ..
+    } = loaded;
 
     let install_dir = install.install_dir.clone();
     let target_files = target.files.clone();
@@ -511,16 +555,25 @@ pub async fn prepare(game_id: &str, install_version_id: &str, to_version_id: &st
             baseline: &baseline_files,
             target: &target_files,
             disk: &disk,
-            is_protected: &is_protected_user_data,
+            is_runtime_data: &is_drop_runtime_data,
+            is_player_data: &is_player_data_folder,
             mod_owned: &mod_owned,
             case_insensitive: cfg!(windows),
             kept_mine: &kept_mine,
+            previously_shipped: &previously_shipped,
         })
         .map_err(|e| UpdateError::Plan(e.to_string()))
     })
     .await
     .map_err(|e| UpdateError::Io(format!("planning stopped: {e}")))??;
 
+    if !plan.skipped_linked.is_empty() {
+        warn!(
+            "{game_id}: not updating files under {:?}: a player-data folder there is a link; the rest of the \
+             update applies",
+            plan.skipped_linked
+        );
+    }
     for w in &plan.writes {
         if !manifest.file_list.contains_key(&w.file.path) {
             return Err(UpdateError::Inconsistent(format!("{} is not in the manifest", w.file.path)));
@@ -537,6 +590,63 @@ pub async fn prepare(game_id: &str, install_version_id: &str, to_version_id: &st
         manifest,
         game_version,
     })
+}
+
+/// The last revision of the installed version to heal from, or `None` when
+/// there is nothing to heal (see "Healing" in the `plan` docs). Only an
+/// install a 6.1.0/6.1.1 update touched can hold what those builds left, and
+/// every such install has a local sidecar without the healed marker. Its
+/// revisions after the installed one were never on this disk.
+fn revisions_to_heal_from(source: BaselineSource, healed: bool, installed_revision: Option<u32>) -> Option<u32> {
+    match (source, healed, installed_revision) {
+        (BaselineSource::Local, false, Some(n)) if n > 0 => Some(n),
+        _ => None,
+    }
+}
+
+/// Every path revisions `1..=last` of the installed version shipped, with
+/// every (size, hash) shipped for it, for the one-shot healing in the
+/// planner.
+///
+/// A revision the server has no snapshot of (404) has nothing to heal from
+/// and is skipped. Any other failure stops the plan, so the review and the
+/// update never plan differently; trying again later is enough.
+async fn fetch_previously_shipped(
+    game_id: &str,
+    installed_version: &str,
+    last: u32,
+) -> Result<HashMap<String, HashSet<(u64, String)>>, UpdateError> {
+    let mut out: HashMap<String, HashSet<(u64, String)>> = HashMap::new();
+    let mut fetched = 0;
+    // One at a time: a file list can be large, and this happens once.
+    for n in 1..=last {
+        match fetch_revision_files(installed_version, RevisionQuery::Exact(n)).await {
+            Ok(Some(r)) => {
+                add_shipped(&mut out, &r.files);
+                fetched += 1;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                warn!("{game_id}: could not fetch revision {n} of {installed_version}: {e}");
+                return Err(e.into());
+            }
+        }
+    }
+    info!(
+        "{game_id}: checking for files earlier updates left behind, from {fetched} of {last} revision(s) of \
+         {installed_version} ({} paths)",
+        out.len()
+    );
+    Ok(out)
+}
+
+fn add_shipped(out: &mut HashMap<String, HashSet<(u64, String)>>, files: &[RemoteFile]) {
+    for f in files {
+        let copies = out.entry(f.path.clone()).or_default();
+        if !f.sha256.is_empty() {
+            copies.insert((f.size, f.sha256.to_ascii_lowercase()));
+        }
+    }
 }
 
 /// Whether the installed version is a delta version: from the local copy of
@@ -585,6 +695,7 @@ impl Prepared {
             conflicts: self.plan.conflicts(),
             backup_paths: self.plan.backup_paths(),
             baseline_source: self.baseline_source,
+            skipped_linked_folders: self.plan.skipped_linked.clone(),
         }
     }
 }
@@ -1071,7 +1182,8 @@ pub async fn record_fresh_baseline(game_id: &str, version_id: &str, install_dir:
     let dir = install_dir.to_path_buf();
     let (g, v) = (game_id.to_string(), version_id.to_string());
     let written = tauri::async_runtime::spawn_blocking(move || {
-        let sidecar = baseline::fresh_sidecar(&dir, &g, &v, revision, &files);
+        let mut sidecar = baseline::fresh_sidecar(&dir, &g, &v, revision, &files);
+        baseline::carry_over(baseline::read_sidecar(&dir), &mut sidecar, &dir);
         baseline::write_sidecar(&dir, &sidecar)
     })
     .await;
@@ -1252,6 +1364,7 @@ mod tests {
                 entry("untouched.toml", "00"),
             ],
             kept_mine: vec!["pack.toml".into(), "same.toml".into(), "untouched.toml".into()],
+            healed_protected_folders: true,
         };
         baseline::write_sidecar(&dir, &sidecar).unwrap();
         let writing: HashSet<String> = ["pack.toml".to_string(), "same.toml".to_string()].into();
@@ -1275,6 +1388,15 @@ mod tests {
         assert_eq!(std::fs::read(aside.join("old").join("1")).unwrap(), b"player original");
         assert!(aside.join("journal.json").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_a_local_unhealed_baseline_is_healed_and_only_up_to_its_revision() {
+        assert_eq!(revisions_to_heal_from(BaselineSource::Local, false, Some(4)), Some(4));
+        assert_eq!(revisions_to_heal_from(BaselineSource::Local, true, Some(4)), None);
+        assert_eq!(revisions_to_heal_from(BaselineSource::Server, false, Some(1)), None);
+        assert_eq!(revisions_to_heal_from(BaselineSource::None, false, None), None);
+        assert_eq!(revisions_to_heal_from(BaselineSource::Local, false, Some(0)), None);
     }
 
     #[test]

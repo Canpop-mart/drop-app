@@ -536,6 +536,12 @@
         >
           {{ BASELINE_NONE_NOTE }}
         </p>
+        <p
+          v-if="skippedLinkedLine(reviewPlan)"
+          class="mt-3 rounded-lg bg-amber-500/10 px-4 py-2 text-sm text-amber-300"
+        >
+          {{ skippedLinkedLine(reviewPlan) }}
+        </p>
 
         <!-- Files replaced or removed with the player's copy kept as .bak:
              information only. The list is paged like the conflicts and its
@@ -1303,6 +1309,7 @@ import {
   CONFLICT_KIND_LABEL,
   RESOLUTION_LABEL,
   backupLine,
+  skippedLinkedLine,
   checkOutcome,
   checkOutcomeText,
   clampPage,

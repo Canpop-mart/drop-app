@@ -564,10 +564,14 @@ pub(crate) struct CommitInput<'a> {
 }
 
 /// The files the player has chosen to keep their own copy of, after this
-/// update: this update's "keep mine" decisions, plus earlier ones for files
-/// this update leaves alone (still in the baseline, not written). A file the
-/// update writes (the player took the update this time) or no longer ships
-/// drops out.
+/// update: this update's "keep mine" decisions, plus earlier ones this update
+/// leaves alone:
+/// - a target file still in the baseline and not written (the player took
+///   the update this time, or it is no longer shipped: it drops out);
+/// - a file the target had removed (`removed_edited`, kept), for as long as
+///   it is still on disk and the update does not write or remove it. It is
+///   the player's own: no later update may take it for the pack's copy or
+///   remove it as a leftover.
 fn kept_mine_after(input: &CommitInput<'_>) -> Vec<String> {
     let mut kept: Vec<String> = input.resolved.kept_mine.clone();
     let earlier = match baseline::read_sidecar(input.install) {
@@ -579,9 +583,24 @@ fn kept_mine_after(input: &CommitInput<'_>) -> Vec<String> {
         }
     };
     let written: HashSet<&str> = input.resolved.writes.iter().map(|w| w.file.path.as_str()).collect();
+    let deleted: HashSet<&str> = input
+        .resolved
+        .deletes
+        .iter()
+        .map(|d| d.existing.disk_path.as_str())
+        .collect();
     let in_baseline: HashSet<&str> = input.resolved.next_baseline.iter().map(|(f, _)| f.path.as_str()).collect();
+    let on_disk = |rel: &str| {
+        path_guard::join_within(input.install, Path::new(rel))
+            .is_ok_and(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_file()))
+    };
     for p in earlier {
-        if in_baseline.contains(p.as_str()) && !written.contains(p.as_str()) && !kept.contains(&p) {
+        let still_kept = if in_baseline.contains(p.as_str()) {
+            !written.contains(p.as_str())
+        } else {
+            !written.contains(p.as_str()) && !deleted.contains(p.as_str()) && on_disk(&p)
+        };
+        if still_kept && !kept.contains(&p) {
             kept.push(p);
         }
     }
@@ -630,6 +649,10 @@ pub(crate) fn stage_meta(input: &CommitInput<'_>) -> Result<Journal, UpdateError
         revision: input.to_revision,
         files,
         kept_mine: kept_mine_after(input),
+        // Healed by this update, or nothing was left to heal, unless a linked
+        // player-data folder kept the healing from checking a file there: the
+        // next update tries again.
+        healed_protected_folders: !input.resolved.heal_incomplete,
     };
     std::fs::create_dir_all(&new_dir).map_err(|e| UpdateError::Io(format!("could not create the staging folder: {e}")))?;
     baseline::write_sidecar(&new_dir, &sidecar)
@@ -1018,6 +1041,14 @@ mod tests {
     }
 
     fn plan_for(install: &Path, target: &[RemoteFile]) -> plan::Plan {
+        plan_for_with(install, target, &HashMap::new())
+    }
+
+    fn plan_for_with(
+        install: &Path,
+        target: &[RemoteFile],
+        previously_shipped: &HashMap<String, HashSet<(u64, String)>>,
+    ) -> plan::Plan {
         let base = read_sidecar(install).unwrap().unwrap().files;
         plan::plan(PlanInput {
             baseline: &base,
@@ -1025,7 +1056,9 @@ mod tests {
             disk: &FsDisk {
                 root: install.to_path_buf(),
             },
-            is_protected: &crate::downloads::download_agent::is_protected_user_data,
+            is_runtime_data: &crate::downloads::download_agent::is_drop_runtime_data,
+            is_player_data: &crate::downloads::download_agent::is_player_data_folder,
+            previously_shipped,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &read_sidecar(install).unwrap().unwrap().kept_mine.into_iter().collect(),
@@ -1155,6 +1188,172 @@ mod tests {
         commit::finish(&install, &journal).unwrap();
         assert!(read_sidecar(&install).unwrap().unwrap().kept_mine.is_empty());
         assert_eq!(read(&install, "config/pack.toml.bak").as_deref(), Some("player edit"));
+        let _ = std::fs::remove_dir_all(&install);
+    }
+
+    /// A linked player-data folder (user/ on the SD card): the update skips
+    /// it, records the old baseline there and stays unhealed; once the link
+    /// is a real folder again, the next plan does the skipped work.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_player_data_folder_is_skipped_then_updated_once_it_is_real() {
+        let install = scratch("linked-user");
+        let sd = scratch("linked-user-sd");
+        for (rel, c) in [("mods/a.jar", "a1"), ("mods/b.jar", "b1"), ("mods/old.jar", "o")] {
+            put(&sd, rel, c);
+        }
+        std::os::unix::fs::symlink(&sd, install.join("user")).unwrap();
+        put(&install, "Game.exe", "exe1");
+        let rev1 = vec![
+            remote("Game.exe", "exe1"),
+            remote("user/mods/a.jar", "a1"),
+            remote("user/mods/b.jar", "b1"),
+        ];
+        let mut side = baseline::fresh_sidecar(&install, "g", "v1", 1, &rev1);
+        side.healed_protected_folders = false;
+        baseline::write_sidecar(&install, &side).unwrap();
+
+        let rev2 = vec![
+            remote("Game.exe", "exe2"),
+            remote("user/mods/a.jar", "a2"),
+            remote("user/mods/c.jar", "c"),
+        ];
+        let leftover = remote("user/mods/old.jar", "o");
+        let prev: HashMap<String, HashSet<(u64, String)>> =
+            [(leftover.path.clone(), [(leftover.size, leftover.sha256.clone())].into())].into();
+        let p = plan_for_with(&install, &rev2, &prev);
+        assert_eq!(p.skipped_linked, vec!["user".to_string()], "{p:#?}");
+        assert_eq!(p.writes.len(), 1, "{p:#?}");
+        assert!(p.deletes.is_empty());
+        let resolved = plan::resolve(p, &HashMap::new()).unwrap();
+        put(&commit::new_dir(&install), "Game.exe", "exe2");
+        let chunks = vec![];
+        let inp = input(&install, &resolved, &chunks);
+        let journal = commit_staged(&inp, stage_meta(&inp).unwrap()).unwrap();
+        commit::finish(&install, &journal).unwrap();
+        assert_eq!(read(&install, "Game.exe").as_deref(), Some("exe2"));
+        assert_eq!(read(&sd, "mods/a.jar").as_deref(), Some("a1"));
+        let side = read_sidecar(&install).unwrap().unwrap();
+        assert!(!side.healed_protected_folders);
+        let hash_of = |path: &str| side.files.iter().find(|f| f.path == path).map(|f| f.sha256.clone());
+        assert_eq!(hash_of("user/mods/a.jar"), Some(remote("", "a1").sha256));
+        assert_eq!(hash_of("user/mods/b.jar"), Some(remote("", "b1").sha256));
+        assert_eq!(hash_of("user/mods/c.jar"), None);
+        assert_eq!(hash_of("Game.exe"), Some(remote("", "exe2").sha256));
+
+        // The player moves the files back into a real folder.
+        std::fs::remove_file(install.join("user")).unwrap();
+        for (rel, c) in [("mods/a.jar", "a1"), ("mods/b.jar", "b1"), ("mods/old.jar", "o")] {
+            put(&install.join("user"), rel, c);
+        }
+        let p = plan_for_with(&install, &rev2, &prev);
+        assert!(p.skipped_linked.is_empty() && p.conflicts().is_empty(), "{p:#?}");
+        let written: Vec<&str> = p.writes.iter().map(|w| w.file.path.as_str()).collect();
+        assert_eq!(written, vec!["user/mods/a.jar", "user/mods/c.jar"]);
+        let mut deleted: Vec<&str> = p.deletes.iter().map(|d| d.existing.disk_path.as_str()).collect();
+        deleted.sort();
+        assert_eq!(deleted, vec!["user/mods/b.jar", "user/mods/old.jar"]);
+        assert_eq!(p.backup_paths(), vec!["user/mods/old.jar".to_string()]);
+        let _ = std::fs::remove_dir_all(&install);
+        let _ = std::fs::remove_dir_all(&sd);
+    }
+
+    /// An install already healed stays healed when a later update skips a
+    /// linked player-data folder: the healing is not due again.
+    #[cfg(unix)]
+    #[test]
+    fn a_healed_install_stays_healed_when_a_linked_folder_is_skipped() {
+        let install = scratch("linked-healed");
+        let sd = scratch("linked-healed-sd");
+        put(&sd, "mods/a.jar", "a1");
+        std::os::unix::fs::symlink(&sd, install.join("user")).unwrap();
+        put(&install, "Game.exe", "exe1");
+        let rev1 = vec![remote("Game.exe", "exe1"), remote("user/mods/a.jar", "a1")];
+        let mut side = baseline::fresh_sidecar(&install, "g", "v1", 1, &rev1);
+        side.healed_protected_folders = true;
+        baseline::write_sidecar(&install, &side).unwrap();
+
+        let rev2 = vec![remote("Game.exe", "exe2"), remote("user/mods/a.jar", "a2")];
+        let p = plan_for(&install, &rev2);
+        assert_eq!(p.skipped_linked, vec!["user".to_string()], "{p:#?}");
+        assert!(!p.heal_incomplete, "{p:#?}");
+        let resolved = plan::resolve(p, &HashMap::new()).unwrap();
+        assert!(!resolved.heal_incomplete);
+        put(&commit::new_dir(&install), "Game.exe", "exe2");
+        let chunks = vec![];
+        let inp = input(&install, &resolved, &chunks);
+        let journal = commit_staged(&inp, stage_meta(&inp).unwrap()).unwrap();
+        commit::finish(&install, &journal).unwrap();
+        assert!(read_sidecar(&install).unwrap().unwrap().healed_protected_folders);
+        let _ = std::fs::remove_dir_all(&install);
+        let _ = std::fs::remove_dir_all(&sd);
+    }
+
+    #[test]
+    fn a_removed_file_the_player_kept_is_never_removed_by_a_later_update() {
+        // A pack whose files live under user/ (a player-data folder, where
+        // the one-shot healing applies), installed at revision 1.
+        let install = scratch("kept-removed");
+        let jar = "user/mods/b.jar";
+        let rev1 = vec![remote("Game.exe", "exe1"), remote(jar, "b1")];
+        put(&install, "Game.exe", "exe1");
+        put(&install, jar, "b1");
+        baseline::write_sidecar(&install, &baseline::fresh_sidecar(&install, "g", "v1", 1, &rev1)).unwrap();
+        // The player swapped in their own b.jar; revision 2 drops b.jar.
+        put(&install, jar, "b0 old");
+        let rev2 = vec![remote("Game.exe", "exe1")];
+        let p = plan_for(&install, &rev2);
+        assert_eq!(p.conflicts().len(), 1, "{p:#?}");
+        let resolutions: HashMap<String, Resolution> = [(jar.to_string(), Resolution::KeepMine)].into();
+        let resolved = plan::resolve(p, &resolutions).unwrap();
+        let chunks = vec![];
+        let inp = input(&install, &resolved, &chunks);
+        let journal = commit_staged(&inp, stage_meta(&inp).unwrap()).unwrap();
+        commit::finish(&install, &journal).unwrap();
+        let side = read_sidecar(&install).unwrap().unwrap();
+        assert!(side.files.iter().all(|f| f.path != jar));
+        assert_eq!(side.kept_mine, vec![jar.to_string()]);
+        assert!(side.healed_protected_folders);
+
+        // Revision 3 changes Game.exe. Some earlier revision shipped exactly
+        // the player's b.jar, but the player chose to keep it: it stays, and
+        // stays recorded.
+        let rev3 = vec![remote("Game.exe", "exe3")];
+        let old = remote(jar, "b0 old");
+        let prev: HashMap<String, HashSet<(u64, String)>> =
+            [(jar.to_string(), [(old.size, old.sha256.clone())].into())].into();
+        let p = plan_for_with(&install, &rev3, &prev);
+        assert!(p.deletes.is_empty() && p.conflicts().is_empty(), "{p:#?}");
+        let resolved = plan::resolve(p, &HashMap::new()).unwrap();
+        put(&commit::new_dir(&install), "Game.exe", "exe3");
+        let mut inp = input(&install, &resolved, &chunks);
+        inp.from_version = "v2";
+        inp.to_version = "v3";
+        let journal = commit_staged(&inp, stage_meta(&inp).unwrap()).unwrap();
+        commit::finish(&install, &journal).unwrap();
+        assert_eq!(read(&install, jar).as_deref(), Some("b0 old"));
+        assert_eq!(read(&install, "Game.exe").as_deref(), Some("exe3"));
+        assert_eq!(read_sidecar(&install).unwrap().unwrap().kept_mine, vec![jar.to_string()]);
+        // Without the record the same plan would set it aside as a leftover,
+        // so the check above is not vacuous.
+        let mut side = read_sidecar(&install).unwrap().unwrap();
+        side.kept_mine.clear();
+        baseline::write_sidecar(&install, &side).unwrap();
+        let p = plan_for_with(&install, &[remote("Game.exe", "exe4")], &prev);
+        assert_eq!(p.backup_paths(), vec![jar.to_string()], "{p:#?}");
+        side.kept_mine = vec![jar.to_string()];
+        baseline::write_sidecar(&install, &side).unwrap();
+
+        // Once the player deletes it, the record goes with the next update.
+        std::fs::remove_file(install.join(jar)).unwrap();
+        let resolved = plan::resolve(plan_for_with(&install, &[remote("Game.exe", "exe4")], &prev), &HashMap::new()).unwrap();
+        put(&commit::new_dir(&install), "Game.exe", "exe4");
+        let mut inp = input(&install, &resolved, &chunks);
+        inp.from_version = "v3";
+        inp.to_version = "v4";
+        let journal = commit_staged(&inp, stage_meta(&inp).unwrap()).unwrap();
+        commit::finish(&install, &journal).unwrap();
+        assert!(read_sidecar(&install).unwrap().unwrap().kept_mine.is_empty());
         let _ = std::fs::remove_dir_all(&install);
     }
 

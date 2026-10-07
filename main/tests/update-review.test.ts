@@ -30,6 +30,7 @@ import {
   queueItemLabel,
   recoverOutcomeText,
   resolutionDetail,
+  skippedLinkedLine,
   shouldAskBeforePlay,
   targetLine,
   unresolvedPaths,
@@ -336,4 +337,19 @@ test("a needs-recovery error is recognised and shown without its marker", () => 
   assert.equal(needsRecovery("Could not queue the update: [needs-recovery] x"), false);
   assert.equal(updateErrorText("Not enough free space for this update."), "Not enough free space for this update.");
   assert.equal(needsRecovery("The Drop server needs updating before games can be updated in place."), false);
+});
+
+test("linked player-data folders are reported, never asked about", () => {
+  assert.equal(skippedLinkedLine(plan()), null);
+  assert.equal(skippedLinkedLine(plan({ skippedLinkedFolders: [] })), null);
+  const one = skippedLinkedLine(plan({ skippedLinkedFolders: ["user"] }))!;
+  assert.match(one, /^Files in user .*that folder is a link/);
+  const two = skippedLinkedLine(plan({ skippedLinkedFolders: ["user", "saves"] }))!;
+  assert.match(two, /user, saves .*those folders are links/);
+  for (const s of [one, two]) assert.ok(!s.includes("\u2014"), s);
+  // Information only: it adds no conflict, so apply is not held up by it.
+  const p = plan({ skippedLinkedFolders: ["user"] });
+  assert.deepEqual(p.conflicts, []);
+  assert.deepEqual(buildResolutions(p.conflicts, {}), { ok: true, resolutions: {} });
+  assert.equal(isUpToDate(p), isUpToDate(plan()));
 });

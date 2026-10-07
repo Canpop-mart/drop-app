@@ -2182,17 +2182,6 @@ onUnmounted(() => {
     refreshTimeout = null;
   }
 });
-
-// The page is kept alive across some BPM navigations, so re-entering home
-// without a fresh mount would leave the spotlight stuck on the same game.
-watch(
-  () => route.path,
-  (to, from) => {
-    if (to === "/bigpicture" && from !== "/bigpicture") {
-      homeData.pickRandomFavoriteSpotlight();
-    }
-  },
-);
 </script>
 
 <style scoped>

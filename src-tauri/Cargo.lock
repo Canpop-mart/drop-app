@@ -1488,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "drop-app"
-version = "6.1.1"
+version = "6.1.2"
 dependencies = [
  "anyhow",
  "async-trait",

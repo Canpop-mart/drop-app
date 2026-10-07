@@ -1,7 +1,7 @@
 <template>
   <!-- Scrolling belongs to the BPM layout's single [data-bp-scroll]
        container; the tab panes below are plain flex children. -->
-  <div class="flex flex-col min-h-full" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
+  <div ref="storeRoot" class="flex flex-col min-h-full" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
     <!-- Tab navigation -->
     <div class="flex items-center gap-2 px-8 py-4 border-b" :style="{ borderColor: 'var(--bpm-border)' }">
       <button
@@ -248,6 +248,7 @@
         :ref="
           (el: any) => registerGrid(el, { onSelect: onRouletteCardSelect })
         "
+        data-bp-roulette
         class="rounded-xl bg-zinc-800/50 ring-1 ring-zinc-700/40 px-5 py-4 mb-5 cursor-pointer hover:ring-blue-500/40 transition"
         :class="{ 'roulette-spinning-surface': rouletteSpinning }"
         @click="onRouletteCardSelect"
@@ -334,11 +335,10 @@
         <div class="flex items-center gap-2 text-sm text-zinc-400">
           <ArrowsUpDownIcon class="size-4" />
           <span>{{ browseSortLabel }}</span>
-          <template v-if="browseLibraryFilter || browseAchievementFilter">
+          <template v-if="browseLibraryFilter">
             <span class="text-zinc-600">|</span>
             <FunnelIcon class="size-3.5" />
-            <span v-if="browseLibraryFilter" class="text-blue-400">{{ browseLibraryLabel.replace('Library: ', '') }}</span>
-            <span v-if="browseAchievementFilter" class="text-blue-400">Has Achievements</span>
+            <span class="text-blue-400">{{ browseLibraryLabel.replace('Library: ', '') }}</span>
           </template>
         </div>
       </div>
@@ -358,7 +358,7 @@
             <div class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-6 max-w-3xl w-full mx-4">
               <h2 class="text-xl font-semibold font-display text-zinc-100 mb-5">Sort & Filter</h2>
 
-              <div class="grid grid-cols-3 gap-6">
+              <div class="grid grid-cols-2 gap-6">
                 <!-- Sort section -->
                 <div>
                   <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Sort By</p>
@@ -406,33 +406,6 @@
                     </button>
                   </div>
                 </div>
-
-                <!-- Achievements filter -->
-                <div>
-                  <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Achievements</p>
-                  <div class="space-y-1.5">
-                    <button
-                      class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors"
-                      :class="!browseAchievementFilter
-                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
-                        : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
-                      :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseAchievementFilter = ''; } })"
-                      @click="browseAchievementFilter = ''"
-                    >
-                      <span class="font-medium">All Games</span>
-                    </button>
-                    <button
-                      class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors"
-                      :class="browseAchievementFilter === 'has_achievements'
-                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
-                        : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
-                      :ref="(el: any) => registerFilterMenu(el, { onSelect: () => { browseAchievementFilter = 'has_achievements'; } })"
-                      @click="browseAchievementFilter = 'has_achievements'"
-                    >
-                      <span class="font-medium">Has Achievements</span>
-                    </button>
-                  </div>
-                </div>
               </div>
 
               <!-- Close -->
@@ -450,12 +423,12 @@
 
       <div
         v-if="browseResults.length > 0"
-        ref="browseGridEl"
         class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7"
       >
         <div
           v-for="game in browsePageResults"
           :key="game.id"
+          :data-bp-game-id="game.id"
           :ref="(el: any) => registerGrid(el, {
             onSelect: () => onTileSelect(game.id),
             // Controller long-press: focus-nav fires this after A is held
@@ -532,7 +505,21 @@
         </button>
       </div>
 
-      <div v-if="browseResults.length === 0 && !browseLoading" class="flex items-center justify-center py-24">
+      <div v-if="browseError && browseResults.length === 0 && !browseLoading" class="flex items-center justify-center py-24">
+        <div class="text-center">
+          <h3 class="text-2xl font-semibold text-zinc-400 mb-2">Couldn't load games</h3>
+          <p class="text-zinc-600 mb-6">{{ browseError }}</p>
+          <button
+            :ref="(el: any) => registerGrid(el, { onSelect: retryBrowse })"
+            class="px-6 py-3 rounded-xl bg-zinc-800 text-zinc-200 text-sm font-medium hover:bg-zinc-700 transition-colors"
+            @click="retryBrowse"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+
+      <div v-else-if="browseResults.length === 0 && !browseLoading" class="flex items-center justify-center py-24">
         <div class="text-center">
           <MagnifyingGlassIcon class="size-16 mx-auto mb-4 text-zinc-600" />
           <h3 class="text-2xl font-semibold text-zinc-400 mb-2">
@@ -600,6 +587,7 @@
           <div
             v-for="game in viewingCollection.games"
             :key="game.id"
+            :data-bp-game-id="game.id"
             :ref="(el: any) => registerGrid(el, { onSelect: () => goToGame(game.id) })"
             class="group bp-focus-delegate relative flex cursor-pointer flex-col rounded-xl transition-all duration-200"
             @click="goToGame(game.id)"
@@ -813,6 +801,18 @@ import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
 import { useDeckMode } from "~/composables/deck-mode";
 import { useShelves } from "~/composables/shelves";
+import {
+  clampPage,
+  needsMoreResults,
+  planReturnFocus,
+  readStoreSnapshot,
+  shouldRestoreFocus,
+  writeStoreSnapshot,
+  type BrowseSort,
+  type ReturnFocus,
+  type StoreBrowseSnapshot,
+  type StoreTab,
+} from "~/composables/bigpicture/store-browse-state";
 
 definePageMeta({ layout: "bigpicture" });
 
@@ -833,15 +833,35 @@ const registerFilterMenu = useBpFocusableGroup("filter-menu");
 const registerBulkAction = useBpFocusableGroup("content");
 const registerShelfPicker = useBpFocusableGroup("shelf-picker");
 
+// ── Browse-state restoration ─────────────────────────────────────────────
+// This page is not kept alive, so opening a game and pressing Back remounts
+// it. The tab, search, sort, library filter, Browse page and open collection
+// are kept in a session snapshot (see store-browse-state.ts) and the refs
+// below are SEEDED from it, so the "filter changed, back to page one"
+// watchers never fire on mount. A fresh visit from the nav rail also gets the
+// saved list back (same as the desktop store); only the focus jump to the
+// opened game is limited to coming back from that game's page.
+const initial = readStoreSnapshot();
+// One-shot: take it now so a later, unrelated visit can't replay it.
+writeStoreSnapshot({ returnFocus: null });
+const previousPath = router.options.history.state?.back;
+const returnFocus: ReturnFocus | null = shouldRestoreFocus(
+  initial.returnFocus,
+  typeof previousPath === "string" ? previousPath : null,
+)
+  ? initial.returnFocus
+  : null;
+
 // State
 const loading = ref(true);
 const browseLoading = ref(false);
-const activeTab = ref<string>(focusNav.getRouteState<string>("activeTab") ?? "featured");
+const browseError = ref<string | null>(null);
+const activeTab = ref<string>(initial.activeTab);
 const showSearch = ref(false);
 const showFilterMenu = ref(false);
-const searchQuery = ref("");
+const searchQuery = ref(initial.searchQuery);
 const heroIndex = ref(0);
-const browseSort = ref("default");
+const browseSort = ref<string>(initial.browseSort);
 
 // Bulk selection (browse tab only — letting the user mass-assign games to
 // a shelf without opening each one individually).
@@ -865,12 +885,12 @@ function cycleBrowseSort() {
   browseSort.value = modes[(idx + 1) % modes.length];
 }
 
-// Browse filters & pagination
-const browseLibraryFilter = ref("");
-const browseAchievementFilter = ref("");
+// Browse filters & pagination. There is no achievements filter: the server's
+// store browse route (api/v1/store/index.get.ts) has no such parameter, and
+// the old "Has Achievements" option here did nothing.
+const browseLibraryFilter = ref(initial.browseLibraryFilter);
 const libraries = ref<Array<{ id: string; name: string }>>([]);
-const browsePage = ref(0);
-const browseGridEl = ref<HTMLElement | null>(null);
+const browsePage = ref(initial.browsePage);
 
 // Data
 const featured = ref<StoreGame[]>([]);
@@ -893,6 +913,9 @@ function updateGridCols() {
   else if (w >= 640) gridCols.value = 3;   // sm
   else gridCols.value = 2;
 }
+// Measure now, not in onMounted: the restored page is computed from
+// itemsPerPage before the grid exists.
+updateGridCols();
 
 // Slice data to exact row counts so hidden overflow items aren't focusable
 const visibleTrending = computed(() => trending.value.slice(0, gridCols.value));
@@ -1032,18 +1055,47 @@ function onRouletteCardSelect() {
     return;
   }
   const gameId = rouletteResult.value.game.id;
+  rememberReturn("roulette", gameId);
   const target = `/bigpicture/library/${gameId}`;
   focusNav.setRouteState("backTo", "/bigpicture/store", target);
   router.push(target);
 }
 
+function currentBrowseState(): Partial<StoreBrowseSnapshot> {
+  return {
+    activeTab: activeTab.value as StoreTab,
+    searchQuery: searchQuery.value,
+    browseSort: browseSort.value as BrowseSort,
+    browseLibraryFilter: browseLibraryFilter.value,
+    browsePage: browsePage.value,
+    collectionId: viewingCollection.value?.id ?? null,
+  };
+}
+
+/** Record what to focus (by game id) and where the page was scrolled. */
+function rememberReturn(kind: ReturnFocus["kind"], gameId: string) {
+  const scroller = document.querySelector<HTMLElement>("[data-bp-scroll]");
+  writeStoreSnapshot({
+    ...currentBrowseState(),
+    returnFocus: { kind, gameId, scrollTop: scroller?.scrollTop ?? 0 },
+  });
+}
+
 function goToGame(gameId?: string) {
   if (!gameId) return;
   devLog("state",`[BPM:STORE] Navigating to game: ${gameId}`);
-  focusNav.saveFocusSnapshot("/bigpicture/store");
+  if (activeTab.value === "featured") {
+    // Featured renders synchronously once its data is in, so the index-based
+    // snapshot is good enough there.
+    focusNav.saveFocusSnapshot("/bigpicture/store");
+  } else {
+    // Browse and collection grids render after an async load; focus comes
+    // back to this game's tile by id once they have (restoreReturnFocus).
+    rememberReturn("tile", gameId);
+  }
   const target = `/bigpicture/library/${gameId}`;
-  // Tell focus-nav's B handler to return to the store (preserving pagination /
-  // tab state via saveFocusSnapshot above) rather than the default library grid.
+  // Tell focus-nav's B handler to return to the store rather than the
+  // default library grid.
   focusNav.setRouteState("backTo", "/bigpicture/store", target);
   router.push(target).then(() => {
     devLog("state",`[BPM:STORE] Navigation complete for: ${gameId}`);
@@ -1074,14 +1126,16 @@ async function loadCollections() {
   }
 }
 
-async function openCollection(id: string) {
+async function openCollection(id: string, autoFocus = true): Promise<boolean> {
   addedCollection.value = false;
   try {
     viewingCollection.value = await api.store.collection(id);
     // Move controller focus onto the freshly-rendered games grid.
-    nextTick(() => focusNav.autoFocusContent("content"));
+    if (autoFocus) nextTick(() => focusNav.autoFocusContent("content"));
+    return true;
   } catch (e) {
     console.error("[BPM:STORE] Failed to load collection:", e);
+    return false;
   }
 }
 
@@ -1255,22 +1309,17 @@ function stopHeroTimer() {
   }
 }
 
-// Pagination: compute how many items per page based on grid columns × 4 rows
-// We fetch a generous batch and paginate client-side so column-count changes
-// don't cause jank. Fall back to 28 (7 cols × 4 rows) when we can't measure.
-const itemsPerPage = computed(() => {
-  const el = browseGridEl.value;
-  if (!el) return 28;
-  const style = getComputedStyle(el);
-  const cols = style.getPropertyValue("grid-template-columns").split(" ").length;
-  return cols * 4;
-});
+// Pagination: 4 rows of the current column count. We fetch generous batches
+// and paginate client-side. This used to measure the rendered grid and fall
+// back to 28 when it wasn't there yet, so page maths done before the grid
+// rendered (restoring a page on Back) used a different page size than the
+// one shown. gridCols follows the same breakpoints as the grid's classes.
+const itemsPerPage = computed(() => gridCols.value * 4);
 
 const browsePageResults = computed(() => {
   const start = browsePage.value * itemsPerPage.value;
-  // Slice to exactly 4 rows worth of items so no overflow items get gamepad focus
-  const maxItems = gridCols.value * 4;
-  return browseResults.value.slice(start, start + Math.min(itemsPerPage.value, maxItems));
+  // Exactly 4 rows, so no overflow items get gamepad focus.
+  return browseResults.value.slice(start, start + itemsPerPage.value);
 });
 
 const browseTotalPages = computed(() => {
@@ -1307,68 +1356,95 @@ function cycleLibraryFilter() {
   browseLibraryFilter.value = opts[(idx + 1) % opts.length];
 }
 
-function toggleAchievementFilter() {
-  browseAchievementFilter.value = browseAchievementFilter.value
-    ? ""
-    : "has_achievements";
-}
-
 function clearBrowseFilters() {
   searchQuery.value = "";
   browseLibraryFilter.value = "";
-  browseAchievementFilter.value = "";
-  browsePage.value = 0;
-  loadBrowse(true);
+  loadBrowse();
 }
 
 // Browse functionality
-async function loadBrowse(reset = false) {
-  if (reset) {
-    browseResults.value = [];
-    browsePage.value = 0;
-  }
+/** Server caps `take` at 55 (api/v1/store/index.get.ts). */
+const BROWSE_BATCH = 55;
+// Bumped by every loadBrowse so a slower, older request (e.g. a restore still
+// fetching batches when the player changes the sort) can't overwrite or
+// append to the newer results.
+let browseSeq = 0;
+let browseRequestedPage = 0;
+
+function browseParams(skip: number) {
+  const effectiveSort: BrowseSort | "relevance" = searchQuery.value
+    ? "relevance"
+    : (browseSort.value as BrowseSort) || "default";
+  return {
+    skip,
+    take: BROWSE_BATCH,
+    q: searchQuery.value || undefined,
+    library: browseLibraryFilter.value || undefined,
+    sort: effectiveSort,
+    order: effectiveSort === "name" ? ("asc" as const) : undefined,
+  };
+}
+
+/**
+ * Load Browse results from scratch and show `page` (zero-based). Page 0 is
+ * one batch; a restored later page keeps fetching batches until that page is
+ * full or the catalog ends, then clamps the page in case the catalog shrank.
+ * Resolves false when superseded by a newer load.
+ */
+async function loadBrowse(page = 0): Promise<boolean> {
+  const seq = ++browseSeq;
+  browseRequestedPage = page;
+  browseResults.value = [];
+  browseTotal.value = 0;
+  browsePage.value = page;
+  browseError.value = null;
   browseLoading.value = true;
+  const results: StoreGame[] = [];
+  let total = 0;
+  let failed: unknown = null;
   try {
-    const effectiveSort = searchQuery.value
-      ? "relevance"
-      : (browseSort.value as any) || "default";
-    const data = await api.store.browse({
-      skip: 0,
-      take: 55,
-      q: searchQuery.value || undefined,
-      library: browseLibraryFilter.value || undefined,
-      sort: effectiveSort,
-      order: effectiveSort === "name" ? "asc" : undefined,
-    });
-    browseResults.value = data.results;
-    browseTotal.value = data.count;
+    do {
+      const data = await api.store.browse(browseParams(results.length));
+      if (seq !== browseSeq) return false;
+      results.push(...data.results);
+      total = data.count;
+      // An empty batch means the server has nothing more to give (guards
+      // against a count that disagrees with what it actually returns).
+      if (data.results.length === 0) break;
+    } while (needsMoreResults(results.length, total, page, itemsPerPage.value));
   } catch (e) {
-    console.error("Failed to load browse:", e);
-  } finally {
-    browseLoading.value = false;
+    if (seq !== browseSeq) return false;
+    failed = e;
+    console.error("[BPM:STORE] Failed to load browse:", e);
   }
+  browseLoading.value = false;
+  if (failed && results.length === 0) {
+    // Leave browsePage alone so Retry asks for the same page again.
+    browseError.value = failed instanceof Error ? failed.message : String(failed);
+    return true;
+  }
+  browseResults.value = results;
+  browseTotal.value = total;
+  browsePage.value = clampPage(page, total, results.length, itemsPerPage.value);
+  return true;
+}
+
+function retryBrowse() {
+  loadBrowse(browseRequestedPage);
 }
 
 async function loadBrowseMore() {
+  const seq = browseSeq;
   browseLoading.value = true;
   try {
-    const effectiveSort = searchQuery.value
-      ? "relevance"
-      : (browseSort.value as any) || "default";
-    const data = await api.store.browse({
-      skip: browseResults.value.length,
-      take: 55,
-      q: searchQuery.value || undefined,
-      library: browseLibraryFilter.value || undefined,
-      sort: effectiveSort,
-      order: effectiveSort === "name" ? "asc" : undefined,
-    });
+    const data = await api.store.browse(browseParams(browseResults.value.length));
+    if (seq !== browseSeq) return;
     browseResults.value.push(...data.results);
     browseTotal.value = data.count;
   } catch (e) {
     console.error("Failed to load more browse:", e);
   } finally {
-    browseLoading.value = false;
+    if (seq === browseSeq) browseLoading.value = false;
   }
 }
 
@@ -1395,15 +1471,15 @@ watch(showBulkShelfPicker, (open) => {
   }
 });
 
-// Reload browse when tab switches to browse; persist tab across back-nav.
+// Reload browse when tab switches to browse. (The tab itself is kept by the
+// snapshot watcher below.)
 watch(activeTab, (tab) => {
-  focusNav.setRouteState("activeTab", tab);
   // Leaving Browse mid-selection drops bulk state so the floating bar doesn't
   // linger on an unrelated tab; leaving Collections resets any open detail.
   if (tab !== "browse" && bulkSelectMode.value) exitBulkMode();
   if (tab !== "collections") viewingCollection.value = null;
   if (tab === "browse") {
-    loadBrowse(true);
+    loadBrowse();
   } else if (tab === "collections") {
     loadCollections();
   }
@@ -1412,13 +1488,13 @@ watch(activeTab, (tab) => {
 // Reload browse when sort or filters change
 watch(browseSort, () => {
   if (activeTab.value === "browse") {
-    loadBrowse(true);
+    loadBrowse();
   }
 });
 
-watch([browseLibraryFilter, browseAchievementFilter], () => {
+watch(browseLibraryFilter, () => {
   if (activeTab.value === "browse") {
-    loadBrowse(true);
+    loadBrowse();
   }
 });
 
@@ -1427,9 +1503,67 @@ let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 watch(searchQuery, () => {
   if (activeTab.value === "browse") {
     if (searchDebounce) clearTimeout(searchDebounce);
-    searchDebounce = setTimeout(() => loadBrowse(true), 300);
+    searchDebounce = setTimeout(() => loadBrowse(), 300);
   }
 });
+
+// Keep the session snapshot current so the next mount (Back from a game, or
+// a later visit) starts from the view the player last saw.
+watch(
+  [
+    activeTab,
+    searchQuery,
+    browseSort,
+    browseLibraryFilter,
+    browsePage,
+    () => viewingCollection.value?.id,
+  ],
+  () => writeStoreSnapshot(currentBrowseState()),
+);
+
+const storeRoot = ref<HTMLElement | null>(null);
+let unmounted = false;
+
+/**
+ * After a Back from a game opened on Browse or in a collection: put the
+ * scroll position back, then focus the opened game's tile, found by its id
+ * (never by index; the page may have shifted). Falls back to the first tile
+ * of the page, then to the page's default focus, so focus never lands on
+ * nothing. Runs only once the grid has rendered.
+ */
+function restoreReturnFocus(rf: ReturnFocus) {
+  if (unmounted) return;
+  const root = storeRoot.value;
+  const scroller = document.querySelector<HTMLElement>("[data-bp-scroll]");
+  if (scroller) scroller.scrollTop = rf.scrollTop;
+
+  const visibleIds =
+    activeTab.value === "browse"
+      ? browsePageResults.value.map((g) => g.id)
+      : (viewingCollection.value?.games.map((g) => g.id) ?? []);
+  const plan = planReturnFocus(rf, visibleIds);
+  const tile = (id: string | undefined) =>
+    id
+      ? root?.querySelector<HTMLElement>(`[data-bp-game-id="${CSS.escape(id)}"]`)
+      : null;
+
+  let el: HTMLElement | null | undefined = null;
+  if (plan.kind === "roulette") {
+    el = root?.querySelector<HTMLElement>("[data-bp-roulette]");
+  } else if (plan.kind === "tile") {
+    el = tile(plan.gameId);
+  }
+  // focusElement applies focus even when something (e.g. the nav rail)
+  // already has it, and scrolls the tile into view if the restored
+  // scrollTop doesn't show it.
+  if (focusNav.focusElement(el)) return;
+  devLog(
+    "focus",
+    `[BPM:STORE] return focus: ${rf.kind} ${rf.gameId} not on this page, using first tile`,
+  );
+  if (focusNav.focusElement(tile(visibleIds[0]))) return;
+  focusNav.autoFocusContent("content");
+}
 
 // Face button handlers for Search (Y) and Sort (X).
 // On Steam Deck (Gamescope), the Web Gamepad API reports physical Y as index 2
@@ -1515,14 +1649,35 @@ onMounted(async () => {
     console.error("Failed to load store data:", e);
   } finally {
     loading.value = false;
-    // If route state restored the tab to 'browse', the watch(activeTab)
-    // below only fires on change — so on re-entry the browse grid would
-    // render empty forever. Kick the fetch off manually here.
-    if (activeTab.value === "browse") {
-      loadBrowse(true);
-    } else if (activeTab.value === "collections") {
-      loadCollections();
+  }
+
+  // The tab was seeded from the snapshot, so watch(activeTab) never fired
+  // and nothing has loaded the Browse grid or collections yet. If the player
+  // already switched tabs during the load above, that watcher did it.
+  if (activeTab.value === "browse" && initial.activeTab === "browse") {
+    // The saved page, not page one: this is what keeps Back from resetting it.
+    const current = await loadBrowse(initial.browsePage);
+    await nextTick();
+    if (!current || unmounted) return;
+    if (returnFocus) restoreReturnFocus(returnFocus);
+    else focusNav.autoFocusContent("content");
+  } else if (
+    activeTab.value === "collections" &&
+    initial.activeTab === "collections"
+  ) {
+    loadCollections();
+    if (initial.collectionId) {
+      // A collection that no longer loads leaves the list view showing.
+      await openCollection(initial.collectionId, false);
+      // The player left the tab while it loaded: don't pop the detail view
+      // back up the next time they open Collections.
+      if (activeTab.value !== "collections") viewingCollection.value = null;
+      await nextTick();
+      if (unmounted || activeTab.value !== "collections") return;
     }
+    if (returnFocus && viewingCollection.value) restoreReturnFocus(returnFocus);
+    else focusNav.autoFocusContent("content");
+  } else {
     nextTick(() => {
       if (!focusNav.restoreFocusSnapshot("/bigpicture/store")) {
         focusNav.autoFocusContent("content");
@@ -1532,6 +1687,9 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  unmounted = true;
+  // Final write in case a change landed without a watcher flush.
+  writeStoreSnapshot(currentBrowseState());
   stopHeroTimer();
   window.removeEventListener("resize", updateGridCols);
   if (searchDebounce) clearTimeout(searchDebounce);

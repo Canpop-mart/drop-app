@@ -170,7 +170,13 @@ const groupOrder = ref<string[]>([]);
 
 interface FocusSnapshot {
   group: string;
-  /** Index of the focused element within its group (DOM order). */
+  /**
+   * Index of the focused element among its group's connected members, in
+   * registration (mount) order, NOT DOM order. Anything that registers later
+   * on the restored page (async rows, re-registered tiles) shifts it, so pages
+   * whose content loads asynchronously should restore by identity instead
+   * (see the Big Picture store's restoreReturnFocus).
+   */
   index: number;
   /** Scroll position of the nearest scrollable ancestor. */
   scrollTop: number;
@@ -181,8 +187,8 @@ const focusHistory = new Map<string, FocusSnapshot>();
 
 /**
  * Per-route free-form state bag. Pages can use this to persist things
- * focus-nav doesn't know about — e.g. which tab was active on the store
- * page. Survives route changes so back-navigation restores the user's
+ * focus-nav doesn't know about — e.g. which view was open on the requests
+ * page, or the `backTo` path the B handler follows. Survives route changes so back-navigation restores the user's
  * last view, not the page's default.
  */
 const routeStateStore = new Map<string, Map<string, unknown>>();
@@ -778,7 +784,7 @@ export function useFocusNavigation() {
   const restoreFocusSnapshot = _restoreFocusSnapshot;
 
   /**
-   * Record a per-route piece of page state (e.g. "activeTab" on the store).
+   * Record a per-route piece of page state (e.g. "view" on the requests page).
    * Pages call this when the state changes; `getRouteState` reads it on
    * mount so back-navigation restores the user's last view.
    *

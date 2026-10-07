@@ -138,27 +138,66 @@ const PROTECTED_DATA_DIRS_ANY_DEPTH: &[&str] = &[
     "Goldberg SteamEmu Saves",
 ];
 
-/// Whether a path (POSIX-relative to the install dir) is runtime user data the
-/// stale-file sweep must never delete. See the two lists above.
-pub(crate) fn is_protected_user_data(relative: &str) -> bool {
-    // Manifest keys are meant to be POSIX, but the path is joined with the OS
-    // separator rules, so a `\\` or a `./` in a key would still name a real
-    // nested directory on Windows. Judge the components the OS will see.
-    let parts: Vec<&str> = relative
+/// The entries of `PROTECTED_DATA_DIRS` that Drop itself (or GBE, through
+/// the config Drop writes) fills at runtime, even where a game ships a file
+/// of the same name: per-game RetroArch saves, GBE achievements and saves,
+/// the GBE config written at launch, and the mod ledgers (`MODS_DIR`).
+/// Together with `PROTECTED_DATA_DIRS_ANY_DEPTH` these are "Drop runtime
+/// data" (`is_drop_runtime_data`). The rest of `PROTECTED_DATA_DIRS` are
+/// generic folder names that games and packs also ship their own files in
+/// (`is_player_data_folder`).
+const DROP_RUNTIME_TOP_LEVEL: &[&str] = &["drop-saves", "drop-goldberg", "steam_settings", ".mods"];
+
+/// A path's components as the OS will see them. Manifest keys are meant to be
+/// POSIX, but the path is joined with the OS separator rules, so a `\\` or a
+/// `./` in a key would still name a real nested directory on Windows.
+fn path_components(relative: &str) -> Vec<&str> {
+    relative
         .split(['/', '\\'])
         .filter(|p| !p.is_empty() && *p != ".")
-        .collect();
-    let top_level = parts
+        .collect()
+}
+
+fn top_level_in(relative: &str, list: &[&str]) -> bool {
+    path_components(relative)
         .first()
-        .is_some_and(|top| PROTECTED_DATA_DIRS.iter().any(|d| d.eq_ignore_ascii_case(top)));
+        .is_some_and(|top| list.iter().any(|d| d.eq_ignore_ascii_case(top)))
+}
+
+fn under_any_depth_dir(relative: &str) -> bool {
+    let parts = path_components(relative);
     // Directory components only: the last part is the file itself.
     let dirs = &parts[..parts.len().saturating_sub(1)];
-    let any_depth = dirs.iter().any(|component| {
+    dirs.iter().any(|component| {
         PROTECTED_DATA_DIRS_ANY_DEPTH
             .iter()
             .any(|d| d.eq_ignore_ascii_case(component))
-    });
-    top_level || any_depth
+    })
+}
+
+/// Whether a path (POSIX-relative to the install dir) is runtime user data the
+/// stale-file sweep must never delete. See the two lists above. Exactly
+/// `is_drop_runtime_data || is_player_data_folder`.
+pub(crate) fn is_protected_user_data(relative: &str) -> bool {
+    top_level_in(relative, PROTECTED_DATA_DIRS) || under_any_depth_dir(relative)
+}
+
+/// Whether a path is data Drop or GBE writes at runtime whatever the game
+/// ships there (`DROP_RUNTIME_TOP_LEVEL`, and `PROTECTED_DATA_DIRS_ANY_DEPTH`
+/// at any depth). The in-place updater only ever writes such a path when
+/// nothing is on disk there.
+pub(crate) fn is_drop_runtime_data(relative: &str) -> bool {
+    top_level_in(relative, DROP_RUNTIME_TOP_LEVEL) || under_any_depth_dir(relative)
+}
+
+/// Whether a path is under one of the generic top-level folders emulators
+/// keep player data in (`user`, `saves`, `system`, ...), and is not Drop
+/// runtime data. Packs ship their own files there too (a Minecraft launcher
+/// keeps its whole instance under `user/`), so the in-place updater updates
+/// the files a pack ships there, but asks rather than replacing or removing
+/// one it can't prove is the pack's own copy.
+pub(crate) fn is_player_data_folder(relative: &str) -> bool {
+    top_level_in(relative, PROTECTED_DATA_DIRS) && !is_drop_runtime_data(relative)
 }
 
 /// Whether the stale-file sweep may delete this path (POSIX-relative to the
@@ -1185,6 +1224,50 @@ mod sweep_tests {
     #[test]
     fn mods_dir_constant_is_protected() {
         assert!(PROTECTED_DATA_DIRS.contains(&super::super::mod_data::MODS_DIR));
+        assert!(DROP_RUNTIME_TOP_LEVEL.contains(&super::super::mod_data::MODS_DIR));
+    }
+
+    #[test]
+    fn runtime_and_player_data_split_the_protected_set() {
+        for d in DROP_RUNTIME_TOP_LEVEL {
+            assert!(PROTECTED_DATA_DIRS.contains(d), "{d}");
+        }
+        let samples = [
+            "user/instances/P/minecraft/mods/a.jar",
+            "User/nand/save.bin",
+            "saves\\slot1.sav",
+            "./system/scph1001.bin",
+            "keys/prod.keys",
+            "mlc01/usr/save/x",
+            ".mods/smapi.moddata",
+            "drop-saves/u1/game.srm",
+            "steam_settings/configs.user.ini",
+            "Binaries/Win64/drop-goldberg/480/a.json",
+            "user/drop-goldberg/480/a.json",
+            "bin/GSE Saves/480/x",
+            "Content/system/old.pak",
+            "data/user/stale.dat",
+            "Game.exe",
+            "saves",
+        ];
+        for p in samples {
+            assert_eq!(
+                is_protected_user_data(p),
+                is_drop_runtime_data(p) || is_player_data_folder(p),
+                "{p}"
+            );
+            assert!(!(is_drop_runtime_data(p) && is_player_data_folder(p)), "{p}");
+        }
+        assert!(is_player_data_folder("user/instances/P/minecraft/mods/a.jar"));
+        assert!(is_player_data_folder("Saves\\slot1.sav"));
+        assert!(!is_drop_runtime_data("user/instances/P/minecraft/mods/a.jar"));
+        assert!(is_drop_runtime_data("drop-saves/u1/game.srm"));
+        assert!(is_drop_runtime_data(".mods/smapi.moddata"));
+        assert!(is_drop_runtime_data("steam_settings/configs.user.ini"));
+        // Runtime data inside a generic folder is runtime data.
+        assert!(is_drop_runtime_data("user/drop-goldberg/480/a.json"));
+        assert!(!is_player_data_folder("user/drop-goldberg/480/a.json"));
+        assert!(!is_player_data_folder("data/user/stale.dat"));
     }
 
     #[test]
