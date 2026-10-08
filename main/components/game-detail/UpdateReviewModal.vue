@@ -124,10 +124,7 @@
               <div v-if="plan.conflicts.length > 0" class="space-y-2">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                   <p class="text-sm text-zinc-300">
-                    {{ plan.conflicts.length }}
-                    {{ plan.conflicts.length === 1 ? "file" : "files" }} you
-                    changed or added {{ plan.conflicts.length === 1 ? "is" : "are" }}
-                    touched by this update.
+                    {{ conflictsLine(plan.conflicts.length) }}
                   </p>
                   <div class="flex gap-2">
                     <button
@@ -256,6 +253,7 @@ import {
   RESOLUTION_LABEL,
   backupLine,
   skippedLinkedLine,
+  conflictsLine,
   countsLine,
   downloadLine,
   resolutionDetail,

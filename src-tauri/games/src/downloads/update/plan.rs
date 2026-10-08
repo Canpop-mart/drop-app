@@ -23,7 +23,11 @@
 //! | in B, not in T    | same as B                 | delete                  |
 //! |                   | missing                   | nothing                 |
 //! |                   | anything else             | conflict `removed_edited` |
-//! | in neither        | anything                  | never looked at         |
+//! | in neither        | anything                  | never looked at (except |
+//! |                   |                           | the one-shot healing    |
+//! |                   |                           | below: leftovers set    |
+//! |                   |                           | aside, or conflict      |
+//! |                   |                           | `removed_unknown`)      |
 //!
 //! Overrides that apply before the table:
 //! - A path that is Drop runtime data (`is_drop_runtime_data`: GBE's
@@ -63,7 +67,8 @@
 //!
 //!   A file there that is byte-identical to the baseline is replaced or
 //!   removed as usual: it is the pack's own copy. Files in neither list are
-//!   never looked at, as anywhere else.
+//!   never looked at, as anywhere else, apart from the one-shot healing
+//!   below.
 //! - A player-data folder that is a link (or holds one on the way to the
 //!   file: on the Deck `user/` or `nand/` is often linked to the SD card)
 //!   gets no operations at all: no write, replace or delete through it. The
@@ -79,25 +84,44 @@
 //! Healing what 6.1.0 and 6.1.1 left behind. Those builds never replaced or
 //! removed files the pack ships under the player-data folders, and recorded
 //! the new hash anyway. `PlanInput::previously_shipped` holds what earlier
-//! revisions of the INSTALLED version shipped, up to the one installed; the
-//! caller passes it once per install (until an update by this build has
-//! run, see `Sidecar::healed_protected_folders`) and passes nothing after.
-//! With it, and only under the player-data folders:
-//! - Earlier copy: a file the pack ships (in B or T) whose baseline entry is
-//!   unverified or absent, and that is byte-identical on disk to what an
-//!   earlier revision shipped at that path, counts as the pack's own copy,
-//!   like a match with B: replaced or removed without asking and without a
-//!   `.bak`. A verified baseline entry is left to the table (the player may
-//!   have rolled the file back on purpose).
-//! - Leftovers: a path an earlier revision shipped that is in neither B nor
-//!   T (in any letter case), on disk as a regular file (not through a link)
-//!   byte-identical to what an earlier revision shipped there, is removed
-//!   without asking, and kept as `.bak` (it may be the player's own copy of
-//!   the same file).
+//! revisions of the INSTALLED version shipped, up to the one installed (an
+//! unknown hash is listed as `""`, with its size). Two
+//! one-shot passes use it, each switched on by its own flag, which the
+//! caller sets until an update by this build has run the pass (see
+//! `Sidecar::healed_protected_folders` and
+//! `Sidecar::healed_unknown_leftovers`). Only under the player-data folders:
+//! - First pass (`PlanInput::heal_protected`):
+//!   - Earlier copy: a file the pack ships (in B or T) whose baseline entry
+//!     is unverified or absent, and that is byte-identical on disk to what
+//!     an earlier revision shipped at that path, counts as the pack's own
+//!     copy, like a match with B: replaced or removed without asking and
+//!     without a `.bak`. A verified baseline entry is left to the table (the
+//!     player may have rolled the file back on purpose).
+//!   - Leftovers: a path an earlier revision shipped that is in neither B
+//!     nor T (in any letter case), on disk as a regular file (not through a
+//!     link) byte-identical to what an earlier revision shipped there, is
+//!     removed without asking, and kept as `.bak` (it may be the player's
+//!     own copy of the same file).
 //!
-//! Neither applies to Drop runtime data, a mod's file, a file the player
-//! chose "keep mine" for (including one the target had removed), an unknown
-//! hash, or an empty file (every empty file has the same hash).
+//!   Neither applies to an unknown hash or an empty file (every empty file
+//!   has the same hash).
+//! - Second pass (`PlanInput::ask_unknown_leftovers`): a path an earlier
+//!   revision shipped that is in neither B nor T (in any letter case), on
+//!   disk as a non-empty regular file (not through a link) of a size an
+//!   earlier revision listed for that path, and not set aside by the first
+//!   pass in the same plan, is a conflict `removed_unknown`, whatever its
+//!   hash: unknown, known and different, or (when the first pass is not
+//!   due) known and the same. A file of another size is left alone: the
+//!   game or the player wrote it since (a save, a log). Drop can't tell
+//!   whether it is the pack's file or the player's, so it asks. Take update
+//!   moves it to `.bak`; keep mine leaves it and records it in `kept_mine`.
+//!   It never turns on the first pass's rules.
+//!
+//! Neither pass applies to Drop runtime data, a mod's file, or a file the
+//! player chose "keep mine" for (including one the target had removed). A
+//! candidate reached through a linked player-data folder is left alone and
+//! the pass is marked incomplete (`Plan::heal_incomplete`,
+//! `Plan::unknown_leftovers_incomplete`), so the next update runs it again.
 //!
 //! Last: a file standing where the update needs a folder is
 //! removed first (kept as `.bak` unless it is exactly the old shipped file),
@@ -179,6 +203,10 @@ pub enum ConflictKind {
     AddedExists,
     ChangedBoth,
     RemovedEdited,
+    /// A file an earlier revision shipped that neither the baseline nor the
+    /// target lists, still on disk: Drop can't tell whether it is the pack's
+    /// or the player's (the second healing pass, see the module docs).
+    RemovedUnknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,13 +297,21 @@ pub struct Plan {
     /// this update had files to add, change or remove and left them as they
     /// are. Sorted, no duplicates.
     pub skipped_linked: Vec<String>,
-    /// The 6.1.x healing was due (`PlanInput::previously_shipped` not empty)
-    /// but a linked player-data folder kept it from checking a file it
-    /// should have: the next baseline must not be marked healed.
+    /// The first healing pass was due (`PlanInput::heal_protected`, with
+    /// earlier revisions to heal from) but a linked player-data folder kept
+    /// it from checking a file it should have: the next baseline must not be
+    /// marked healed (`Sidecar::healed_protected_folders`).
     pub heal_incomplete: bool,
+    /// As `heal_incomplete`, for the second pass
+    /// (`PlanInput::ask_unknown_leftovers`, `Sidecar::healed_unknown_leftovers`):
+    /// a leftover it would have asked about is reached through a linked
+    /// player-data folder.
+    pub unknown_leftovers_incomplete: bool,
     /// Baseline paths the target no longer ships (Drop runtime data
-    /// excluded), and leftovers an earlier revision shipped that are removed.
-    /// Every mod's backup of these is discarded, as the Phase 0 sweep does.
+    /// excluded), leftovers an earlier revision shipped that are removed,
+    /// and leftovers asked about (`removed_unknown`, whatever the player
+    /// chooses, as for `removed_edited`). Every mod's backup of these is
+    /// discarded, as the Phase 0 sweep does.
     pub dropped: Vec<String>,
 }
 
@@ -490,10 +526,16 @@ pub struct PlanInput<'a> {
     pub is_player_data: &'a dyn Fn(&str) -> bool,
     /// Every path an earlier revision of the installed version shipped (up
     /// to the installed one), spelt as the server spells it, with every
-    /// `(size, sha256)` shipped for it, for the one-shot healing of what
-    /// 6.1.0/6.1.1 left behind (see the module docs). Empty once an install
-    /// has been healed.
+    /// `(size, sha256)` shipped for it (`sha256` is `""` where the hash was
+    /// unknown), for the one-shot healing of what 6.1.0/6.1.1 left behind
+    /// (see the module docs). Empty when neither pass is due.
     pub previously_shipped: &'a HashMap<String, HashSet<(u64, String)>>,
+    /// Run the first healing pass: the earlier-copy rule and the silent
+    /// leftovers (see the module docs).
+    pub heal_protected: bool,
+    /// Run the second healing pass: ask about leftovers whose original
+    /// contents are unknown (`removed_unknown`, see the module docs).
+    pub ask_unknown_leftovers: bool,
     /// Files Drop-managed mods have claimed, install-relative, as spelt in
     /// the mod ledgers (`mod_owned_files_spelled`).
     pub mod_owned: &'a HashSet<String>,
@@ -503,7 +545,7 @@ pub struct PlanInput<'a> {
     /// local baseline's `keptMine`), spelt as the target (or, for a file the
     /// target removed, the baseline) spelt them. Their baseline entry has no
     /// mtime on purpose; see `plan_unchanged`. They are never treated as the
-    /// pack's copy, nor removed as leftovers.
+    /// pack's copy, nor removed or asked about as leftovers.
     pub kept_mine: &'a HashSet<String>,
 }
 
@@ -621,10 +663,12 @@ struct Ctx<'a> {
     is_player_data: &'a dyn Fn(&str) -> bool,
     mod_owned: HashSet<String>,
     kept_mine: HashSet<String>,
-    /// `previously_shipped` by `Fold::key`: one spelling to reach the file
-    /// by (the first, sorted) and every (size, hash) any spelling shipped.
-    /// Unknown hashes left out.
-    earlier: BTreeMap<String, (String, HashSet<(u64, String)>)>,
+    /// `previously_shipped` by `Fold::key`.
+    earlier: BTreeMap<String, Earlier>,
+    /// `PlanInput::heal_protected`.
+    heal_protected: bool,
+    /// `PlanInput::ask_unknown_leftovers`.
+    ask_unknown_leftovers: bool,
     /// Folders already checked by `linked_player_data_folder`.
     linked: RefCell<HashMap<String, bool>>,
     fold: Fold,
@@ -648,14 +692,15 @@ impl Ctx<'_> {
     }
 
     /// What earlier revisions shipped at `p`, when a copy matching one may
-    /// count as the pack's: only under a player-data folder, never for Drop
-    /// runtime data, nor for a file the player chose to keep.
+    /// count as the pack's: only while the first healing pass runs, only
+    /// under a player-data folder, never for Drop runtime data, nor for a
+    /// file the player chose to keep.
     fn earlier_copies(&self, p: &str) -> Option<&HashSet<(u64, String)>> {
-        if !self.player_data(p) || self.runtime_data(p) || self.kept_by_player(p) {
+        if !self.heal_protected || !self.player_data(p) || self.runtime_data(p) || self.kept_by_player(p) {
             return None;
         }
         let n = normalize_path(p).ok()?;
-        self.earlier.get(&self.fold.key(&n)).map(|(_, set)| set)
+        self.earlier.get(&self.fold.key(&n)).map(|e| &e.copies)
     }
 
     /// The linked folder `p` is reached through, when `p` is under a
@@ -680,9 +725,11 @@ impl Ctx<'_> {
         paths.iter().find_map(|p| self.linked_player_data_folder(p))
     }
 
-    /// Whether this plan heals what 6.1.x left behind (see the module docs).
+    /// Whether this plan runs the first healing pass, with earlier revisions
+    /// to heal from (see the module docs). The second pass alone never makes
+    /// this true.
     fn healing(&self) -> bool {
-        !self.earlier.is_empty()
+        self.heal_protected && !self.earlier.is_empty()
     }
 
     fn kept_by_player(&self, p: &str) -> bool {
@@ -714,6 +761,8 @@ pub fn plan(input: PlanInput<'_>) -> Result<Plan, PlanError> {
         case_insensitive,
         kept_mine,
         previously_shipped,
+        heal_protected,
+        ask_unknown_leftovers,
     } = input;
     let fold = Fold(case_insensitive);
 
@@ -743,6 +792,8 @@ pub fn plan(input: PlanInput<'_>) -> Result<Plan, PlanError> {
             .map(|n| fold.key(&n))
             .collect(),
         earlier: earlier_by_key(previously_shipped, fold),
+        heal_protected,
+        ask_unknown_leftovers,
         linked: RefCell::new(HashMap::new()),
         fold,
     };
@@ -772,7 +823,8 @@ pub fn plan(input: PlanInput<'_>) -> Result<Plan, PlanError> {
             (Some(b), None) => plan_removed(&mut plan, &ctx, b)?,
         }
     }
-    plan_leftovers(&mut plan, &ctx, &listed);
+    let set_aside = plan_leftovers(&mut plan, &ctx, &listed);
+    plan_unknown_leftovers(&mut plan, &ctx, &listed, &set_aside);
     plan.skipped_linked.sort();
     plan.skipped_linked.dedup();
     refuse_links(&plan, &ctx)?;
@@ -1086,12 +1138,26 @@ fn plan_removed(plan: &mut Plan, ctx: &Ctx<'_>, b: &BaselineFile) -> Result<(), 
     Ok(())
 }
 
+/// What earlier revisions shipped at one path (every spelling of it that
+/// `Fold::key` treats as the same file).
+struct Earlier {
+    /// One spelling to reach the file by: the first, sorted.
+    path: String,
+    /// Every (size, hash) shipped there whose hash is known and whose file
+    /// is not empty: what the first healing pass matches against. May be
+    /// empty.
+    copies: HashSet<(u64, String)>,
+    /// Every size listed there, known hash or not: what the second healing
+    /// pass matches against.
+    sizes: HashSet<u64>,
+}
+
 /// `previously_shipped` keyed as `Ctx::earlier`.
 fn earlier_by_key(
     previously_shipped: &HashMap<String, HashSet<(u64, String)>>,
     fold: Fold,
-) -> BTreeMap<String, (String, HashSet<(u64, String)>)> {
-    let mut out: BTreeMap<String, (String, HashSet<(u64, String)>)> = BTreeMap::new();
+) -> BTreeMap<String, Earlier> {
+    let mut out: BTreeMap<String, Earlier> = BTreeMap::new();
     for (path, copies) in previously_shipped {
         let Ok(n) = normalize_path(path) else {
             log::warn!("update plan: ignoring unsafe path {path:?} from an earlier revision");
@@ -1102,33 +1168,51 @@ fn earlier_by_key(
         }
         // Spellings that differ only in case are one file on Windows: their
         // copies are pooled, reached by the first spelling in sort order.
-        let entry = out.entry(fold.key(&n)).or_insert_with(|| (path.clone(), HashSet::new()));
-        if *path < entry.0 {
-            entry.0 = path.clone();
+        let entry = out.entry(fold.key(&n)).or_insert_with(|| Earlier {
+            path: path.clone(),
+            copies: HashSet::new(),
+            sizes: HashSet::new(),
+        });
+        if *path < entry.path {
+            entry.path = path.clone();
         }
         // Unknown hashes match nothing, and every empty file has the same
         // hash: neither says the file is the pack's.
-        entry.1.extend(copies.iter().filter(|(size, h)| !h.is_empty() && *size > 0).cloned());
+        entry
+            .copies
+            .extend(copies.iter().filter(|(size, h)| !h.is_empty() && *size > 0).cloned());
+        entry.sizes.extend(copies.iter().map(|(size, _)| *size));
     }
     out
 }
 
-/// Remove pack files an earlier update left behind: see "leftovers" in the
-/// module docs. `listed` holds every B and T path as `Fold::key` keys them.
+/// Whether `path` (a key of `Ctx::earlier`, and its spelling) may be a
+/// leftover at all: an earlier revision shipped it, neither B nor T lists it
+/// in any letter case (`listed` holds every B and T path, normalised and
+/// lower-cased), and it is under a player-data folder, not Drop runtime
+/// data, not a mod's, and not kept by the player.
+fn leftover_candidate(ctx: &Ctx<'_>, listed: &HashSet<String>, key: &str, path: &str) -> bool {
+    !listed.contains(&key.to_lowercase())
+        && ctx.player_data(path)
+        && !ctx.runtime_data(path)
+        && !ctx.owned_by_mod(path)
+        && !ctx.kept_by_player(path)
+}
+
+/// Remove pack files an earlier update left behind: see "leftovers" under
+/// the first healing pass in the module docs. Returns the `Ctx::earlier`
+/// keys it set aside, lower-cased.
 ///
 /// Best effort: a leftover that can't be read is left where it is (and
 /// logged) rather than failing the update. Only regular files whose size
-/// matches an earlier copy are hashed. `listed` holds every B and T path,
-/// normalised and lower-cased.
-fn plan_leftovers(plan: &mut Plan, ctx: &Ctx<'_>, listed: &HashSet<String>) {
-    for (key, (path, copies)) in &ctx.earlier {
-        if listed.contains(&key.to_lowercase())
-            || copies.is_empty()
-            || !ctx.player_data(path)
-            || ctx.runtime_data(path)
-            || ctx.owned_by_mod(path)
-            || ctx.kept_by_player(path)
-        {
+/// matches an earlier copy are hashed.
+fn plan_leftovers(plan: &mut Plan, ctx: &Ctx<'_>, listed: &HashSet<String>) -> HashSet<String> {
+    let mut set_aside = HashSet::new();
+    if !ctx.heal_protected {
+        return set_aside;
+    }
+    for (key, Earlier { path, copies, .. }) in &ctx.earlier {
+        if copies.is_empty() || !leftover_candidate(ctx, listed, key, path) {
             continue;
         }
         let stat = ctx.disk.stat(path);
@@ -1169,6 +1253,71 @@ fn plan_leftovers(plan: &mut Plan, ctx: &Ctx<'_>, listed: &HashSet<String>) {
             backup: true,
         });
         plan.dropped.push(path.clone());
+        set_aside.insert(key.to_lowercase());
+    }
+    set_aside
+}
+
+/// Ask about files an earlier revision shipped that neither list names any
+/// more: see the second healing pass in the module docs. `set_aside` holds
+/// the `Ctx::earlier` keys the first pass already removed in this plan,
+/// lower-cased.
+///
+/// The hash does not matter, so nothing is read: only the file's kind and
+/// size are looked at, and the size must be one an earlier revision listed
+/// for the path (an unknown hash still comes with the import manifest's
+/// size, so a pack file renamed since still matches).
+///
+/// Spellings that differ only in case are asked about once, and not at all
+/// when the first pass set one aside: on a disk that ignores case although
+/// this build does not (an exFAT SD card on Linux) they are the same file,
+/// and two operations on it would stop the commit. On a disk that does not
+/// ignore case, the second file is left as it is, as before this pass.
+fn plan_unknown_leftovers(plan: &mut Plan, ctx: &Ctx<'_>, listed: &HashSet<String>, set_aside: &HashSet<String>) {
+    if !ctx.ask_unknown_leftovers {
+        return;
+    }
+    let mut taken: HashSet<String> = set_aside.clone();
+    for (key, Earlier { path, sizes, .. }) in &ctx.earlier {
+        if taken.contains(&key.to_lowercase()) || !leftover_candidate(ctx, listed, key, path) {
+            continue;
+        }
+        // A real, non-empty file. An empty one is nothing to ask about, and a
+        // link or folder is not the pack's file.
+        let DiskStat::File { size, .. } = ctx.disk.stat(path) else {
+            continue;
+        };
+        if size == 0 {
+            continue;
+        }
+        // The size an earlier revision listed for this path. Anything else
+        // is a file the game or the player wrote since (a save, a log, the
+        // launcher's options), not one the pack left behind.
+        if !sizes.contains(&size) {
+            continue;
+        }
+        // Not asked through a link: tried again by the next update.
+        if ctx.linked_folder_of(&[path]).is_some() {
+            plan.unknown_leftovers_incomplete = true;
+            continue;
+        }
+        // Not through a link (nor through anything else that is not a real
+        // folder): the file must really be inside the install.
+        if ancestors(path).iter().any(|a| ctx.disk.stat(a) != DiskStat::Dir) {
+            continue;
+        }
+        taken.insert(key.to_lowercase());
+        log::info!("update plan: asking about {path}, a file an earlier revision shipped and this one does not");
+        plan.deletes.push(DeleteOp {
+            existing: Existing {
+                disk_path: path.clone(),
+                expect: Expect::Present,
+            },
+            conflict: Some(ConflictKind::RemovedUnknown),
+            keep_bak: false,
+            backup: false,
+        });
+        plan.dropped.push(path.clone());
     }
 }
 
@@ -1182,7 +1331,7 @@ fn ancestors(rel: &str) -> Vec<String> {
 /// target has `data/x`). The file has to go first: a planned delete of it
 /// loses its conflict (the folder can't be kept out) and keeps a .bak; a file
 /// the plan wasn't going to touch is removed with a .bak. Protected player
-/// data in the way stops the plan.
+/// data in the way stops the plan, and so does a `removed_unknown` leftover.
 fn clear_way_for_folders(plan: &mut Plan, ctx: &Ctx<'_>) -> Result<(), PlanError> {
     let mut needed: Vec<String> = plan
         .writes
@@ -1204,6 +1353,13 @@ fn clear_way_for_folders(plan: &mut Plan, ctx: &Ctx<'_>) -> Result<(), PlanError
                 .unwrap_or(false)
         });
         match planned {
+            // A leftover Drop is asking about: it is not known to be the
+            // pack's, so it is not set aside without asking. It stops the
+            // plan, as it did before the second healing pass, when it was
+            // an unlisted file under a player-data folder.
+            Some(d) if d.conflict == Some(ConflictKind::RemovedUnknown) => {
+                return Err(PlanError::InTheWay(folder));
+            }
             Some(d) => {
                 if d.conflict.is_some() {
                     d.conflict = None;
@@ -1285,7 +1441,8 @@ pub struct Resolved {
     pub next_baseline: Vec<(RemoteFile, NextMtime)>,
     pub dropped: Vec<String>,
     /// Files the player chose to keep their own copy of: target files, and
-    /// files the target removed (`removed_edited`). Recorded in the baseline
+    /// files the target removed (`removed_edited`) or an earlier revision
+    /// left behind (`removed_unknown`). Recorded in the baseline
     /// so a later repair keeps a .bak before restoring them, and so no later
     /// update treats them as the pack's copy or removes them as leftovers.
     pub kept_mine: Vec<String>,
@@ -1293,24 +1450,29 @@ pub struct Resolved {
     pub skipped_linked: Vec<String>,
     /// As [`Plan::heal_incomplete`].
     pub heal_incomplete: bool,
+    /// As [`Plan::unknown_leftovers_incomplete`].
+    pub unknown_leftovers_incomplete: bool,
 }
 
 /// Apply the player's decisions. `Err` lists the conflicts with no decision.
 /// Decisions for paths that are not conflicts are ignored.
 ///
 /// - take update: the player's file is moved aside and kept as `<file>.bak`
-///   (for `removed_edited` too: it leaves its path but is not destroyed);
+///   (for `removed_edited` and `removed_unknown` too: it leaves its path but
+///   is not destroyed);
 /// - keep mine: the file is not touched. For `changed_both`/`added_exists`
 ///   the next baseline records the TARGET hash, so the file keeps reading as
 ///   the player's change; for `removed_edited` the path leaves the baseline
-///   and the file becomes the player's own. Either way the path is recorded
-///   in `kept_mine`.
+///   and the file becomes the player's own, as a `removed_unknown` file
+///   (never in the baseline) does. Either way the path is recorded in
+///   `kept_mine`.
 pub fn resolve(plan: Plan, resolutions: &HashMap<String, Resolution>) -> Result<Resolved, Vec<String>> {
     let mut unresolved: BTreeSet<String> = BTreeSet::new();
     let mut out = Resolved {
         dropped: plan.dropped,
         skipped_linked: plan.skipped_linked,
         heal_incomplete: plan.heal_incomplete,
+        unknown_leftovers_incomplete: plan.unknown_leftovers_incomplete,
         ..Default::default()
     };
     for (file, mtime) in plan.kept {
@@ -1485,6 +1647,8 @@ mod tests {
             is_runtime_data: protected,
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
+            heal_protected: false,
+            ask_unknown_leftovers: false,
             mod_owned: mods,
             case_insensitive: d.case_insensitive,
             kept_mine: &HashSet::new(),
@@ -1501,6 +1665,8 @@ mod tests {
             is_runtime_data: &never_protected,
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
+            heal_protected: false,
+            ask_unknown_leftovers: false,
             mod_owned: &HashSet::new(),
             case_insensitive: d.case_insensitive,
             kept_mine: &kept,
@@ -1683,6 +1849,8 @@ mod tests {
             is_runtime_data: &never_protected,
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
+            heal_protected: false,
+            ask_unknown_leftovers: false,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -1818,6 +1986,8 @@ mod tests {
             is_runtime_data: &never_protected,
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
+            heal_protected: false,
+            ask_unknown_leftovers: false,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -2148,6 +2318,8 @@ mod tests {
                 is_runtime_data: &never_protected,
                 is_player_data: &never_protected,
                 previously_shipped: &HashMap::new(),
+                heal_protected: false,
+                ask_unknown_leftovers: false,
                 mod_owned: &HashSet::new(),
                 case_insensitive: false,
                 kept_mine: &HashSet::new(),
@@ -2165,6 +2337,8 @@ mod tests {
             is_runtime_data: &never_protected,
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
+            heal_protected: false,
+            ask_unknown_leftovers: false,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -2308,6 +2482,8 @@ mod tests {
             is_runtime_data: &saves_protected,
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
+            heal_protected: false,
+            ask_unknown_leftovers: false,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -2341,6 +2517,8 @@ mod tests {
             is_runtime_data: &never_protected,
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
+            heal_protected: false,
+            ask_unknown_leftovers: false,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -2389,6 +2567,8 @@ mod tests {
             case_insensitive: d.case_insensitive,
             kept_mine: &kept,
             previously_shipped: prev,
+            heal_protected: !prev.is_empty(),
+            ask_unknown_leftovers: false,
         })
         .expect("plan")
     }
@@ -2561,6 +2741,8 @@ mod tests {
             is_runtime_data: &is_drop_runtime_data,
             is_player_data: &is_player_data_folder,
             previously_shipped: &HashMap::new(),
+            heal_protected: false,
+            ask_unknown_leftovers: false,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -2809,6 +2991,8 @@ mod tests {
             is_runtime_data: &never_protected,
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
+            heal_protected: false,
+            ask_unknown_leftovers: false,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -2819,4 +3003,440 @@ mod tests {
         assert_eq!(only_write_of(&p).file.path, "Game.exe");
     }
 
+    // ---- the second healing pass: leftovers whose original is unknown ----
+    //
+    // The bug (a real player, 6.1.2): a modpack version imported before
+    // revisions existed was edited on the server before its fingerprints
+    // were recorded, so revision 1 lists files with an unknown hash
+    // (including files renamed or deleted before the recording). 6.1.0/6.1.1
+    // never removed them under user/ and dropped them from the baseline, and
+    // 6.1.2's first pass only sets aside a file matching a KNOWN hash. Two
+    // old resource packs stayed, treated as the player's own files.
+
+    const MIZUNO: &str = "user/instances/Multiversal Pack/minecraft/resourcepacks/Mizuno x Fresh Animations 4.5.zip";
+    const RECOVERED: &str = "user/instances/Multiversal Pack/minecraft/resourcepacks/Re-covered.zip";
+
+    fn pack(name: &str) -> String {
+        format!("user/instances/Multiversal Pack/minecraft/resourcepacks/{name}")
+    }
+
+    /// Which healing passes run, and the rest of the planner's inputs the
+    /// tests below vary.
+    #[derive(Clone, Copy, Default)]
+    struct Passes<'a> {
+        heal_protected: bool,
+        ask_unknown: bool,
+        kept_mine: &'a [&'a str],
+        mods: &'a [&'a str],
+    }
+
+    const ASK_ONLY: Passes<'static> = Passes {
+        heal_protected: false,
+        ask_unknown: true,
+        kept_mine: &[],
+        mods: &[],
+    };
+
+    const BOTH: Passes<'static> = Passes {
+        heal_protected: true,
+        ..ASK_ONLY
+    };
+
+    fn run_passes(
+        b: &[BaselineFile],
+        t: &[RemoteFile],
+        d: &MemDisk,
+        prev: &HashMap<String, HashSet<(u64, String)>>,
+        passes: Passes<'_>,
+    ) -> Plan {
+        try_passes(b, t, d, prev, passes).expect("plan")
+    }
+
+    fn try_passes(
+        b: &[BaselineFile],
+        t: &[RemoteFile],
+        d: &MemDisk,
+        prev: &HashMap<String, HashSet<(u64, String)>>,
+        passes: Passes<'_>,
+    ) -> Result<Plan, PlanError> {
+        let kept: HashSet<String> = passes.kept_mine.iter().map(|s| s.to_string()).collect();
+        let mods: HashSet<String> = passes.mods.iter().map(|s| s.to_string()).collect();
+        plan(PlanInput {
+            baseline: b,
+            target: t,
+            disk: d,
+            is_runtime_data: &is_drop_runtime_data,
+            is_player_data: &is_player_data_folder,
+            mod_owned: &mods,
+            case_insensitive: d.case_insensitive,
+            kept_mine: &kept,
+            previously_shipped: prev,
+            heal_protected: passes.heal_protected,
+            ask_unknown_leftovers: passes.ask_unknown,
+        })
+    }
+
+    /// What `fetch_previously_shipped` builds from a revision that lists
+    /// each path with an unknown hash and the size of the given content.
+    fn shipped_unknown(entries: &[(&str, &str)]) -> HashMap<String, HashSet<(u64, String)>> {
+        let files: Vec<RemoteFile> = entries
+            .iter()
+            .map(|(p, content)| RemoteFile {
+                path: p.to_string(),
+                size: content.len() as u64,
+                sha256: String::new(),
+            })
+            .collect();
+        let mut out = HashMap::new();
+        super::super::add_shipped(&mut out, &files);
+        out
+    }
+
+    fn conflict(path: &str, kind: ConflictKind) -> Conflict {
+        Conflict {
+            path: path.to_string(),
+            kind,
+        }
+    }
+
+    #[test]
+    fn an_unknown_hash_leftover_under_user_is_asked_about_once() {
+        let d = disk_of(&[(MIZUNO, "old pack zip"), (RECOVERED, "old zip two"), ("Game.exe", "e1")]);
+        let prev = shipped_unknown(&[(MIZUNO, "old pack zip"), (RECOVERED, "old zip two")]);
+        assert_eq!(prev[MIZUNO], [(12, String::new())].into(), "{prev:?}");
+        let b = [base("Game.exe", "e1", Some(1))];
+        let t = [remote("Game.exe", "e2")];
+
+        // 6.1.2's pass alone has nothing to match them against.
+        let first_only = Passes {
+            heal_protected: true,
+            ..Default::default()
+        };
+        let p = run_passes(&b, &t, &d, &prev, first_only);
+        assert!(p.deletes.is_empty() && p.conflicts().is_empty(), "{p:#?}");
+
+        // The second pass asks about both.
+        let p = run_passes(&b, &t, &d, &prev, ASK_ONLY);
+        assert_eq!(
+            p.conflicts(),
+            vec![
+                conflict(MIZUNO, ConflictKind::RemovedUnknown),
+                conflict(RECOVERED, ConflictKind::RemovedUnknown)
+            ],
+            "{p:#?}"
+        );
+        for del in &p.deletes {
+            assert_eq!(del.existing.expect, Expect::Present);
+            assert!(!del.keep_bak && !del.backup, "{del:#?}");
+        }
+        assert!(p.backup_paths().is_empty());
+        // Counted like `removed_edited`: a conflict, not in the plain counts.
+        assert_eq!(p.counts(), (0, 1, 0));
+        assert!(p.dropped.contains(&MIZUNO.to_string()) && p.dropped.contains(&RECOVERED.to_string()));
+        assert!(!p.heal_incomplete && !p.unknown_leftovers_incomplete);
+        // The hash does not matter, so neither file was read.
+        assert!(!d.hashed.borrow().iter().any(|h| h == MIZUNO || h == RECOVERED));
+
+        // Every one needs a choice.
+        let unresolved = resolve(p.clone(), &HashMap::new()).unwrap_err();
+        assert_eq!(unresolved, vec![MIZUNO.to_string(), RECOVERED.to_string()]);
+
+        // Take update: moved to .bak. Keep mine: untouched and recorded.
+        let r: HashMap<String, Resolution> = [
+            (MIZUNO.to_string(), Resolution::TakeUpdate),
+            (RECOVERED.to_string(), Resolution::KeepMine),
+        ]
+        .into();
+        let res = resolve(p, &r).unwrap();
+        assert_eq!(res.deletes.len(), 1, "{res:#?}");
+        assert_eq!(res.deletes[0].existing.disk_path, MIZUNO);
+        assert!(res.deletes[0].keep_bak);
+        assert_eq!(res.kept_mine, vec![RECOVERED.to_string()]);
+        assert!(res.next_baseline.iter().all(|(f, _)| f.path != MIZUNO && f.path != RECOVERED));
+
+        // The next plan does not ask again: the kept file is the player's
+        // even while the pass is still due, and once the marker is set the
+        // pass does not run at all.
+        let d = disk_of(&[(RECOVERED, "old zip two"), ("Game.exe", "e2")]);
+        let kept = Passes {
+            kept_mine: &[RECOVERED],
+            ..ASK_ONLY
+        };
+        let p = run_passes(&[base("Game.exe", "e2", Some(1))], &[remote("Game.exe", "e3")], &d, &prev, kept);
+        assert!(p.conflicts().is_empty() && p.deletes.is_empty(), "{p:#?}");
+        let p = run_passes(
+            &[base("Game.exe", "e2", Some(1))],
+            &[remote("Game.exe", "e3")],
+            &d,
+            &prev,
+            Passes::default(),
+        );
+        assert!(p.conflicts().is_empty() && p.deletes.is_empty(), "{p:#?}");
+    }
+
+    #[test]
+    fn a_known_hash_leftover_that_differs_is_asked_about_too() {
+        let zip = pack("old.zip");
+        // Same size as the shipped copy, so the first pass hashes it and
+        // finds it different.
+        let d = disk_of(&[(&zip, "player bld")]);
+        let prev = shipped(&[(&zip, &["pack build"])]);
+        for passes in [ASK_ONLY, BOTH] {
+            let p = run_passes(&[], &[], &d, &prev, passes);
+            assert_eq!(p.conflicts(), vec![conflict(&zip, ConflictKind::RemovedUnknown)], "{p:#?}");
+            assert_eq!(p.deletes.len(), 1);
+            assert!(p.backup_paths().is_empty());
+        }
+    }
+
+    #[test]
+    fn the_second_pass_asks_only_at_a_size_an_earlier_revision_listed() {
+        // The import captured files the game or launcher writes at runtime
+        // (options.txt, a world's level.dat), with an unknown hash. They
+        // have grown since: not the pack's leftovers, never asked about.
+        let options = "user/instances/Multiversal Pack/minecraft/options.txt";
+        let level = "user/instances/Multiversal Pack/minecraft/saves/World/level.dat";
+        let d = disk_of(&[(options, "fov:90\nkeys:custom"), (level, "much more progress")]);
+        let prev = shipped_unknown(&[(options, "fov:70"), (level, "progress")]);
+        let p = run_passes(&[], &[], &d, &prev, ASK_ONLY);
+        assert!(p.deletes.is_empty() && p.conflicts().is_empty(), "{p:#?}");
+        // A known hash at another size: not asked either.
+        let zip = pack("old.zip");
+        let d = disk_of(&[(&zip, "a different, longer file")]);
+        let p = run_passes(&[], &[], &d, &shipped(&[(&zip, &["pack build"])]), BOTH);
+        assert!(p.deletes.is_empty() && p.conflicts().is_empty(), "{p:#?}");
+
+        // Unknown hash, same size: asked.
+        let d = disk_of(&[(&zip, "renamed!!")]);
+        let p = run_passes(&[], &[], &d, &shipped_unknown(&[(&zip, "123456789")]), ASK_ONLY);
+        assert_eq!(p.conflicts(), vec![conflict(&zip, ConflictKind::RemovedUnknown)], "{p:#?}");
+        // Known hash, different content, same size: asked.
+        let d = disk_of(&[(&zip, "player bld")]);
+        let p = run_passes(&[], &[], &d, &shipped(&[(&zip, &["pack build"])]), ASK_ONLY);
+        assert_eq!(p.conflicts(), vec![conflict(&zip, ConflictKind::RemovedUnknown)], "{p:#?}");
+        // Any revision's size counts, known or unknown.
+        let mut prev = shipped(&[(&zip, &["rev 2 build, longer"])]);
+        prev.get_mut(&zip).unwrap().extend(shipped_unknown(&[(&zip, "rev 1 bld!")]).remove(&zip).unwrap());
+        let p = run_passes(&[], &[], &d, &prev, ASK_ONLY);
+        assert_eq!(p.conflicts(), vec![conflict(&zip, ConflictKind::RemovedUnknown)], "{p:#?}");
+    }
+
+    #[test]
+    fn a_leftover_asked_about_in_the_way_of_a_new_folder_stops_the_plan() {
+        // The target needs a folder where the leftover file is. It is not
+        // known to be the pack's, so it is not set aside without asking.
+        let zip = pack("old.zip");
+        let inner = format!("{zip}/pack.mcmeta");
+        let d = disk_of(&[(&zip, "who knows")]);
+        let t = [remote(&inner, "meta")];
+        let r = try_passes(&[], &t, &d, &shipped_unknown(&[(&zip, "who knows")]), ASK_ONLY);
+        assert!(matches!(r, Err(PlanError::InTheWay(ref p)) if *p == zip), "{r:?}");
+        // As before the second pass: an unlisted file there stops the plan.
+        let r = try_passes(&[], &t, &d, &HashMap::new(), Passes::default());
+        assert!(matches!(r, Err(PlanError::InTheWay(ref p)) if *p == zip), "{r:?}");
+        // Other kinds keep their rule: a leftover the first pass sets aside
+        // makes way, kept as .bak.
+        let p = run_passes(&[], &t, &d, &shipped(&[(&zip, &["who knows"])]), BOTH);
+        assert_eq!(p.backup_paths(), vec![zip.clone()], "{p:#?}");
+        assert!(p.conflicts().is_empty());
+    }
+
+    #[test]
+    fn with_both_passes_due_a_known_copy_is_set_aside_and_an_unknown_one_asked() {
+        let (known, unknown) = (pack("gates.zip"), pack("mizuno.zip"));
+        let d = disk_of(&[(&known, "pack build"), (&unknown, "who knows")]);
+        let mut prev = shipped(&[(&known, &["pack build"])]);
+        prev.extend(shipped_unknown(&[(&unknown, "who knows")]));
+        let p = run_passes(&[], &[], &d, &prev, BOTH);
+        // The first pass sets the known copy aside silently, and it is not
+        // also asked about.
+        assert_eq!(p.backup_paths(), vec![known.clone()], "{p:#?}");
+        assert_eq!(p.deletes.iter().filter(|d| d.existing.disk_path == known).count(), 1);
+        assert_eq!(p.conflicts(), vec![conflict(&unknown, ConflictKind::RemovedUnknown)]);
+        assert_eq!(p.dropped.iter().filter(|d| **d == known).count(), 1);
+        // With the first pass already done, the known copy is asked about:
+        // the player may have put it back.
+        let p = run_passes(&[], &[], &d, &prev, ASK_ONLY);
+        assert_eq!(
+            p.conflicts(),
+            vec![
+                conflict(&known, ConflictKind::RemovedUnknown),
+                conflict(&unknown, ConflictKind::RemovedUnknown)
+            ],
+            "{p:#?}"
+        );
+        assert!(p.backup_paths().is_empty());
+    }
+
+    #[test]
+    fn leftovers_the_second_pass_never_asks_about() {
+        let zip = pack("old.zip");
+        fn ask(
+            d: &MemDisk,
+            b: &[BaselineFile],
+            t: &[RemoteFile],
+            prev: &HashMap<String, HashSet<(u64, String)>>,
+            passes: Passes<'_>,
+        ) -> Plan {
+            run_passes(b, t, d, prev, passes)
+        }
+
+        // Outside the player-data folders.
+        let outside = "resourcepacks/old.zip";
+        let d = disk_of(&[(outside, "x")]);
+        let p = ask(&d, &[], &[], &shipped_unknown(&[(outside, "x")]), ASK_ONLY);
+        assert!(p.deletes.is_empty(), "{p:#?}");
+
+        // Drop runtime data, even under user/.
+        let gbe = "user/drop-goldberg/480/achievements.json";
+        let d = disk_of(&[(gbe, "earned")]);
+        let p = ask(&d, &[], &[], &shipped_unknown(&[(gbe, "earned")]), ASK_ONLY);
+        assert!(p.deletes.is_empty(), "{p:#?}");
+
+        // A mod's file.
+        let d = disk_of(&[(&zip, "mod's zip")]);
+        let mods = Passes {
+            mods: &[&zip],
+            ..ASK_ONLY
+        };
+        let p = ask(&d, &[], &[], &shipped_unknown(&[(&zip, "mod's zip")]), mods);
+        assert!(p.deletes.is_empty(), "{p:#?}");
+        // (Not vacuous: without the claim it is asked about.)
+        let p = ask(&d, &[], &[], &shipped_unknown(&[(&zip, "mod's zip")]), ASK_ONLY);
+        assert_eq!(p.conflicts().len(), 1);
+
+        // A path B or T lists, in any letter case, on a disk this build
+        // treats as case-sensitive.
+        let upper = zip.to_uppercase();
+        let p = ask(&d, &[base(&upper, "x", Some(1))], &[], &shipped_unknown(&[(&zip, "mod's zip")]), ASK_ONLY);
+        assert!(p.conflicts().iter().all(|c| c.path != zip), "{p:#?}");
+        let p = ask(&d, &[], &[remote(&upper, "x")], &shipped_unknown(&[(&zip, "mod's zip")]), ASK_ONLY);
+        assert!(p.conflicts().iter().all(|c| c.path != zip), "{p:#?}");
+
+        // An empty file.
+        let d = disk_of(&[(&zip, "")]);
+        let p = ask(&d, &[], &[], &shipped_unknown(&[(&zip, "")]), ASK_ONLY);
+        assert!(p.deletes.is_empty(), "{p:#?}");
+
+        // A link where the file was, and a folder.
+        let mut d = MemDisk::default();
+        d.links.insert(zip.clone());
+        let p = ask(&d, &[], &[], &shipped_unknown(&[(&zip, "x")]), ASK_ONLY);
+        assert!(p.deletes.is_empty() && !p.unknown_leftovers_incomplete, "{p:#?}");
+        let d = disk_of(&[(&format!("{zip}/inner.txt"), "x")]);
+        let p = ask(&d, &[], &[], &shipped_unknown(&[(&zip, "x")]), ASK_ONLY);
+        assert!(p.deletes.is_empty(), "{p:#?}");
+
+        // Through a linked player-data folder: not asked, and the pass is
+        // incomplete so the next update tries again. The first pass's flag
+        // is untouched, and the rest of the update goes ahead.
+        for link in ["user", "user/instances/Multiversal Pack"] {
+            let mut d = disk_of(&[(&zip, "x"), ("Game.exe", "e1")]);
+            d.links.insert(link.into());
+            let p = ask(
+                &d,
+                &[base("Game.exe", "e1", Some(1))],
+                &[remote("Game.exe", "e2")],
+                &shipped_unknown(&[(&zip, "x")]),
+                ASK_ONLY,
+            );
+            assert!(p.conflicts().is_empty(), "{link}: {p:#?}");
+            assert!(p.unknown_leftovers_incomplete && !p.heal_incomplete, "{link}: {p:#?}");
+            assert_eq!(only_write(&p).file.path, "Game.exe");
+            assert!(resolve(p, &HashMap::new()).unwrap().unknown_leftovers_incomplete);
+        }
+
+        // A file the player chose to keep (covered above too).
+        let d = disk_of(&[(&zip, "x")]);
+        let kept = Passes {
+            kept_mine: &[&zip],
+            ..ASK_ONLY
+        };
+        assert!(ask(&d, &[], &[], &shipped_unknown(&[(&zip, "x")]), kept).deletes.is_empty());
+
+        // And nothing at all when the pass is not due.
+        assert!(ask(&d, &[], &[], &shipped_unknown(&[(&zip, "x")]), Passes::default()).deletes.is_empty());
+    }
+
+    #[test]
+    fn spellings_of_one_leftover_on_a_disk_that_ignores_case_get_one_operation() {
+        // Linux with an exFAT SD card: the planner matches case exactly, the
+        // disk does not, so two spellings an earlier revision listed are one
+        // file. Two operations on it would stop the commit.
+        let (upper, lower) = (pack("A.zip"), pack("a.zip"));
+        let mut d = disk_of(&[(&upper, "pack build")]);
+        d.case_insensitive = true;
+        let plan_exact = |prev: &HashMap<String, HashSet<(u64, String)>>, passes: Passes<'_>| {
+            plan(PlanInput {
+                baseline: &[],
+                target: &[],
+                disk: &d,
+                is_runtime_data: &is_drop_runtime_data,
+                is_player_data: &is_player_data_folder,
+                mod_owned: &HashSet::new(),
+                case_insensitive: false,
+                kept_mine: &HashSet::new(),
+                previously_shipped: prev,
+                heal_protected: passes.heal_protected,
+                ask_unknown_leftovers: passes.ask_unknown,
+            })
+            .expect("plan")
+        };
+        // The first pass sets one spelling aside; the other is not asked.
+        let mut prev = shipped(&[(&upper, &["pack build"])]);
+        prev.extend(shipped_unknown(&[(&lower, "pack build")]));
+        let p = plan_exact(&prev, BOTH);
+        assert_eq!(p.deletes.len(), 1, "{p:#?}");
+        assert!(p.conflicts().is_empty() && p.backup_paths() == vec![upper.clone()]);
+        // Both unknown: asked once.
+        let p = plan_exact(&shipped_unknown(&[(&upper, "pack build"), (&lower, "pack build")]), ASK_ONLY);
+        assert_eq!(p.deletes.len(), 1, "{p:#?}");
+        assert_eq!(p.conflicts(), vec![conflict(&upper, ConflictKind::RemovedUnknown)]);
+    }
+
+    #[test]
+    fn the_second_pass_alone_never_turns_on_the_first_passs_rules() {
+        // A pack file under user/ that matches a known earlier copy, with an
+        // unverified baseline entry. The first pass would replace it as the
+        // pack's own copy; the second pass alone leaves it to the table.
+        let cfg = "user/config/a.cfg";
+        let d = disk_of(&[(cfg, "rev1")]);
+        let prev = shipped(&[(cfg, &["rev1"])]);
+        let b = [base(cfg, "rev2", None)];
+        // Not vacuous: with the first pass it is replaced.
+        let p = run_passes(&b, &[remote(cfg, "rev2")], &d, &prev, BOTH);
+        assert!(only_write(&p).conflict.is_none(), "{p:#?}");
+        // Unchanged by the update: kept, not replaced.
+        let p = run_passes(&b, &[remote(cfg, "rev2")], &d, &prev, ASK_ONLY);
+        assert!(p.writes.is_empty() && p.deletes.is_empty() && p.conflicts().is_empty(), "{p:#?}");
+        assert_eq!(p.kept, vec![(remote(cfg, "rev2"), None)]);
+        // Changed or removed by the update: asked, as without healing.
+        let p = run_passes(&b, &[remote(cfg, "rev3")], &d, &prev, ASK_ONLY);
+        assert_eq!(only_write(&p).conflict, Some(ConflictKind::ChangedBoth));
+        let p = run_passes(&b, &[], &d, &prev, ASK_ONLY);
+        assert_eq!(p.conflicts(), vec![conflict(cfg, ConflictKind::RemovedEdited)]);
+
+        // A leftover matching a known copy is asked about, never set aside
+        // silently.
+        let zip = pack("gates.zip");
+        let d = disk_of(&[(&zip, "pack build")]);
+        let p = run_passes(&[], &[], &d, &shipped(&[(&zip, &["pack build"])]), ASK_ONLY);
+        assert!(p.backup_paths().is_empty(), "{p:#?}");
+        assert_eq!(p.conflicts(), vec![conflict(&zip, ConflictKind::RemovedUnknown)]);
+
+        // A linked folder skipping an unverified file does not mark the
+        // first pass incomplete: it is not running.
+        let same = mc("d.jar");
+        let mut d = disk_of(&[(&same, "d-player"), ("Game.exe", "e1")]);
+        d.links.insert("user".into());
+        let p = run_passes(
+            &[base(&same, "d1", None), base("Game.exe", "e1", Some(1))],
+            &[remote(&same, "d1"), remote("Game.exe", "e2"), remote(&mc("new.jar"), "n")],
+            &d,
+            &shipped(&[(&mc("old.jar"), &["o"])]),
+            ASK_ONLY,
+        );
+        assert!(!p.heal_incomplete && !p.unknown_leftovers_incomplete, "{p:#?}");
+        assert_eq!(p.skipped_linked, vec!["user".to_string()]);
+    }
 }

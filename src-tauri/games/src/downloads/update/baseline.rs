@@ -34,11 +34,19 @@ pub struct Sidecar {
     #[serde(default)]
     pub kept_mine: Vec<String>,
     /// Written by an install, repair or update from a build that heals what
-    /// 6.1.0/6.1.1 left behind under the player-data folders (see the `plan`
-    /// docs). Once set, updates of this install no longer look for it.
-    /// Absent (false) in sidecars those builds wrote.
+    /// 6.1.0/6.1.1 left behind under the player-data folders (the first
+    /// healing pass in the `plan` docs). Once set, updates of this install
+    /// no longer run that pass. Absent (false) in sidecars those builds
+    /// wrote.
     #[serde(default)]
     pub healed_protected_folders: bool,
+    /// As `healed_protected_folders`, for the second healing pass: asking
+    /// about files an earlier revision shipped whose original contents are
+    /// unknown (`removed_unknown` in the `plan` docs). Absent (false) in
+    /// sidecars written before 6.1.3, so every existing install gets that
+    /// pass once.
+    #[serde(default)]
+    pub healed_unknown_leftovers: bool,
 }
 
 /// The sidecar without its file list, for the update check (which reads one
@@ -254,15 +262,16 @@ pub fn fresh_sidecar(
         // Not known here: a repair or reinstall into a folder an earlier
         // update left files in has not been healed. See `carry_over`.
         healed_protected_folders: false,
+        healed_unknown_leftovers: false,
     }
 }
 
 /// What a fresh baseline (after an install or repair into `install_dir`)
 /// keeps from the sidecar that was already there, read as `previous`:
-/// - the healed marker: a repair only re-checks the files the version
-///   ships, and the stale-file sweep never touches the player-data folders,
-///   so what 6.1.0/6.1.1 left there survives it. Only a folder with no
-///   sidecar (a new install), or one from another game, starts healed. An
+/// - the healed markers (both passes): a repair only re-checks the files the
+///   version ships, and the stale-file sweep never touches the player-data
+///   folders, so what 6.1.0/6.1.1 left there survives it. Only a folder with
+///   no sidecar (a new install), or one from another game, starts healed. An
 ///   unreadable sidecar does not.
 /// - "keep mine" records for files the version no longer ships that are
 ///   still on disk (a `removed_edited` file the player kept), so they stay
@@ -272,19 +281,23 @@ pub fn carry_over(previous: io::Result<Option<Sidecar>>, next: &mut Sidecar, ins
     let previous = match previous {
         Ok(None) => {
             next.healed_protected_folders = true;
+            next.healed_unknown_leftovers = true;
             return;
         }
         Ok(Some(s)) if s.game_id != next.game_id => {
             next.healed_protected_folders = true;
+            next.healed_unknown_leftovers = true;
             return;
         }
         Ok(Some(s)) => s,
         Err(_) => {
             next.healed_protected_folders = false;
+            next.healed_unknown_leftovers = false;
             return;
         }
     };
     next.healed_protected_folders = previous.healed_protected_folders;
+    next.healed_unknown_leftovers = previous.healed_unknown_leftovers;
     let shipped: std::collections::HashSet<&str> = next.files.iter().map(|f| f.path.as_str()).collect();
     let still_kept: Vec<String> = previous
         .kept_mine
@@ -346,6 +359,7 @@ mod tests {
             }],
             kept_mine: vec!["a/b.jar".into()],
             healed_protected_folders: true,
+            healed_unknown_leftovers: true,
         };
         write_sidecar(&dir, &s).unwrap();
         assert_eq!(read_sidecar(&dir).unwrap(), Some(s));
@@ -364,7 +378,7 @@ mod tests {
         )
         .unwrap();
         let s = read_sidecar(&dir).unwrap().unwrap();
-        assert!(!s.healed_protected_folders);
+        assert!(!s.healed_protected_folders && !s.healed_unknown_leftovers);
         assert_eq!(s.files.len(), 1);
         let json = serde_json::to_string(&Sidecar {
             healed_protected_folders: true,
@@ -372,6 +386,26 @@ mod tests {
         })
         .unwrap();
         assert!(json.contains(r#""healedProtectedFolders":true"#), "{json}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sidecar_from_6_1_2_loads_with_the_second_pass_due() {
+        let dir = scratch("sidecar-612");
+        // As 6.1.2 wrote it: first pass done, no healedUnknownLeftovers.
+        std::fs::write(
+            sidecar_path(&dir),
+            br#"{"gameId":"g","versionId":"v","revision":2,"files":[],"keptMine":[],"healedProtectedFolders":true}"#,
+        )
+        .unwrap();
+        let s = read_sidecar(&dir).unwrap().unwrap();
+        assert!(s.healed_protected_folders && !s.healed_unknown_leftovers);
+        let json = serde_json::to_string(&Sidecar {
+            healed_unknown_leftovers: true,
+            ..s
+        })
+        .unwrap();
+        assert!(json.contains(r#""healedUnknownLeftovers":true"#), "{json}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -386,10 +420,12 @@ mod tests {
             sha256: "00".into(),
         }];
         let fresh = || fresh_sidecar(&dir, "g", "v", 2, &files);
+        // Not known before `carry_over` has looked.
+        assert!(!fresh().healed_protected_folders && !fresh().healed_unknown_leftovers);
         // A new install: nothing an earlier update could have left.
         let mut next = fresh();
         carry_over(Ok(None), &mut next, &dir);
-        assert!(next.healed_protected_folders);
+        assert!(next.healed_protected_folders && next.healed_unknown_leftovers);
         // A repair of an install 6.1.x updated: the leftovers survive a
         // repair, so it is still not healed, and the removed file the player
         // kept stays theirs. A record for a shipped file is dropped.
@@ -404,29 +440,36 @@ mod tests {
                 "user/mods/deleted-since.jar".into(),
             ],
             healed_protected_folders: false,
+            healed_unknown_leftovers: false,
         };
         let mut next = fresh();
         carry_over(Ok(Some(before.clone())), &mut next, &dir);
-        assert!(!next.healed_protected_folders);
+        assert!(!next.healed_protected_folders && !next.healed_unknown_leftovers);
         assert_eq!(next.kept_mine, vec!["user/mods/kept-removed.jar".to_string()]);
-        // Healed before: stays healed.
-        let mut next = fresh();
-        carry_over(
-            Ok(Some(Sidecar {
-                healed_protected_folders: true,
-                ..before.clone()
-            })),
-            &mut next,
-            &dir,
-        );
-        assert!(next.healed_protected_folders);
+        // Healed before: stays healed, each marker on its own.
+        for (protected, unknown) in [(true, false), (false, true), (true, true)] {
+            let mut next = fresh();
+            carry_over(
+                Ok(Some(Sidecar {
+                    healed_protected_folders: protected,
+                    healed_unknown_leftovers: unknown,
+                    ..before.clone()
+                })),
+                &mut next,
+                &dir,
+            );
+            assert_eq!(
+                (next.healed_protected_folders, next.healed_unknown_leftovers),
+                (protected, unknown)
+            );
+        }
         // Unreadable: not claimed healed. Another game's: a new install.
         let mut next = fresh();
         carry_over(Err(io::Error::other("corrupt")), &mut next, &dir);
-        assert!(!next.healed_protected_folders);
+        assert!(!next.healed_protected_folders && !next.healed_unknown_leftovers);
         let mut next = fresh();
         carry_over(Ok(Some(Sidecar { game_id: "other".into(), ..before })), &mut next, &dir);
-        assert!(next.healed_protected_folders && next.kept_mine.is_empty());
+        assert!(next.healed_protected_folders && next.healed_unknown_leftovers && next.kept_mine.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

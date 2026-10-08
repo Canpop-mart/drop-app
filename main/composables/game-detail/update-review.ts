@@ -13,7 +13,13 @@
  * kept here so both surfaces read the same words.
  */
 
-export type ConflictKind = "added_exists" | "changed_both" | "removed_edited";
+export type ConflictKind =
+  | "added_exists"
+  | "changed_both"
+  | "removed_edited"
+  /** A file an earlier revision shipped that the pack no longer lists; Drop
+   * can't tell whether it is the pack's or the player's. */
+  | "removed_unknown";
 export type Resolution = "take_update" | "keep_mine";
 export type UpdateConflict = { path: string; kind: ConflictKind };
 
@@ -271,6 +277,7 @@ export const CONFLICT_KIND_LABEL: Record<ConflictKind, string> = {
   added_exists: "You added a file the update also adds",
   changed_both: "You changed a file the update changes",
   removed_edited: "You changed a file the update removes",
+  removed_unknown: "The pack no longer includes this file",
 };
 
 export const RESOLUTION_LABEL: Record<Resolution, string> = {
@@ -285,7 +292,7 @@ export function resolutionDetail(
 ): string {
   if (!choice) return "Choose what to do with this file";
   if (choice === "keep_mine") return "Your copy stays as it is";
-  return kind === "removed_edited"
+  return kind === "removed_edited" || kind === "removed_unknown"
     ? "The file is removed. Your copy is kept as .bak"
     : "The update's copy is used. Your copy is kept as .bak";
 }
@@ -320,6 +327,16 @@ export function skippedLinkedLine(plan: UpdatePlan): string | null {
   return folders.length === 1
     ? `Files in ${names} won't be updated because that folder is a link to another location. The rest of the update still applies.`
     : `Files in ${names} won't be updated because those folders are links to another location. The rest of the update still applies.`;
+}
+
+/**
+ * The line above the conflict list, on both surfaces. Says nothing about
+ * who changed the files: a `removed_unknown` file may be the pack's.
+ */
+export function conflictsLine(count: number): string {
+  return count === 1
+    ? "1 file needs a decision before this update."
+    : `${count} files need a decision before this update.`;
 }
 
 /** "3 added, 12 updated, 1 removed". */

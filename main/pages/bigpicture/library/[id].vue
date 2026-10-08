@@ -594,10 +594,8 @@
 
         <template v-if="reviewPlan.conflicts.length > 0">
           <p class="mt-4 text-sm text-zinc-300">
-            {{ reviewPlan.conflicts.length }}
-            {{ reviewPlan.conflicts.length === 1 ? "file" : "files" }} you changed or
-            added {{ reviewPlan.conflicts.length === 1 ? "is" : "are" }} touched by this
-            update. A switches between Take update and Keep mine.
+            {{ conflictsLine(reviewPlan.conflicts.length) }} A switches between Take
+            update and Keep mine.
           </p>
           <div class="mt-3 flex flex-wrap gap-3">
             <button
@@ -1313,6 +1311,7 @@ import {
   checkOutcome,
   checkOutcomeText,
   clampPage,
+  conflictsLine,
   countsLine,
   downloadLine,
   isLatestForPlatform,

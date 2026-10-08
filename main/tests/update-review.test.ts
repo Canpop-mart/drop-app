@@ -7,7 +7,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  CONFLICT_KIND_LABEL,
   backupLine,
+  conflictsLine,
   buildResolutions,
   carryChoices,
   checkOutcome,
@@ -265,6 +267,7 @@ test("no player-facing copy uses an em dash", async () => {
     mod.checkOutcomeText({ kind: "error", message: "x" }),
     resolutionDetail("changed_both", "take_update"),
     resolutionDetail("removed_edited", "take_update"),
+    resolutionDetail("removed_unknown", "take_update"),
     resolutionDetail("changed_both", "keep_mine"),
     resolutionDetail("changed_both", undefined),
     backupLine(plan({ backupPaths: ["a"] }))!,
@@ -337,6 +340,46 @@ test("a needs-recovery error is recognised and shown without its marker", () => 
   assert.equal(needsRecovery("Could not queue the update: [needs-recovery] x"), false);
   assert.equal(updateErrorText("Not enough free space for this update."), "Not enough free space for this update.");
   assert.equal(needsRecovery("The Drop server needs updating before games can be updated in place."), false);
+});
+
+test("a file the pack no longer includes is a conflict like any other", () => {
+  const unknown: UpdateConflict = { path: "user/rp/old.zip", kind: "removed_unknown" };
+  const all = [...conflicts, unknown];
+  // Its own label, not the "you changed" one, and no em dash.
+  const label = CONFLICT_KIND_LABEL.removed_unknown;
+  assert.equal(label, "The pack no longer includes this file");
+  assert.notEqual(label, CONFLICT_KIND_LABEL.removed_edited);
+  for (const s of [
+    label,
+    resolutionDetail("removed_unknown", "take_update"),
+    resolutionDetail("removed_unknown", "keep_mine"),
+    resolutionDetail("removed_unknown", undefined),
+  ]) {
+    assert.ok(!s.includes("\u2014"), s);
+  }
+  // Take update moves it aside, as for a removed file.
+  assert.match(resolutionDetail("removed_unknown", "take_update"), /removed.*\.bak/);
+  assert.match(resolutionDetail("removed_unknown", "keep_mine"), /stays/);
+  // Choose all covers it.
+  assert.equal(chooseAll(all, "keep_mine")[unknown.path], "keep_mine");
+  assert.equal(chooseAll(all, "take_update")[unknown.path], "take_update");
+  // Apply needs a choice for it.
+  const others = chooseAll(conflicts, "take_update");
+  const r = buildResolutions(all, others);
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.deepEqual(r.missing, [unknown.path]);
+  const ok = buildResolutions(all, { ...others, [unknown.path]: "keep_mine" });
+  assert.equal(ok.ok, true);
+  if (ok.ok) assert.equal(ok.resolutions[unknown.path], "keep_mine");
+});
+
+test("the conflict list's heading claims nothing about the player", () => {
+  assert.equal(conflictsLine(1), "1 file needs a decision before this update.");
+  assert.equal(conflictsLine(3), "3 files need a decision before this update.");
+  for (const s of [conflictsLine(1), conflictsLine(2)]) {
+    assert.ok(!s.includes("\u2014"), s);
+    assert.doesNotMatch(s, /you changed|you added/i);
+  }
 });
 
 test("linked player-data folders are reported, never asked about", () => {

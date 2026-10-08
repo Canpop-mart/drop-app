@@ -649,10 +649,11 @@ pub(crate) fn stage_meta(input: &CommitInput<'_>) -> Result<Journal, UpdateError
         revision: input.to_revision,
         files,
         kept_mine: kept_mine_after(input),
-        // Healed by this update, or nothing was left to heal, unless a linked
-        // player-data folder kept the healing from checking a file there: the
-        // next update tries again.
+        // Each healing pass ran in this update or was not due, unless a
+        // linked player-data folder kept it from checking a file there: the
+        // next update runs that pass again.
         healed_protected_folders: !input.resolved.heal_incomplete,
+        healed_unknown_leftovers: !input.resolved.unknown_leftovers_incomplete,
     };
     std::fs::create_dir_all(&new_dir).map_err(|e| UpdateError::Io(format!("could not create the staging folder: {e}")))?;
     baseline::write_sidecar(&new_dir, &sidecar)
@@ -1044,10 +1045,23 @@ mod tests {
         plan_for_with(install, target, &HashMap::new())
     }
 
+    /// With `previously_shipped`, the first healing pass runs (as before the
+    /// second pass existed); the second does not.
     fn plan_for_with(
         install: &Path,
         target: &[RemoteFile],
         previously_shipped: &HashMap<String, HashSet<(u64, String)>>,
+    ) -> plan::Plan {
+        plan_for_passes(install, target, previously_shipped, !previously_shipped.is_empty(), false)
+    }
+
+    /// The healing passes set explicitly.
+    fn plan_for_passes(
+        install: &Path,
+        target: &[RemoteFile],
+        previously_shipped: &HashMap<String, HashSet<(u64, String)>>,
+        heal_protected: bool,
+        ask_unknown_leftovers: bool,
     ) -> plan::Plan {
         let base = read_sidecar(install).unwrap().unwrap().files;
         plan::plan(PlanInput {
@@ -1059,6 +1073,8 @@ mod tests {
             is_runtime_data: &crate::downloads::download_agent::is_drop_runtime_data,
             is_player_data: &crate::downloads::download_agent::is_player_data_folder,
             previously_shipped,
+            heal_protected,
+            ask_unknown_leftovers,
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &read_sidecar(install).unwrap().unwrap().kept_mine.into_iter().collect(),
@@ -1355,6 +1371,159 @@ mod tests {
         commit::finish(&install, &journal).unwrap();
         assert!(read_sidecar(&install).unwrap().unwrap().kept_mine.is_empty());
         let _ = std::fs::remove_dir_all(&install);
+    }
+
+    // ---- the second healing pass, end to end ----
+
+    const MIZUNO: &str = "user/instances/Multiversal Pack/minecraft/resourcepacks/Mizuno x Fresh Animations 4.5.zip";
+    const RECOVERED: &str = "user/instances/Multiversal Pack/minecraft/resourcepacks/Re-covered.zip";
+
+    /// An install as 6.1.2 left the player's: revision 2, the first pass
+    /// done, no `healedUnknownLeftovers`, and revision 1 listing each of
+    /// `leftovers` with an unknown hash and the size of the given content
+    /// (what `fetch_previously_shipped` builds from it).
+    fn installed_by_6_1_2(install: &Path, leftovers: &[(&str, &str)]) -> HashMap<String, HashSet<(u64, String)>> {
+        let rev2 = vec![remote("Game.exe", "exe2")];
+        put(install, "Game.exe", "exe2");
+        let mut side = baseline::fresh_sidecar(install, "g", "v1", 2, &rev2);
+        side.healed_protected_folders = true;
+        baseline::write_sidecar(install, &side).unwrap();
+        let json = std::fs::read_to_string(baseline::sidecar_path(install)).unwrap();
+        let json = json.replace(r#","healedUnknownLeftovers":false"#, "");
+        assert!(!json.contains("healedUnknownLeftovers"), "{json}");
+        std::fs::write(baseline::sidecar_path(install), json).unwrap();
+        let rev1: Vec<RemoteFile> = leftovers
+            .iter()
+            .map(|(p, content)| RemoteFile {
+                path: p.to_string(),
+                size: content.len() as u64,
+                sha256: String::new(),
+            })
+            .collect();
+        let mut prev = HashMap::new();
+        super::super::add_shipped(&mut prev, &rev1);
+        prev
+    }
+
+    /// The healing passes `prepare` runs for this install's sidecar.
+    fn passes_for(install: &Path) -> (bool, bool) {
+        let side = read_sidecar(install).unwrap().unwrap();
+        let (_, heal, ask) = super::super::due_passes(
+            super::super::BaselineSource::Local,
+            side.healed_protected_folders,
+            side.healed_unknown_leftovers,
+            Some(side.revision),
+        );
+        (heal, ask)
+    }
+
+    fn update_game_exe(install: &Path, resolved: &Resolved, from: &str, to: &str, exe: &str) {
+        put(&commit::new_dir(install), "Game.exe", exe);
+        let chunks = vec![];
+        let mut inp = input(install, resolved, &chunks);
+        inp.from_version = from;
+        inp.to_version = to;
+        let journal = commit_staged(&inp, stage_meta(&inp).unwrap()).unwrap();
+        commit::finish(install, &journal).unwrap();
+    }
+
+    #[test]
+    fn an_unknown_leftover_is_asked_about_once_and_the_answer_sticks() {
+        let install = scratch("unknown-leftovers");
+        let prev = installed_by_6_1_2(&install, &[(MIZUNO, "old pack zip"), (RECOVERED, "old zip two")]);
+        put(&install, MIZUNO, "old pack zip");
+        put(&install, RECOVERED, "old zip two");
+        assert_eq!(passes_for(&install), (false, true));
+
+        let rev3 = vec![remote("Game.exe", "exe3")];
+        let (heal, ask) = passes_for(&install);
+        let p = plan_for_passes(&install, &rev3, &prev, heal, ask);
+        let conflicts = p.conflicts();
+        let kinds: Vec<(&str, plan::ConflictKind)> = conflicts.iter().map(|c| (c.path.as_str(), c.kind)).collect();
+        assert_eq!(
+            kinds,
+            vec![(MIZUNO, plan::ConflictKind::RemovedUnknown), (RECOVERED, plan::ConflictKind::RemovedUnknown)],
+            "{p:#?}"
+        );
+        let resolutions: HashMap<String, Resolution> = [
+            (MIZUNO.to_string(), Resolution::TakeUpdate),
+            (RECOVERED.to_string(), Resolution::KeepMine),
+        ]
+        .into();
+        let resolved = plan::resolve(p, &resolutions).unwrap();
+        update_game_exe(&install, &resolved, "v1", "v1", "exe3");
+
+        // Take update: moved to .bak. Keep mine: untouched.
+        assert!(!install.join(MIZUNO).exists());
+        assert_eq!(read(&install, &format!("{MIZUNO}.bak")).as_deref(), Some("old pack zip"));
+        assert_eq!(read(&install, RECOVERED).as_deref(), Some("old zip two"));
+        assert_eq!(read(&install, "Game.exe").as_deref(), Some("exe3"));
+        let side = read_sidecar(&install).unwrap().unwrap();
+        assert!(side.healed_unknown_leftovers && side.healed_protected_folders, "{side:#?}");
+        assert_eq!(side.kept_mine, vec![RECOVERED.to_string()]);
+
+        // The next update does not ask again: the marker is set, so the
+        // revisions are not even fetched...
+        assert_eq!(passes_for(&install), (false, false));
+        let rev4 = vec![remote("Game.exe", "exe4")];
+        let p = plan_for_passes(&install, &rev4, &HashMap::new(), false, false);
+        assert!(p.conflicts().is_empty() && p.deletes.is_empty(), "{p:#?}");
+        // ...and even if the pass ran, the kept file is the player's.
+        let p = plan_for_passes(&install, &rev4, &prev, false, true);
+        assert!(p.conflicts().is_empty() && p.deletes.is_empty(), "{p:#?}");
+        let _ = std::fs::remove_dir_all(&install);
+    }
+
+    #[test]
+    fn a_fresh_install_starts_with_both_passes_done() {
+        let install = scratch("fresh-markers");
+        let rev1 = vec![remote("Game.exe", "exe1")];
+        put(&install, "Game.exe", "exe1");
+        // What `record_fresh_baseline` does for a new install.
+        let mut side = baseline::fresh_sidecar(&install, "g", "v1", 1, &rev1);
+        baseline::carry_over(read_sidecar(&install), &mut side, &install);
+        assert!(side.healed_protected_folders && side.healed_unknown_leftovers);
+        baseline::write_sidecar(&install, &side).unwrap();
+        assert_eq!(passes_for(&install), (false, false));
+        let _ = std::fs::remove_dir_all(&install);
+    }
+
+    /// The second pass's marker stays unset while a leftover is reached
+    /// through a linked player-data folder, and the pass asks once the link
+    /// is a real folder again.
+    #[cfg(unix)]
+    #[test]
+    fn an_unknown_leftover_behind_a_link_is_asked_about_once_the_link_is_gone() {
+        let install = scratch("unknown-linked");
+        let sd = scratch("unknown-linked-sd");
+        let prev = installed_by_6_1_2(&install, &[(RECOVERED, "old zip two")]);
+        let inside = RECOVERED.trim_start_matches("user/");
+        put(&sd, inside, "old zip two");
+        std::os::unix::fs::symlink(&sd, install.join("user")).unwrap();
+
+        let rev3 = vec![remote("Game.exe", "exe3")];
+        let (heal, ask) = passes_for(&install);
+        let p = plan_for_passes(&install, &rev3, &prev, heal, ask);
+        assert!(p.conflicts().is_empty() && p.deletes.is_empty(), "{p:#?}");
+        assert!(p.unknown_leftovers_incomplete && !p.heal_incomplete, "{p:#?}");
+        let resolved = plan::resolve(p, &HashMap::new()).unwrap();
+        update_game_exe(&install, &resolved, "v1", "v1", "exe3");
+        assert_eq!(read(&install, "Game.exe").as_deref(), Some("exe3"));
+        assert_eq!(read(&sd, inside).as_deref(), Some("old zip two"));
+        let side = read_sidecar(&install).unwrap().unwrap();
+        assert!(side.healed_protected_folders && !side.healed_unknown_leftovers, "{side:#?}");
+
+        // The player moves the files back into a real folder.
+        std::fs::remove_file(install.join("user")).unwrap();
+        put(&install, RECOVERED, "old zip two");
+        let (heal, ask) = passes_for(&install);
+        assert_eq!((heal, ask), (false, true));
+        let p = plan_for_passes(&install, &[remote("Game.exe", "exe4")], &prev, heal, ask);
+        assert_eq!(p.conflicts().len(), 1, "{p:#?}");
+        assert_eq!(p.conflicts()[0].kind, plan::ConflictKind::RemovedUnknown);
+        assert!(!p.unknown_leftovers_incomplete);
+        let _ = std::fs::remove_dir_all(&install);
+        let _ = std::fs::remove_dir_all(&sd);
     }
 
     #[test]

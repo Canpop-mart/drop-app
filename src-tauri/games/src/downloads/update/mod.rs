@@ -396,9 +396,12 @@ struct LoadedBaseline {
     revision: Option<u32>,
     /// Files the player chose "keep mine" for (only a local sidecar has any).
     kept_mine: HashSet<String>,
-    /// The sidecar says this install was healed already (see
+    /// The sidecar says the first healing pass is done (see
     /// `Sidecar::healed_protected_folders`).
     healed: bool,
+    /// The sidecar says the second healing pass is done (see
+    /// `Sidecar::healed_unknown_leftovers`).
+    healed_unknown: bool,
 }
 
 /// The baseline for an install: its sidecar when that matches the install,
@@ -412,6 +415,7 @@ async fn load_baseline(install: &InstallRef) -> Result<LoadedBaseline, UpdateErr
                 revision: Some(s.revision),
                 kept_mine: s.kept_mine.into_iter().collect(),
                 healed: s.healed_protected_folders,
+                healed_unknown: s.healed_unknown_leftovers,
             });
         }
         Ok(Some(s)) => warn!(
@@ -438,6 +442,7 @@ async fn load_baseline(install: &InstallRef) -> Result<LoadedBaseline, UpdateErr
                 revision: Some(r.revision),
                 kept_mine: HashSet::new(),
                 healed: false,
+                healed_unknown: false,
             })
         }
         None => {
@@ -451,6 +456,7 @@ async fn load_baseline(install: &InstallRef) -> Result<LoadedBaseline, UpdateErr
                 revision: None,
                 kept_mine: HashSet::new(),
                 healed: false,
+                healed_unknown: false,
             })
         }
     }
@@ -524,7 +530,9 @@ pub async fn prepare(game_id: &str, install_version_id: &str, to_version_id: &st
         Some(_) => {}
     }
 
-    let previously_shipped = match revisions_to_heal_from(loaded.source, loaded.healed, loaded.revision) {
+    let (last_to_heal_from, heal_protected, ask_unknown_leftovers) =
+        due_passes(loaded.source, loaded.healed, loaded.healed_unknown, loaded.revision);
+    let previously_shipped = match last_to_heal_from {
         Some(last) => fetch_previously_shipped(game_id, &install.version_id, last).await?,
         None => HashMap::new(),
     };
@@ -561,6 +569,8 @@ pub async fn prepare(game_id: &str, install_version_id: &str, to_version_id: &st
             case_insensitive: cfg!(windows),
             kept_mine: &kept_mine,
             previously_shipped: &previously_shipped,
+            heal_protected,
+            ask_unknown_leftovers,
         })
         .map_err(|e| UpdateError::Plan(e.to_string()))
     })
@@ -592,21 +602,36 @@ pub async fn prepare(game_id: &str, install_version_id: &str, to_version_id: &st
     })
 }
 
-/// The last revision of the installed version to heal from, or `None` when
-/// there is nothing to heal (see "Healing" in the `plan` docs). Only an
-/// install a 6.1.0/6.1.1 update touched can hold what those builds left, and
-/// every such install has a local sidecar without the healed marker. Its
-/// revisions after the installed one were never on this disk.
-fn revisions_to_heal_from(source: BaselineSource, healed: bool, installed_revision: Option<u32>) -> Option<u32> {
-    match (source, healed, installed_revision) {
-        (BaselineSource::Local, false, Some(n)) if n > 0 => Some(n),
-        _ => None,
+/// Which one-shot healing passes a plan runs (see "Healing" in the `plan`
+/// docs), from the baseline's source, its markers
+/// (`Sidecar::healed_protected_folders`, `Sidecar::healed_unknown_leftovers`)
+/// and the installed revision: `(last revision to fetch, heal_protected,
+/// ask_unknown_leftovers)`.
+///
+/// Each pass runs while its marker is unset, and both need the earlier
+/// revisions, which are fetched while either does. Fetching them for the
+/// second pass alone does not turn on the first, which acts without asking.
+/// Only an install a 6.1.0/6.1.1 update touched can hold what those builds
+/// left, and every such install has a local sidecar; any other baseline
+/// runs neither. Revisions after the installed one were never on this disk.
+fn due_passes(
+    source: BaselineSource,
+    healed_protected: bool,
+    healed_unknown: bool,
+    installed_revision: Option<u32>,
+) -> (Option<u32>, bool, bool) {
+    match (source, installed_revision) {
+        (BaselineSource::Local, Some(n)) if n > 0 && !(healed_protected && healed_unknown) => {
+            (Some(n), !healed_protected, !healed_unknown)
+        }
+        _ => (None, false, false),
     }
 }
 
 /// Every path revisions `1..=last` of the installed version shipped, with
 /// every (size, hash) shipped for it, for the one-shot healing in the
-/// planner.
+/// planner. An unknown hash is kept as `(size, "")`: the first pass matches
+/// it against nothing, the second pass only needs the size.
 ///
 /// A revision the server has no snapshot of (404) has nothing to heal from
 /// and is skipped. Any other failure stops the plan, so the review and the
@@ -642,10 +667,9 @@ async fn fetch_previously_shipped(
 
 fn add_shipped(out: &mut HashMap<String, HashSet<(u64, String)>>, files: &[RemoteFile]) {
     for f in files {
-        let copies = out.entry(f.path.clone()).or_default();
-        if !f.sha256.is_empty() {
-            copies.insert((f.size, f.sha256.to_ascii_lowercase()));
-        }
+        out.entry(f.path.clone())
+            .or_default()
+            .insert((f.size, f.sha256.to_ascii_lowercase()));
     }
 }
 
@@ -1365,6 +1389,7 @@ mod tests {
             ],
             kept_mine: vec!["pack.toml".into(), "same.toml".into(), "untouched.toml".into()],
             healed_protected_folders: true,
+            healed_unknown_leftovers: true,
         };
         baseline::write_sidecar(&dir, &sidecar).unwrap();
         let writing: HashSet<String> = ["pack.toml".to_string(), "same.toml".to_string()].into();
@@ -1392,11 +1417,53 @@ mod tests {
 
     #[test]
     fn only_a_local_unhealed_baseline_is_healed_and_only_up_to_its_revision() {
-        assert_eq!(revisions_to_heal_from(BaselineSource::Local, false, Some(4)), Some(4));
-        assert_eq!(revisions_to_heal_from(BaselineSource::Local, true, Some(4)), None);
-        assert_eq!(revisions_to_heal_from(BaselineSource::Server, false, Some(1)), None);
-        assert_eq!(revisions_to_heal_from(BaselineSource::None, false, None), None);
-        assert_eq!(revisions_to_heal_from(BaselineSource::Local, false, Some(0)), None);
+        use BaselineSource::{Local, None as NoBaseline, Server};
+        // (source, healed_protected, healed_unknown, revision) -> (fetch up
+        // to, heal_protected, ask_unknown_leftovers)
+        let table = [
+            // A local sidecar: each pass while its marker is unset.
+            ((Local, false, false, Some(4)), (Some(4), true, true)),
+            ((Local, true, false, Some(4)), (Some(4), false, true)),
+            ((Local, false, true, Some(4)), (Some(4), true, false)),
+            ((Local, true, true, Some(4)), (None, false, false)),
+            // No revision to heal from.
+            ((Local, false, false, Some(0)), (None, false, false)),
+            ((Local, false, false, None), (None, false, false)),
+            // Any other baseline: nothing due, whatever the markers say.
+            ((Server, false, false, Some(1)), (None, false, false)),
+            ((Server, true, false, Some(3)), (None, false, false)),
+            ((NoBaseline, false, false, None), (None, false, false)),
+        ];
+        for ((source, healed, healed_unknown, revision), want) in table {
+            assert_eq!(
+                due_passes(source, healed, healed_unknown, revision),
+                want,
+                "{source:?} {healed} {healed_unknown} {revision:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_revision_with_only_unknown_hashes_still_lists_its_paths_and_sizes() {
+        let mut out = HashMap::new();
+        add_shipped(
+            &mut out,
+            &[
+                RemoteFile {
+                    path: "user/a.zip".into(),
+                    size: 3,
+                    sha256: String::new(),
+                },
+                RemoteFile {
+                    path: "user/b.zip".into(),
+                    size: 3,
+                    sha256: "AB".into(),
+                },
+            ],
+        );
+        // The size stays with an unknown hash: the second pass needs it.
+        assert_eq!(out["user/a.zip"], [(3, String::new())].into());
+        assert_eq!(out["user/b.zip"], [(3, "ab".to_string())].into());
     }
 
     #[test]
