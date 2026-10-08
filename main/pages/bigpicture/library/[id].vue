@@ -543,9 +543,10 @@
           {{ skippedLinkedLine(reviewPlan) }}
         </p>
 
-        <!-- Files replaced or removed with the player's copy kept as .bak:
-             information only. The list is paged like the conflicts and its
-             rows are focusable so a pad can read through it. -->
+        <!-- Files replaced or removed with the player's copy kept as .bak,
+             or moved to the recovery folder: information only. The list is
+             paged like the conflicts and its rows are focusable so a pad can
+             read through it. -->
         <template v-if="backupLine(reviewPlan)">
           <div class="mt-4 flex flex-wrap items-center gap-3">
             <p class="text-sm text-zinc-300">{{ backupLine(reviewPlan) }}</p>
@@ -566,6 +567,9 @@
                 class="min-w-0 rounded-xl bg-zinc-800/60 px-4 py-2.5"
               >
                 <span class="block truncate font-mono text-sm text-zinc-200">{{ path }}</span>
+                <span class="block font-mono text-xs text-zinc-500">
+                  {{ backupDestination(reviewPlan, path) }}
+                </span>
               </div>
             </div>
             <div v-if="backupPages > 1" class="mt-3 flex items-center gap-3">
@@ -594,10 +598,10 @@
 
         <template v-if="reviewPlan.conflicts.length > 0">
           <p class="mt-4 text-sm text-zinc-300">
-            {{ conflictsLine(reviewPlan.conflicts.length) }} A switches between Take
-            update and Keep mine.
+            {{ conflictsLine(reviewPlan.conflicts.length) }}
+            {{ toggleHint(reviewPlan.conflicts) }}
           </p>
-          <div class="mt-3 flex flex-wrap gap-3">
+          <div v-if="hasOtherConflicts" class="mt-3 flex flex-wrap gap-3">
             <button
               :ref="(el: any) => registerReviewEl(el, 'all-take', { onSelect: () => updateCtl.chooseEvery('take_update') })"
               class="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-200"
@@ -613,6 +617,27 @@
               Keep mine for all
             </button>
           </div>
+          <!-- Files in mirrored folders the pack does not ship: their own
+               bulk actions, never covered by the ones above. -->
+          <template v-if="extrasLine(reviewPlan.conflicts)">
+            <p class="mt-3 text-sm text-zinc-400">{{ extrasLine(reviewPlan.conflicts) }}</p>
+            <div class="mt-3 flex flex-wrap gap-3">
+              <button
+                :ref="(el: any) => registerReviewEl(el, 'extras-keep', { onSelect: () => updateCtl.chooseEveryExtra('keep_mine') })"
+                class="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-200"
+                @click="updateCtl.chooseEveryExtra('keep_mine')"
+              >
+                Keep all
+              </button>
+              <button
+                :ref="(el: any) => registerReviewEl(el, 'extras-remove', { onSelect: () => updateCtl.chooseEveryExtra('take_update') })"
+                class="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-200"
+                @click="updateCtl.chooseEveryExtra('take_update')"
+              >
+                Remove all
+              </button>
+            </div>
+          </template>
 
           <div class="mt-3 grid grid-cols-2 gap-3">
             <button
@@ -633,7 +658,7 @@
                 class="mt-1 block text-sm font-semibold"
                 :class="reviewChoices[c.path] ? 'text-blue-300' : 'text-amber-300'"
               >
-                {{ reviewChoices[c.path] ? RESOLUTION_LABEL[reviewChoices[c.path]] : "Not chosen" }}
+                {{ reviewChoices[c.path] ? choiceLabel(c.kind, reviewChoices[c.path]) : "Not chosen" }}
               </span>
               <span class="block text-xs text-zinc-400">
                 {{ resolutionDetail(c.kind, reviewChoices[c.path]) }}
@@ -1305,9 +1330,13 @@ import {
 import {
   BASELINE_NONE_NOTE,
   CONFLICT_KIND_LABEL,
-  RESOLUTION_LABEL,
+  backupDestination,
   backupLine,
+  choiceLabel,
+  extrasLine,
+  isExtra,
   skippedLinkedLine,
+  toggleHint,
   checkOutcome,
   checkOutcomeText,
   clampPage,
@@ -1944,6 +1973,10 @@ const REVIEW_ERROR_LEAD = {
 } as const;
 const reviewPlan = computed(() => updateCtl.plan.value);
 const reviewChoices = computed(() => updateCtl.choices.value);
+/** Conflicts "Take update for all" covers: every kind but the extra files. */
+const hasOtherConflicts = computed(() =>
+  updateCtl.conflicts.value.some((c) => !isExtra(c)),
+);
 const conflictPage = ref(0);
 const conflictPages = computed(() => pageCount(updateCtl.conflicts.value.length));
 const pagedConflicts = computed(() =>
@@ -2024,7 +2057,7 @@ async function applyUpdate() {
   if (reviewPhase.value.kind !== "ready") return;
   if (!updateCtl.canApply.value) {
     showInfoToast(
-      `Choose Take update or Keep mine for ${updateCtl.unresolved.value.length} more file(s) first`,
+      `Make a choice for ${updateCtl.unresolved.value.length} more file(s) first`,
     );
     const first = updateCtl.unresolved.value[0];
     if (first) {

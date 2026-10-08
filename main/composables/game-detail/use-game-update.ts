@@ -15,9 +15,11 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import {
+  applyArgs,
   buildResolutions,
   carryChoices,
   chooseAll,
+  chooseExtras,
   isUpToDate,
   needsRecovery,
   nextChoice,
@@ -149,11 +151,19 @@ export function useGameUpdate(gameId: string) {
   }
 
   function toggle(path: string) {
-    choose(path, nextChoice(choices.value[path]));
+    const kind = conflicts.value.find((c) => c.path === path)?.kind;
+    choose(path, nextChoice(choices.value[path], kind));
   }
 
+  /** "Take update for all" / "Keep mine for all": every conflict except the
+   * extra files, whose choices stay as they are. */
   function chooseEvery(choice: Resolution) {
-    choices.value = chooseAll(conflicts.value, choice);
+    choices.value = { ...choices.value, ...chooseAll(conflicts.value, choice) };
+  }
+
+  /** "Keep all" / "Remove all": the extra files only. */
+  function chooseEveryExtra(choice: Resolution) {
+    choices.value = { ...choices.value, ...chooseExtras(conflicts.value, choice) };
   }
 
   /** Queue the reviewed update. True when it was queued. */
@@ -166,13 +176,10 @@ export function useGameUpdate(gameId: string) {
     const seq = ++requestSeq;
     phase.value = { kind: "applying" };
     try {
-      await invoke("apply_game_update", {
-        gameId,
-        installVersionId: from,
-        toVersionId: p.toVersionId,
-        toRevision: p.toRevision,
-        resolutions: built.resolutions,
-      });
+      await invoke(
+        "apply_game_update",
+        applyArgs(gameId, from, p, built.resolutions),
+      );
       markUpdating(gameId);
       if (seq === requestSeq) phase.value = { kind: "queued" };
       return true;
@@ -209,6 +216,7 @@ export function useGameUpdate(gameId: string) {
     choose,
     toggle,
     chooseEvery,
+    chooseEveryExtra,
     apply,
     close,
   };

@@ -7,6 +7,8 @@
 //! .drop-update/new/<path>     staged new files, as the server spells them
 //! .drop-update/old/<n>        originals moved out of the way, by op number
 //! .drop-update/journal.json   what the commit is doing
+//! .drop-removed/<time>/<path> originals from mirrored folders, kept after
+//!                             the commit (see `Original::recover_to`)
 //! ```
 //!
 //! The commit writes the journal (phase `moving`), then per operation moves
@@ -35,8 +37,8 @@ use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use utils::path_guard;
 
-use super::UPDATE_DIR;
 use super::baseline::write_file_atomic;
+use super::{RECOVERY_DIR, UPDATE_DIR};
 
 pub const JOURNAL_FILE: &str = "journal.json";
 pub const NEW_DIR: &str = "new";
@@ -59,6 +61,44 @@ pub struct Original {
     pub slot: String,
     /// Keep it as `<disk_path>.bak` once committed, instead of deleting it.
     pub keep_as_bak: bool,
+    /// Keep it here instead (install-relative, under `RECOVERY_DIR`), once
+    /// committed: a file from a mirrored folder. Like every original it sits
+    /// in `old/` until then, so a rollback puts it back. Falls back to `.bak`
+    /// when the recovery folder can't be used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recover_to: Option<String>,
+}
+
+/// The recovery folder's name for an update made at `now`: the UTC time as
+/// `YYYYMMDDTHHMMSSZ` (no `:`, which Windows does not allow in a name).
+pub fn recovery_stamp(now: std::time::SystemTime) -> String {
+    let secs = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (days, rem) = (secs / 86_400, secs % 86_400);
+    // Days since 1970-01-01 to a civil date (H. Hinnant's algorithm).
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}{month:02}{day:02}T{:02}{:02}{:02}Z",
+        rem / 3_600,
+        rem % 3_600 / 60,
+        rem % 60
+    )
+}
+
+/// Where a file at `disk_path` goes in the recovery folder of the update
+/// stamped `stamp` (install-relative, `/`-separated).
+pub fn recovery_path(stamp: &str, disk_path: &str) -> String {
+    format!("{RECOVERY_DIR}/{stamp}/{}", disk_path.replace('\\', "/"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -453,6 +493,45 @@ pub fn rollback(install: &Path, journal: &Journal) -> Result<(), String> {
     Ok(())
 }
 
+/// Move an original from its `old/` slot to `dest` (install-relative, under
+/// the recovery folder), creating the folders on the way. Refuses when the
+/// recovery folder is not a real folder, or the destination would leave the
+/// install through a link. An existing file at `dest` is never replaced:
+/// `<dest>.1`, `<dest>.2`, ... are used instead.
+fn move_to_recovery(install: &Path, slot: &Path, dest: &str) -> io::Result<PathBuf> {
+    let root = install.join(RECOVERY_DIR);
+    if std::fs::symlink_metadata(&root).is_ok_and(|m| !m.is_dir()) {
+        return Err(io::Error::other(format!("{RECOVERY_DIR} is not a folder")));
+    }
+    let to = join(install, dest).map_err(io::Error::other)?;
+    if !to.starts_with(&root) {
+        return Err(io::Error::other(format!("{dest} is not in {RECOVERY_DIR}")));
+    }
+    // Checked before creating anything (a link inside the recovery folder
+    // must not get folders made outside the install), and again after.
+    let base_real = install.canonicalize()?;
+    let within = || {
+        path_guard::ensure_parent_within(&base_real, &to)
+            .map_err(|_| io::Error::other(format!("{dest} leads outside the install folder")))
+    };
+    within()?;
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    within()?;
+    let free = if exists(&to) {
+        let name = to.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        (1..)
+            .map(|n| to.with_file_name(format!("{name}.{n}")))
+            .find(|p| !exists(p))
+            .unwrap_or(to)
+    } else {
+        to
+    };
+    std::fs::rename(slot, &free)?;
+    Ok(free)
+}
+
 /// The first free `<path>.bak`, `<path>.bak.1`, ... next to `disk`.
 pub fn free_bak_path(disk: &Path) -> PathBuf {
     let name = disk.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -526,10 +605,12 @@ fn remove_any(path: &Path) -> io::Result<()> {
     }
 }
 
-/// After a committed update (mod hand-over done, install record moved): keep
-/// the originals the player asked to keep as `.bak`, delete the rest, then
+/// After a committed update (mod hand-over done, install record moved): move
+/// the originals of mirrored folders to the recovery folder, keep the other
+/// originals the player asked to keep as `.bak`, delete the rest, then
 /// remove the journal and the staging folder. Hold [`lock_staging`]. Safe to
-/// run again after a crash. Returns the `.bak` files written.
+/// run again after a crash. Returns the copies kept (`.bak` files and files
+/// in the recovery folder).
 pub fn finish(install: &Path, journal: &Journal) -> Result<Vec<PathBuf>, String> {
     let old = old_dir(install);
     let mut baks = Vec::new();
@@ -542,7 +623,20 @@ pub fn finish(install: &Path, journal: &Journal) -> Result<Vec<PathBuf>, String>
         if !exists(&slot) {
             continue;
         }
-        if orig.keep_as_bak {
+        if let Some(dest) = &orig.recover_to {
+            match move_to_recovery(install, &slot, dest) {
+                Ok(kept) => {
+                    baks.push(kept);
+                    continue;
+                }
+                // Kept as .bak instead (below): never lost, never stuck.
+                Err(e) => warn!(
+                    "could not move {} to {dest} ({e}); keeping it as .bak instead",
+                    orig.disk_path
+                ),
+            }
+        }
+        if orig.keep_as_bak || orig.recover_to.is_some() {
             let bak = free_bak_path(&disk);
             match std::fs::rename(&slot, &bak) {
                 Ok(()) => baks.push(bak),
@@ -644,6 +738,7 @@ mod tests {
                 disk_path: d.into(),
                 slot: s.into(),
                 keep_as_bak: b,
+                recover_to: None,
             }),
             ..Default::default()
         }
@@ -937,5 +1032,95 @@ mod tests {
         assert!(!install.join("data.bak").exists());
         assert!(!update_dir(&install).exists());
         let _ = std::fs::remove_dir_all(&install);
+    }
+
+    #[test]
+    fn the_recovery_folder_is_named_by_the_utc_time() {
+        let at = |secs: u64| recovery_stamp(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs));
+        assert_eq!(at(0), "19700101T000000Z");
+        // 2026-10-08 12:34:56 UTC.
+        assert_eq!(at(1_791_462_896), "20261008T123456Z");
+        // 2024-02-29 23:59:59 UTC (a leap day).
+        assert_eq!(at(1_709_251_199), "20240229T235959Z");
+        assert_eq!(
+            recovery_path("20261008T123456Z", "user\\mods\\a.jar"),
+            ".drop-removed/20261008T123456Z/user/mods/a.jar"
+        );
+    }
+
+    fn recovering(name: &str) -> (PathBuf, Journal) {
+        let install = scratch(name);
+        put(&install, "mods/mine.jar", "player mod");
+        let mut o = op("mods/mine.jar", false, Some(("mods/mine.jar", "0", true)));
+        o.original.as_mut().unwrap().recover_to = Some(recovery_path("20261008T123456Z", "mods/mine.jar"));
+        (install, journal_of(vec![o]))
+    }
+
+    #[test]
+    fn a_recovered_original_goes_to_the_recovery_folder_once_committed() {
+        let (install, journal) = recovering("recover-ok");
+        // A copy from an earlier update with the same name is never replaced.
+        put(&install, ".drop-removed/20261008T123456Z/mods/mine.jar", "older");
+        let journal = commit(&install, journal).unwrap();
+        // Before the commit point is finished it is still in staging only.
+        assert!(!install.join("mods/mine.jar").exists());
+        let kept = finish(&install, &journal).unwrap();
+        let to = install.join(".drop-removed/20261008T123456Z/mods/mine.jar.1");
+        assert_eq!(kept, vec![to.clone()]);
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "player mod");
+        assert_eq!(read(&install, ".drop-removed/20261008T123456Z/mods/mine.jar").as_deref(), Some("older"));
+        assert!(!install.join("mods/mine.jar.bak").exists());
+        let _ = std::fs::remove_dir_all(&install);
+    }
+
+    #[test]
+    fn a_recovered_original_is_put_back_on_rollback() {
+        let (install, journal) = recovering("recover-crash");
+        let journal = moves_then_crash(&install, journal, 1);
+        rollback(&install, &journal).unwrap();
+        assert_eq!(read(&install, "mods/mine.jar").as_deref(), Some("player mod"));
+        assert!(!install.join(".drop-removed").exists());
+        let _ = std::fs::remove_dir_all(&install);
+    }
+
+    #[test]
+    fn a_recovery_folder_that_is_not_a_folder_falls_back_to_bak() {
+        let (install, journal) = recovering("recover-blocked");
+        put(&install, ".drop-removed", "a file");
+        let journal = commit(&install, journal).unwrap();
+        let kept = finish(&install, &journal).unwrap();
+        assert_eq!(kept, vec![install.join("mods/mine.jar.bak")]);
+        assert_eq!(read(&install, "mods/mine.jar.bak").as_deref(), Some("player mod"));
+        assert!(!journal_present(&install));
+        let _ = std::fs::remove_dir_all(&install);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_folder_is_made_outside_the_install_through_a_link_in_the_recovery_folder() {
+        let (install, journal) = recovering("recover-inner-link");
+        let outside = scratch("recover-inner-link-outside");
+        std::fs::create_dir_all(install.join(".drop-removed")).unwrap();
+        std::os::unix::fs::symlink(&outside, install.join(".drop-removed/20261008T123456Z")).unwrap();
+        let journal = commit(&install, journal).unwrap();
+        finish(&install, &journal).unwrap();
+        assert_eq!(read(&install, "mods/mine.jar.bak").as_deref(), Some("player mod"));
+        assert!(std::fs::read_dir(&outside).unwrap().next().is_none(), "a folder was made outside");
+        let _ = std::fs::remove_dir_all(&install);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recovery_folder_linked_out_of_the_install_is_not_used() {
+        let (install, journal) = recovering("recover-linked");
+        let outside = scratch("recover-linked-outside");
+        std::os::unix::fs::symlink(&outside, install.join(".drop-removed")).unwrap();
+        let journal = commit(&install, journal).unwrap();
+        finish(&install, &journal).unwrap();
+        assert_eq!(read(&install, "mods/mine.jar.bak").as_deref(), Some("player mod"));
+        assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
+        let _ = std::fs::remove_dir_all(&install);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 }

@@ -572,6 +572,8 @@ pub(crate) struct CommitInput<'a> {
 ///   it is still on disk and the update does not write or remove it. It is
 ///   the player's own: no later update may take it for the pack's copy or
 ///   remove it as a leftover.
+///
+/// Never a file in a mirrored folder: "keep mine" does not apply there.
 fn kept_mine_after(input: &CommitInput<'_>) -> Vec<String> {
     let mut kept: Vec<String> = input.resolved.kept_mine.clone();
     let earlier = match baseline::read_sidecar(input.install) {
@@ -600,6 +602,44 @@ fn kept_mine_after(input: &CommitInput<'_>) -> Vec<String> {
         } else {
             !written.contains(p.as_str()) && !deleted.contains(p.as_str()) && on_disk(&p)
         };
+        if still_kept && !kept.contains(&p) {
+            kept.push(p);
+        }
+    }
+    kept.retain(|p| !input.resolved.mirrors.contains(p));
+    kept.sort();
+    kept
+}
+
+/// The install's whitelist after this update (`Sidecar::kept_extras`): the
+/// files the player chose to keep in this update, plus earlier entries whose
+/// file is still on disk, which this update neither writes nor removes, and
+/// which the target does not ship. Everything else is pruned, so the list
+/// does not grow forever.
+fn kept_extras_after(input: &CommitInput<'_>) -> Vec<String> {
+    let mut kept: Vec<String> = input.resolved.kept_extras.clone();
+    let earlier = match baseline::read_sidecar(input.install) {
+        Ok(Some(s)) if s.game_id == input.game_id => s.kept_extras,
+        Ok(_) => Vec::new(),
+        Err(e) => {
+            warn!("could not read the earlier baseline in {}: {e}", input.install.display());
+            Vec::new()
+        }
+    };
+    let written: HashSet<&str> = input.resolved.writes.iter().map(|w| w.file.path.as_str()).collect();
+    let deleted: HashSet<&str> = input
+        .resolved
+        .deletes
+        .iter()
+        .map(|d| d.existing.disk_path.as_str())
+        .collect();
+    let shipped: HashSet<&str> = input.resolved.next_baseline.iter().map(|(f, _)| f.path.as_str()).collect();
+    for p in earlier {
+        let still_kept = !written.contains(p.as_str())
+            && !deleted.contains(p.as_str())
+            && !shipped.contains(p.as_str())
+            && path_guard::join_within(input.install, Path::new(&p))
+                .is_ok_and(|full| std::fs::symlink_metadata(full).is_ok_and(|m| m.is_file()));
         if still_kept && !kept.contains(&p) {
             kept.push(p);
         }
@@ -649,11 +689,11 @@ pub(crate) fn stage_meta(input: &CommitInput<'_>) -> Result<Journal, UpdateError
         revision: input.to_revision,
         files,
         kept_mine: kept_mine_after(input),
-        // Each healing pass ran in this update or was not due, unless a
-        // linked player-data folder kept it from checking a file there: the
-        // next update runs that pass again.
+        kept_extras: kept_extras_after(input),
+        // Healed by this update, or nothing was left to heal, unless a linked
+        // player-data folder kept the healing from checking a file there: the
+        // next update tries again.
         healed_protected_folders: !input.resolved.heal_incomplete,
-        healed_unknown_leftovers: !input.resolved.unknown_leftovers_incomplete,
     };
     std::fs::create_dir_all(&new_dir).map_err(|e| UpdateError::Io(format!("could not create the staging folder: {e}")))?;
     baseline::write_sidecar(&new_dir, &sidecar)
@@ -680,6 +720,11 @@ pub(crate) fn stage_meta(input: &CommitInput<'_>) -> Result<Journal, UpdateError
         slot += 1;
         slot.to_string()
     };
+    // Copies kept from mirrored folders go to one recovery folder per
+    // update, named when the journal is built (a roll-forward reuses it).
+    let stamp = commit::recovery_stamp(std::time::SystemTime::now());
+    let recover_to =
+        |path: &str, keep: bool, recover: bool| (keep && recover).then(|| commit::recovery_path(&stamp, path));
     // Deletes first: a removed file may stand where a written file's folder
     // goes.
     let mut ops: Vec<JournalOp> = Vec::new();
@@ -691,6 +736,7 @@ pub(crate) fn stage_meta(input: &CommitInput<'_>) -> Result<Journal, UpdateError
                 disk_path: d.existing.disk_path.clone(),
                 slot: next_slot(),
                 keep_as_bak: d.keep_bak,
+                recover_to: recover_to(&d.existing.disk_path, d.keep_bak, d.recover),
             }),
             ..Default::default()
         });
@@ -703,6 +749,7 @@ pub(crate) fn stage_meta(input: &CommitInput<'_>) -> Result<Journal, UpdateError
                 disk_path: e.disk_path.clone(),
                 slot: next_slot(),
                 keep_as_bak: w.keep_bak,
+                recover_to: recover_to(&e.disk_path, w.keep_bak, w.recover),
             }),
             ..Default::default()
         });
@@ -716,6 +763,7 @@ pub(crate) fn stage_meta(input: &CommitInput<'_>) -> Result<Journal, UpdateError
                 disk_path: name.to_string(),
                 slot: next_slot(),
                 keep_as_bak: false,
+                recover_to: None,
             }),
             ..Default::default()
         });
@@ -1045,27 +1093,32 @@ mod tests {
         plan_for_with(install, target, &HashMap::new())
     }
 
-    /// With `previously_shipped`, the first healing pass runs (as before the
-    /// second pass existed); the second does not.
+    /// With `previously_shipped`, the healing runs.
     fn plan_for_with(
         install: &Path,
         target: &[RemoteFile],
         previously_shipped: &HashMap<String, HashSet<(u64, String)>>,
     ) -> plan::Plan {
-        plan_for_passes(install, target, previously_shipped, !previously_shipped.is_empty(), false)
+        try_plan(install, target, previously_shipped, &[], &HashSet::new()).unwrap()
     }
 
-    /// The healing passes set explicitly.
-    fn plan_for_passes(
+    /// As `prepare` plans it, with the target's mirrored folders and the
+    /// install's own whitelist (from its sidecar).
+    fn plan_mirrored(install: &Path, target: &[RemoteFile], mirrors: &[&str]) -> plan::Plan {
+        let mirrors: Vec<String> = mirrors.iter().map(|m| m.to_string()).collect();
+        try_plan(install, target, &HashMap::new(), &mirrors, &HashSet::new()).unwrap()
+    }
+
+    fn try_plan(
         install: &Path,
         target: &[RemoteFile],
         previously_shipped: &HashMap<String, HashSet<(u64, String)>>,
-        heal_protected: bool,
-        ask_unknown_leftovers: bool,
-    ) -> plan::Plan {
-        let base = read_sidecar(install).unwrap().unwrap().files;
+        mirror_folders: &[String],
+        mod_owned: &HashSet<String>,
+    ) -> Result<plan::Plan, plan::PlanError> {
+        let side = read_sidecar(install).unwrap().unwrap();
         plan::plan(PlanInput {
-            baseline: &base,
+            baseline: &side.files,
             target,
             disk: &FsDisk {
                 root: install.to_path_buf(),
@@ -1073,13 +1126,13 @@ mod tests {
             is_runtime_data: &crate::downloads::download_agent::is_drop_runtime_data,
             is_player_data: &crate::downloads::download_agent::is_player_data_folder,
             previously_shipped,
-            heal_protected,
-            ask_unknown_leftovers,
-            mod_owned: &HashSet::new(),
+            heal_protected: !previously_shipped.is_empty(),
+            mirror_folders,
+            kept_extras: &side.kept_extras.iter().cloned().collect(),
+            mod_owned,
             case_insensitive: false,
-            kept_mine: &read_sidecar(install).unwrap().unwrap().kept_mine.into_iter().collect(),
+            kept_mine: &side.kept_mine.iter().cloned().collect(),
         })
-        .unwrap()
     }
 
     /// What the downloader would leave in staging.
@@ -1373,50 +1426,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&install);
     }
 
-    // ---- the second healing pass, end to end ----
-
-    const MIZUNO: &str = "user/instances/Multiversal Pack/minecraft/resourcepacks/Mizuno x Fresh Animations 4.5.zip";
-    const RECOVERED: &str = "user/instances/Multiversal Pack/minecraft/resourcepacks/Re-covered.zip";
-
-    /// An install as 6.1.2 left the player's: revision 2, the first pass
-    /// done, no `healedUnknownLeftovers`, and revision 1 listing each of
-    /// `leftovers` with an unknown hash and the size of the given content
-    /// (what `fetch_previously_shipped` builds from it).
-    fn installed_by_6_1_2(install: &Path, leftovers: &[(&str, &str)]) -> HashMap<String, HashSet<(u64, String)>> {
-        let rev2 = vec![remote("Game.exe", "exe2")];
-        put(install, "Game.exe", "exe2");
-        let mut side = baseline::fresh_sidecar(install, "g", "v1", 2, &rev2);
-        side.healed_protected_folders = true;
-        baseline::write_sidecar(install, &side).unwrap();
-        let json = std::fs::read_to_string(baseline::sidecar_path(install)).unwrap();
-        let json = json.replace(r#","healedUnknownLeftovers":false"#, "");
-        assert!(!json.contains("healedUnknownLeftovers"), "{json}");
-        std::fs::write(baseline::sidecar_path(install), json).unwrap();
-        let rev1: Vec<RemoteFile> = leftovers
-            .iter()
-            .map(|(p, content)| RemoteFile {
-                path: p.to_string(),
-                size: content.len() as u64,
-                sha256: String::new(),
-            })
-            .collect();
-        let mut prev = HashMap::new();
-        super::super::add_shipped(&mut prev, &rev1);
-        prev
-    }
-
-    /// The healing passes `prepare` runs for this install's sidecar.
-    fn passes_for(install: &Path) -> (bool, bool) {
-        let side = read_sidecar(install).unwrap().unwrap();
-        let (_, heal, ask) = super::super::due_passes(
-            super::super::BaselineSource::Local,
-            side.healed_protected_folders,
-            side.healed_unknown_leftovers,
-            Some(side.revision),
-        );
-        (heal, ask)
-    }
-
     fn update_game_exe(install: &Path, resolved: &Resolved, from: &str, to: &str, exe: &str) {
         put(&commit::new_dir(install), "Game.exe", exe);
         let chunks = vec![];
@@ -1427,101 +1436,195 @@ mod tests {
         commit::finish(install, &journal).unwrap();
     }
 
-    #[test]
-    fn an_unknown_leftover_is_asked_about_once_and_the_answer_sticks() {
-        let install = scratch("unknown-leftovers");
-        let prev = installed_by_6_1_2(&install, &[(MIZUNO, "old pack zip"), (RECOVERED, "old zip two")]);
-        put(&install, MIZUNO, "old pack zip");
-        put(&install, RECOVERED, "old zip two");
-        assert_eq!(passes_for(&install), (false, true));
+    // ---- mirrored folders, end to end ----
 
-        let rev3 = vec![remote("Game.exe", "exe3")];
-        let (heal, ask) = passes_for(&install);
-        let p = plan_for_passes(&install, &rev3, &prev, heal, ask);
-        let conflicts = p.conflicts();
-        let kinds: Vec<(&str, plan::ConflictKind)> = conflicts.iter().map(|c| (c.path.as_str(), c.kind)).collect();
+    const MODS: &str = "user/instances/P/minecraft/mods";
+
+    fn mods(name: &str) -> String {
+        format!("{MODS}/{name}")
+    }
+
+    /// A pack at revision 1 with one jar in its mods folder, installed with a
+    /// baseline, then the player added two files of their own there.
+    fn installed_mirrored(name: &str) -> PathBuf {
+        let install = scratch(name);
+        let rev1 = vec![remote("Game.exe", "exe1"), remote(&mods("pack.jar"), "pack1")];
+        put(&install, "Game.exe", "exe1");
+        put(&install, &mods("pack.jar"), "pack1");
+        baseline::write_sidecar(&install, &baseline::fresh_sidecar(&install, "g", "v1", 1, &rev1)).unwrap();
+        put(&install, &mods("mine.jar"), "player mod");
+        put(&install, &mods("sub/extra.zip"), "player pack");
+        install
+    }
+
+    fn rev2_mirrored() -> Vec<RemoteFile> {
+        vec![remote("Game.exe", "exe2"), remote(&mods("pack.jar"), "pack1")]
+    }
+
+    /// Every file under `.drop-removed`, as (path inside its update's
+    /// folder, content), with the update folders' names.
+    fn recovered(install: &Path) -> (Vec<String>, Vec<(String, String)>) {
+        let root = install.join(crate::downloads::update::RECOVERY_DIR);
+        let Ok(stamps) = std::fs::read_dir(&root) else {
+            return (vec![], vec![]);
+        };
+        let mut names = vec![];
+        let mut files = vec![];
+        for stamp in stamps {
+            let stamp = stamp.unwrap().path();
+            names.push(stamp.file_name().unwrap().to_string_lossy().to_string());
+            let disk = FsDisk { root: stamp.clone() };
+            for f in disk.files_under(".").unwrap() {
+                let rel = f.trim_start_matches("./").to_string();
+                files.push((rel.clone(), read(&stamp, &rel).unwrap()));
+            }
+        }
+        files.sort();
+        (names, files)
+    }
+
+    #[test]
+    fn an_extra_file_is_removed_to_the_recovery_folder_or_kept_and_not_asked_again() {
+        let install = installed_mirrored("mirror-extras");
+        let p = plan_mirrored(&install, &rev2_mirrored(), &[MODS]);
+        let asked: Vec<(String, plan::ConflictKind)> = p.conflicts().into_iter().map(|c| (c.path, c.kind)).collect();
         assert_eq!(
-            kinds,
-            vec![(MIZUNO, plan::ConflictKind::RemovedUnknown), (RECOVERED, plan::ConflictKind::RemovedUnknown)],
+            asked,
+            vec![
+                (mods("mine.jar"), plan::ConflictKind::ExtraFile),
+                (mods("sub/extra.zip"), plan::ConflictKind::ExtraFile)
+            ],
             "{p:#?}"
         );
-        let resolutions: HashMap<String, Resolution> = [
-            (MIZUNO.to_string(), Resolution::TakeUpdate),
-            (RECOVERED.to_string(), Resolution::KeepMine),
+        let choices: HashMap<String, Resolution> = [
+            (mods("mine.jar"), Resolution::TakeUpdate),
+            (mods("sub/extra.zip"), Resolution::KeepMine),
         ]
         .into();
-        let resolved = plan::resolve(p, &resolutions).unwrap();
-        update_game_exe(&install, &resolved, "v1", "v1", "exe3");
+        let resolved = plan::resolve(p, &choices).unwrap();
+        update_game_exe(&install, &resolved, "v1", "v1", "exe2");
 
-        // Take update: moved to .bak. Keep mine: untouched.
-        assert!(!install.join(MIZUNO).exists());
-        assert_eq!(read(&install, &format!("{MIZUNO}.bak")).as_deref(), Some("old pack zip"));
-        assert_eq!(read(&install, RECOVERED).as_deref(), Some("old zip two"));
-        assert_eq!(read(&install, "Game.exe").as_deref(), Some("exe3"));
+        // Remove: out of the folder, into .drop-removed/<UTC time>/<path>.
+        assert!(!install.join(mods("mine.jar")).exists());
+        assert!(!install.join(format!("{}.bak", mods("mine.jar"))).exists());
+        let (stamps, files) = recovered(&install);
+        assert_eq!(stamps.len(), 1);
+        let stamp = &stamps[0];
+        assert!(stamp.len() == 16 && stamp.ends_with('Z') && stamp.as_bytes()[8] == b'T', "{stamp}");
+        assert_eq!(files, vec![(mods("mine.jar"), "player mod".to_string())]);
+        // Keep: untouched and whitelisted; never a "keep mine" record.
+        assert_eq!(read(&install, &mods("sub/extra.zip")).as_deref(), Some("player pack"));
         let side = read_sidecar(&install).unwrap().unwrap();
-        assert!(side.healed_unknown_leftovers && side.healed_protected_folders, "{side:#?}");
-        assert_eq!(side.kept_mine, vec![RECOVERED.to_string()]);
+        assert_eq!(side.kept_extras, vec![mods("sub/extra.zip")]);
+        assert!(side.kept_mine.is_empty());
+        assert_eq!(read(&install, "Game.exe").as_deref(), Some("exe2"));
 
-        // The next update does not ask again: the marker is set, so the
-        // revisions are not even fetched...
-        assert_eq!(passes_for(&install), (false, false));
-        let rev4 = vec![remote("Game.exe", "exe4")];
-        let p = plan_for_passes(&install, &rev4, &HashMap::new(), false, false);
+        // The next update does not ask again, and keeps the whitelist.
+        let rev3 = vec![remote("Game.exe", "exe3"), remote(&mods("pack.jar"), "pack1")];
+        let p = plan_mirrored(&install, &rev3, &[MODS]);
         assert!(p.conflicts().is_empty() && p.deletes.is_empty(), "{p:#?}");
-        // ...and even if the pass ran, the kept file is the player's.
-        let p = plan_for_passes(&install, &rev4, &prev, false, true);
-        assert!(p.conflicts().is_empty() && p.deletes.is_empty(), "{p:#?}");
+        update_game_exe(&install, &plan::resolve(p, &HashMap::new()).unwrap(), "v1", "v1", "exe3");
+        assert_eq!(read_sidecar(&install).unwrap().unwrap().kept_extras, vec![mods("sub/extra.zip")]);
+
+        // The player deletes the kept file: the next update prunes it.
+        std::fs::remove_file(install.join(mods("sub/extra.zip"))).unwrap();
+        let rev4 = vec![remote("Game.exe", "exe4"), remote(&mods("pack.jar"), "pack1")];
+        let p = plan_mirrored(&install, &rev4, &[MODS]);
+        update_game_exe(&install, &plan::resolve(p, &HashMap::new()).unwrap(), "v1", "v1", "exe4");
+        assert!(read_sidecar(&install).unwrap().unwrap().kept_extras.is_empty());
+        // The recovery folder is never cleaned up by an update.
+        assert_eq!(recovered(&install).1, vec![(mods("mine.jar"), "player mod".to_string())]);
         let _ = std::fs::remove_dir_all(&install);
     }
 
     #[test]
-    fn a_fresh_install_starts_with_both_passes_done() {
-        let install = scratch("fresh-markers");
-        let rev1 = vec![remote("Game.exe", "exe1")];
-        put(&install, "Game.exe", "exe1");
-        // What `record_fresh_baseline` does for a new install.
-        let mut side = baseline::fresh_sidecar(&install, "g", "v1", 1, &rev1);
-        baseline::carry_over(read_sidecar(&install), &mut side, &install);
-        assert!(side.healed_protected_folders && side.healed_unknown_leftovers);
-        baseline::write_sidecar(&install, &side).unwrap();
-        assert_eq!(passes_for(&install), (false, false));
+    fn a_player_edited_pack_file_in_a_mirrored_folder_is_replaced_and_recovered_without_asking() {
+        let install = installed_mirrored("mirror-edited");
+        put(&install, &mods("pack.jar"), "player edit");
+        let rev2 = vec![remote("Game.exe", "exe1"), remote(&mods("pack.jar"), "pack2")];
+        let p = plan_mirrored(&install, &rev2, &[MODS]);
+        assert!(p.conflicts().iter().all(|c| c.kind == plan::ConflictKind::ExtraFile), "{p:#?}");
+        assert_eq!(p.recovery_paths(), vec![mods("pack.jar")]);
+        let keep_all: HashMap<String, Resolution> =
+            p.conflicts().into_iter().map(|c| (c.path, Resolution::KeepMine)).collect();
+        let resolved = plan::resolve(p, &keep_all).unwrap();
+        put(&commit::new_dir(&install), &mods("pack.jar"), "pack2");
+        let chunks = vec![];
+        let inp = input(&install, &resolved, &chunks);
+        let journal = commit_staged(&inp, stage_meta(&inp).unwrap()).unwrap();
+        commit::finish(&install, &journal).unwrap();
+        assert_eq!(read(&install, &mods("pack.jar")).as_deref(), Some("pack2"));
+        assert!(!install.join(format!("{}.bak", mods("pack.jar"))).exists());
+        assert_eq!(recovered(&install).1, vec![(mods("pack.jar"), "player edit".to_string())]);
+        // Without the mirrored folder the same edit is a question.
+        let _ = std::fs::remove_dir_all(&install);
+        let install = installed_mirrored("mirror-edited-off");
+        put(&install, &mods("pack.jar"), "player edit");
+        let p = plan_mirrored(&install, &rev2, &[]);
+        assert_eq!(p.conflicts().len(), 1, "{p:#?}");
+        assert_eq!(p.conflicts()[0].kind, plan::ConflictKind::ChangedBoth);
         let _ = std::fs::remove_dir_all(&install);
     }
 
-    /// The second pass's marker stays unset while a leftover is reached
-    /// through a linked player-data folder, and the pass asks once the link
-    /// is a real folder again.
+    #[test]
+    fn a_failed_commit_puts_the_extra_files_it_moved_back() {
+        let install = installed_mirrored("mirror-rollback");
+        put(&install, "other.txt", "x");
+        let p = plan_mirrored(&install, &rev2_mirrored(), &[MODS]);
+        let remove_all: HashMap<String, Resolution> =
+            p.conflicts().into_iter().map(|c| (c.path, Resolution::TakeUpdate)).collect();
+        let resolved = plan::resolve(p, &remove_all).unwrap();
+        put(&commit::new_dir(&install), "Game.exe", "exe2");
+        let chunks = vec![];
+        let inp = input(&install, &resolved, &chunks);
+        let mut journal = stage_meta(&inp).unwrap();
+        assert_eq!(journal.ops.iter().filter(|o| o.original.as_ref().is_some_and(|o| o.recover_to.is_some())).count(), 2);
+        // A last move that fails (its slot is in a folder that does not
+        // exist), after the extras have gone to the staging folder.
+        journal.ops.push(JournalOp {
+            target: "other.txt".into(),
+            staged: false,
+            original: Some(Original {
+                disk_path: "other.txt".into(),
+                slot: "99/nested".into(),
+                keep_as_bak: false,
+                recover_to: None,
+            }),
+            ..Default::default()
+        });
+        let err = commit_staged(&inp, journal).unwrap_err();
+        assert!(err.to_string().contains("could not be applied"), "{err}");
+        assert_eq!(read(&install, &mods("mine.jar")).as_deref(), Some("player mod"));
+        assert_eq!(read(&install, &mods("sub/extra.zip")).as_deref(), Some("player pack"));
+        assert_eq!(read(&install, "Game.exe").as_deref(), Some("exe1"));
+        assert!(!install.join(crate::downloads::update::RECOVERY_DIR).exists());
+        assert!(!commit::journal_present(&install));
+        assert_eq!(read_sidecar(&install).unwrap().unwrap().revision, 1);
+        let _ = std::fs::remove_dir_all(&install);
+    }
+
     #[cfg(unix)]
     #[test]
-    fn an_unknown_leftover_behind_a_link_is_asked_about_once_the_link_is_gone() {
-        let install = scratch("unknown-linked");
-        let sd = scratch("unknown-linked-sd");
-        let prev = installed_by_6_1_2(&install, &[(RECOVERED, "old zip two")]);
-        let inside = RECOVERED.trim_start_matches("user/");
-        put(&sd, inside, "old zip two");
-        std::os::unix::fs::symlink(&sd, install.join("user")).unwrap();
-
-        let rev3 = vec![remote("Game.exe", "exe3")];
-        let (heal, ask) = passes_for(&install);
-        let p = plan_for_passes(&install, &rev3, &prev, heal, ask);
+    fn a_mirrored_folder_that_is_a_link_is_skipped_and_reported_on_a_real_disk() {
+        let install = scratch("mirror-linked");
+        let sd = scratch("mirror-linked-sd");
+        put(&install, "Game.exe", "exe1");
+        let rev1 = vec![remote("Game.exe", "exe1")];
+        baseline::write_sidecar(&install, &baseline::fresh_sidecar(&install, "g", "v1", 1, &rev1)).unwrap();
+        put(&sd, "mine.jar", "player mod");
+        std::fs::create_dir_all(install.join(MODS).parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&sd, install.join(MODS)).unwrap();
+        // Only the player's files behind the link: left alone, no note.
+        let p = plan_mirrored(&install, &[remote("Game.exe", "exe2")], &[MODS]);
         assert!(p.conflicts().is_empty() && p.deletes.is_empty(), "{p:#?}");
-        assert!(p.unknown_leftovers_incomplete && !p.heal_incomplete, "{p:#?}");
-        let resolved = plan::resolve(p, &HashMap::new()).unwrap();
-        update_game_exe(&install, &resolved, "v1", "v1", "exe3");
-        assert_eq!(read(&install, "Game.exe").as_deref(), Some("exe3"));
-        assert_eq!(read(&sd, inside).as_deref(), Some("old zip two"));
-        let side = read_sidecar(&install).unwrap().unwrap();
-        assert!(side.healed_protected_folders && !side.healed_unknown_leftovers, "{side:#?}");
-
-        // The player moves the files back into a real folder.
-        std::fs::remove_file(install.join("user")).unwrap();
-        put(&install, RECOVERED, "old zip two");
-        let (heal, ask) = passes_for(&install);
-        assert_eq!((heal, ask), (false, true));
-        let p = plan_for_passes(&install, &[remote("Game.exe", "exe4")], &prev, heal, ask);
-        assert_eq!(p.conflicts().len(), 1, "{p:#?}");
-        assert_eq!(p.conflicts()[0].kind, plan::ConflictKind::RemovedUnknown);
-        assert!(!p.unknown_leftovers_incomplete);
+        assert!(p.skipped_linked.is_empty(), "{p:#?}");
+        // The pack ships a file there: reported, and nothing goes through.
+        let p = plan_mirrored(&install, &[remote("Game.exe", "exe2"), remote(&mods("pack.jar"), "pack1")], &[MODS]);
+        assert!(p.conflicts().is_empty() && p.deletes.is_empty(), "{p:#?}");
+        assert_eq!(p.writes.len(), 1, "{p:#?}");
+        assert_eq!(p.skipped_linked, vec![MODS.to_string()]);
+        assert_eq!(read(&sd, "mine.jar").as_deref(), Some("player mod"));
+        assert!(!sd.join("pack.jar").exists());
         let _ = std::fs::remove_dir_all(&install);
         let _ = std::fs::remove_dir_all(&sd);
     }

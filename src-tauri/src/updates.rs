@@ -398,9 +398,18 @@ pub async fn apply_game_update(
     install_version_id: String,
     to_version_id: String,
     to_revision: u32,
+    mirror_folders: Vec<String>,
     resolutions: HashMap<String, Resolution>,
 ) -> Result<(), UpdateError> {
-    engine::apply(&game_id, &install_version_id, &to_version_id, to_revision, resolutions).await
+    engine::apply(
+        &game_id,
+        &install_version_id,
+        &to_version_id,
+        to_revision,
+        &mirror_folders,
+        resolutions,
+    )
+    .await
 }
 
 /// The way out of an update that was interrupted and could not be finished

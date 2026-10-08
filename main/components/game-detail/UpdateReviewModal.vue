@@ -94,7 +94,8 @@
               </div>
 
               <!-- Files replaced or removed with the player's copy kept as
-                   .bak: information only, no choice. -->
+                   .bak, or moved to the recovery folder: information only,
+                   no choice. -->
               <div v-if="backupLine(plan)" class="space-y-2">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                   <p class="text-sm text-zinc-300">{{ backupLine(plan) }}</p>
@@ -113,10 +114,17 @@
                   <li
                     v-for="path in plan.backupPaths"
                     :key="path"
-                    class="truncate px-3 py-1.5 font-mono text-xs text-zinc-300"
-                    :title="path"
+                    class="flex items-center gap-3 px-3 py-1.5"
                   >
-                    {{ path }}
+                    <span
+                      class="min-w-0 flex-1 truncate font-mono text-xs text-zinc-300"
+                      :title="path"
+                    >
+                      {{ path }}
+                    </span>
+                    <span class="shrink-0 font-mono text-xs text-zinc-500">
+                      {{ backupDestination(plan, path) }}
+                    </span>
                   </li>
                 </ul>
               </div>
@@ -126,7 +134,7 @@
                   <p class="text-sm text-zinc-300">
                     {{ conflictsLine(plan.conflicts.length) }}
                   </p>
-                  <div class="flex gap-2">
+                  <div v-if="hasOthers" class="flex gap-2">
                     <button
                       type="button"
                       class="rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700"
@@ -142,6 +150,34 @@
                       @click="update.chooseEvery('keep_mine')"
                     >
                       Keep mine for all
+                    </button>
+                  </div>
+                </div>
+                <!-- Files in mirrored folders the pack does not ship: their
+                     own bulk actions, never covered by the ones above. -->
+                <div
+                  v-if="extrasLine(plan.conflicts)"
+                  class="flex flex-wrap items-center justify-between gap-2"
+                >
+                  <p class="min-w-0 flex-1 text-xs text-zinc-400">
+                    {{ extrasLine(plan.conflicts) }}
+                  </p>
+                  <div class="flex gap-2">
+                    <button
+                      type="button"
+                      class="rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700"
+                      :disabled="phase.kind !== 'ready'"
+                      @click="update.chooseEveryExtra('keep_mine')"
+                    >
+                      Keep all
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700"
+                      :disabled="phase.kind !== 'ready'"
+                      @click="update.chooseEveryExtra('take_update')"
+                    >
+                      Remove all
                     </button>
                   </div>
                 </div>
@@ -166,7 +202,7 @@
                       class="inline-flex shrink-0 overflow-hidden rounded-md ring-1 ring-zinc-700"
                     >
                       <button
-                        v-for="r in RESOLUTIONS"
+                        v-for="r in choicesFor(c.kind)"
                         :key="r"
                         type="button"
                         class="px-2.5 py-1 text-xs font-medium transition-colors"
@@ -178,7 +214,7 @@
                         :disabled="phase.kind !== 'ready'"
                         @click="update.choose(c.path, r)"
                       >
-                        {{ RESOLUTION_LABEL[r] }}
+                        {{ choiceLabel(c.kind, r) }}
                       </button>
                     </div>
                   </li>
@@ -240,9 +276,11 @@
 <script setup lang="ts">
 /**
  * Desktop review for an in-place game update: what the update adds, changes
- * and removes, the download size, and every file the player changed that the
- * update also touches, each with "take update" or "keep mine". Apply queues
- * it. All state lives in the `useGameUpdate` instance the page passes in.
+ * and removes, the download size, and every file that needs a decision: one
+ * the player changed that the update also touches ("take update" or "keep
+ * mine"), or one in a mirrored folder that the pack does not ship ("keep"
+ * or "remove"). Apply queues it. All state lives in the `useGameUpdate`
+ * instance the page passes in.
  *
  * Plain teleported overlay like InstallModal (the Headless UI Dialog did not
  * show in the packaged WebView2 build), so it handles Escape itself.
@@ -250,15 +288,18 @@
 import {
   BASELINE_NONE_NOTE,
   CONFLICT_KIND_LABEL,
-  RESOLUTION_LABEL,
+  backupDestination,
   backupLine,
+  choiceLabel,
+  choicesFor,
   skippedLinkedLine,
   conflictsLine,
   countsLine,
   downloadLine,
+  extrasLine,
+  isExtra,
   resolutionDetail,
   targetLine,
-  type Resolution,
 } from "~/composables/game-detail/update-review";
 import type { GameUpdateController } from "~/composables/game-detail/use-game-update";
 
@@ -271,8 +312,6 @@ const props = defineProps<{
 
 const showBackups = ref(false);
 
-const RESOLUTIONS: Resolution[] = ["take_update", "keep_mine"];
-
 /** The sentence before the engine's error, by what was being attempted. */
 const ERROR_LEAD = {
   plan: "Could not check this update.",
@@ -283,6 +322,10 @@ const ERROR_LEAD = {
 const phase = computed(() => props.update.phase.value);
 const plan = computed(() => props.update.plan.value);
 const choices = computed(() => props.update.choices.value);
+/** Conflicts the "for all" actions cover: every kind but the extra files. */
+const hasOthers = computed(() =>
+  (plan.value?.conflicts ?? []).some((c) => !isExtra(c)),
+);
 const open = computed(() => phase.value.kind !== "idle");
 
 function close() {

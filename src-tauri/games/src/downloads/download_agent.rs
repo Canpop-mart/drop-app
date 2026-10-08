@@ -116,6 +116,9 @@ const PROTECTED_DATA_DIRS: &[&str] = &[
     ".mods", // mod_data::MODS_DIR: one ledger per installed mod. Losing these
              // makes every installed mod read as uninstalled and drops its
              // launch override, even when the mod's files survive.
+    crate::downloads::update::RECOVERY_DIR, // the player's files an in-place
+             // update moved out of a mirrored folder. Never in a manifest,
+             // never deleted by Drop.
 ];
 
 /// Directories that hold user data WHEREVER they sit in the install tree, not
@@ -141,12 +144,19 @@ const PROTECTED_DATA_DIRS_ANY_DEPTH: &[&str] = &[
 /// The entries of `PROTECTED_DATA_DIRS` that Drop itself (or GBE, through
 /// the config Drop writes) fills at runtime, even where a game ships a file
 /// of the same name: per-game RetroArch saves, GBE achievements and saves,
-/// the GBE config written at launch, and the mod ledgers (`MODS_DIR`).
+/// the GBE config written at launch, the mod ledgers (`MODS_DIR`), and the
+/// in-place updater's recovery folder (`RECOVERY_DIR`).
 /// Together with `PROTECTED_DATA_DIRS_ANY_DEPTH` these are "Drop runtime
 /// data" (`is_drop_runtime_data`). The rest of `PROTECTED_DATA_DIRS` are
 /// generic folder names that games and packs also ship their own files in
 /// (`is_player_data_folder`).
-const DROP_RUNTIME_TOP_LEVEL: &[&str] = &["drop-saves", "drop-goldberg", "steam_settings", ".mods"];
+const DROP_RUNTIME_TOP_LEVEL: &[&str] = &[
+    "drop-saves",
+    "drop-goldberg",
+    "steam_settings",
+    ".mods",
+    crate::downloads::update::RECOVERY_DIR,
+];
 
 /// A path's components as the OS will see them. Manifest keys are meant to be
 /// POSIX, but the path is joined with the OS separator rules, so a `\\` or a
@@ -1222,6 +1232,23 @@ mod sweep_tests {
     }
 
     #[test]
+    fn the_update_recovery_folder_is_never_swept() {
+        let recovered = ".drop-removed/20261008T120000Z/user/instances/P/minecraft/mods/mine.jar";
+        assert!(is_protected_user_data(recovered));
+        assert!(is_drop_runtime_data(recovered));
+        assert!(!is_player_data_folder(recovered));
+        // Even if a previous version's manifest named it.
+        let previous = manifest(&[recovered, "old.dll"]);
+        let current = manifest(&["Game.exe"]);
+        let stale = stale_paths(&previous, &current);
+        let swept: Vec<&str> = stale
+            .into_iter()
+            .filter(|p| should_sweep(p, &current, &HashSet::new()))
+            .collect();
+        assert_eq!(swept, vec!["old.dll"]);
+    }
+
+    #[test]
     fn mods_dir_constant_is_protected() {
         assert!(PROTECTED_DATA_DIRS.contains(&super::super::mod_data::MODS_DIR));
         assert!(DROP_RUNTIME_TOP_LEVEL.contains(&super::super::mod_data::MODS_DIR));
@@ -1249,6 +1276,7 @@ mod sweep_tests {
             "data/user/stale.dat",
             "Game.exe",
             "saves",
+            ".drop-removed/20261008T120000Z/user/mods/a.jar",
         ];
         for p in samples {
             assert_eq!(

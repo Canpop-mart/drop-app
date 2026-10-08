@@ -8,12 +8,20 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   CONFLICT_KIND_LABEL,
+  applyArgs,
+  EXTRA_RESOLUTION_LABEL,
+  RECOVERY_FOLDER,
+  backupDestination,
   backupLine,
+  choiceLabel,
+  choicesFor,
   conflictsLine,
   buildResolutions,
   carryChoices,
   checkOutcome,
   chooseAll,
+  chooseExtras,
+  extrasLine,
   clampPage,
   completionLabel,
   countsLine,
@@ -35,7 +43,9 @@ import {
   skippedLinkedLine,
   shouldAskBeforePlay,
   targetLine,
+  toggleHint,
   unresolvedPaths,
+  type Choices,
   type InstallSummary,
   type UpdateConflict,
   type UpdatePlan,
@@ -260,6 +270,7 @@ test("no player-facing copy uses an em dash", async () => {
   const strings: string[] = [
     ...Object.values(mod.CONFLICT_KIND_LABEL),
     ...Object.values(mod.RESOLUTION_LABEL),
+    ...Object.values(mod.EXTRA_RESOLUTION_LABEL),
     mod.BASELINE_NONE_NOTE,
     mod.checkOutcomeText({ kind: "checking" }),
     mod.checkOutcomeText({ kind: "up_to_date" }),
@@ -267,11 +278,23 @@ test("no player-facing copy uses an em dash", async () => {
     mod.checkOutcomeText({ kind: "error", message: "x" }),
     resolutionDetail("changed_both", "take_update"),
     resolutionDetail("removed_edited", "take_update"),
-    resolutionDetail("removed_unknown", "take_update"),
+    resolutionDetail("extra_file", "take_update"),
+    resolutionDetail("extra_file", "keep_mine"),
+    resolutionDetail("extra_file", undefined),
     resolutionDetail("changed_both", "keep_mine"),
     resolutionDetail("changed_both", undefined),
     backupLine(plan({ backupPaths: ["a"] }))!,
     backupLine(plan({ backupPaths: ["a", "b"] }))!,
+    backupLine(plan({ backupPaths: ["a"], recoveryPaths: ["a"] }))!,
+    backupLine(plan({ backupPaths: ["a", "b", "c"], recoveryPaths: ["b", "c"] }))!,
+    extrasLine([{ path: "m/x.jar", kind: "extra_file" }])!,
+    extrasLine([
+      { path: "m/x.jar", kind: "extra_file" },
+      { path: "m/y.jar", kind: "extra_file" },
+    ])!,
+    toggleHint([{ path: "m/x.jar", kind: "extra_file" }]),
+    toggleHint([...conflicts, { path: "m/x.jar", kind: "extra_file" }]),
+    toggleHint(conflicts),
     targetLine(plan(), (v) => v),
     targetLine(plan({ toVersionId: "v2" }), (v) => v),
     recoverOutcomeText({ result: "nothing" }),
@@ -342,35 +365,138 @@ test("a needs-recovery error is recognised and shown without its marker", () => 
   assert.equal(needsRecovery("The Drop server needs updating before games can be updated in place."), false);
 });
 
-test("a file the pack no longer includes is a conflict like any other", () => {
-  const unknown: UpdateConflict = { path: "user/rp/old.zip", kind: "removed_unknown" };
-  const all = [...conflicts, unknown];
-  // Its own label, not the "you changed" one, and no em dash.
-  const label = CONFLICT_KIND_LABEL.removed_unknown;
-  assert.equal(label, "The pack no longer includes this file");
-  assert.notEqual(label, CONFLICT_KIND_LABEL.removed_edited);
+// ── Mirrored folders: files that are not part of the pack ──────────────────
+
+const extras: UpdateConflict[] = [
+  { path: "user/mc/mods/mine.jar", kind: "extra_file" },
+  { path: "user/mc/resourcepacks/mine.zip", kind: "extra_file" },
+];
+const mixed = [...conflicts, ...extras];
+
+test("an extra file has its own label and choices, without an em dash", () => {
+  assert.equal(CONFLICT_KIND_LABEL.extra_file, "Not part of the pack");
+  assert.equal(choiceLabel("extra_file", "keep_mine"), "Keep");
+  assert.equal(choiceLabel("extra_file", "take_update"), "Remove");
+  assert.equal(choiceLabel("changed_both", "keep_mine"), "Keep mine");
+  assert.equal(choiceLabel("changed_both", "take_update"), "Take update");
+  assert.deepEqual(choicesFor("extra_file"), ["keep_mine", "take_update"]);
+  assert.deepEqual(choicesFor("removed_edited"), ["take_update", "keep_mine"]);
+  assert.equal(resolutionDetail("extra_file", "take_update"), "Moved to the recovery folder");
+  assert.equal(resolutionDetail("extra_file", "keep_mine"), "Kept, and not asked again");
   for (const s of [
-    label,
-    resolutionDetail("removed_unknown", "take_update"),
-    resolutionDetail("removed_unknown", "keep_mine"),
-    resolutionDetail("removed_unknown", undefined),
+    CONFLICT_KIND_LABEL.extra_file,
+    ...Object.values(EXTRA_RESOLUTION_LABEL),
+    resolutionDetail("extra_file", "take_update"),
+    resolutionDetail("extra_file", "keep_mine"),
+    resolutionDetail("extra_file", undefined),
+    extrasLine(extras)!,
   ]) {
     assert.ok(!s.includes("\u2014"), s);
   }
-  // Take update moves it aside, as for a removed file.
-  assert.match(resolutionDetail("removed_unknown", "take_update"), /removed.*\.bak/);
-  assert.match(resolutionDetail("removed_unknown", "keep_mine"), /stays/);
-  // Choose all covers it.
-  assert.equal(chooseAll(all, "keep_mine")[unknown.path], "keep_mine");
-  assert.equal(chooseAll(all, "take_update")[unknown.path], "take_update");
-  // Apply needs a choice for it.
-  const others = chooseAll(conflicts, "take_update");
-  const r = buildResolutions(all, others);
+});
+
+test("bulk take update or keep mine never chooses for an extra file", () => {
+  const take = chooseAll(mixed, "take_update");
+  const keep = chooseAll(mixed, "keep_mine");
+  for (const e of extras) {
+    assert.equal(take[e.path], undefined);
+    assert.equal(keep[e.path], undefined);
+  }
+  for (const c of conflicts) assert.equal(take[c.path], "take_update");
+  // The extras stay unchosen, so apply still waits for them.
+  assert.deepEqual(
+    unresolvedPaths(mixed, take),
+    extras.map((e) => e.path),
+  );
+});
+
+test("keep all and remove all choose for the extra files only", () => {
+  const keep = chooseExtras(mixed, "keep_mine");
+  const remove = chooseExtras(mixed, "take_update");
+  assert.deepEqual(Object.keys(keep).sort(), extras.map((e) => e.path).sort());
+  assert.deepEqual(Object.keys(remove).sort(), extras.map((e) => e.path).sort());
+  for (const e of extras) {
+    assert.equal(keep[e.path], "keep_mine");
+    assert.equal(remove[e.path], "take_update");
+  }
+  // Merged the way the controller merges: earlier choices for the other
+  // kinds survive either bulk action.
+  const before: Choices = { "config/a.cfg": "keep_mine" };
+  const after: Choices = { ...before, ...chooseExtras(mixed, "take_update") };
+  assert.equal(after["config/a.cfg"], "keep_mine");
+  const both = { ...after, ...chooseAll(mixed, "take_update") };
+  for (const e of extras) assert.equal(both[e.path], "take_update");
+});
+
+test("apply needs a choice for every extra file", () => {
+  const others = chooseAll(mixed, "take_update");
+  const r = buildResolutions(mixed, others);
   assert.equal(r.ok, false);
-  if (!r.ok) assert.deepEqual(r.missing, [unknown.path]);
-  const ok = buildResolutions(all, { ...others, [unknown.path]: "keep_mine" });
+  if (!r.ok) assert.deepEqual(r.missing, extras.map((e) => e.path));
+  const partial = buildResolutions(mixed, { ...others, [extras[0].path]: "keep_mine" });
+  assert.equal(partial.ok, false);
+  if (!partial.ok) assert.deepEqual(partial.missing, [extras[1].path]);
+  const ok = buildResolutions(mixed, { ...others, ...chooseExtras(mixed, "keep_mine") });
   assert.equal(ok.ok, true);
-  if (ok.ok) assert.equal(ok.resolutions[unknown.path], "keep_mine");
+  if (ok.ok) {
+    assert.equal(ok.resolutions[extras[0].path], "keep_mine");
+    assert.equal(ok.resolutions[extras[1].path], "keep_mine");
+  }
+});
+
+test("a first press on an extra file keeps it", () => {
+  assert.equal(nextChoice(undefined, "extra_file"), "keep_mine");
+  assert.equal(nextChoice("keep_mine", "extra_file"), "take_update");
+  assert.equal(nextChoice("take_update", "extra_file"), "keep_mine");
+  assert.equal(nextChoice(undefined, "changed_both"), "take_update");
+});
+
+test("recovered copies are said to go to the recovery folder, not .bak", () => {
+  assert.equal(RECOVERY_FOLDER, ".drop-removed");
+  const p = plan({
+    updateCount: 3,
+    backupPaths: ["config/x.cfg", "user/mc/mods/a.jar", "user/mc/mods/b.jar"],
+    recoveryPaths: ["user/mc/mods/a.jar", "user/mc/mods/b.jar"],
+  });
+  const line = backupLine(p)!;
+  assert.match(line, /^1 file .*\.bak\. 2 files .*\.drop-removed folder in the game folder$/);
+  assert.equal(backupDestination(p, "config/x.cfg"), ".bak");
+  assert.equal(backupDestination(p, "user/mc/mods/a.jar"), ".drop-removed");
+  // Only recovered copies: no .bak sentence.
+  const only = backupLine(plan({ backupPaths: ["m/a.jar"], recoveryPaths: ["m/a.jar"] }))!;
+  assert.doesNotMatch(only, /\.bak/);
+  assert.match(only, /^1 file .*Your copy is moved to the \.drop-removed folder/);
+  // An older build sends no recoveryPaths: all .bak, as before.
+  assert.match(backupLine(plan({ backupPaths: ["a", "b"] }))!, /^2 files .*\.bak$/);
+  // Extras line says where a removed file goes, and names only real actions.
+  const ex = extrasLine(extras)!;
+  assert.match(ex, /^2 files .*Remove moves a file to the \.drop-removed folder.*Keep leaves it/);
+  assert.equal(extrasLine(conflicts), null);
+});
+
+test("apply sends back the mirrored folders the review saw", () => {
+  const p = plan({
+    toVersionId: "v2",
+    toRevision: 4,
+    mirrorFolders: ["user/mc/mods", "user/mc/resourcepacks"],
+  });
+  const res = { "user/mc/mods/mine.jar": "keep_mine" as const };
+  assert.deepEqual(applyArgs("g", "v1", p, res), {
+    gameId: "g",
+    installVersionId: "v1",
+    toVersionId: "v2",
+    toRevision: 4,
+    mirrorFolders: ["user/mc/mods", "user/mc/resourcepacks"],
+    resolutions: res,
+  });
+  // A plan from a build that sent none: an empty list, never undefined.
+  assert.deepEqual(applyArgs("g", "v1", plan(), {}).mirrorFolders, []);
+});
+
+test("the Big Picture hint names the choices the rows have", () => {
+  assert.equal(toggleHint(conflicts), "A switches between Take update and Keep mine.");
+  assert.equal(toggleHint(extras), "A switches between Keep and Remove.");
+  assert.match(toggleHint(mixed), /Take update and Keep mine, or Keep and Remove/);
 });
 
 test("the conflict list's heading claims nothing about the player", () => {

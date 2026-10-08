@@ -50,6 +50,10 @@ use plan::{BaselineFile, Conflict, Plan, PlanInput, RemoteFile, Resolution};
 pub const UPDATE_DIR: &str = ".drop-update";
 /// What the client last installed here (see `baseline`).
 pub const BASELINE_FILE: &str = ".drop-baseline.json";
+/// Where an update moves the player's files out of a mirrored folder (see
+/// `plan`): `<install>/.drop-removed/<UTC time>/<original path>`. Created
+/// when first needed; Drop never deletes anything in it.
+pub const RECOVERY_DIR: &str = ".drop-removed";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -73,6 +77,10 @@ pub enum UpdateError {
     NoFileList,
     ServerUnsupported,
     RevisionChanged { planned: u32, current: u32 },
+    /// The version's mirrored folders changed on the server since the
+    /// review: the conflicts the player decided may no longer be the ones
+    /// this update has.
+    MirrorsChanged,
     Inconsistent(String),
     Unresolved(Vec<String>),
     ChangedSinceReview(String),
@@ -121,7 +129,7 @@ impl std::fmt::Display for UpdateError {
             UpdateError::ServerUnsupported => {
                 write!(f, "The Drop server needs updating before games can be updated in place.")
             }
-            UpdateError::RevisionChanged { .. } => write!(
+            UpdateError::RevisionChanged { .. } | UpdateError::MirrorsChanged => write!(
                 f,
                 "The update changed on the server while you were reviewing it. Review it again."
             ),
@@ -267,6 +275,10 @@ pub struct RevisionFiles {
     pub version_id: String,
     pub revision: u32,
     pub files: Vec<RemoteFile>,
+    /// The version's mirrored folders (its current setting, whatever
+    /// revision was asked for). Absent from servers before 6.1.4: none.
+    #[serde(default)]
+    pub mirror_folders: Vec<String>,
 }
 
 pub enum RevisionQuery {
@@ -369,6 +381,9 @@ pub struct UpdatePlan {
     /// them (see `Plan::backup_paths`). Never also in `conflicts`; counted in
     /// `updateCount` / `removeCount`.
     pub backup_paths: Vec<String>,
+    /// The `backup_paths` in mirrored folders, whose copy goes to the
+    /// recovery folder (`RECOVERY_DIR`) instead of `.bak`.
+    pub recovery_paths: Vec<String>,
     pub baseline_source: BaselineSource,
     /// Player-data folders (install-relative, `user` or `user/nand`, say)
     /// that are links, often to an SD card, where this update changes
@@ -376,6 +391,10 @@ pub struct UpdatePlan {
     /// applies; those files stay as they are until the folder is a real
     /// folder again. Empty when there are none. (`skippedLinkedFolders`)
     pub skipped_linked_folders: Vec<String>,
+    /// The mirrored folders this review applied, checked and sorted
+    /// (`Mirrors::reviewed`). The UI passes them back to `apply`, which
+    /// refuses when they changed since (`UpdateError::MirrorsChanged`).
+    pub mirror_folders: Vec<String>,
 }
 
 pub struct Prepared {
@@ -396,12 +415,12 @@ struct LoadedBaseline {
     revision: Option<u32>,
     /// Files the player chose "keep mine" for (only a local sidecar has any).
     kept_mine: HashSet<String>,
-    /// The sidecar says the first healing pass is done (see
+    /// The install's whitelist of extra files in mirrored folders (only a
+    /// local sidecar has one).
+    kept_extras: HashSet<String>,
+    /// The sidecar says the healing is done (see
     /// `Sidecar::healed_protected_folders`).
     healed: bool,
-    /// The sidecar says the second healing pass is done (see
-    /// `Sidecar::healed_unknown_leftovers`).
-    healed_unknown: bool,
 }
 
 /// The baseline for an install: its sidecar when that matches the install,
@@ -414,8 +433,8 @@ async fn load_baseline(install: &InstallRef) -> Result<LoadedBaseline, UpdateErr
                 source: BaselineSource::Local,
                 revision: Some(s.revision),
                 kept_mine: s.kept_mine.into_iter().collect(),
+                kept_extras: s.kept_extras.into_iter().collect(),
                 healed: s.healed_protected_folders,
-                healed_unknown: s.healed_unknown_leftovers,
             });
         }
         Ok(Some(s)) => warn!(
@@ -441,8 +460,8 @@ async fn load_baseline(install: &InstallRef) -> Result<LoadedBaseline, UpdateErr
                 source: BaselineSource::Server,
                 revision: Some(r.revision),
                 kept_mine: HashSet::new(),
+                kept_extras: HashSet::new(),
                 healed: false,
-                healed_unknown: false,
             })
         }
         None => {
@@ -455,8 +474,8 @@ async fn load_baseline(install: &InstallRef) -> Result<LoadedBaseline, UpdateErr
                 source: BaselineSource::None,
                 revision: None,
                 kept_mine: HashSet::new(),
+                kept_extras: HashSet::new(),
                 healed: false,
-                healed_unknown: false,
             })
         }
     }
@@ -530,8 +549,8 @@ pub async fn prepare(game_id: &str, install_version_id: &str, to_version_id: &st
         Some(_) => {}
     }
 
-    let (last_to_heal_from, heal_protected, ask_unknown_leftovers) =
-        due_passes(loaded.source, loaded.healed, loaded.healed_unknown, loaded.revision);
+    let last_to_heal_from = due_passes(loaded.source, loaded.healed, loaded.revision);
+    let heal_protected = last_to_heal_from.is_some();
     let previously_shipped = match last_to_heal_from {
         Some(last) => fetch_previously_shipped(game_id, &install.version_id, last).await?,
         None => HashMap::new(),
@@ -541,17 +560,22 @@ pub async fn prepare(game_id: &str, install_version_id: &str, to_version_id: &st
         source: baseline_source,
         revision: from_revision,
         kept_mine,
+        kept_extras,
         ..
     } = loaded;
 
     let install_dir = install.install_dir.clone();
     let target_files = target.files.clone();
+    let mirror_folders = target.mirror_folders.clone();
     let plan = tauri::async_runtime::spawn_blocking(move || -> Result<Plan, UpdateError> {
         let mod_owned = match mod_owned_files_spelled(&install_dir) {
             Ok(set) => set,
             Err(why) => {
-                // Without ownership, mod files read as the player's: they
-                // become conflicts the player decides, never silent writes.
+                // Without ownership, mod files read as the player's: outside
+                // mirrored folders they become conflicts the player decides.
+                // Inside one, a mod file the pack also ships is replaced (its
+                // copy goes to the recovery folder) and any other is asked
+                // about as an extra file.
                 warn!("update plan for {}: {why}; treating mod files as the player's", install_dir.display());
                 HashSet::new()
             }
@@ -570,7 +594,8 @@ pub async fn prepare(game_id: &str, install_version_id: &str, to_version_id: &st
             kept_mine: &kept_mine,
             previously_shipped: &previously_shipped,
             heal_protected,
-            ask_unknown_leftovers,
+            mirror_folders: &mirror_folders,
+            kept_extras: &kept_extras,
         })
         .map_err(|e| UpdateError::Plan(e.to_string()))
     })
@@ -602,36 +627,23 @@ pub async fn prepare(game_id: &str, install_version_id: &str, to_version_id: &st
     })
 }
 
-/// Which one-shot healing passes a plan runs (see "Healing" in the `plan`
-/// docs), from the baseline's source, its markers
-/// (`Sidecar::healed_protected_folders`, `Sidecar::healed_unknown_leftovers`)
-/// and the installed revision: `(last revision to fetch, heal_protected,
-/// ask_unknown_leftovers)`.
-///
-/// Each pass runs while its marker is unset, and both need the earlier
-/// revisions, which are fetched while either does. Fetching them for the
-/// second pass alone does not turn on the first, which acts without asking.
-/// Only an install a 6.1.0/6.1.1 update touched can hold what those builds
-/// left, and every such install has a local sidecar; any other baseline
-/// runs neither. Revisions after the installed one were never on this disk.
-fn due_passes(
-    source: BaselineSource,
-    healed_protected: bool,
-    healed_unknown: bool,
-    installed_revision: Option<u32>,
-) -> (Option<u32>, bool, bool) {
-    match (source, installed_revision) {
-        (BaselineSource::Local, Some(n)) if n > 0 && !(healed_protected && healed_unknown) => {
-            (Some(n), !healed_protected, !healed_unknown)
-        }
-        _ => (None, false, false),
+/// The last revision of the installed version to heal from, or `None` when
+/// the one-shot healing is not due (see "Healing" in the `plan` docs), from
+/// the baseline's source, its marker (`Sidecar::healed_protected_folders`)
+/// and the installed revision. Only an install a 6.1.0/6.1.1 update touched
+/// can hold what those builds left, and every such install has a local
+/// sidecar without the marker. Its revisions after the installed one were
+/// never on this disk.
+fn due_passes(source: BaselineSource, healed_protected: bool, installed_revision: Option<u32>) -> Option<u32> {
+    match (source, healed_protected, installed_revision) {
+        (BaselineSource::Local, false, Some(n)) if n > 0 => Some(n),
+        _ => None,
     }
 }
 
 /// Every path revisions `1..=last` of the installed version shipped, with
 /// every (size, hash) shipped for it, for the one-shot healing in the
-/// planner. An unknown hash is kept as `(size, "")`: the first pass matches
-/// it against nothing, the second pass only needs the size.
+/// planner. Unknown hashes are left out: they match nothing.
 ///
 /// A revision the server has no snapshot of (404) has nothing to heal from
 /// and is skipped. Any other failure stops the plan, so the review and the
@@ -667,9 +679,10 @@ async fn fetch_previously_shipped(
 
 fn add_shipped(out: &mut HashMap<String, HashSet<(u64, String)>>, files: &[RemoteFile]) {
     for f in files {
-        out.entry(f.path.clone())
-            .or_default()
-            .insert((f.size, f.sha256.to_ascii_lowercase()));
+        let copies = out.entry(f.path.clone()).or_default();
+        if !f.sha256.is_empty() {
+            copies.insert((f.size, f.sha256.to_ascii_lowercase()));
+        }
     }
 }
 
@@ -718,8 +731,10 @@ impl Prepared {
             download_bytes: self.download_bytes(),
             conflicts: self.plan.conflicts(),
             backup_paths: self.plan.backup_paths(),
+            recovery_paths: self.plan.recovery_paths(),
             baseline_source: self.baseline_source,
             skipped_linked_folders: self.plan.skipped_linked.clone(),
+            mirror_folders: self.plan.mirrors.reviewed(),
         }
     }
 }
@@ -751,24 +766,40 @@ fn check_can_update(db: &Database, install: &InstallRef, to_version_id: &str) ->
     Ok(())
 }
 
-/// Re-plan, check the player decided every conflict, and queue the update.
+/// Whether the update planned now is the one the player reviewed: the same
+/// revision, and the same mirrored folders (`UpdatePlan::mirror_folders`).
+/// An admin can change the mirrored folders without a new revision, and a
+/// file the player chose to keep could then be replaced without asking.
+fn same_as_reviewed(prepared: &Plan, to_revision: u32, now_revision: u32, reviewed_mirrors: &[String]) -> Result<(), UpdateError> {
+    if now_revision != to_revision {
+        return Err(UpdateError::RevisionChanged {
+            planned: to_revision,
+            current: now_revision,
+        });
+    }
+    let mut reviewed = reviewed_mirrors.to_vec();
+    reviewed.sort();
+    if prepared.mirrors.reviewed() != reviewed {
+        return Err(UpdateError::MirrorsChanged);
+    }
+    Ok(())
+}
+
+/// Re-plan, check it is still the update the player reviewed and that they
+/// decided every conflict, and queue the update.
 pub async fn apply(
     game_id: &str,
     install_version_id: &str,
     to_version_id: &str,
     to_revision: u32,
+    mirror_folders: &[String],
     resolutions: HashMap<String, Resolution>,
 ) -> Result<(), UpdateError> {
     if update_active(game_id) {
         return Err(UpdateError::Busy);
     }
     let prepared = prepare(game_id, install_version_id, to_version_id).await?;
-    if prepared.to_revision != to_revision {
-        return Err(UpdateError::RevisionChanged {
-            planned: to_revision,
-            current: prepared.to_revision,
-        });
-    }
+    same_as_reviewed(&prepared.plan, to_revision, prepared.to_revision, mirror_folders)?;
     {
         let db = borrow_db_checked();
         check_can_update(&db, &prepared.install, to_version_id)?;
@@ -1388,8 +1419,8 @@ mod tests {
                 entry("untouched.toml", "00"),
             ],
             kept_mine: vec!["pack.toml".into(), "same.toml".into(), "untouched.toml".into()],
+            kept_extras: vec![],
             healed_protected_folders: true,
-            healed_unknown_leftovers: true,
         };
         baseline::write_sidecar(&dir, &sidecar).unwrap();
         let writing: HashSet<String> = ["pack.toml".to_string(), "same.toml".to_string()].into();
@@ -1417,53 +1448,56 @@ mod tests {
 
     #[test]
     fn only_a_local_unhealed_baseline_is_healed_and_only_up_to_its_revision() {
-        use BaselineSource::{Local, None as NoBaseline, Server};
-        // (source, healed_protected, healed_unknown, revision) -> (fetch up
-        // to, heal_protected, ask_unknown_leftovers)
-        let table = [
-            // A local sidecar: each pass while its marker is unset.
-            ((Local, false, false, Some(4)), (Some(4), true, true)),
-            ((Local, true, false, Some(4)), (Some(4), false, true)),
-            ((Local, false, true, Some(4)), (Some(4), true, false)),
-            ((Local, true, true, Some(4)), (None, false, false)),
-            // No revision to heal from.
-            ((Local, false, false, Some(0)), (None, false, false)),
-            ((Local, false, false, None), (None, false, false)),
-            // Any other baseline: nothing due, whatever the markers say.
-            ((Server, false, false, Some(1)), (None, false, false)),
-            ((Server, true, false, Some(3)), (None, false, false)),
-            ((NoBaseline, false, false, None), (None, false, false)),
-        ];
-        for ((source, healed, healed_unknown, revision), want) in table {
-            assert_eq!(
-                due_passes(source, healed, healed_unknown, revision),
-                want,
-                "{source:?} {healed} {healed_unknown} {revision:?}"
-            );
-        }
+        assert_eq!(due_passes(BaselineSource::Local, false, Some(4)), Some(4));
+        assert_eq!(due_passes(BaselineSource::Local, true, Some(4)), None);
+        assert_eq!(due_passes(BaselineSource::Server, false, Some(1)), None);
+        assert_eq!(due_passes(BaselineSource::None, false, None), None);
+        assert_eq!(due_passes(BaselineSource::Local, false, Some(0)), None);
+        assert_eq!(due_passes(BaselineSource::Local, false, None), None);
     }
 
     #[test]
-    fn a_revision_with_only_unknown_hashes_still_lists_its_paths_and_sizes() {
-        let mut out = HashMap::new();
-        add_shipped(
-            &mut out,
-            &[
-                RemoteFile {
-                    path: "user/a.zip".into(),
-                    size: 3,
-                    sha256: String::new(),
-                },
-                RemoteFile {
-                    path: "user/b.zip".into(),
-                    size: 3,
-                    sha256: "AB".into(),
-                },
-            ],
+    fn an_old_server_sends_no_mirrored_folders_and_a_new_one_does() {
+        let old: RevisionFiles = serde_json::from_str(r#"{"versionId":"v","revision":2,"files":[]}"#).unwrap();
+        assert!(old.mirror_folders.is_empty());
+        let new: RevisionFiles = serde_json::from_str(
+            r#"{"versionId":"v","revision":2,"files":[],"mirrorFolders":["user/mc/mods","user/mc/resourcepacks"]}"#,
+        )
+        .unwrap();
+        assert_eq!(new.mirror_folders, vec!["user/mc/mods".to_string(), "user/mc/resourcepacks".to_string()]);
+    }
+
+    #[test]
+    fn apply_refuses_when_the_mirrored_folders_changed_since_the_review() {
+        let plan_with = |raw: &[&str]| Plan {
+            mirrors: plan::Mirrors::new(&raw.iter().map(|s| s.to_string()).collect::<Vec<_>>(), false),
+            ..Default::default()
+        };
+        let reviewed = |l: &[&str]| -> Vec<String> { l.iter().map(|s| s.to_string()).collect() };
+        let now = plan_with(&["user/mc/resourcepacks", "user/mc/mods"]);
+        // The review's own list (sorted) applies, in any order.
+        let summary = now.mirrors.reviewed();
+        assert_eq!(summary, reviewed(&["user/mc/mods", "user/mc/resourcepacks"]));
+        assert!(same_as_reviewed(&now, 3, 3, &summary).is_ok());
+        assert!(same_as_reviewed(&now, 3, 3, &reviewed(&["user/mc/resourcepacks", "user/mc/mods"])).is_ok());
+        // A folder added (or removed) since: refused, with the same words as
+        // a new revision, so the review offers to check again.
+        let err = same_as_reviewed(&now, 3, 3, &reviewed(&["user/mc/mods"])).unwrap_err();
+        assert!(matches!(err, UpdateError::MirrorsChanged));
+        assert_eq!(
+            err.to_string(),
+            UpdateError::RevisionChanged { planned: 1, current: 2 }.to_string()
         );
-        // The size stays with an unknown hash: the second pass needs it.
-        assert_eq!(out["user/a.zip"], [(3, String::new())].into());
-        assert_eq!(out["user/b.zip"], [(3, "ab".to_string())].into());
+        assert!(matches!(
+            same_as_reviewed(&plan_with(&[]), 3, 3, &summary),
+            Err(UpdateError::MirrorsChanged)
+        ));
+        assert!(same_as_reviewed(&plan_with(&[]), 3, 3, &[]).is_ok());
+        // The revision is still checked first.
+        assert!(matches!(
+            same_as_reviewed(&now, 3, 4, &summary),
+            Err(UpdateError::RevisionChanged { planned: 3, current: 4 })
+        ));
     }
 
     #[test]

@@ -34,19 +34,21 @@ pub struct Sidecar {
     #[serde(default)]
     pub kept_mine: Vec<String>,
     /// Written by an install, repair or update from a build that heals what
-    /// 6.1.0/6.1.1 left behind under the player-data folders (the first
-    /// healing pass in the `plan` docs). Once set, updates of this install
-    /// no longer run that pass. Absent (false) in sidecars those builds
-    /// wrote.
+    /// 6.1.0/6.1.1 left behind under the player-data folders (the healing in
+    /// the `plan` docs). Once set, updates of this install no longer look
+    /// for it. Absent (false) in sidecars those builds wrote.
+    ///
+    /// 6.1.3 also wrote `healedUnknownLeftovers` for a pass this build no
+    /// longer has. Unknown keys are ignored when reading (this struct does
+    /// not deny them), and the key is not written back.
     #[serde(default)]
     pub healed_protected_folders: bool,
-    /// As `healed_protected_folders`, for the second healing pass: asking
-    /// about files an earlier revision shipped whose original contents are
-    /// unknown (`removed_unknown` in the `plan` docs). Absent (false) in
-    /// sidecars written before 6.1.3, so every existing install gets that
-    /// pass once.
+    /// The whitelist: files in mirrored folders the player chose to keep
+    /// (`extra_file`, keep mine), never asked about again. Kept through
+    /// updates and repairs while the file is on disk and the version does
+    /// not ship it. Absent (empty) in sidecars from before 6.1.4.
     #[serde(default)]
-    pub healed_unknown_leftovers: bool,
+    pub kept_extras: Vec<String>,
 }
 
 /// The sidecar without its file list, for the update check (which reads one
@@ -198,6 +200,11 @@ impl DiskView for FsDisk {
         let p = self
             .path(rel)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unsafe path"))?;
+        // The folder itself is never a link to walk through either. (Links on
+        // the way to it are the caller's to check: see `plan_extras`.)
+        if !std::fs::symlink_metadata(&p)?.is_dir() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a folder"));
+        }
         let mut out = Vec::new();
         let mut stack: Vec<(PathBuf, String)> = vec![(p, rel.replace('\\', "/"))];
         while let Some((dir, prefix)) = stack.pop() {
@@ -259,61 +266,63 @@ pub fn fresh_sidecar(
         revision,
         files,
         kept_mine: Vec::new(),
+        kept_extras: Vec::new(),
         // Not known here: a repair or reinstall into a folder an earlier
         // update left files in has not been healed. See `carry_over`.
         healed_protected_folders: false,
-        healed_unknown_leftovers: false,
     }
 }
 
 /// What a fresh baseline (after an install or repair into `install_dir`)
 /// keeps from the sidecar that was already there, read as `previous`:
-/// - the healed markers (both passes): a repair only re-checks the files the
-///   version ships, and the stale-file sweep never touches the player-data
-///   folders, so what 6.1.0/6.1.1 left there survives it. Only a folder with
-///   no sidecar (a new install), or one from another game, starts healed. An
+/// - the healed marker: a repair only re-checks the files the version
+///   ships, and the stale-file sweep never touches the player-data folders,
+///   so what 6.1.0/6.1.1 left there survives it. Only a folder with no
+///   sidecar (a new install), or one from another game, starts healed. An
 ///   unreadable sidecar does not.
 /// - "keep mine" records for files the version no longer ships that are
 ///   still on disk (a `removed_edited` file the player kept), so they stay
 ///   the player's. Records for files the version ships are dropped: the
 ///   repair has just restored the game's copy (keeping a `.bak` first).
+/// - the whitelist (`kept_extras`), under the same rule: an entry stays
+///   while its file is on disk and the version does not ship it. A repair
+///   never removes files the version does not ship, so a whitelisted file is
+///   still there afterwards.
 pub fn carry_over(previous: io::Result<Option<Sidecar>>, next: &mut Sidecar, install_dir: &Path) {
     let previous = match previous {
         Ok(None) => {
             next.healed_protected_folders = true;
-            next.healed_unknown_leftovers = true;
             return;
         }
         Ok(Some(s)) if s.game_id != next.game_id => {
             next.healed_protected_folders = true;
-            next.healed_unknown_leftovers = true;
             return;
         }
         Ok(Some(s)) => s,
         Err(_) => {
             next.healed_protected_folders = false;
-            next.healed_unknown_leftovers = false;
             return;
         }
     };
     next.healed_protected_folders = previous.healed_protected_folders;
-    next.healed_unknown_leftovers = previous.healed_unknown_leftovers;
-    let shipped: std::collections::HashSet<&str> = next.files.iter().map(|f| f.path.as_str()).collect();
-    let still_kept: Vec<String> = previous
-        .kept_mine
-        .into_iter()
-        .filter(|p| !shipped.contains(p.as_str()))
-        .filter(|p| {
-            path_guard::join_within(install_dir, Path::new(p))
+    let shipped: std::collections::HashSet<String> = next.files.iter().map(|f| f.path.clone()).collect();
+    let keep = |p: &String| {
+        !shipped.contains(p)
+            && path_guard::join_within(install_dir, Path::new(p))
                 .is_ok_and(|full| std::fs::symlink_metadata(full).is_ok_and(|m| m.is_file()))
-        })
-        .collect();
-    for p in still_kept {
+    };
+    for p in previous.kept_mine.into_iter().filter(|p| keep(p)) {
         if !next.kept_mine.contains(&p) {
             next.kept_mine.push(p);
         }
     }
     next.kept_mine.sort();
+    for p in previous.kept_extras.into_iter().filter(|p| keep(p)) {
+        if !next.kept_extras.contains(&p) {
+            next.kept_extras.push(p);
+        }
+    }
+    next.kept_extras.sort();
 }
 
 #[cfg(test)]
@@ -358,8 +367,8 @@ mod tests {
                 mtime: Some(u64::MAX - 1),
             }],
             kept_mine: vec!["a/b.jar".into()],
+            kept_extras: vec!["mods/mine.jar".into()],
             healed_protected_folders: true,
-            healed_unknown_leftovers: true,
         };
         write_sidecar(&dir, &s).unwrap();
         assert_eq!(read_sidecar(&dir).unwrap(), Some(s));
@@ -378,7 +387,7 @@ mod tests {
         )
         .unwrap();
         let s = read_sidecar(&dir).unwrap().unwrap();
-        assert!(!s.healed_protected_folders && !s.healed_unknown_leftovers);
+        assert!(!s.healed_protected_folders && s.kept_extras.is_empty());
         assert_eq!(s.files.len(), 1);
         let json = serde_json::to_string(&Sidecar {
             healed_protected_folders: true,
@@ -390,22 +399,22 @@ mod tests {
     }
 
     #[test]
-    fn a_sidecar_from_6_1_2_loads_with_the_second_pass_due() {
-        let dir = scratch("sidecar-612");
-        // As 6.1.2 wrote it: first pass done, no healedUnknownLeftovers.
+    fn a_sidecar_from_6_1_3_still_loads_and_drops_its_removed_marker() {
+        let dir = scratch("sidecar-613");
+        // As 6.1.3 wrote it, with the marker of the pass 6.1.4 removed.
         std::fs::write(
             sidecar_path(&dir),
-            br#"{"gameId":"g","versionId":"v","revision":2,"files":[],"keptMine":[],"healedProtectedFolders":true}"#,
+            br#"{"gameId":"g","versionId":"v","revision":2,"files":[],"keptMine":["a"],"healedProtectedFolders":true,"healedUnknownLeftovers":false}"#,
         )
         .unwrap();
         let s = read_sidecar(&dir).unwrap().unwrap();
-        assert!(s.healed_protected_folders && !s.healed_unknown_leftovers);
-        let json = serde_json::to_string(&Sidecar {
-            healed_unknown_leftovers: true,
-            ..s
-        })
-        .unwrap();
-        assert!(json.contains(r#""healedUnknownLeftovers":true"#), "{json}");
+        assert!(s.healed_protected_folders);
+        assert_eq!(s.kept_mine, vec!["a".to_string()]);
+        assert!(s.kept_extras.is_empty());
+        write_sidecar(&dir, &s).unwrap();
+        let json = std::fs::read_to_string(sidecar_path(&dir)).unwrap();
+        assert!(!json.contains("healedUnknownLeftovers"), "{json}");
+        assert!(json.contains(r#""keptExtras":[]"#), "{json}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -414,6 +423,7 @@ mod tests {
         let dir = scratch("carry-over");
         std::fs::create_dir_all(dir.join("user/mods")).unwrap();
         std::fs::write(dir.join("user/mods/kept-removed.jar"), b"player").unwrap();
+        std::fs::write(dir.join("user/mods/my-own.jar"), b"player").unwrap();
         let files = [RemoteFile {
             path: "user/mods/a.jar".into(),
             size: 1,
@@ -421,14 +431,15 @@ mod tests {
         }];
         let fresh = || fresh_sidecar(&dir, "g", "v", 2, &files);
         // Not known before `carry_over` has looked.
-        assert!(!fresh().healed_protected_folders && !fresh().healed_unknown_leftovers);
+        assert!(!fresh().healed_protected_folders);
         // A new install: nothing an earlier update could have left.
         let mut next = fresh();
         carry_over(Ok(None), &mut next, &dir);
-        assert!(next.healed_protected_folders && next.healed_unknown_leftovers);
+        assert!(next.healed_protected_folders);
         // A repair of an install 6.1.x updated: the leftovers survive a
         // repair, so it is still not healed, and the removed file the player
-        // kept stays theirs. A record for a shipped file is dropped.
+        // kept stays theirs. A record for a shipped file is dropped, and so
+        // is one whose file is gone. The whitelist follows the same rule.
         let before = Sidecar {
             game_id: "g".into(),
             version_id: "v".into(),
@@ -439,37 +450,36 @@ mod tests {
                 "user/mods/kept-removed.jar".into(),
                 "user/mods/deleted-since.jar".into(),
             ],
+            kept_extras: vec![
+                "user/mods/a.jar".into(),
+                "user/mods/my-own.jar".into(),
+                "user/mods/deleted-own.jar".into(),
+            ],
             healed_protected_folders: false,
-            healed_unknown_leftovers: false,
         };
         let mut next = fresh();
         carry_over(Ok(Some(before.clone())), &mut next, &dir);
-        assert!(!next.healed_protected_folders && !next.healed_unknown_leftovers);
+        assert!(!next.healed_protected_folders);
         assert_eq!(next.kept_mine, vec!["user/mods/kept-removed.jar".to_string()]);
-        // Healed before: stays healed, each marker on its own.
-        for (protected, unknown) in [(true, false), (false, true), (true, true)] {
-            let mut next = fresh();
-            carry_over(
-                Ok(Some(Sidecar {
-                    healed_protected_folders: protected,
-                    healed_unknown_leftovers: unknown,
-                    ..before.clone()
-                })),
-                &mut next,
-                &dir,
-            );
-            assert_eq!(
-                (next.healed_protected_folders, next.healed_unknown_leftovers),
-                (protected, unknown)
-            );
-        }
+        assert_eq!(next.kept_extras, vec!["user/mods/my-own.jar".to_string()]);
+        // Healed before: stays healed.
+        let mut next = fresh();
+        carry_over(
+            Ok(Some(Sidecar {
+                healed_protected_folders: true,
+                ..before.clone()
+            })),
+            &mut next,
+            &dir,
+        );
+        assert!(next.healed_protected_folders);
         // Unreadable: not claimed healed. Another game's: a new install.
         let mut next = fresh();
         carry_over(Err(io::Error::other("corrupt")), &mut next, &dir);
-        assert!(!next.healed_protected_folders && !next.healed_unknown_leftovers);
+        assert!(!next.healed_protected_folders && next.kept_extras.is_empty());
         let mut next = fresh();
         carry_over(Ok(Some(Sidecar { game_id: "other".into(), ..before })), &mut next, &dir);
-        assert!(next.healed_protected_folders && next.healed_unknown_leftovers && next.kept_mine.is_empty());
+        assert!(next.healed_protected_folders && next.kept_mine.is_empty() && next.kept_extras.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

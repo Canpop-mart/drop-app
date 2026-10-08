@@ -17,9 +17,10 @@ export type ConflictKind =
   | "added_exists"
   | "changed_both"
   | "removed_edited"
-  /** A file an earlier revision shipped that the pack no longer lists; Drop
-   * can't tell whether it is the pack's or the player's. */
-  | "removed_unknown";
+  /** A file in a folder the pack mirrors that the pack does not ship (the
+   * player's own mod, say). Take update moves it to the recovery folder,
+   * keep mine keeps it and Drop never asks about it again. */
+  | "extra_file";
 export type Resolution = "take_update" | "keep_mine";
 export type UpdateConflict = { path: string; kind: ConflictKind };
 
@@ -43,6 +44,12 @@ export type UpdatePlan = {
    * already counted in `updateCount` / `removeCount`.
    */
   backupPaths: string[];
+  /**
+   * The `backupPaths` in folders the pack mirrors: the player's copy goes to
+   * the recovery folder (`RECOVERY_FOLDER` in the game folder) instead of
+   * `.bak`. Optional: older builds don't send it.
+   */
+  recoveryPaths?: string[];
   baselineSource: "local" | "server" | "none";
   /**
    * Player-data folders (install-relative) that are links, often to an SD
@@ -50,6 +57,13 @@ export type UpdatePlan = {
    * The rest of the update applies. Optional: older builds don't send it.
    */
   skippedLinkedFolders?: string[];
+  /**
+   * The folders this review mirrored, as the engine checked them. Passed
+   * back to `apply_game_update`, which refuses (asking for a new review)
+   * when the server's list changed since. Optional: older builds don't send
+   * it.
+   */
+  mirrorFolders?: string[];
 };
 
 /** `recover_game_update`'s result. */
@@ -102,18 +116,46 @@ export function isUpToDate(plan: UpdatePlan): boolean {
 
 // ── The player's choices ─────────────────────────────────────────────────────
 
-/** A press on a conflict row: unset goes to "take update", then it flips. */
-export function nextChoice(current: Resolution | undefined): Resolution {
+/** A file in a mirrored folder that the pack does not ship. */
+export function isExtra(c: { kind: ConflictKind }): boolean {
+  return c.kind === "extra_file";
+}
+
+/**
+ * A press on a conflict row: unset goes to "take update", then it flips. A
+ * file that is not part of the pack starts at "keep" instead, so a stray
+ * press never moves a player's own file away.
+ */
+export function nextChoice(
+  current: Resolution | undefined,
+  kind?: ConflictKind,
+): Resolution {
+  if (!current) return kind === "extra_file" ? "keep_mine" : "take_update";
   return current === "take_update" ? "keep_mine" : "take_update";
 }
 
-/** Every conflict set to the same choice. */
+/**
+ * Every conflict except the extra files set to the same choice ("Take
+ * update for all" / "Keep mine for all"). Extra files are left out: one
+ * press must never move all of a player's own mods away. They have their
+ * own bulk actions (`chooseExtras`).
+ */
 export function chooseAll(
   conflicts: readonly UpdateConflict[],
   choice: Resolution,
 ): Choices {
   const out: Choices = {};
-  for (const c of conflicts) out[c.path] = choice;
+  for (const c of conflicts) if (!isExtra(c)) out[c.path] = choice;
+  return out;
+}
+
+/** Every extra file set to the same choice ("Keep all" / "Remove all"). */
+export function chooseExtras(
+  conflicts: readonly UpdateConflict[],
+  choice: Resolution,
+): Choices {
+  const out: Choices = {};
+  for (const c of conflicts) if (isExtra(c)) out[c.path] = choice;
   return out;
 }
 
@@ -142,6 +184,28 @@ export function buildResolutions(
   const resolutions: Choices = {};
   for (const c of conflicts) resolutions[c.path] = choices[c.path];
   return { ok: true, resolutions };
+}
+
+/**
+ * The arguments of `apply_game_update` for a reviewed plan. The revision and
+ * the mirrored folders go back as the review saw them: the engine refuses
+ * the apply (asking for a new review) when either changed on the server
+ * since, so a file the player chose to keep is never replaced unasked.
+ */
+export function applyArgs(
+  gameId: string,
+  installVersionId: string,
+  plan: UpdatePlan,
+  resolutions: Choices,
+) {
+  return {
+    gameId,
+    installVersionId,
+    toVersionId: plan.toVersionId,
+    toRevision: plan.toRevision,
+    mirrorFolders: plan.mirrorFolders ?? [],
+    resolutions,
+  };
 }
 
 /**
@@ -277,7 +341,7 @@ export const CONFLICT_KIND_LABEL: Record<ConflictKind, string> = {
   added_exists: "You added a file the update also adds",
   changed_both: "You changed a file the update changes",
   removed_edited: "You changed a file the update removes",
-  removed_unknown: "The pack no longer includes this file",
+  extra_file: "Not part of the pack",
 };
 
 export const RESOLUTION_LABEL: Record<Resolution, string> = {
@@ -285,14 +349,39 @@ export const RESOLUTION_LABEL: Record<Resolution, string> = {
   keep_mine: "Keep mine",
 };
 
+/** The labels an extra file's choices read as, on both surfaces. */
+export const EXTRA_RESOLUTION_LABEL: Record<Resolution, string> = {
+  take_update: "Remove",
+  keep_mine: "Keep",
+};
+
+/** What a choice is called on a row of this kind. */
+export function choiceLabel(kind: ConflictKind, choice: Resolution): string {
+  return kind === "extra_file"
+    ? EXTRA_RESOLUTION_LABEL[choice]
+    : RESOLUTION_LABEL[choice];
+}
+
+/** A row's choices in the order they are shown: "Keep" first for an extra file. */
+export function choicesFor(kind: ConflictKind): Resolution[] {
+  return kind === "extra_file"
+    ? ["keep_mine", "take_update"]
+    : ["take_update", "keep_mine"];
+}
+
 /** What a choice does to this file, for the row's detail line. */
 export function resolutionDetail(
   kind: ConflictKind,
   choice: Resolution | undefined,
 ): string {
   if (!choice) return "Choose what to do with this file";
+  if (kind === "extra_file") {
+    return choice === "keep_mine"
+      ? "Kept, and not asked again"
+      : "Moved to the recovery folder";
+  }
   if (choice === "keep_mine") return "Your copy stays as it is";
-  return kind === "removed_edited" || kind === "removed_unknown"
+  return kind === "removed_edited"
     ? "The file is removed. Your copy is kept as .bak"
     : "The update's copy is used. Your copy is kept as .bak";
 }
@@ -310,13 +399,67 @@ export function targetLine(
     : `From ${versionName(plan.fromVersionId)} to ${versionName(plan.toVersionId)}`;
 }
 
+/**
+ * The folder, inside the game folder, where an update moves the player's
+ * files out of a mirrored folder (`RECOVERY_DIR`,
+ * games/src/downloads/update/mod.rs). Drop never deletes anything in it.
+ */
+export const RECOVERY_FOLDER = ".drop-removed";
+
+/** Where the player's copy of a `backupPaths` entry goes. */
+export function backupDestination(plan: UpdatePlan, path: string): string {
+  return (plan.recoveryPaths ?? []).includes(path) ? RECOVERY_FOLDER : ".bak";
+}
+
 /** The informational line for `backupPaths`, or null when there are none. */
 export function backupLine(plan: UpdatePlan): string | null {
-  const n = plan.backupPaths?.length ?? 0;
+  const all = plan.backupPaths ?? [];
+  if (all.length === 0) return null;
+  const recovered = new Set(plan.recoveryPaths ?? []);
+  const r = all.filter((p) => recovered.has(p)).length;
+  const n = all.length - r;
+  const parts: string[] = [];
+  if (n > 0) {
+    parts.push(
+      n === 1
+        ? "1 file will be replaced or removed. Drop can't tell whether you changed it, so your copy is kept as .bak"
+        : `${n} files will be replaced or removed. Drop can't tell whether you changed them, so your copies are kept as .bak`,
+    );
+  }
+  if (r > 0) {
+    parts.push(
+      r === 1
+        ? `1 file in a folder that matches the pack will be replaced or removed. Your copy is moved to the ${RECOVERY_FOLDER} folder in the game folder`
+        : `${r} files in folders that match the pack will be replaced or removed. Your copies are moved to the ${RECOVERY_FOLDER} folder in the game folder`,
+    );
+  }
+  return parts.join(". ");
+}
+
+/**
+ * The line above the extra files' bulk actions, or null when there are
+ * none. Names the two choices and where a removed file goes.
+ */
+export function extrasLine(conflicts: readonly UpdateConflict[]): string | null {
+  const n = conflicts.filter(isExtra).length;
   if (n === 0) return null;
-  return n === 1
-    ? "1 file will be replaced or removed. Drop can't tell whether you changed it, so your copy is kept as .bak"
-    : `${n} files will be replaced or removed. Drop can't tell whether you changed them, so your copies are kept as .bak`;
+  const lead =
+    n === 1
+      ? "1 file in a folder that matches the pack is not part of it."
+      : `${n} files in folders that match the pack are not part of it.`;
+  return `${lead} Remove moves a file to the ${RECOVERY_FOLDER} folder in the game folder. Keep leaves it, and Drop won't ask about it again.`;
+}
+
+/** Big Picture's hint for what A does on a conflict row. */
+export function toggleHint(conflicts: readonly UpdateConflict[]): string {
+  const extras = conflicts.some(isExtra);
+  const others = conflicts.some((c) => !isExtra(c));
+  if (extras && others) {
+    return "A switches between Take update and Keep mine, or Keep and Remove.";
+  }
+  return extras
+    ? "A switches between Keep and Remove."
+    : "A switches between Take update and Keep mine.";
 }
 
 /** The informational line for `skippedLinkedFolders`, or null when there are none. */
@@ -331,7 +474,7 @@ export function skippedLinkedLine(plan: UpdatePlan): string | null {
 
 /**
  * The line above the conflict list, on both surfaces. Says nothing about
- * who changed the files: a `removed_unknown` file may be the pack's.
+ * who changed the files: an `extra_file` is not a change at all.
  */
 export function conflictsLine(count: number): string {
   return count === 1

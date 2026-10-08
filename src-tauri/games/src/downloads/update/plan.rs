@@ -25,9 +25,8 @@
 //! |                   | anything else             | conflict `removed_edited` |
 //! | in neither        | anything                  | never looked at (except |
 //! |                   |                           | the one-shot healing    |
-//! |                   |                           | below: leftovers set    |
-//! |                   |                           | aside, or conflict      |
-//! |                   |                           | `removed_unknown`)      |
+//! |                   |                           | and mirrored folders,   |
+//! |                   |                           | below)                  |
 //!
 //! Overrides that apply before the table:
 //! - A path that is Drop runtime data (`is_drop_runtime_data`: GBE's
@@ -68,7 +67,7 @@
 //!   A file there that is byte-identical to the baseline is replaced or
 //!   removed as usual: it is the pack's own copy. Files in neither list are
 //!   never looked at, as anywhere else, apart from the one-shot healing
-//!   below.
+//!   and mirrored folders below.
 //! - A player-data folder that is a link (or holds one on the way to the
 //!   file: on the Deck `user/` or `nand/` is often linked to the SD card)
 //!   gets no operations at all: no write, replace or delete through it. The
@@ -84,44 +83,57 @@
 //! Healing what 6.1.0 and 6.1.1 left behind. Those builds never replaced or
 //! removed files the pack ships under the player-data folders, and recorded
 //! the new hash anyway. `PlanInput::previously_shipped` holds what earlier
-//! revisions of the INSTALLED version shipped, up to the one installed (an
-//! unknown hash is listed as `""`, with its size). Two
-//! one-shot passes use it, each switched on by its own flag, which the
-//! caller sets until an update by this build has run the pass (see
-//! `Sidecar::healed_protected_folders` and
-//! `Sidecar::healed_unknown_leftovers`). Only under the player-data folders:
-//! - First pass (`PlanInput::heal_protected`):
-//!   - Earlier copy: a file the pack ships (in B or T) whose baseline entry
-//!     is unverified or absent, and that is byte-identical on disk to what
-//!     an earlier revision shipped at that path, counts as the pack's own
-//!     copy, like a match with B: replaced or removed without asking and
-//!     without a `.bak`. A verified baseline entry is left to the table (the
-//!     player may have rolled the file back on purpose).
-//!   - Leftovers: a path an earlier revision shipped that is in neither B
-//!     nor T (in any letter case), on disk as a regular file (not through a
-//!     link) byte-identical to what an earlier revision shipped there, is
-//!     removed without asking, and kept as `.bak` (it may be the player's
-//!     own copy of the same file).
+//! revisions of the INSTALLED version shipped, up to the one installed. A
+//! one-shot pass uses it (`PlanInput::heal_protected`), which the caller
+//! switches on until an update by this build has run it (see
+//! `Sidecar::healed_protected_folders`). Only under the player-data folders:
+//! - Earlier copy: a file the pack ships (in B or T) whose baseline entry is
+//!   unverified or absent, and that is byte-identical on disk to what an
+//!   earlier revision shipped at that path, counts as the pack's own copy,
+//!   like a match with B: replaced or removed without asking and without a
+//!   `.bak`. A verified baseline entry is left to the table (the player may
+//!   have rolled the file back on purpose).
+//! - Leftovers: a path an earlier revision shipped that is in neither B nor
+//!   T (in any letter case), on disk as a regular file (not through a link)
+//!   byte-identical to what an earlier revision shipped there, is removed
+//!   without asking, and kept as `.bak` (it may be the player's own copy of
+//!   the same file).
 //!
-//!   Neither applies to an unknown hash or an empty file (every empty file
-//!   has the same hash).
-//! - Second pass (`PlanInput::ask_unknown_leftovers`): a path an earlier
-//!   revision shipped that is in neither B nor T (in any letter case), on
-//!   disk as a non-empty regular file (not through a link) of a size an
-//!   earlier revision listed for that path, and not set aside by the first
-//!   pass in the same plan, is a conflict `removed_unknown`, whatever its
-//!   hash: unknown, known and different, or (when the first pass is not
-//!   due) known and the same. A file of another size is left alone: the
-//!   game or the player wrote it since (a save, a log). Drop can't tell
-//!   whether it is the pack's file or the player's, so it asks. Take update
-//!   moves it to `.bak`; keep mine leaves it and records it in `kept_mine`.
-//!   It never turns on the first pass's rules.
+//! Neither applies to Drop runtime data, a mod's file, a file the player
+//! chose "keep mine" for (including one the target had removed), an unknown
+//! hash, or an empty file (every empty file has the same hash). A candidate
+//! reached through a linked player-data folder is left alone and the pass is
+//! marked incomplete (`Plan::heal_incomplete`), so the next update runs it
+//! again.
 //!
-//! Neither pass applies to Drop runtime data, a mod's file, or a file the
-//! player chose "keep mine" for (including one the target had removed). A
-//! candidate reached through a linked player-data folder is left alone and
-//! the pass is marked incomplete (`Plan::heal_incomplete`,
-//! `Plan::unknown_leftovers_incomplete`), so the next update runs it again.
+//! Mirrored folders (`PlanInput::mirror_folders`, the target version's
+//! setting on the server). Inside one, the folder ends up holding exactly the
+//! target's files, and the rules above change:
+//! - A target file there always ends up identical to T. Where the table says
+//!   `added_exists` or `changed_both`, or the player-data rule would leave a
+//!   different file in place, it is replaced without asking; an unchanged
+//!   file is checked against the disk even with a verified baseline entry.
+//!   `removed_edited` becomes a removal without asking. "Keep mine" records
+//!   (`PlanInput::kept_mine`) do not apply.
+//! - Every copy the player loses there (what `.bak` would keep elsewhere)
+//!   goes to the recovery folder instead (`WriteOp::recover`), and is listed
+//!   in [`Plan::backup_paths`] and [`Plan::recovery_paths`].
+//! - Every other file on disk under the folder (any depth) that neither B nor
+//!   T lists is a conflict `extra_file`: take update moves it to the
+//!   recovery folder, keep mine leaves it and adds it to the install's
+//!   whitelist (`Resolved::kept_extras`). Not asked about: a whitelisted file
+//!   (`PlanInput::kept_extras`), Drop runtime data, a mod's file, Drop's own
+//!   paths, and a file another rule already removes (a healed leftover).
+//! - A mirrored folder that is a link, or is reached through one, is not
+//!   listed, and neither is a link inside one. Either is reported in
+//!   [`Plan::skipped_linked`] when B or T lists files behind it, which the
+//!   update can't check or change; a link holding only the player's own
+//!   files is left alone without a note. A missing mirrored folder has
+//!   nothing to list.
+//!
+//! Drop runtime data and the mod hand-over rules are the same inside a
+//! mirrored folder as anywhere else, except that a mod's copy the game takes
+//! back goes to the recovery folder rather than `.bak`.
 //!
 //! Last: a file standing where the update needs a folder is
 //! removed first (kept as `.bak` unless it is exactly the old shipped file),
@@ -193,7 +205,8 @@ pub trait DiskView {
     fn sha256(&self, rel: &str) -> std::io::Result<String>;
     /// Every entry under the directory `rel`, recursively, as install-relative
     /// `/` paths, without following links (a link is one entry). Directories
-    /// themselves are not listed, only what they hold.
+    /// themselves are not listed, only what they hold. An error when `rel`
+    /// itself is not a real directory.
     fn files_under(&self, rel: &str) -> std::io::Result<Vec<String>>;
 }
 
@@ -203,10 +216,10 @@ pub enum ConflictKind {
     AddedExists,
     ChangedBoth,
     RemovedEdited,
-    /// A file an earlier revision shipped that neither the baseline nor the
-    /// target lists, still on disk: Drop can't tell whether it is the pack's
-    /// or the player's (the second healing pass, see the module docs).
-    RemovedUnknown,
+    /// A file in a mirrored folder that neither the baseline nor the target
+    /// lists (see the module docs). Take update moves it to the recovery
+    /// folder; keep mine adds it to the install's whitelist.
+    ExtraFile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,9 +276,14 @@ pub struct WriteOp {
     /// Kept as `.bak` without asking, because Drop can't tell whether the
     /// player changed it (see [`Plan::backup_paths`]).
     pub backup: bool,
+    /// The replaced file is in a mirrored folder: when it is kept
+    /// (`keep_bak`), it goes to the recovery folder instead of next to the
+    /// new file as `.bak`, so the folder holds only the pack's files.
+    pub recover: bool,
 }
 
-/// Remove a file the target no longer ships.
+/// Remove a file the target no longer ships, or one a mirrored folder
+/// should not hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteOp {
     pub existing: Existing,
@@ -273,6 +291,8 @@ pub struct DeleteOp {
     pub keep_bak: bool,
     /// As [`WriteOp::backup`].
     pub backup: bool,
+    /// As [`WriteOp::recover`].
+    pub recover: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -295,24 +315,22 @@ pub struct Plan {
     pub kept: Vec<(RemoteFile, Option<u64>)>,
     /// Player-data folders that are links (or reached through one), where
     /// this update had files to add, change or remove and left them as they
-    /// are. Sorted, no duplicates.
+    /// are; and links in or on the way to a mirrored folder with pack files
+    /// behind them, which the update did not look inside. Sorted, no
+    /// duplicates.
     pub skipped_linked: Vec<String>,
-    /// The first healing pass was due (`PlanInput::heal_protected`, with
+    /// The healing was due (`PlanInput::heal_protected`, with
     /// earlier revisions to heal from) but a linked player-data folder kept
     /// it from checking a file it should have: the next baseline must not be
     /// marked healed (`Sidecar::healed_protected_folders`).
     pub heal_incomplete: bool,
-    /// As `heal_incomplete`, for the second pass
-    /// (`PlanInput::ask_unknown_leftovers`, `Sidecar::healed_unknown_leftovers`):
-    /// a leftover it would have asked about is reached through a linked
-    /// player-data folder.
-    pub unknown_leftovers_incomplete: bool,
     /// Baseline paths the target no longer ships (Drop runtime data
-    /// excluded), leftovers an earlier revision shipped that are removed,
-    /// and leftovers asked about (`removed_unknown`, whatever the player
-    /// chooses, as for `removed_edited`). Every mod's backup of these is
-    /// discarded, as the Phase 0 sweep does.
+    /// excluded), and leftovers an earlier revision shipped that are
+    /// removed. Every mod's backup of these is discarded, as the Phase 0
+    /// sweep does.
     pub dropped: Vec<String>,
+    /// The mirrored folders this plan applied (see the module docs).
+    pub mirrors: Mirrors,
 }
 
 impl Plan {
@@ -346,9 +364,12 @@ impl Plan {
     ///   mtime: a baseline from the server, or an older install's), so the
     ///   file may be an older copy rather than the player's edit;
     /// - a Drop-managed mod had replaced it (it may also hold player edits);
-    /// - a folder of the update has to go where the file is.
+    /// - a folder of the update has to go where the file is;
+    /// - it is in a mirrored folder and differs from what the target ships
+    ///   there, or the target no longer ships it. These copies go to the
+    ///   recovery folder rather than `.bak` (see [`Self::recovery_paths`]).
     ///
-    /// Spelt as on disk (where the `.bak` goes). Never also a conflict.
+    /// Spelt as on disk. Never also a conflict.
     pub fn backup_paths(&self) -> Vec<String> {
         let mut out: Vec<String> = self
             .writes
@@ -359,6 +380,25 @@ impl Plan {
                 self.deletes
                     .iter()
                     .filter(|d| d.backup && d.conflict.is_none())
+                    .map(|d| d.existing.disk_path.clone()),
+            )
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The [`Self::backup_paths`] whose copy goes to the recovery folder
+    /// rather than `.bak` (those in a mirrored folder).
+    pub fn recovery_paths(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .writes
+            .iter()
+            .filter(|w| w.backup && w.recover && w.conflict.is_none())
+            .filter_map(|w| w.existing.as_ref().map(|e| e.disk_path.clone()))
+            .chain(
+                self.deletes
+                    .iter()
+                    .filter(|d| d.backup && d.recover && d.conflict.is_none())
                     .map(|d| d.existing.disk_path.clone()),
             )
             .collect();
@@ -436,6 +476,7 @@ pub fn same_hash(a: &str, b: &str) -> bool {
 /// planned (it would overwrite Drop's own state).
 const RESERVED_TOP_LEVEL: &[&str] = &[
     super::UPDATE_DIR,
+    super::RECOVERY_DIR,
     super::BASELINE_FILE,
     super::super::drop_data::DROPDATA_PATH,
     super::super::mod_data::MODS_DIR,
@@ -484,6 +525,86 @@ impl Fold {
     }
 }
 
+/// The mirrored folders of a plan (see the module docs): normalised, Drop's
+/// own top-level names and nested entries dropped, matched as the install's
+/// filesystem compares paths.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Mirrors {
+    /// Spelt as the server spelt them.
+    folders: Vec<String>,
+    case_insensitive: bool,
+}
+
+impl Mirrors {
+    /// The server's list (`mirrorFolders`), re-checked: an entry that is
+    /// empty, absolute, holds `.`, `..`, `\` or an empty segment, has a
+    /// segment ending in `.` or a space (Windows drops those, so `mods.`
+    /// would be the real `mods` folder, matched by none of the pack's paths),
+    /// or names Drop's own data, is ignored with a warning. Duplicates (in
+    /// any letter case) and entries inside another entry are dropped.
+    pub fn new(raw: &[String], case_insensitive: bool) -> Self {
+        let mut valid: Vec<String> = Vec::new();
+        for entry in raw {
+            let ok = !entry.is_empty()
+                && !entry.contains('\\')
+                && normalize_path(entry).is_ok_and(|n| n == *entry)
+                && !entry.split('/').any(|seg| seg.ends_with('.') || seg.ends_with(' '))
+                && !is_reserved(&entry.to_lowercase());
+            if ok {
+                valid.push(entry.clone());
+            } else {
+                log::warn!("update plan: ignoring mirrored folder {entry:?} from the server");
+            }
+        }
+        // Shallowest first, so a nested entry finds its parent already kept.
+        valid.sort_by_key(|f| f.matches('/').count());
+        let mut folders: Vec<String> = Vec::new();
+        for f in valid {
+            let lower = f.to_lowercase();
+            let covered = folders.iter().any(|kept| {
+                let kept = kept.to_lowercase();
+                lower == kept || lower.starts_with(&format!("{kept}/"))
+            });
+            if !covered {
+                folders.push(f);
+            }
+        }
+        Self {
+            folders,
+            case_insensitive,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.folders.is_empty()
+    }
+
+    pub fn folders(&self) -> &[String] {
+        &self.folders
+    }
+
+    /// The folders, sorted: what the review shows and `apply` compares
+    /// (`UpdatePlan::mirror_folders`).
+    pub fn reviewed(&self) -> Vec<String> {
+        let mut out = self.folders.clone();
+        out.sort();
+        out
+    }
+
+    /// Whether `path` (install-relative, any separator) is inside a mirrored
+    /// folder.
+    pub fn contains(&self, path: &str) -> bool {
+        let Ok(n) = normalize_path(path) else {
+            return false;
+        };
+        let fold = Fold(self.case_insensitive);
+        let n = fold.key(&n);
+        self.folders
+            .iter()
+            .any(|f| n.starts_with(&format!("{}/", fold.key(f))))
+    }
+}
+
 /// Folded normalised paths that occur more than once in one list.
 fn case_collisions<'a>(
     paths: impl Iterator<Item = &'a str>,
@@ -526,16 +647,19 @@ pub struct PlanInput<'a> {
     pub is_player_data: &'a dyn Fn(&str) -> bool,
     /// Every path an earlier revision of the installed version shipped (up
     /// to the installed one), spelt as the server spells it, with every
-    /// `(size, sha256)` shipped for it (`sha256` is `""` where the hash was
-    /// unknown), for the one-shot healing of what 6.1.0/6.1.1 left behind
-    /// (see the module docs). Empty when neither pass is due.
+    /// `(size, sha256)` shipped for it (unknown hashes left out), for the
+    /// one-shot healing of what 6.1.0/6.1.1 left behind (see the module
+    /// docs). Empty when the healing is not due.
     pub previously_shipped: &'a HashMap<String, HashSet<(u64, String)>>,
-    /// Run the first healing pass: the earlier-copy rule and the silent
+    /// Run the one-shot healing: the earlier-copy rule and the silent
     /// leftovers (see the module docs).
     pub heal_protected: bool,
-    /// Run the second healing pass: ask about leftovers whose original
-    /// contents are unknown (`removed_unknown`, see the module docs).
-    pub ask_unknown_leftovers: bool,
+    /// Folders the target version mirrors, as the server sent them
+    /// (`mirrorFolders`; re-checked by [`Mirrors::new`]). Empty: none.
+    pub mirror_folders: &'a [String],
+    /// The install's whitelist (`Sidecar::kept_extras`): files in mirrored
+    /// folders the player chose to keep, never asked about again.
+    pub kept_extras: &'a HashSet<String>,
     /// Files Drop-managed mods have claimed, install-relative, as spelt in
     /// the mod ledgers (`mod_owned_files_spelled`).
     pub mod_owned: &'a HashSet<String>,
@@ -545,7 +669,8 @@ pub struct PlanInput<'a> {
     /// local baseline's `keptMine`), spelt as the target (or, for a file the
     /// target removed, the baseline) spelt them. Their baseline entry has no
     /// mtime on purpose; see `plan_unchanged`. They are never treated as the
-    /// pack's copy, nor removed or asked about as leftovers.
+    /// pack's copy, nor removed as leftovers. Ignored inside mirrored
+    /// folders.
     pub kept_mine: &'a HashSet<String>,
 }
 
@@ -667,8 +792,13 @@ struct Ctx<'a> {
     earlier: BTreeMap<String, Earlier>,
     /// `PlanInput::heal_protected`.
     heal_protected: bool,
-    /// `PlanInput::ask_unknown_leftovers`.
-    ask_unknown_leftovers: bool,
+    mirrors: Mirrors,
+    /// `PlanInput::kept_extras` by `Fold::key`.
+    kept_extras: HashSet<String>,
+    /// `PlanInput::kept_extras`, normalised and lower-cased.
+    kept_extras_any_case: HashSet<String>,
+    /// Every path B or T lists, normalised (not folded).
+    listed_exact: HashSet<String>,
     /// Folders already checked by `linked_player_data_folder`.
     linked: RefCell<HashMap<String, bool>>,
     fold: Fold,
@@ -692,7 +822,7 @@ impl Ctx<'_> {
     }
 
     /// What earlier revisions shipped at `p`, when a copy matching one may
-    /// count as the pack's: only while the first healing pass runs, only
+    /// count as the pack's: only while the healing runs, only
     /// under a player-data folder, never for Drop runtime data, nor for a
     /// file the player chose to keep.
     fn earlier_copies(&self, p: &str) -> Option<&HashSet<(u64, String)>> {
@@ -725,17 +855,37 @@ impl Ctx<'_> {
         paths.iter().find_map(|p| self.linked_player_data_folder(p))
     }
 
-    /// Whether this plan runs the first healing pass, with earlier revisions
-    /// to heal from (see the module docs). The second pass alone never makes
-    /// this true.
+    /// Whether this plan runs the healing, with earlier revisions to heal
+    /// from (see the module docs).
     fn healing(&self) -> bool {
         self.heal_protected && !self.earlier.is_empty()
     }
 
+    /// The player chose "keep mine" for `p` in an earlier update. Never true
+    /// inside a mirrored folder, which always matches the target.
     fn kept_by_player(&self, p: &str) -> bool {
-        normalize_path(p)
-            .map(|n| self.kept_mine.contains(&self.fold.key(&n)))
-            .unwrap_or(false)
+        !self.mirrored(p)
+            && normalize_path(p)
+                .map(|n| self.kept_mine.contains(&self.fold.key(&n)))
+                .unwrap_or(false)
+    }
+
+    fn mirrored(&self, p: &str) -> bool {
+        self.mirrors.contains(p)
+    }
+
+    /// Whether B or T lists a file inside the folder `dir` (in any letter
+    /// case).
+    fn lists_files_under(&self, dir: &str) -> bool {
+        let Ok(n) = normalize_path(dir) else { return false };
+        let prefix = format!("{}/", n.to_lowercase());
+        self.listed_exact.iter().any(|p| p.to_lowercase().starts_with(&prefix))
+    }
+
+    /// The player chose to keep `p` in a mirrored folder (the whitelist), in
+    /// any letter case.
+    fn whitelisted(&self, p: &str) -> bool {
+        normalize_path(p).is_ok_and(|n| self.kept_extras_any_case.contains(&n.to_lowercase()))
     }
 
     /// Whether this client never confirmed the baseline entry against this
@@ -762,7 +912,8 @@ pub fn plan(input: PlanInput<'_>) -> Result<Plan, PlanError> {
         kept_mine,
         previously_shipped,
         heal_protected,
-        ask_unknown_leftovers,
+        mirror_folders,
+        kept_extras,
     } = input;
     let fold = Fold(case_insensitive);
 
@@ -793,7 +944,23 @@ pub fn plan(input: PlanInput<'_>) -> Result<Plan, PlanError> {
             .collect(),
         earlier: earlier_by_key(previously_shipped, fold),
         heal_protected,
-        ask_unknown_leftovers,
+        mirrors: Mirrors::new(mirror_folders, case_insensitive),
+        kept_extras: kept_extras
+            .iter()
+            .filter_map(|p| normalize_path(p).ok())
+            .map(|n| fold.key(&n))
+            .collect(),
+        kept_extras_any_case: kept_extras
+            .iter()
+            .filter_map(|p| normalize_path(p).ok())
+            .map(|n| n.to_lowercase())
+            .collect(),
+        listed_exact: baseline
+            .iter()
+            .map(|b| b.path.as_str())
+            .chain(target.iter().map(|t| t.path.as_str()))
+            .filter_map(|p| normalize_path(p).ok())
+            .collect(),
         linked: RefCell::new(HashMap::new()),
         fold,
     };
@@ -823,14 +990,145 @@ pub fn plan(input: PlanInput<'_>) -> Result<Plan, PlanError> {
             (Some(b), None) => plan_removed(&mut plan, &ctx, b)?,
         }
     }
-    let set_aside = plan_leftovers(&mut plan, &ctx, &listed);
-    plan_unknown_leftovers(&mut plan, &ctx, &listed, &set_aside);
+    plan_leftovers(&mut plan, &ctx, &listed);
+    plan_extras(&mut plan, &ctx, &listed)?;
     plan.skipped_linked.sort();
     plan.skipped_linked.dedup();
     refuse_links(&plan, &ctx)?;
     clear_way_for_folders(&mut plan, &ctx)?;
     clear_way_for_files(&mut plan, &ctx)?;
+    route_to_recovery(&mut plan, &ctx);
+    plan.mirrors = ctx.mirrors;
     Ok(plan)
+}
+
+/// Ask about the files mirrored folders hold that neither B nor T lists:
+/// see "Mirrored folders" in the module docs. `listed` holds every B and T
+/// path, normalised and lower-cased.
+///
+/// A file that matches a listed path only in letter case is the same file
+/// on a disk that ignores case, and is not asked about. On a disk that does
+/// not, it is a different file only when the listed spelling is on disk
+/// too; otherwise it is left alone (an SD card formatted exFAT ignores case
+/// even on Linux, and two operations on one file would stop the commit).
+fn plan_extras(plan: &mut Plan, ctx: &Ctx<'_>, listed: &HashSet<String>) -> Result<(), PlanError> {
+    if ctx.mirrors.is_empty() {
+        return Ok(());
+    }
+    // Files an operation of this plan already acts on (a healed leftover):
+    // never a second operation on the same file.
+    let acted_on: HashSet<String> = plan
+        .deletes
+        .iter()
+        .map(|d| d.existing.disk_path.as_str())
+        .chain(plan.writes.iter().filter_map(|w| w.existing.as_ref().map(|e| e.disk_path.as_str())))
+        .filter_map(|p| normalize_path(p).ok())
+        .map(|n| n.to_lowercase())
+        .collect();
+    let mut asked: HashSet<String> = HashSet::new();
+    for folder in ctx.mirrors.folders() {
+        // The folder, or one on the way to it, must be a real folder: a link
+        // is never walked through, and is reported instead.
+        let mut chain = ancestors(folder);
+        chain.push(folder.clone());
+        let mut blocked: Option<(String, DiskStat)> = None;
+        for dir in chain {
+            let stat = ctx.disk.stat(&dir);
+            if stat != DiskStat::Dir {
+                blocked = Some((dir, stat));
+                break;
+            }
+        }
+        match blocked {
+            None => {}
+            // Reported only when the pack has files there (which this update
+            // can't check or change through the link); a link holding only
+            // the player's own files is left alone without a note.
+            Some((dir, DiskStat::Other)) => {
+                log::warn!("update plan: not checking mirrored folder {folder}: {dir} is a link");
+                if ctx.lists_files_under(folder) {
+                    plan.skipped_linked.push(dir);
+                }
+                continue;
+            }
+            // Missing (or a file where a folder would be): nothing to list.
+            Some((dir, _)) => {
+                log::info!("update plan: mirrored folder {folder} is not on disk ({dir} is not a folder); nothing to check there");
+                continue;
+            }
+        }
+        let mut entries = ctx
+            .disk
+            .files_under(folder)
+            .map_err(|e| PlanError::Io(folder.clone(), e))?;
+        entries.sort();
+        let on_disk: HashSet<String> = entries.iter().filter_map(|e| normalize_path(e).ok()).collect();
+        for entry in entries {
+            let Ok(n) = normalize_path(&entry) else { continue };
+            let lower = n.to_lowercase();
+            if is_reserved(&lower) || ctx.runtime_data(&entry) || ctx.owned_by_mod(&entry) {
+                continue;
+            }
+            if listed.contains(&lower) {
+                // Listed in this exact spelling, or the same file in another
+                // letter case (see above).
+                let distinct = !ctx.fold.0
+                    && !ctx.listed_exact.contains(&n)
+                    && on_disk
+                        .iter()
+                        .any(|other| *other != n && other.to_lowercase() == lower && ctx.listed_exact.contains(other));
+                if !distinct {
+                    continue;
+                }
+            }
+            if ctx.kept_extras.contains(&ctx.fold.key(&n)) || acted_on.contains(&lower) {
+                continue;
+            }
+            if !asked.insert(ctx.fold.key(&n)) {
+                continue;
+            }
+            match ctx.disk.stat(&entry) {
+                DiskStat::File { .. } => plan.deletes.push(DeleteOp {
+                    existing: Existing {
+                        disk_path: entry,
+                        expect: Expect::Present,
+                    },
+                    conflict: Some(ConflictKind::ExtraFile),
+                    keep_bak: false,
+                    backup: false,
+                    recover: true,
+                }),
+                // A link (or something Drop can't look at) inside the folder:
+                // left alone, and reported only when the pack has files
+                // behind it (a linked subfolder the update can't check).
+                DiskStat::Other => {
+                    log::info!("update plan: leaving {entry} in a mirrored folder alone: it is a link");
+                    if ctx.lists_files_under(&entry) {
+                        plan.skipped_linked.push(entry);
+                    }
+                }
+                DiskStat::Missing | DiskStat::Dir => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every operation inside a mirrored folder keeps the player's copy (when
+/// it keeps one) in the recovery folder, not as `.bak` next to it: a `.bak`
+/// there would be an extra file the next update asks about.
+fn route_to_recovery(plan: &mut Plan, ctx: &Ctx<'_>) {
+    if ctx.mirrors.is_empty() {
+        return;
+    }
+    for w in &mut plan.writes {
+        if let Some(e) = &w.existing {
+            w.recover = ctx.mirrored(&e.disk_path);
+        }
+    }
+    for d in &mut plan.deletes {
+        d.recover = ctx.mirrored(&d.existing.disk_path);
+    }
 }
 
 /// Every folder an operation goes through must be a real folder (or not
@@ -870,6 +1168,7 @@ fn write(file: &RemoteFile, added: bool, existing: Option<Existing>, conflict: O
         conflict,
         keep_bak: false,
         backup: false,
+        recover: false,
     }
 }
 
@@ -886,6 +1185,7 @@ fn write_with_backup(file: &RemoteFile, added: bool, disk_path: String) -> Write
         conflict: None,
         keep_bak: true,
         backup: true,
+        recover: false,
     }
 }
 
@@ -924,6 +1224,11 @@ fn plan_added(plan: &mut Plan, ctx: &Ctx<'_>, t: &RemoteFile) -> Result<(), Plan
                 expect: expect_content(seen.sha256.as_deref().unwrap_or_default(), seen.stat),
             };
             plan.writes.push(write(t, true, Some(existing), None));
+        }
+        // A mirrored folder matches the target: the update's copy goes in,
+        // the one on disk to the recovery folder, without asking.
+        OnDisk::Base | OnDisk::Other if ctx.mirrored(&t.path) => {
+            plan.writes.push(write_with_backup(t, true, t.path.clone()));
         }
         OnDisk::Base | OnDisk::Other => {
             let existing = Existing {
@@ -985,6 +1290,7 @@ fn plan_both(plan: &mut Plan, ctx: &Ctx<'_>, b: &BaselineFile, t: &RemoteFile) -
     let seen = look(ctx.disk, &disk_path, Some(b), Some(t), earlier)?;
     let unknown_base = ctx.unverified(b) && !ctx.kept_by_player(&t.path);
     let player_data = ctx.player_data(&b.path) || ctx.player_data(&t.path);
+    let mirrored = ctx.mirrored(&b.path) || ctx.mirrored(&t.path);
     match seen.state {
         OnDisk::Missing => plan.writes.push(write(t, false, None, None)),
         OnDisk::Base | OnDisk::Earlier => {
@@ -1012,8 +1318,11 @@ fn plan_both(plan: &mut Plan, ctx: &Ctx<'_>, b: &BaselineFile, t: &RemoteFile) -
         // disk (see `Ctx::unverified`): the update wins and the file on disk
         // is kept as .bak, without a conflict to decide. Not under a
         // player-data folder, where it may be an emulator's save or setting:
-        // that falls through to a conflict.
-        OnDisk::Other if unknown_base && !player_data => plan.writes.push(write_with_backup(t, false, disk_path)),
+        // that falls through to a conflict. In a mirrored folder the update
+        // always wins, without asking (the copy goes to the recovery folder).
+        OnDisk::Other if (unknown_base && !player_data) || mirrored => {
+            plan.writes.push(write_with_backup(t, false, disk_path))
+        }
         OnDisk::Other => {
             let existing = Existing {
                 disk_path,
@@ -1051,9 +1360,13 @@ fn plan_both(plan: &mut Plan, ctx: &Ctx<'_>, b: &BaselineFile, t: &RemoteFile) -
 /// Files the player chose "keep mine" for also have no mtime, on purpose:
 /// they stay as they are. So do Drop runtime data and files a Drop-managed
 /// mod has claimed, as for any unchanged file.
+///
+/// In a mirrored folder the disk is always checked (a verified entry whose
+/// size and mtime still match needs no hash), and a different file there is
+/// replaced, its copy going to the recovery folder.
 fn plan_unchanged(plan: &mut Plan, ctx: &Ctx<'_>, b: &BaselineFile, t: &RemoteFile) -> Result<(), PlanError> {
-    if !ctx.unverified(b)
-        || ctx.kept_by_player(&t.path)
+    let mirrored = ctx.mirrored(&b.path) || ctx.mirrored(&t.path);
+    if (!mirrored && (!ctx.unverified(b) || ctx.kept_by_player(&t.path)))
         || ctx.runtime_data(&t.path)
         || ctx.runtime_data(&b.path)
         || ctx.owned_by_mod(&b.path)
@@ -1075,8 +1388,9 @@ fn plan_unchanged(plan: &mut Plan, ctx: &Ctx<'_>, b: &BaselineFile, t: &RemoteFi
             plan.writes.push(write(t, false, Some(existing), None));
         }
         // A different file under a player-data folder: an emulator may have
-        // rewritten it (its settings, say). Left alone, as before.
-        OnDisk::Other if ctx.player_data(&b.path) || ctx.player_data(&t.path) => {
+        // rewritten it (its settings, say). Left alone, as before, unless the
+        // folder is mirrored.
+        OnDisk::Other if !mirrored && (ctx.player_data(&b.path) || ctx.player_data(&t.path)) => {
             plan.kept.push((t.clone(), b.mtime));
         }
         // A different file, or a folder or link where the file should be.
@@ -1117,22 +1431,30 @@ fn plan_removed(plan: &mut Plan, ctx: &Ctx<'_>, b: &BaselineFile) -> Result<(), 
                 conflict: None,
                 keep_bak: false,
                 backup: false,
+                recover: false,
             });
         }
         // Unknown or unchecked original (see `Ctx::unverified`): removed, but
         // the file on disk is kept as .bak. Under a player-data folder it is
-        // asked about instead (below).
-        OnDisk::Target | OnDisk::Other if ctx.unverified(b) && !ctx.player_data(&b.path) => plan.deletes.push(DeleteOp {
-            existing: existing(Expect::Present),
-            conflict: None,
-            keep_bak: true,
-            backup: true,
-        }),
+        // asked about instead (below). In a mirrored folder it is always
+        // removed without asking, its copy going to the recovery folder.
+        OnDisk::Target | OnDisk::Other
+            if (ctx.unverified(b) && !ctx.player_data(&b.path)) || ctx.mirrored(&b.path) =>
+        {
+            plan.deletes.push(DeleteOp {
+                existing: existing(Expect::Present),
+                conflict: None,
+                keep_bak: true,
+                backup: true,
+                recover: false,
+            })
+        }
         OnDisk::Target | OnDisk::Other => plan.deletes.push(DeleteOp {
             existing: existing(Expect::Present),
             conflict: Some(ConflictKind::RemovedEdited),
             keep_bak: false,
             backup: false,
+            recover: false,
         }),
     }
     Ok(())
@@ -1144,12 +1466,8 @@ struct Earlier {
     /// One spelling to reach the file by: the first, sorted.
     path: String,
     /// Every (size, hash) shipped there whose hash is known and whose file
-    /// is not empty: what the first healing pass matches against. May be
-    /// empty.
+    /// is not empty: what the healing matches against. May be empty.
     copies: HashSet<(u64, String)>,
-    /// Every size listed there, known hash or not: what the second healing
-    /// pass matches against.
-    sizes: HashSet<u64>,
 }
 
 /// `previously_shipped` keyed as `Ctx::earlier`.
@@ -1171,7 +1489,6 @@ fn earlier_by_key(
         let entry = out.entry(fold.key(&n)).or_insert_with(|| Earlier {
             path: path.clone(),
             copies: HashSet::new(),
-            sizes: HashSet::new(),
         });
         if *path < entry.path {
             entry.path = path.clone();
@@ -1181,7 +1498,6 @@ fn earlier_by_key(
         entry
             .copies
             .extend(copies.iter().filter(|(size, h)| !h.is_empty() && *size > 0).cloned());
-        entry.sizes.extend(copies.iter().map(|(size, _)| *size));
     }
     out
 }
@@ -1190,28 +1506,28 @@ fn earlier_by_key(
 /// leftover at all: an earlier revision shipped it, neither B nor T lists it
 /// in any letter case (`listed` holds every B and T path, normalised and
 /// lower-cased), and it is under a player-data folder, not Drop runtime
-/// data, not a mod's, and not kept by the player.
+/// data, not a mod's, not kept by the player, and not on the whitelist of a
+/// mirrored folder (in any letter case).
 fn leftover_candidate(ctx: &Ctx<'_>, listed: &HashSet<String>, key: &str, path: &str) -> bool {
     !listed.contains(&key.to_lowercase())
         && ctx.player_data(path)
         && !ctx.runtime_data(path)
         && !ctx.owned_by_mod(path)
         && !ctx.kept_by_player(path)
+        && !ctx.whitelisted(path)
 }
 
-/// Remove pack files an earlier update left behind: see "leftovers" under
-/// the first healing pass in the module docs. Returns the `Ctx::earlier`
-/// keys it set aside, lower-cased.
+/// Remove pack files an earlier update left behind: see "leftovers" in the
+/// module docs.
 ///
 /// Best effort: a leftover that can't be read is left where it is (and
 /// logged) rather than failing the update. Only regular files whose size
 /// matches an earlier copy are hashed.
-fn plan_leftovers(plan: &mut Plan, ctx: &Ctx<'_>, listed: &HashSet<String>) -> HashSet<String> {
-    let mut set_aside = HashSet::new();
+fn plan_leftovers(plan: &mut Plan, ctx: &Ctx<'_>, listed: &HashSet<String>) {
     if !ctx.heal_protected {
-        return set_aside;
+        return;
     }
-    for (key, Earlier { path, copies, .. }) in &ctx.earlier {
+    for (key, Earlier { path, copies }) in &ctx.earlier {
         if copies.is_empty() || !leftover_candidate(ctx, listed, key, path) {
             continue;
         }
@@ -1251,71 +1567,7 @@ fn plan_leftovers(plan: &mut Plan, ctx: &Ctx<'_>, listed: &HashSet<String>) -> H
             conflict: None,
             keep_bak: true,
             backup: true,
-        });
-        plan.dropped.push(path.clone());
-        set_aside.insert(key.to_lowercase());
-    }
-    set_aside
-}
-
-/// Ask about files an earlier revision shipped that neither list names any
-/// more: see the second healing pass in the module docs. `set_aside` holds
-/// the `Ctx::earlier` keys the first pass already removed in this plan,
-/// lower-cased.
-///
-/// The hash does not matter, so nothing is read: only the file's kind and
-/// size are looked at, and the size must be one an earlier revision listed
-/// for the path (an unknown hash still comes with the import manifest's
-/// size, so a pack file renamed since still matches).
-///
-/// Spellings that differ only in case are asked about once, and not at all
-/// when the first pass set one aside: on a disk that ignores case although
-/// this build does not (an exFAT SD card on Linux) they are the same file,
-/// and two operations on it would stop the commit. On a disk that does not
-/// ignore case, the second file is left as it is, as before this pass.
-fn plan_unknown_leftovers(plan: &mut Plan, ctx: &Ctx<'_>, listed: &HashSet<String>, set_aside: &HashSet<String>) {
-    if !ctx.ask_unknown_leftovers {
-        return;
-    }
-    let mut taken: HashSet<String> = set_aside.clone();
-    for (key, Earlier { path, sizes, .. }) in &ctx.earlier {
-        if taken.contains(&key.to_lowercase()) || !leftover_candidate(ctx, listed, key, path) {
-            continue;
-        }
-        // A real, non-empty file. An empty one is nothing to ask about, and a
-        // link or folder is not the pack's file.
-        let DiskStat::File { size, .. } = ctx.disk.stat(path) else {
-            continue;
-        };
-        if size == 0 {
-            continue;
-        }
-        // The size an earlier revision listed for this path. Anything else
-        // is a file the game or the player wrote since (a save, a log, the
-        // launcher's options), not one the pack left behind.
-        if !sizes.contains(&size) {
-            continue;
-        }
-        // Not asked through a link: tried again by the next update.
-        if ctx.linked_folder_of(&[path]).is_some() {
-            plan.unknown_leftovers_incomplete = true;
-            continue;
-        }
-        // Not through a link (nor through anything else that is not a real
-        // folder): the file must really be inside the install.
-        if ancestors(path).iter().any(|a| ctx.disk.stat(a) != DiskStat::Dir) {
-            continue;
-        }
-        taken.insert(key.to_lowercase());
-        log::info!("update plan: asking about {path}, a file an earlier revision shipped and this one does not");
-        plan.deletes.push(DeleteOp {
-            existing: Existing {
-                disk_path: path.clone(),
-                expect: Expect::Present,
-            },
-            conflict: Some(ConflictKind::RemovedUnknown),
-            keep_bak: false,
-            backup: false,
+            recover: false,
         });
         plan.dropped.push(path.clone());
     }
@@ -1331,7 +1583,8 @@ fn ancestors(rel: &str) -> Vec<String> {
 /// target has `data/x`). The file has to go first: a planned delete of it
 /// loses its conflict (the folder can't be kept out) and keeps a .bak; a file
 /// the plan wasn't going to touch is removed with a .bak. Protected player
-/// data in the way stops the plan, and so does a `removed_unknown` leftover.
+/// data in the way stops the plan, except in a mirrored folder (which must
+/// match the target; the file goes to the recovery folder).
 fn clear_way_for_folders(plan: &mut Plan, ctx: &Ctx<'_>) -> Result<(), PlanError> {
     let mut needed: Vec<String> = plan
         .writes
@@ -1353,13 +1606,6 @@ fn clear_way_for_folders(plan: &mut Plan, ctx: &Ctx<'_>) -> Result<(), PlanError
                 .unwrap_or(false)
         });
         match planned {
-            // A leftover Drop is asking about: it is not known to be the
-            // pack's, so it is not set aside without asking. It stops the
-            // plan, as it did before the second healing pass, when it was
-            // an unlisted file under a player-data folder.
-            Some(d) if d.conflict == Some(ConflictKind::RemovedUnknown) => {
-                return Err(PlanError::InTheWay(folder));
-            }
             Some(d) => {
                 if d.conflict.is_some() {
                     d.conflict = None;
@@ -1368,8 +1614,8 @@ fn clear_way_for_folders(plan: &mut Plan, ctx: &Ctx<'_>) -> Result<(), PlanError
                 }
             }
             // A file in neither list under a runtime or player-data folder
-            // is never touched.
-            None if ctx.runtime_data(&folder) || ctx.player_data(&folder) => {
+            // is never touched, unless a mirrored folder holds it.
+            None if ctx.runtime_data(&folder) || (ctx.player_data(&folder) && !ctx.mirrored(&folder)) => {
                 return Err(PlanError::InTheWay(folder));
             }
             None => plan.deletes.push(DeleteOp {
@@ -1380,6 +1626,7 @@ fn clear_way_for_folders(plan: &mut Plan, ctx: &Ctx<'_>) -> Result<(), PlanError
                 conflict: None,
                 keep_bak: true,
                 backup: true,
+                recover: false,
             }),
         }
     }
@@ -1441,38 +1688,40 @@ pub struct Resolved {
     pub next_baseline: Vec<(RemoteFile, NextMtime)>,
     pub dropped: Vec<String>,
     /// Files the player chose to keep their own copy of: target files, and
-    /// files the target removed (`removed_edited`) or an earlier revision
-    /// left behind (`removed_unknown`). Recorded in the baseline
+    /// files the target removed (`removed_edited`). Recorded in the baseline
     /// so a later repair keeps a .bak before restoring them, and so no later
     /// update treats them as the pack's copy or removes them as leftovers.
     pub kept_mine: Vec<String>,
+    /// Files in mirrored folders the player chose to keep (`extra_file`,
+    /// keep mine), for the install's whitelist (`Sidecar::kept_extras`).
+    pub kept_extras: Vec<String>,
     /// As [`Plan::skipped_linked`].
     pub skipped_linked: Vec<String>,
     /// As [`Plan::heal_incomplete`].
     pub heal_incomplete: bool,
-    /// As [`Plan::unknown_leftovers_incomplete`].
-    pub unknown_leftovers_incomplete: bool,
+    /// As [`Plan::mirrors`].
+    pub mirrors: Mirrors,
 }
 
 /// Apply the player's decisions. `Err` lists the conflicts with no decision.
 /// Decisions for paths that are not conflicts are ignored.
 ///
 /// - take update: the player's file is moved aside and kept as `<file>.bak`
-///   (for `removed_edited` and `removed_unknown` too: it leaves its path but
-///   is not destroyed);
+///   (for `removed_edited` too: it leaves its path but is not destroyed). An
+///   `extra_file` is moved to the recovery folder instead
+///   (`DeleteOp::recover`);
 /// - keep mine: the file is not touched. For `changed_both`/`added_exists`
 ///   the next baseline records the TARGET hash, so the file keeps reading as
 ///   the player's change; for `removed_edited` the path leaves the baseline
-///   and the file becomes the player's own, as a `removed_unknown` file
-///   (never in the baseline) does. Either way the path is recorded in
-///   `kept_mine`.
+///   and the file becomes the player's own. Either way the path is recorded
+///   in `kept_mine`. An `extra_file` is recorded in `kept_extras` instead.
 pub fn resolve(plan: Plan, resolutions: &HashMap<String, Resolution>) -> Result<Resolved, Vec<String>> {
     let mut unresolved: BTreeSet<String> = BTreeSet::new();
     let mut out = Resolved {
         dropped: plan.dropped,
         skipped_linked: plan.skipped_linked,
         heal_incomplete: plan.heal_incomplete,
-        unknown_leftovers_incomplete: plan.unknown_leftovers_incomplete,
+        mirrors: plan.mirrors,
         ..Default::default()
     };
     for (file, mtime) in plan.kept {
@@ -1508,6 +1757,9 @@ pub fn resolve(plan: Plan, resolutions: &HashMap<String, Resolution>) -> Result<
                     d.keep_bak = true;
                     out.deletes.push(d);
                 }
+                Some(Resolution::KeepMine) if d.conflict == Some(ConflictKind::ExtraFile) => {
+                    out.kept_extras.push(d.existing.disk_path)
+                }
                 Some(Resolution::KeepMine) => out.kept_mine.push(d.existing.disk_path),
                 None => {
                     unresolved.insert(d.existing.disk_path);
@@ -1520,6 +1772,7 @@ pub fn resolve(plan: Plan, resolutions: &HashMap<String, Resolution>) -> Result<
     }
     out.next_baseline.sort_by(|a, b| a.0.path.cmp(&b.0.path));
     out.kept_mine.sort();
+    out.kept_extras.sort();
     Ok(out)
 }
 
@@ -1648,7 +1901,8 @@ mod tests {
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
             heal_protected: false,
-            ask_unknown_leftovers: false,
+            mirror_folders: &[],
+            kept_extras: &HashSet::new(),
             mod_owned: mods,
             case_insensitive: d.case_insensitive,
             kept_mine: &HashSet::new(),
@@ -1666,7 +1920,8 @@ mod tests {
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
             heal_protected: false,
-            ask_unknown_leftovers: false,
+            mirror_folders: &[],
+            kept_extras: &HashSet::new(),
             mod_owned: &HashSet::new(),
             case_insensitive: d.case_insensitive,
             kept_mine: &kept,
@@ -1850,7 +2105,8 @@ mod tests {
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
             heal_protected: false,
-            ask_unknown_leftovers: false,
+            mirror_folders: &[],
+            kept_extras: &HashSet::new(),
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -1987,7 +2243,8 @@ mod tests {
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
             heal_protected: false,
-            ask_unknown_leftovers: false,
+            mirror_folders: &[],
+            kept_extras: &HashSet::new(),
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -2319,7 +2576,8 @@ mod tests {
                 is_player_data: &never_protected,
                 previously_shipped: &HashMap::new(),
                 heal_protected: false,
-                ask_unknown_leftovers: false,
+                mirror_folders: &[],
+            kept_extras: &HashSet::new(),
                 mod_owned: &HashSet::new(),
                 case_insensitive: false,
                 kept_mine: &HashSet::new(),
@@ -2338,7 +2596,8 @@ mod tests {
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
             heal_protected: false,
-            ask_unknown_leftovers: false,
+            mirror_folders: &[],
+            kept_extras: &HashSet::new(),
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -2483,7 +2742,8 @@ mod tests {
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
             heal_protected: false,
-            ask_unknown_leftovers: false,
+            mirror_folders: &[],
+            kept_extras: &HashSet::new(),
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -2518,7 +2778,8 @@ mod tests {
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
             heal_protected: false,
-            ask_unknown_leftovers: false,
+            mirror_folders: &[],
+            kept_extras: &HashSet::new(),
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -2568,7 +2829,8 @@ mod tests {
             kept_mine: &kept,
             previously_shipped: prev,
             heal_protected: !prev.is_empty(),
-            ask_unknown_leftovers: false,
+            mirror_folders: &[],
+            kept_extras: &HashSet::new(),
         })
         .expect("plan")
     }
@@ -2742,7 +3004,8 @@ mod tests {
             is_player_data: &is_player_data_folder,
             previously_shipped: &HashMap::new(),
             heal_protected: false,
-            ask_unknown_leftovers: false,
+            mirror_folders: &[],
+            kept_extras: &HashSet::new(),
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -2992,7 +3255,8 @@ mod tests {
             is_player_data: &never_protected,
             previously_shipped: &HashMap::new(),
             heal_protected: false,
-            ask_unknown_leftovers: false,
+            mirror_folders: &[],
+            kept_extras: &HashSet::new(),
             mod_owned: &HashSet::new(),
             case_insensitive: false,
             kept_mine: &HashSet::new(),
@@ -3003,440 +3267,341 @@ mod tests {
         assert_eq!(only_write_of(&p).file.path, "Game.exe");
     }
 
-    // ---- the second healing pass: leftovers whose original is unknown ----
+    // ---- mirrored folders ----
     //
-    // The bug (a real player, 6.1.2): a modpack version imported before
-    // revisions existed was edited on the server before its fingerprints
-    // were recorded, so revision 1 lists files with an unknown hash
-    // (including files renamed or deleted before the recording). 6.1.0/6.1.1
-    // never removed them under user/ and dropped them from the baseline, and
-    // 6.1.2's first pass only sets aside a file matching a KNOWN hash. Two
-    // old resource packs stayed, treated as the player's own files.
+    // The owner's design for modpacks (6.1.4): folders the admin marks as
+    // mirrored end up matching the server exactly. Files a player added
+    // there are kept only if the player says so, and that choice is
+    // remembered.
 
-    const MIZUNO: &str = "user/instances/Multiversal Pack/minecraft/resourcepacks/Mizuno x Fresh Animations 4.5.zip";
-    const RECOVERED: &str = "user/instances/Multiversal Pack/minecraft/resourcepacks/Re-covered.zip";
+    const MODS: &str = "user/instances/P/minecraft/mods";
 
-    fn pack(name: &str) -> String {
-        format!("user/instances/Multiversal Pack/minecraft/resourcepacks/{name}")
+    fn in_mods(name: &str) -> String {
+        format!("{MODS}/{name}")
     }
 
-    /// Which healing passes run, and the rest of the planner's inputs the
-    /// tests below vary.
-    #[derive(Clone, Copy, Default)]
-    struct Passes<'a> {
-        heal_protected: bool,
-        ask_unknown: bool,
+    /// Everything a mirrored-folder test varies.
+    #[derive(Default)]
+    struct Mirror<'a> {
+        folders: &'a [&'a str],
+        kept_extras: &'a [&'a str],
         kept_mine: &'a [&'a str],
         mods: &'a [&'a str],
+        prev: Option<&'a HashMap<String, HashSet<(u64, String)>>>,
     }
 
-    const ASK_ONLY: Passes<'static> = Passes {
-        heal_protected: false,
-        ask_unknown: true,
-        kept_mine: &[],
-        mods: &[],
-    };
-
-    const BOTH: Passes<'static> = Passes {
-        heal_protected: true,
-        ..ASK_ONLY
-    };
-
-    fn run_passes(
-        b: &[BaselineFile],
-        t: &[RemoteFile],
-        d: &MemDisk,
-        prev: &HashMap<String, HashSet<(u64, String)>>,
-        passes: Passes<'_>,
-    ) -> Plan {
-        try_passes(b, t, d, prev, passes).expect("plan")
-    }
-
-    fn try_passes(
-        b: &[BaselineFile],
-        t: &[RemoteFile],
-        d: &MemDisk,
-        prev: &HashMap<String, HashSet<(u64, String)>>,
-        passes: Passes<'_>,
-    ) -> Result<Plan, PlanError> {
-        let kept: HashSet<String> = passes.kept_mine.iter().map(|s| s.to_string()).collect();
-        let mods: HashSet<String> = passes.mods.iter().map(|s| s.to_string()).collect();
+    fn try_mirror(b: &[BaselineFile], t: &[RemoteFile], d: &MemDisk, m: Mirror<'_>) -> Result<Plan, PlanError> {
+        let set = |l: &[&str]| -> HashSet<String> { l.iter().map(|s| s.to_string()).collect() };
+        let folders: Vec<String> = m.folders.iter().map(|s| s.to_string()).collect();
+        let empty = HashMap::new();
+        let prev = m.prev.unwrap_or(&empty);
         plan(PlanInput {
             baseline: b,
             target: t,
             disk: d,
             is_runtime_data: &is_drop_runtime_data,
             is_player_data: &is_player_data_folder,
-            mod_owned: &mods,
+            mod_owned: &set(m.mods),
             case_insensitive: d.case_insensitive,
-            kept_mine: &kept,
+            kept_mine: &set(m.kept_mine),
             previously_shipped: prev,
-            heal_protected: passes.heal_protected,
-            ask_unknown_leftovers: passes.ask_unknown,
+            heal_protected: !prev.is_empty(),
+            mirror_folders: &folders,
+            kept_extras: &set(m.kept_extras),
         })
     }
 
-    /// What `fetch_previously_shipped` builds from a revision that lists
-    /// each path with an unknown hash and the size of the given content.
-    fn shipped_unknown(entries: &[(&str, &str)]) -> HashMap<String, HashSet<(u64, String)>> {
-        let files: Vec<RemoteFile> = entries
-            .iter()
-            .map(|(p, content)| RemoteFile {
-                path: p.to_string(),
-                size: content.len() as u64,
-                sha256: String::new(),
-            })
-            .collect();
-        let mut out = HashMap::new();
-        super::super::add_shipped(&mut out, &files);
-        out
+    fn run_mirror(b: &[BaselineFile], t: &[RemoteFile], d: &MemDisk, m: Mirror<'_>) -> Plan {
+        try_mirror(b, t, d, m).expect("plan")
     }
 
-    fn conflict(path: &str, kind: ConflictKind) -> Conflict {
-        Conflict {
-            path: path.to_string(),
-            kind,
-        }
+    fn extras_of(p: &Plan) -> Vec<String> {
+        p.conflicts()
+            .into_iter()
+            .filter(|c| c.kind == ConflictKind::ExtraFile)
+            .map(|c| c.path)
+            .collect()
     }
 
     #[test]
-    fn an_unknown_hash_leftover_under_user_is_asked_about_once() {
-        let d = disk_of(&[(MIZUNO, "old pack zip"), (RECOVERED, "old zip two"), ("Game.exe", "e1")]);
-        let prev = shipped_unknown(&[(MIZUNO, "old pack zip"), (RECOVERED, "old zip two")]);
-        assert_eq!(prev[MIZUNO], [(12, String::new())].into(), "{prev:?}");
-        let b = [base("Game.exe", "e1", Some(1))];
-        let t = [remote("Game.exe", "e2")];
-
-        // 6.1.2's pass alone has nothing to match them against.
-        let first_only = Passes {
-            heal_protected: true,
-            ..Default::default()
-        };
-        let p = run_passes(&b, &t, &d, &prev, first_only);
-        assert!(p.deletes.is_empty() && p.conflicts().is_empty(), "{p:#?}");
-
-        // The second pass asks about both.
-        let p = run_passes(&b, &t, &d, &prev, ASK_ONLY);
-        assert_eq!(
-            p.conflicts(),
-            vec![
-                conflict(MIZUNO, ConflictKind::RemovedUnknown),
-                conflict(RECOVERED, ConflictKind::RemovedUnknown)
-            ],
-            "{p:#?}"
-        );
-        for del in &p.deletes {
-            assert_eq!(del.existing.expect, Expect::Present);
-            assert!(!del.keep_bak && !del.backup, "{del:#?}");
-        }
+    fn an_extra_file_in_a_mirrored_folder_is_asked_about_and_both_choices_work() {
+        let pack = in_mods("sodium.jar");
+        let mine = in_mods("mine.jar");
+        let deep = in_mods("sub/deeper/also-mine.jar");
+        let d = disk_of(&[(&pack, "s1"), (&mine, "player"), (&deep, "player2")]);
+        let b = [base(&pack, "s1", Some(1))];
+        let t = [remote(&pack, "s1")];
+        let p = run_mirror(&b, &t, &d, Mirror { folders: &[MODS], ..Default::default() });
+        // Any depth below the folder; the pack's own file is not asked about.
+        assert_eq!(extras_of(&p), vec![mine.clone(), deep.clone()], "{p:#?}");
+        // An extra is not a backup and not counted as removed.
         assert!(p.backup_paths().is_empty());
-        // Counted like `removed_edited`: a conflict, not in the plain counts.
-        assert_eq!(p.counts(), (0, 1, 0));
-        assert!(p.dropped.contains(&MIZUNO.to_string()) && p.dropped.contains(&RECOVERED.to_string()));
-        assert!(!p.heal_incomplete && !p.unknown_leftovers_incomplete);
-        // The hash does not matter, so neither file was read.
-        assert!(!d.hashed.borrow().iter().any(|h| h == MIZUNO || h == RECOVERED));
+        assert_eq!(p.counts(), (0, 0, 0));
 
-        // Every one needs a choice.
-        let unresolved = resolve(p.clone(), &HashMap::new()).unwrap_err();
-        assert_eq!(unresolved, vec![MIZUNO.to_string(), RECOVERED.to_string()]);
+        // No choice: apply refuses.
+        assert!(resolve(p.clone(), &HashMap::new()).is_err());
+        let choices: HashMap<String, Resolution> =
+            [(mine.clone(), Resolution::TakeUpdate), (deep.clone(), Resolution::KeepMine)].into();
+        let r = resolve(p, &choices).unwrap();
+        // Remove: moved out, kept in the recovery folder (not deleted, no .bak).
+        assert_eq!(r.deletes.len(), 1, "{r:#?}");
+        let del = &r.deletes[0];
+        assert_eq!(del.existing.disk_path, mine);
+        assert!(del.keep_bak && del.recover, "{del:#?}");
+        // Keep: on the whitelist, never in "keep mine" or the baseline.
+        assert_eq!(r.kept_extras, vec![deep.clone()]);
+        assert!(r.kept_mine.is_empty());
+        assert!(r.next_baseline.iter().all(|(f, _)| f.path != deep && f.path != mine));
+        assert!(r.dropped.is_empty());
+    }
 
-        // Take update: moved to .bak. Keep mine: untouched and recorded.
-        let r: HashMap<String, Resolution> = [
-            (MIZUNO.to_string(), Resolution::TakeUpdate),
-            (RECOVERED.to_string(), Resolution::KeepMine),
-        ]
-        .into();
-        let res = resolve(p, &r).unwrap();
-        assert_eq!(res.deletes.len(), 1, "{res:#?}");
-        assert_eq!(res.deletes[0].existing.disk_path, MIZUNO);
-        assert!(res.deletes[0].keep_bak);
-        assert_eq!(res.kept_mine, vec![RECOVERED.to_string()]);
-        assert!(res.next_baseline.iter().all(|(f, _)| f.path != MIZUNO && f.path != RECOVERED));
-
-        // The next plan does not ask again: the kept file is the player's
-        // even while the pass is still due, and once the marker is set the
-        // pass does not run at all.
-        let d = disk_of(&[(RECOVERED, "old zip two"), ("Game.exe", "e2")]);
-        let kept = Passes {
-            kept_mine: &[RECOVERED],
-            ..ASK_ONLY
-        };
-        let p = run_passes(&[base("Game.exe", "e2", Some(1))], &[remote("Game.exe", "e3")], &d, &prev, kept);
-        assert!(p.conflicts().is_empty() && p.deletes.is_empty(), "{p:#?}");
-        let p = run_passes(
-            &[base("Game.exe", "e2", Some(1))],
-            &[remote("Game.exe", "e3")],
-            &d,
-            &prev,
-            Passes::default(),
-        );
+    #[test]
+    fn a_whitelisted_extra_is_never_asked_about_again() {
+        let mine = in_mods("mine.jar");
+        let d = disk_of(&[(&mine, "player")]);
+        let p = run_mirror(&[], &[], &d, Mirror { folders: &[MODS], kept_extras: &[&mine], ..Default::default() });
         assert!(p.conflicts().is_empty() && p.deletes.is_empty(), "{p:#?}");
     }
 
     #[test]
-    fn a_known_hash_leftover_that_differs_is_asked_about_too() {
-        let zip = pack("old.zip");
-        // Same size as the shipped copy, so the first pass hashes it and
-        // finds it different.
-        let d = disk_of(&[(&zip, "player bld")]);
-        let prev = shipped(&[(&zip, &["pack build"])]);
-        for passes in [ASK_ONLY, BOTH] {
-            let p = run_passes(&[], &[], &d, &prev, passes);
-            assert_eq!(p.conflicts(), vec![conflict(&zip, ConflictKind::RemovedUnknown)], "{p:#?}");
-            assert_eq!(p.deletes.len(), 1);
-            assert!(p.backup_paths().is_empty());
-        }
+    fn files_outside_mirrored_folders_are_never_asked_about() {
+        let mine = in_mods("mine.jar");
+        let rp = "user/instances/P/minecraft/resourcepacks/mine.zip";
+        let d = disk_of(&[(&mine, "player"), (rp, "player"), ("options.txt", "x")]);
+        // No mirrored folders at all (an old server sends none): nothing.
+        let p = run_mirror(&[], &[], &d, Mirror::default());
+        assert!(p.conflicts().is_empty() && p.deletes.is_empty(), "{p:#?}");
+        // Only the mods folder mirrored: only its file.
+        let p = run_mirror(&[], &[], &d, Mirror { folders: &[MODS], ..Default::default() });
+        assert_eq!(extras_of(&p), vec![mine]);
     }
 
     #[test]
-    fn the_second_pass_asks_only_at_a_size_an_earlier_revision_listed() {
-        // The import captured files the game or launcher writes at runtime
-        // (options.txt, a world's level.dat), with an unknown hash. They
-        // have grown since: not the pack's leftovers, never asked about.
-        let options = "user/instances/Multiversal Pack/minecraft/options.txt";
-        let level = "user/instances/Multiversal Pack/minecraft/saves/World/level.dat";
-        let d = disk_of(&[(options, "fov:90\nkeys:custom"), (level, "much more progress")]);
-        let prev = shipped_unknown(&[(options, "fov:70"), (level, "progress")]);
-        let p = run_passes(&[], &[], &d, &prev, ASK_ONLY);
-        assert!(p.deletes.is_empty() && p.conflicts().is_empty(), "{p:#?}");
-        // A known hash at another size: not asked either.
-        let zip = pack("old.zip");
-        let d = disk_of(&[(&zip, "a different, longer file")]);
-        let p = run_passes(&[], &[], &d, &shipped(&[(&zip, &["pack build"])]), BOTH);
-        assert!(p.deletes.is_empty() && p.conflicts().is_empty(), "{p:#?}");
-
-        // Unknown hash, same size: asked.
-        let d = disk_of(&[(&zip, "renamed!!")]);
-        let p = run_passes(&[], &[], &d, &shipped_unknown(&[(&zip, "123456789")]), ASK_ONLY);
-        assert_eq!(p.conflicts(), vec![conflict(&zip, ConflictKind::RemovedUnknown)], "{p:#?}");
-        // Known hash, different content, same size: asked.
-        let d = disk_of(&[(&zip, "player bld")]);
-        let p = run_passes(&[], &[], &d, &shipped(&[(&zip, &["pack build"])]), ASK_ONLY);
-        assert_eq!(p.conflicts(), vec![conflict(&zip, ConflictKind::RemovedUnknown)], "{p:#?}");
-        // Any revision's size counts, known or unknown.
-        let mut prev = shipped(&[(&zip, &["rev 2 build, longer"])]);
-        prev.get_mut(&zip).unwrap().extend(shipped_unknown(&[(&zip, "rev 1 bld!")]).remove(&zip).unwrap());
-        let p = run_passes(&[], &[], &d, &prev, ASK_ONLY);
-        assert_eq!(p.conflicts(), vec![conflict(&zip, ConflictKind::RemovedUnknown)], "{p:#?}");
-    }
-
-    #[test]
-    fn a_leftover_asked_about_in_the_way_of_a_new_folder_stops_the_plan() {
-        // The target needs a folder where the leftover file is. It is not
-        // known to be the pack's, so it is not set aside without asking.
-        let zip = pack("old.zip");
-        let inner = format!("{zip}/pack.mcmeta");
-        let d = disk_of(&[(&zip, "who knows")]);
-        let t = [remote(&inner, "meta")];
-        let r = try_passes(&[], &t, &d, &shipped_unknown(&[(&zip, "who knows")]), ASK_ONLY);
-        assert!(matches!(r, Err(PlanError::InTheWay(ref p)) if *p == zip), "{r:?}");
-        // As before the second pass: an unlisted file there stops the plan.
-        let r = try_passes(&[], &t, &d, &HashMap::new(), Passes::default());
-        assert!(matches!(r, Err(PlanError::InTheWay(ref p)) if *p == zip), "{r:?}");
-        // Other kinds keep their rule: a leftover the first pass sets aside
-        // makes way, kept as .bak.
-        let p = run_passes(&[], &t, &d, &shipped(&[(&zip, &["who knows"])]), BOTH);
-        assert_eq!(p.backup_paths(), vec![zip.clone()], "{p:#?}");
-        assert!(p.conflicts().is_empty());
-    }
-
-    #[test]
-    fn with_both_passes_due_a_known_copy_is_set_aside_and_an_unknown_one_asked() {
-        let (known, unknown) = (pack("gates.zip"), pack("mizuno.zip"));
-        let d = disk_of(&[(&known, "pack build"), (&unknown, "who knows")]);
-        let mut prev = shipped(&[(&known, &["pack build"])]);
-        prev.extend(shipped_unknown(&[(&unknown, "who knows")]));
-        let p = run_passes(&[], &[], &d, &prev, BOTH);
-        // The first pass sets the known copy aside silently, and it is not
-        // also asked about.
-        assert_eq!(p.backup_paths(), vec![known.clone()], "{p:#?}");
-        assert_eq!(p.deletes.iter().filter(|d| d.existing.disk_path == known).count(), 1);
-        assert_eq!(p.conflicts(), vec![conflict(&unknown, ConflictKind::RemovedUnknown)]);
-        assert_eq!(p.dropped.iter().filter(|d| **d == known).count(), 1);
-        // With the first pass already done, the known copy is asked about:
-        // the player may have put it back.
-        let p = run_passes(&[], &[], &d, &prev, ASK_ONLY);
-        assert_eq!(
-            p.conflicts(),
-            vec![
-                conflict(&known, ConflictKind::RemovedUnknown),
-                conflict(&unknown, ConflictKind::RemovedUnknown)
-            ],
-            "{p:#?}"
-        );
-        assert!(p.backup_paths().is_empty());
-    }
-
-    #[test]
-    fn leftovers_the_second_pass_never_asks_about() {
-        let zip = pack("old.zip");
-        fn ask(
-            d: &MemDisk,
-            b: &[BaselineFile],
-            t: &[RemoteFile],
-            prev: &HashMap<String, HashSet<(u64, String)>>,
-            passes: Passes<'_>,
-        ) -> Plan {
-            run_passes(b, t, d, prev, passes)
-        }
-
-        // Outside the player-data folders.
-        let outside = "resourcepacks/old.zip";
-        let d = disk_of(&[(outside, "x")]);
-        let p = ask(&d, &[], &[], &shipped_unknown(&[(outside, "x")]), ASK_ONLY);
-        assert!(p.deletes.is_empty(), "{p:#?}");
-
-        // Drop runtime data, even under user/.
-        let gbe = "user/drop-goldberg/480/achievements.json";
-        let d = disk_of(&[(gbe, "earned")]);
-        let p = ask(&d, &[], &[], &shipped_unknown(&[(gbe, "earned")]), ASK_ONLY);
-        assert!(p.deletes.is_empty(), "{p:#?}");
-
-        // A mod's file.
-        let d = disk_of(&[(&zip, "mod's zip")]);
-        let mods = Passes {
-            mods: &[&zip],
-            ..ASK_ONLY
-        };
-        let p = ask(&d, &[], &[], &shipped_unknown(&[(&zip, "mod's zip")]), mods);
-        assert!(p.deletes.is_empty(), "{p:#?}");
-        // (Not vacuous: without the claim it is asked about.)
-        let p = ask(&d, &[], &[], &shipped_unknown(&[(&zip, "mod's zip")]), ASK_ONLY);
-        assert_eq!(p.conflicts().len(), 1);
-
-        // A path B or T lists, in any letter case, on a disk this build
-        // treats as case-sensitive.
-        let upper = zip.to_uppercase();
-        let p = ask(&d, &[base(&upper, "x", Some(1))], &[], &shipped_unknown(&[(&zip, "mod's zip")]), ASK_ONLY);
-        assert!(p.conflicts().iter().all(|c| c.path != zip), "{p:#?}");
-        let p = ask(&d, &[], &[remote(&upper, "x")], &shipped_unknown(&[(&zip, "mod's zip")]), ASK_ONLY);
-        assert!(p.conflicts().iter().all(|c| c.path != zip), "{p:#?}");
-
-        // An empty file.
-        let d = disk_of(&[(&zip, "")]);
-        let p = ask(&d, &[], &[], &shipped_unknown(&[(&zip, "")]), ASK_ONLY);
-        assert!(p.deletes.is_empty(), "{p:#?}");
-
-        // A link where the file was, and a folder.
-        let mut d = MemDisk::default();
-        d.links.insert(zip.clone());
-        let p = ask(&d, &[], &[], &shipped_unknown(&[(&zip, "x")]), ASK_ONLY);
-        assert!(p.deletes.is_empty() && !p.unknown_leftovers_incomplete, "{p:#?}");
-        let d = disk_of(&[(&format!("{zip}/inner.txt"), "x")]);
-        let p = ask(&d, &[], &[], &shipped_unknown(&[(&zip, "x")]), ASK_ONLY);
-        assert!(p.deletes.is_empty(), "{p:#?}");
-
-        // Through a linked player-data folder: not asked, and the pass is
-        // incomplete so the next update tries again. The first pass's flag
-        // is untouched, and the rest of the update goes ahead.
-        for link in ["user", "user/instances/Multiversal Pack"] {
-            let mut d = disk_of(&[(&zip, "x"), ("Game.exe", "e1")]);
-            d.links.insert(link.into());
-            let p = ask(
-                &d,
-                &[base("Game.exe", "e1", Some(1))],
-                &[remote("Game.exe", "e2")],
-                &shipped_unknown(&[(&zip, "x")]),
-                ASK_ONLY,
-            );
-            assert!(p.conflicts().is_empty(), "{link}: {p:#?}");
-            assert!(p.unknown_leftovers_incomplete && !p.heal_incomplete, "{link}: {p:#?}");
-            assert_eq!(only_write(&p).file.path, "Game.exe");
-            assert!(resolve(p, &HashMap::new()).unwrap().unknown_leftovers_incomplete);
-        }
-
-        // A file the player chose to keep (covered above too).
-        let d = disk_of(&[(&zip, "x")]);
-        let kept = Passes {
-            kept_mine: &[&zip],
-            ..ASK_ONLY
-        };
-        assert!(ask(&d, &[], &[], &shipped_unknown(&[(&zip, "x")]), kept).deletes.is_empty());
-
-        // And nothing at all when the pass is not due.
-        assert!(ask(&d, &[], &[], &shipped_unknown(&[(&zip, "x")]), Passes::default()).deletes.is_empty());
-    }
-
-    #[test]
-    fn spellings_of_one_leftover_on_a_disk_that_ignores_case_get_one_operation() {
-        // Linux with an exFAT SD card: the planner matches case exactly, the
-        // disk does not, so two spellings an earlier revision listed are one
-        // file. Two operations on it would stop the commit.
-        let (upper, lower) = (pack("A.zip"), pack("a.zip"));
-        let mut d = disk_of(&[(&upper, "pack build")]);
+    fn a_target_file_in_another_letter_case_is_not_an_extra_on_a_disk_that_ignores_case() {
+        let t = [remote(&in_mods("Sodium.jar"), "s1")];
+        let mut d = disk_of(&[(&in_mods("sodium.jar"), "s1")]);
         d.case_insensitive = true;
-        let plan_exact = |prev: &HashMap<String, HashSet<(u64, String)>>, passes: Passes<'_>| {
-            plan(PlanInput {
-                baseline: &[],
-                target: &[],
-                disk: &d,
-                is_runtime_data: &is_drop_runtime_data,
-                is_player_data: &is_player_data_folder,
-                mod_owned: &HashSet::new(),
-                case_insensitive: false,
-                kept_mine: &HashSet::new(),
-                previously_shipped: prev,
-                heal_protected: passes.heal_protected,
-                ask_unknown_leftovers: passes.ask_unknown,
-            })
-            .expect("plan")
-        };
-        // The first pass sets one spelling aside; the other is not asked.
-        let mut prev = shipped(&[(&upper, &["pack build"])]);
-        prev.extend(shipped_unknown(&[(&lower, "pack build")]));
-        let p = plan_exact(&prev, BOTH);
-        assert_eq!(p.deletes.len(), 1, "{p:#?}");
-        assert!(p.conflicts().is_empty() && p.backup_paths() == vec![upper.clone()]);
-        // Both unknown: asked once.
-        let p = plan_exact(&shipped_unknown(&[(&upper, "pack build"), (&lower, "pack build")]), ASK_ONLY);
-        assert_eq!(p.deletes.len(), 1, "{p:#?}");
-        assert_eq!(p.conflicts(), vec![conflict(&upper, ConflictKind::RemovedUnknown)]);
+        let p = run_mirror(&[], &t, &d, Mirror { folders: &[MODS], ..Default::default() });
+        assert!(extras_of(&p).is_empty(), "{p:#?}");
+        assert!(p.writes.is_empty() && p.deletes.is_empty(), "{p:#?}");
+        // A disk this build thinks is case-sensitive but only one spelling is
+        // there (an exFAT SD card): still the same file, never two operations.
+        d.case_insensitive = false;
+        let p = run_mirror(&[], &t, &d, Mirror { folders: &[MODS], ..Default::default() });
+        assert!(extras_of(&p).is_empty(), "{p:#?}");
+        // Both spellings on a case-sensitive disk: two files, one is extra.
+        let d = disk_of(&[(&in_mods("Sodium.jar"), "s1"), (&in_mods("sodium.jar"), "old")]);
+        let p = run_mirror(&[], &t, &d, Mirror { folders: &[MODS], ..Default::default() });
+        assert_eq!(extras_of(&p), vec![in_mods("sodium.jar")]);
     }
 
     #[test]
-    fn the_second_pass_alone_never_turns_on_the_first_passs_rules() {
-        // A pack file under user/ that matches a known earlier copy, with an
-        // unverified baseline entry. The first pass would replace it as the
-        // pack's own copy; the second pass alone leaves it to the table.
-        let cfg = "user/config/a.cfg";
-        let d = disk_of(&[(cfg, "rev1")]);
-        let prev = shipped(&[(cfg, &["rev1"])]);
-        let b = [base(cfg, "rev2", None)];
-        // Not vacuous: with the first pass it is replaced.
-        let p = run_passes(&b, &[remote(cfg, "rev2")], &d, &prev, BOTH);
-        assert!(only_write(&p).conflict.is_none(), "{p:#?}");
-        // Unchanged by the update: kept, not replaced.
-        let p = run_passes(&b, &[remote(cfg, "rev2")], &d, &prev, ASK_ONLY);
-        assert!(p.writes.is_empty() && p.deletes.is_empty() && p.conflicts().is_empty(), "{p:#?}");
-        assert_eq!(p.kept, vec![(remote(cfg, "rev2"), None)]);
-        // Changed or removed by the update: asked, as without healing.
-        let p = run_passes(&b, &[remote(cfg, "rev3")], &d, &prev, ASK_ONLY);
-        assert_eq!(only_write(&p).conflict, Some(ConflictKind::ChangedBoth));
-        let p = run_passes(&b, &[], &d, &prev, ASK_ONLY);
-        assert_eq!(p.conflicts(), vec![conflict(cfg, ConflictKind::RemovedEdited)]);
+    fn drop_managed_mod_files_runtime_data_and_drops_own_paths_are_not_asked_about() {
+        let modded = in_mods("from-a-drop-mod.jar");
+        let saves = "user/instances/P/minecraft/mods/drop-goldberg/480/a.json";
+        let d = disk_of(&[(&modded, "mod"), (saves, "x"), (&in_mods("mine.jar"), "player")]);
+        let p = run_mirror(&[], &[], &d, Mirror { folders: &[MODS], mods: &[&modded], ..Default::default() });
+        assert_eq!(extras_of(&p), vec![in_mods("mine.jar")], "{p:#?}");
+        // Drop's own top-level folders are never mirrored.
+        let d = disk_of(&[(".drop-removed/20260101T000000Z/x.jar", "x"), (".drop-update/new/a", "x")]);
+        let p = run_mirror(&[], &[], &d, Mirror { folders: &[".drop-removed", ".drop-update"], ..Default::default() });
+        assert!(p.conflicts().is_empty() && p.mirrors.is_empty(), "{p:#?}");
+    }
 
-        // A leftover matching a known copy is asked about, never set aside
-        // silently.
-        let zip = pack("gates.zip");
-        let d = disk_of(&[(&zip, "pack build")]);
-        let p = run_passes(&[], &[], &d, &shipped(&[(&zip, &["pack build"])]), ASK_ONLY);
-        assert!(p.backup_paths().is_empty(), "{p:#?}");
-        assert_eq!(p.conflicts(), vec![conflict(&zip, ConflictKind::RemovedUnknown)]);
+    #[test]
+    fn a_mirrored_folder_through_a_link_is_skipped_and_reported_when_the_pack_has_files_there() {
+        let mine = in_mods("mine.jar");
+        let pack = in_mods("pack.jar");
+        for link in ["user", "user/instances/P/minecraft", MODS] {
+            let mut d = disk_of(&[(&mine, "player"), (&pack, "p1")]);
+            d.links.insert(link.to_string());
+            // The pack has nothing there: nothing to report on every update.
+            let p = run_mirror(&[], &[], &d, Mirror { folders: &[MODS], ..Default::default() });
+            assert!(p.conflicts().is_empty() && p.deletes.is_empty(), "{link}: {p:#?}");
+            assert!(p.skipped_linked.is_empty(), "{link}: {p:#?}");
+            // A pack file there, even an unchanged one the mirrored folder
+            // would have to check: reported.
+            let b = [base(&pack, "p1", Some(1))];
+            let p = run_mirror(&b, &[remote(&pack, "p1")], &d, Mirror { folders: &[MODS], ..Default::default() });
+            assert!(p.conflicts().is_empty() && p.deletes.is_empty() && p.writes.is_empty(), "{link}: {p:#?}");
+            assert_eq!(p.skipped_linked, vec![link.to_string()], "{link}");
+        }
+        // A link inside the folder is not walked or moved either, and is
+        // reported only when the pack has files behind it.
+        let mut d = disk_of(&[(&mine, "player")]);
+        d.links.insert(in_mods("linked-pack"));
+        d.files.insert(in_mods("linked-pack"), ("".into(), Some(1)));
+        let p = run_mirror(&[], &[], &d, Mirror { folders: &[MODS], ..Default::default() });
+        assert_eq!(extras_of(&p), vec![mine.clone()]);
+        assert!(p.skipped_linked.is_empty(), "{p:#?}");
+        let behind = in_mods("linked-pack/x.jar");
+        let p = run_mirror(&[base(&behind, "x", Some(1))], &[remote(&behind, "x")], &d, Mirror { folders: &[MODS], ..Default::default() });
+        assert_eq!(extras_of(&p), vec![mine]);
+        assert_eq!(p.skipped_linked, vec![in_mods("linked-pack")]);
+        // A missing mirrored folder: nothing to list, nothing reported.
+        let p = run_mirror(&[], &[], &disk_of(&[]), Mirror { folders: &[MODS], ..Default::default() });
+        assert!(p.conflicts().is_empty() && p.skipped_linked.is_empty(), "{p:#?}");
+    }
 
-        // A linked folder skipping an unverified file does not mark the
-        // first pass incomplete: it is not running.
-        let same = mc("d.jar");
-        let mut d = disk_of(&[(&same, "d-player"), ("Game.exe", "e1")]);
-        d.links.insert("user".into());
-        let p = run_passes(
-            &[base(&same, "d1", None), base("Game.exe", "e1", Some(1))],
-            &[remote(&same, "d1"), remote("Game.exe", "e2"), remote(&mc("new.jar"), "n")],
-            &d,
-            &shipped(&[(&mc("old.jar"), &["o"])]),
-            ASK_ONLY,
+    #[test]
+    fn a_player_edited_pack_file_in_a_mirrored_folder_is_replaced_and_its_copy_recovered() {
+        let changed = in_mods("changed.jar");
+        let added = in_mods("added.jar");
+        let removed = in_mods("removed.jar");
+        let same = in_mods("same.jar");
+        let kept = in_mods("kept.jar");
+        let d = disk_of(&[
+            (&changed, "player edit"),
+            (&added, "player's own"),
+            (&removed, "player edit 2"),
+            (&same, "player edit 3"),
+            (&kept, "player edit 4"),
+        ]);
+        let b = [
+            base(&changed, "c1", Some(1)),
+            base(&removed, "r1", Some(1)),
+            base(&same, "s1", Some(1)),
+            base(&kept, "k1", None),
+        ];
+        let t = [remote(&changed, "c2"), remote(&added, "a1"), remote(&same, "s1"), remote(&kept, "k1")];
+        // Outside a mirrored folder these are conflicts, or left alone.
+        let outside = run_mirror(&b, &t, &d, Mirror { kept_mine: &[&kept], ..Default::default() });
+        let kinds: Vec<ConflictKind> = outside.conflicts().iter().map(|c| c.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![ConflictKind::AddedExists, ConflictKind::ChangedBoth, ConflictKind::RemovedEdited],
+            "{outside:#?}"
         );
-        assert!(!p.heal_incomplete && !p.unknown_leftovers_incomplete, "{p:#?}");
-        assert_eq!(p.skipped_linked, vec!["user".to_string()]);
+        // Mirrored: every one replaced or removed, no question, and every
+        // player copy goes to the recovery folder.
+        let p = run_mirror(&b, &t, &d, Mirror { folders: &[MODS], kept_mine: &[&kept], ..Default::default() });
+        assert!(p.conflicts().is_empty(), "{p:#?}");
+        let mut expected = vec![added.clone(), changed.clone(), kept.clone(), removed.clone(), same.clone()];
+        expected.sort();
+        assert_eq!(p.backup_paths(), expected);
+        assert_eq!(p.recovery_paths(), expected);
+        for w in &p.writes {
+            assert!(w.keep_bak && w.recover && w.backup, "{w:#?}");
+        }
+        assert!(p.deletes.iter().all(|d| d.keep_bak && d.recover), "{p:#?}");
+        let r = resolve(p, &HashMap::new()).unwrap();
+        assert!(r.kept_mine.is_empty());
+    }
+
+    #[test]
+    fn a_pack_file_untouched_in_a_mirrored_folder_is_not_hashed_and_a_clean_replace_keeps_no_copy() {
+        let jar = in_mods("a.jar");
+        let other = in_mods("b.jar");
+        let d = disk_of(&[(&jar, "a1"), (&other, "b1")]);
+        let b = [base(&jar, "a1", Some(1)), base(&other, "b1", Some(1))];
+        let t = [remote(&jar, "a2"), remote(&other, "b1")];
+        let p = run_mirror(&b, &t, &d, Mirror { folders: &[MODS], ..Default::default() });
+        assert!(d.hashed.borrow().is_empty(), "{:?}", d.hashed.borrow());
+        let w = only_write(&p);
+        assert!(!w.keep_bak && !w.backup && w.recover, "{w:#?}");
+        assert!(p.backup_paths().is_empty() && p.recovery_paths().is_empty());
+    }
+
+    #[test]
+    fn a_bak_file_in_a_mirrored_folder_is_an_ordinary_extra() {
+        let bak = in_mods("sodium.jar.bak");
+        let d = disk_of(&[(&in_mods("sodium.jar"), "s1"), (&bak, "old")]);
+        let b = [base(&in_mods("sodium.jar"), "s1", Some(1))];
+        let p = run_mirror(&b, &[remote(&in_mods("sodium.jar"), "s1")], &d, Mirror { folders: &[MODS], ..Default::default() });
+        assert_eq!(extras_of(&p), vec![bak]);
+    }
+
+    #[test]
+    fn a_leftover_the_healing_sets_aside_is_not_also_asked_about() {
+        let old = in_mods("old.jar");
+        let d = disk_of(&[(&old, "old-pack")]);
+        let prev = shipped(&[(&old, &["old-pack"])]);
+        let p = run_mirror(&[], &[], &d, Mirror { folders: &[MODS], prev: Some(&prev), ..Default::default() });
+        assert!(extras_of(&p).is_empty(), "{p:#?}");
+        assert_eq!(p.deletes.len(), 1);
+        // Set aside to the recovery folder, not .bak, inside a mirrored folder.
+        assert!(p.deletes[0].recover && p.deletes[0].keep_bak);
+        assert_eq!(p.recovery_paths(), vec![old]);
+    }
+
+    #[test]
+    fn a_whitelisted_file_is_never_set_aside_by_the_healing() {
+        let old = in_mods("old.jar");
+        let mut d = disk_of(&[(&old, "old-pack")]);
+        let prev = shipped(&[(&old, &["old-pack"])]);
+        // Whitelisted in another letter case, with and without the folder
+        // still mirrored, on either kind of disk: the healing leaves it.
+        let upper = old.to_uppercase();
+        for (ci, folders) in [(true, &[MODS][..]), (true, &[][..]), (false, &[][..])] {
+            d.case_insensitive = ci;
+            let p = run_mirror(&[], &[], &d, Mirror { folders, kept_extras: &[&upper], prev: Some(&prev), ..Default::default() });
+            assert!(p.deletes.is_empty() && p.conflicts().is_empty(), "{ci} {folders:?}: {p:#?}");
+        }
+        // Not whitelisted: set aside, so the check above is not vacuous.
+        let p = run_mirror(&[], &[], &d, Mirror { prev: Some(&prev), ..Default::default() });
+        assert_eq!(p.deletes.len(), 1, "{p:#?}");
+    }
+
+    #[test]
+    fn a_mirrored_folder_whose_name_windows_would_trim_is_ignored() {
+        let raw: Vec<String> = ["user/mc/mods.", "user/mc/mods ", "user/mc./mods", "user/mc /mods", "user/.minecraft/mods"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // Only the folder whose name merely starts with a dot is kept.
+        assert_eq!(Mirrors::new(&raw, true).folders(), &["user/.minecraft/mods".to_string()]);
+        // So a pack's own files are never read as extras of `mods.`.
+        let pack = in_mods("pack.jar");
+        let mut d = disk_of(&[(&pack, "p1")]);
+        d.case_insensitive = true;
+        let trimmed = format!("{MODS}.");
+        let p = run_mirror(&[base(&pack, "p1", Some(1))], &[remote(&pack, "p1")], &d, Mirror { folders: &[&trimmed], ..Default::default() });
+        assert!(p.conflicts().is_empty() && p.mirrors.is_empty(), "{p:#?}");
+    }
+
+    #[test]
+    fn a_file_in_the_way_of_a_new_pack_folder_is_moved_out_in_a_mirrored_folder() {
+        // The pack now ships mods/extra/x.jar; the player has a FILE named
+        // mods/extra, whitelisted earlier. Elsewhere under user/ that stops
+        // the plan; a mirrored folder must match, so it is moved out.
+        let file = in_mods("extra");
+        let d = disk_of(&[(&file, "player")]);
+        let t = [remote(&in_mods("extra/x.jar"), "x")];
+        let r = try_mirror(&[], &t, &d, Mirror { kept_extras: &[&file], ..Default::default() });
+        assert!(matches!(r, Err(PlanError::InTheWay(_))), "{r:?}");
+        let p = run_mirror(&[], &t, &d, Mirror { folders: &[MODS], kept_extras: &[&file], ..Default::default() });
+        assert!(p.conflicts().is_empty(), "{p:#?}");
+        assert_eq!(p.recovery_paths(), vec![file]);
+    }
+
+    #[test]
+    fn mirrored_folders_from_the_server_are_rechecked() {
+        let raw: Vec<String> = [
+            "user/mc/mods",
+            "user/mc/mods/sub",
+            "USER/MC/MODS",
+            "user/mc/resourcepacks",
+            "",
+            "/abs",
+            "a/../b",
+            "a/./b",
+            "a//b",
+            "trailing/",
+            "back\\slash",
+            "C:/x",
+            ".drop-update",
+            ".dropdata",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let m = Mirrors::new(&raw, false);
+        assert_eq!(m.folders(), &["user/mc/mods".to_string(), "user/mc/resourcepacks".to_string()]);
+        assert!(m.contains("user/mc/mods/a.jar"));
+        assert!(m.contains("user\\mc\\mods\\sub\\a.jar"));
+        assert!(!m.contains("user/mc/mods"));
+        assert!(!m.contains("user/mc/modsx/a.jar"));
+        assert!(!m.contains("User/mc/mods/a.jar"));
+        assert!(Mirrors::new(&raw, true).contains("User/MC/mods/a.jar"));
     }
 }
