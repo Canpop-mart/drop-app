@@ -1353,6 +1353,7 @@ import {
   shouldAskBeforePlay,
   targetLine,
 } from "~/composables/game-detail/update-review";
+import { quickInstallGame } from "~/composables/game-detail/quick-install";
 import { isUpdating } from "~/composables/update-tracking";
 import { useFocusNavigation } from "~/composables/focus-navigation";
 import { GamepadButton, useGamepad } from "~/composables/gamepad";
@@ -3296,33 +3297,8 @@ async function resumePartialDownload() {
 
 async function downloadGame() {
   try {
-    // Need version options to know what to download
-    if (!versionOptions.value || versionOptions.value.length === 0) {
-      versionOptions.value = await invoke<VersionOption[]>(
-        "fetch_game_version_options",
-        { gameId },
-      );
-    }
-
-    if (!versionOptions.value || versionOptions.value.length === 0) {
-      launchError.value = "No downloadable versions available for this game.";
-      return;
-    }
-
-    // Pick the first (latest) version option
-    const vo = versionOptions.value[0];
-
-    // Get available install directories
-    const installDirs = await invoke<string[]>("fetch_download_dir_stats");
-    const installDir = 0; // Default to first directory
-
-    await invoke("download_game", {
-      gameId,
-      versionId: vo.versionId,
-      installDir,
-      targetPlatform: vo.platform,
-      enableUpdates: true,
-    });
+    // Same pick as the home screen's Install: newest version this device runs.
+    await quickInstallGame(gameId, versionOptions.value);
   } catch (e) {
     console.error("Failed to start download:", e);
     launchError.value = `Download failed: ${e instanceof Error ? e.message : String(e)}`;

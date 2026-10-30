@@ -184,6 +184,9 @@ async function install() {
       versionId: dependency.versionId,
       installDir: installDir.value,
       targetPlatform: installPlatform.value,
+      // Emulators and other dependencies follow their latest version, the
+      // same as the Big Picture dependency install.
+      enableUpdates: true,
     });
     cancel();
   } catch (error) {

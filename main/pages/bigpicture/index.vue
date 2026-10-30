@@ -1180,6 +1180,7 @@ import BpmLaunchScreen from "~/components/bigpicture/BpmLaunchScreen.vue";
 import BpmBoxArtOverlay from "~/components/bigpicture/BpmBoxArtOverlay.vue";
 import BpmHomeSkeleton from "~/components/bigpicture/BpmHomeSkeleton.vue";
 import { devLog } from "~/composables/dev-mode";
+import { quickInstallGame } from "~/composables/game-detail/quick-install";
 import { useListen } from "~/composables/useListen";
 import { parseStatus, deduplicatedInvoke } from "~/composables/game";
 import type { LaunchResult } from "~/composables/game";
@@ -1413,7 +1414,7 @@ async function heroAction() {
   }
   if (entry.status.type === "Remote") {
     try {
-      await invoke("download_game", { id: entry.game.id });
+      await quickInstallGame(entry.game.id);
     } catch (e) {
       console.error("[BPM:HOME] Download failed:", e);
       showLaunchError(
@@ -1856,9 +1857,13 @@ const contextMenuActions = computed(() => {
       action: async () => {
         closeContextMenu();
         try {
-          await invoke("download_game", { id: entry.game.id });
+          await quickInstallGame(entry.game.id);
         } catch (e) {
           console.error("[BPM:HOME] Download failed:", e);
+          showLaunchError(
+            "Couldn't start the download",
+            `Drop couldn't queue ${entry.game.mName}: ${e instanceof Error ? e.message : String(e)}`,
+          );
         }
       },
     });
