@@ -87,6 +87,14 @@
         </button>
       </div>
 
+      <p
+        v-if="scanMessage && !error"
+        class="text-sm"
+        :style="{ color: 'var(--bpm-muted)' }"
+      >
+        {{ scanMessage }}
+      </p>
+
       <div
         v-if="error"
         class="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300"
@@ -102,6 +110,10 @@ import { ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import BpmWizardShell from "~/components/bigpicture/BpmWizardShell.vue";
+import {
+  describeInstallDirScan,
+  parseInstallDirScan,
+} from "~/composables/install-dir-scan";
 import { useBpFocusableGroup } from "~/composables/bp-focusable";
 
 definePageMeta({ layout: "bpm-wizard" });
@@ -118,6 +130,7 @@ const installDirs = ref<string[]>([]);
 const removableStorage = ref<DetectedDrive[]>([]);
 const loading = ref(false);
 const error = ref("");
+const scanMessage = ref("");
 
 onMounted(async () => {
   await refreshInstallDirs();
@@ -154,7 +167,8 @@ async function addFolder() {
       title: "Choose a folder for game installs",
     });
     if (!chosen || Array.isArray(chosen)) return;
-    await invoke("add_download_dir", { newDir: chosen });
+    const scan = await invoke("add_download_dir", { newDir: chosen });
+    scanMessage.value = describeInstallDirScan(parseInstallDirScan(scan));
     await refreshInstallDirs();
   } catch (e: any) {
     error.value = typeof e === "string" ? e : String(e?.message ?? e);
@@ -168,7 +182,8 @@ async function addFromDetected(path: string) {
   loading.value = true;
   try {
     const gameDir = path.endsWith("/") ? `${path}drop-games` : `${path}/drop-games`;
-    await invoke("add_download_dir", { newDir: gameDir });
+    const scan = await invoke("add_download_dir", { newDir: gameDir });
+    scanMessage.value = describeInstallDirScan(parseInstallDirScan(scan));
     await refreshInstallDirs();
   } catch (e: any) {
     error.value = typeof e === "string" ? e : String(e?.message ?? e);

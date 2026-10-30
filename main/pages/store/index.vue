@@ -507,6 +507,11 @@
       </div>
     </div>
 
+    <!-- ═══ Addons tab ═══ -->
+    <!-- Extras the server admin runs; the player adds or removes them here.
+         Big Picture has the same tab (pages/bigpicture/store.vue). -->
+    <StoreAddonsTab v-else-if="activeTab === 'addons'" />
+
     <!-- Filter drawer — slides in from the right with advanced controls
          that don't belong in the chip row. Closed by default; opened via
          the "Filters" button. -->
@@ -747,7 +752,7 @@ import BannerFallback from "~/components/BannerFallback.vue";
 // were active — using query params would make every filter change
 // push a new history entry, which makes the back button useless.
 type StoredBrowseSnapshot = {
-  activeTab: "featured" | "browse" | "collections";
+  activeTab: "featured" | "browse" | "collections" | "addons";
   searchQuery: string;
   browseSort: "recent" | "updated" | "name";
   browsePage: number;
@@ -824,6 +829,7 @@ const tabs = [
   { label: "Featured", value: "featured" },
   { label: "Browse", value: "browse" },
   { label: "Collections", value: "collections" },
+  { label: "Addons", value: "addons" },
 ] as const;
 
 // Refs seed directly from the snapshot (module state, falling back

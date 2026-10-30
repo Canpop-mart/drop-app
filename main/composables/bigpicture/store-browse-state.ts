@@ -11,7 +11,7 @@
  * Pure functions, tested by: node --test tests/store-browse-state.test.ts
  */
 
-export type StoreTab = "featured" | "browse" | "collections";
+export type StoreTab = "featured" | "browse" | "collections" | "addons";
 export type BrowseSort = "default" | "newest" | "name" | "recent";
 
 /** Where focus goes when the player comes back from the game they opened. */
@@ -47,7 +47,12 @@ export const DEFAULT_SNAPSHOT: StoreBrowseSnapshot = {
   returnFocus: null,
 };
 
-const TABS: readonly StoreTab[] = ["featured", "browse", "collections"];
+const TABS: readonly StoreTab[] = [
+  "featured",
+  "browse",
+  "collections",
+  "addons",
+];
 const SORTS: readonly BrowseSort[] = ["default", "newest", "name", "recent"];
 
 const str = (v: unknown, fallback: string) =>

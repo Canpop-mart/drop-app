@@ -708,6 +708,26 @@ export function useServerApi() {
         ),
     },
 
+    /**
+     * The Store's Addons tab. Addons are services the server admin runs; a
+     * player adds or removes them for themselves. `list` returns raw JSON on
+     * purpose: composables/addon-shop.ts checks it (parseShopList) so a
+     * malformed reply shows as an error rather than an empty shop.
+     */
+    addons: {
+      list: () => apiFetch<unknown>("api/v1/addons"),
+      add: (name: string) =>
+        apiFetch<{ name: string; added: boolean }>(
+          `api/v1/addons/${encodeURIComponent(name)}/membership`,
+          { method: "POST" },
+        ),
+      remove: (name: string) =>
+        apiFetch<{ name: string; added: boolean }>(
+          `api/v1/addons/${encodeURIComponent(name)}/membership`,
+          { method: "DELETE" },
+        ),
+    },
+
     community: {
       stats: () => apiFetch<CommunityStats>("api/v1/community/stats"),
       activity: (limit = 30, before?: string) => {

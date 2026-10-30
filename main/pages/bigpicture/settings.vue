@@ -577,6 +577,13 @@
               </button>
             </div>
           </div>
+          <p
+            v-if="storageMessage"
+            class="text-xs mt-3"
+            :class="storageMessageIsError ? 'text-red-400' : 'text-zinc-400'"
+          >
+            {{ storageMessage }}
+          </p>
         </div>
       </div>
 
@@ -1387,6 +1394,10 @@ import { useRaLink } from "~/composables/ra-link";
 import BigPictureKeyboard from "~/components/bigpicture/BigPictureKeyboard.vue";
 import BigPictureButtonPrompt from "~/components/bigpicture/BigPictureButtonPrompt.vue";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  describeInstallDirScan,
+  parseInstallDirScan,
+} from "~/composables/install-dir-scan";
 import { listen } from "@tauri-apps/api/event";
 import { platform } from "@tauri-apps/plugin-os";
 
@@ -2187,13 +2198,23 @@ onMounted(async () => {
   } catch { /* ignore on non-Linux */ }
 });
 
+const storageMessage = ref<string | null>(null);
+const storageMessageIsError = ref(false);
+
 async function addStorageAsInstallDir(path: string) {
   const gameDir = `${path}/drop-games`;
+  storageMessage.value = null;
   try {
-    await invoke("add_download_dir", { newDir: gameDir });
+    // A card that already has a drop-games folder (from this Deck or another
+    // device) is added as is, and the games on it are imported.
+    const scan = await invoke("add_download_dir", { newDir: gameDir });
+    storageMessageIsError.value = false;
+    storageMessage.value = describeInstallDirScan(parseInstallDirScan(scan));
     installDirs.value = await invoke("fetch_download_dir_stats");
   } catch (e) {
     console.error("Failed to add storage dir:", e);
+    storageMessageIsError.value = true;
+    storageMessage.value = `Couldn't use this card: ${typeof e === "string" ? e : String((e as Error)?.message ?? e)}`;
   }
 }
 

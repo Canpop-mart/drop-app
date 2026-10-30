@@ -25,18 +25,22 @@
 //! The DB still owns the source of truth; the scan only fills gaps. A game
 //! already in `game_statuses` is left untouched.
 
-use std::fs;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use database::{
     GameDownloadStatus, borrow_db_mut_checked,
-    models::data::{InstallRecord, InstalledGameType},
+    models::data::{DatabaseApplications, InstallRecord, InstalledGameType},
 };
 use log::{info, warn};
+use serde::Serialize;
 
 use crate::{
     downloads::drop_data::{DROPDATA_PATH, DropData},
     library::set_partially_installed_db,
-    status::{StatusKind, game_meta, transition},
+    status::{StatusKind, game_meta, transition_from_db},
 };
 
 /// True when the `.dropdata` completion map proves every chunk landed.
@@ -49,40 +53,107 @@ fn dropdata_reports_complete(drop_data: &DropData) -> bool {
     !contexts.is_empty() && contexts.values().all(|done| *done)
 }
 
-pub fn scan_install_dirs() {
+/// What one scan imported. `add_download_dir` returns it so the UI can say how
+/// many games it found in a folder that already had some.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanReport {
+    pub installed: usize,
+    pub partial: usize,
+}
+
+/// Folders under an install dir that hold a `.dropdata`, in a stable order.
+///
+/// Two layouts exist on disk: `<dir>/<game>` for installs made before
+/// multi-version support, and `<dir>/<game>/<version>` for every install made
+/// since (`GameDownloadAgent::new`). Both levels are checked on every game
+/// folder, because an old single-version folder can also hold a newer
+/// per-version install inside it. Dot-folders are Drop's own working folders
+/// (`.mods`, `.drop-update`, `.drop-removed`, ...) and never an install.
+fn candidate_dirs(install_dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for game in subdirs(install_dir) {
+        if game.join(DROPDATA_PATH).is_file() {
+            found.push(game.clone());
+        }
+        for version in subdirs(&game) {
+            if version.join(DROPDATA_PATH).is_file() {
+                found.push(version);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+fn subdirs(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect()
+}
+
+/// Why an install found on disk is left alone, or `None` to import it.
+///
+/// A `Remote` status is not a reason: it is what an uninstalled or demoted
+/// game is left with, and those are exactly the folders worth picking back up.
+fn skip_reason(apps: &DatabaseApplications, game_id: &str, version: &str) -> Option<&'static str> {
+    if apps.transient_statuses.keys().any(|m| m.id == game_id) {
+        return Some("it is downloading or busy");
+    }
+    if apps.get_install(game_id, version).is_some() {
+        return Some("this version is already recorded");
+    }
+    match apps.game_statuses.get(game_id) {
+        Some(GameDownloadStatus::Installed { .. }) => {
+            Some("another version of this game is already installed")
+        }
+        _ => None,
+    }
+}
+
+pub fn scan_install_dirs() -> ScanReport {
     let mut db_lock = borrow_db_mut_checked();
     // Clone only the install_dirs paths (small Vec), not the entire DB,
     // since we need mutable access to db_lock in the loop body.
     let install_dirs = db_lock.applications.install_dirs.clone();
-    let mut imported = 0usize;
-    let mut imported_partial = 0usize;
+    let mut report = ScanReport::default();
 
     for install_dir in &install_dirs {
-        let Ok(files) = fs::read_dir(install_dir) else {
-            continue;
-        };
-        for game in files.into_iter().flatten() {
-            let drop_data_file = game.path().join(DROPDATA_PATH);
-            if !drop_data_file.exists() {
-                continue;
-            }
-            let drop_data = match DropData::read(&game.path()) {
+        for game_path in candidate_dirs(install_dir) {
+            // `read` points `base_path` at `game_path`, wherever the folder was
+            // when the file was written, so a copied or moved library imports
+            // at its real location.
+            let drop_data = match DropData::read(&game_path) {
                 Ok(v) => v,
                 Err(err) => {
                     warn!(
-                        ".dropdata exists for {}, but couldn't read it. is it corrupted? {:?}",
-                        game.file_name().display(),
+                        ".dropdata exists in {}, but couldn't read it. is it corrupted? {:?}",
+                        game_path.display(),
                         err
                     );
                     continue;
                 }
             };
-            // Skip games already known — the DB is the source of truth.
-            if db_lock
-                .applications
-                .game_statuses
-                .contains_key(&drop_data.game_id)
+            if let Some(reason) =
+                skip_reason(&db_lock.applications, &drop_data.game_id, &drop_data.game_version)
             {
+                if !db_lock
+                    .applications
+                    .get_install(&drop_data.game_id, &drop_data.game_version)
+                    .is_some_and(|r| Path::new(&r.install_dir) == game_path)
+                {
+                    info!(
+                        "[game-status] scan: not importing {} from {}: {reason}",
+                        drop_data.game_id,
+                        game_path.display()
+                    );
+                }
                 continue;
             }
 
@@ -95,10 +166,11 @@ pub fn scan_install_dirs() {
 
             // Decide complete vs. partial from the on-disk chunk flags.
             if dropdata_reports_complete(&drop_data) {
-                transition(&metadata.id, None, StatusKind::Installed);
+                transition_from_db(&db_lock, &metadata.id, StatusKind::Installed);
                 info!(
-                    "[game-status] scan: importing {} as Installed ({} chunks all complete)",
+                    "[game-status] scan: importing {} as Installed from {} ({} chunks all complete)",
                     metadata.id,
+                    game_path.display(),
                     drop_data.get_contexts().len()
                 );
                 // A scanned complete install has no SetupConfiguration data
@@ -126,12 +198,13 @@ pub fn scan_install_dirs() {
                     install_type: InstalledGameType::Installed,
                     update_available: false,
                 });
-                imported += 1;
+                report.installed += 1;
             } else {
                 warn!(
-                    "[game-status] scan: {} has .dropdata but incomplete chunk flags, \
+                    "[game-status] scan: {} in {} has .dropdata but incomplete chunk flags, \
                      importing as PartiallyInstalled",
-                    metadata.id
+                    metadata.id,
+                    game_path.display()
                 );
                 set_partially_installed_db(
                     &mut db_lock,
@@ -143,15 +216,77 @@ pub fn scan_install_dirs() {
                     // the next online library sync (see the Installed branch).
                     Default::default(),
                 );
-                imported_partial += 1;
+                report.partial += 1;
             }
         }
     }
 
-    if imported + imported_partial > 0 {
+    if report.installed + report.partial > 0 {
         info!(
-            "[game-status] scan complete: imported {imported} installed, \
-             {imported_partial} partially-installed game(s) from disk"
+            "[game-status] scan complete: imported {} installed, \
+             {} partially-installed game(s) from disk",
+            report.installed, report.partial
         );
+    }
+    report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("drop_scan_test_{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    fn mark(dir: &Path) {
+        fs::create_dir_all(dir).expect("create install dir");
+        fs::write(dir.join(DROPDATA_PATH), b"x").expect("write marker");
+    }
+
+    /// Both on-disk layouts are found: the legacy `<dir>/<game>` and the
+    /// per-version `<dir>/<game>/<version>` every current install uses,
+    /// including a per-version install nested inside a legacy one.
+    #[test]
+    fn finds_legacy_and_per_version_installs() {
+        let root = scratch("layouts");
+        mark(&root.join("Legacy"));
+        mark(&root.join("Legacy").join("v2"));
+        mark(&root.join("Modern").join("v1"));
+        fs::create_dir_all(root.join("Modern").join("v1").join("Data")).unwrap();
+
+        let found = candidate_dirs(&root);
+        assert_eq!(
+            found,
+            vec![
+                root.join("Legacy"),
+                root.join("Legacy").join("v2"),
+                root.join("Modern").join("v1"),
+            ]
+        );
+    }
+
+    /// Folders with no `.dropdata`, Drop's own dot-folders and plain files are
+    /// not installs, and nothing deeper than two levels is looked at.
+    #[test]
+    fn ignores_non_installs() {
+        let root = scratch("non_installs");
+        fs::create_dir_all(root.join("Empty").join("v1")).unwrap();
+        mark(&root.join(".drop-update"));
+        mark(&root.join("Game").join(".mods"));
+        mark(&root.join("Game").join("v1").join("deep"));
+        fs::write(root.join("notes.txt"), b"hi").unwrap();
+
+        assert!(candidate_dirs(&root).is_empty());
+    }
+
+    /// A missing install dir (unplugged SD card) finds nothing and doesn't panic.
+    #[test]
+    fn missing_dir_finds_nothing() {
+        let root = scratch("missing").join("gone");
+        assert!(candidate_dirs(&root).is_empty());
     }
 }

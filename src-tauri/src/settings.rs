@@ -9,7 +9,7 @@ use database::{
     Settings, borrow_db_checked, borrow_db_mut_checked, db::DATA_ROOT_DIR, debug::SystemData,
 };
 use download_manager::error::DownloadManagerError;
-use games::scan::scan_install_dirs;
+use games::scan::{ScanReport, scan_install_dirs};
 use log::error;
 use serde::Serialize;
 use serde_json::Value;
@@ -33,21 +33,23 @@ pub fn delete_download_dir(index: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// Add an install directory and import the games already in it.
+///
+/// The folder may hold anything. Games Drop installed there before, from this
+/// client or another (a reset, a second client, a folder copied over), carry a
+/// `.dropdata` and are imported by the scan; everything else is left alone.
 #[tauri::command]
-pub fn add_download_dir(new_dir: PathBuf) -> Result<(), DownloadManagerError<()>> {
-    // Check the new directory is all good
+pub fn add_download_dir(new_dir: PathBuf) -> Result<ScanReport, DownloadManagerError<()>> {
     let new_dir_path = Path::new(&new_dir);
-    if new_dir_path.exists() {
-        let dir_contents = new_dir_path.read_dir()?;
-        if dir_contents.count() != 0 {
-            return Err(Error::new(
-                ErrorKind::DirectoryNotEmpty,
-                "Selected directory cannot contain any existing files",
-            )
-            .into());
-        }
-    } else {
+    if !new_dir_path.exists() {
         create_dir_all(new_dir_path)?;
+    }
+    if !new_dir_path.is_dir() {
+        return Err(Error::new(
+            ErrorKind::NotADirectory,
+            "Selected path is not a folder",
+        )
+        .into());
     }
 
     // Add it to the dictionary
@@ -59,12 +61,37 @@ pub fn add_download_dir(new_dir: PathBuf) -> Result<(), DownloadManagerError<()>
         )
         .into());
     }
+    // One folder inside another would scan the same games twice and let a
+    // download land inside another game's install.
+    if let Some(existing) = lock
+        .applications
+        .install_dirs
+        .iter()
+        .find(|existing| dirs_overlap(existing, new_dir_path))
+    {
+        return Err(Error::new(
+            ErrorKind::AlreadyExists,
+            format!(
+                "Selected folder overlaps the install folder {}",
+                existing.display()
+            ),
+        )
+        .into());
+    }
     lock.applications.install_dirs.push(new_dir);
     drop(lock);
 
-    scan_install_dirs();
+    Ok(scan_install_dirs())
+}
 
-    Ok(())
+/// True when one folder is the other or sits inside it. Compared after
+/// resolving links and `..`, so two spellings of one folder count as the same.
+/// A folder that can't be resolved (an unplugged SD card) overlaps nothing.
+fn dirs_overlap(a: &Path, b: &Path) -> bool {
+    let (Ok(a), Ok(b)) = (a.canonicalize(), b.canonicalize()) else {
+        return false;
+    };
+    a.starts_with(&b) || b.starts_with(&a)
 }
 
 /// Opens an install directory (by its index in the configured list) in the
@@ -609,5 +636,28 @@ pub fn add_defender_exclusions() -> Result<(), String> {
     #[cfg(not(windows))]
     {
         Err("Windows Defender exclusions only apply on Windows.".to_string())
+    }
+}
+
+#[cfg(test)]
+mod install_dir_tests {
+    use super::dirs_overlap;
+
+    #[test]
+    fn nested_and_equal_folders_overlap() {
+        let root = std::env::temp_dir().join("drop_settings_overlap_test");
+        let _ = std::fs::remove_dir_all(&root);
+        let games = root.join("games");
+        let inner = games.join("Some Game");
+        let sibling = root.join("other");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+
+        assert!(dirs_overlap(&games, &games));
+        assert!(dirs_overlap(&games, &inner));
+        assert!(dirs_overlap(&inner, &games));
+        assert!(dirs_overlap(&games, &games.join("..").join("games")));
+        assert!(!dirs_overlap(&games, &sibling));
+        assert!(!dirs_overlap(&games, &root.join("missing")));
     }
 }

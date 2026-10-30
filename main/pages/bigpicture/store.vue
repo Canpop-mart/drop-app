@@ -686,6 +686,13 @@
       </template>
     </div>
 
+    <!-- ═══ Addons tab ═══ -->
+    <!-- Same tab as the desktop Store, over the same state
+         (composables/addon-shop.ts). -->
+    <div v-else-if="activeTab === 'addons'" class="flex-1 px-8 py-6">
+      <BpmStoreAddons />
+    </div>
+
     <!-- Floating bulk-action bar -->
     <Teleport to="body">
       <Transition
@@ -1703,6 +1710,7 @@ const tabs = [
   { label: "Featured", value: "featured" },
   { label: "Browse", value: "browse" },
   { label: "Collections", value: "collections" },
+  { label: "Addons", value: "addons" },
 ];
 </script>
 

@@ -73,6 +73,9 @@
         </div>
       </li>
     </ul>
+    <p v-if="scanMessage" class="pb-4 text-sm text-zinc-400">
+      {{ scanMessage }}
+    </p>
 
     <!-- Antivirus (Windows Defender) — offer to exclude Drop's folders so
          cracked game files (and Drop itself) stop getting quarantined, which
@@ -244,7 +247,8 @@
                       </button>
                     </div>
                     <p class="mt-2 text-sm text-zinc-400" id="dir-description">
-                      Select an empty directory to add.
+                      Pick an empty folder, or one with games Drop installed
+                      before. Those are added to your library.
                     </p>
                   </div>
                 </div>
@@ -308,11 +312,16 @@ import { FolderOpenIcon } from "@heroicons/vue/24/solid";
 import { invoke } from "@tauri-apps/api/core";
 import { Switch } from "@headlessui/vue";
 import { type Settings } from "~/types";
+import {
+  describeInstallDirScan,
+  parseInstallDirScan,
+} from "~/composables/install-dir-scan";
 
 const open = ref(false);
 const currentDirectory = ref<string | undefined>(undefined);
 const error = ref<string | undefined>(undefined);
 const createDirectoryLoading = ref(false);
+const scanMessage = ref<string | undefined>(undefined);
 
 const dirs = ref<Array<string>>([]);
 
@@ -395,8 +404,11 @@ async function submitDirectory() {
       throw new Error("Please select a directory first");
     createDirectoryLoading.value = true;
 
-    // Add directory
-    await invoke("add_download_dir", { newDir: currentDirectory.value });
+    // Add directory, importing any games already in it
+    const scan = await invoke("add_download_dir", {
+      newDir: currentDirectory.value,
+    });
+    scanMessage.value = describeInstallDirScan(parseInstallDirScan(scan));
 
     // Update list
     await updateDirs();
