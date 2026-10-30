@@ -240,6 +240,11 @@ jobs:
       # Also bundles umu-launcher so Windows game compatibility works out of the box.
       - name: Fix AppImage for SteamOS compatibility
         if: matrix.platform == 'ubuntu-22.04'
+        env:
+          # The repack below produces a different file from the one
+          # tauri-action signed, so it is signed again at the end.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
           if [ -z "$APPIMAGE" ]; then
@@ -360,31 +365,93 @@ jobs:
             echo "WARNING: zerotier-one bundle failed (package fetch/extract) — shipping without co-op rooms"
           fi
 
+          # appimagetool's continuous build refuses an AppDir that other users
+          # can't read (build 333, 2026-10-29: "has mode 0700, but it must be
+          # readable and executable for all users"), and the tree extracted
+          # above comes out 0700. These are the two commands it asks for.
+          chmod -R a+rX squashfs-root
+          chmod a+rx squashfs-root/AppRun
+
           # Download appimagetool to repack
-          curl -Lo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          curl -fLo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
 
           # Repack the AppImage
           ARCH=x86_64 ./appimagetool squashfs-root "$APPIMAGE"
           rm -rf squashfs-root appimagetool
 
-      # Re-upload the fixed AppImage to the release
+          # Re-sign it. The updater checks the signature against these exact
+          # bytes, and the .sig tauri-action wrote is for the AppImage before
+          # the repack, so without this every Linux AppImage update is rejected
+          # (6.1.4's was). `signer sign` overwrites "$APPIMAGE.sig"; the
+          # updater-manifest job copies it into latest.json.
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            pnpm tauri signer sign "$APPIMAGE"
+          else
+            echo "WARNING: no updater signing key, the repacked AppImage is unsigned"
+          fi
+
+      # Re-upload the fixed AppImage, and its new signature, to the release
       - name: Upload fixed AppImage
         if: matrix.platform == 'ubuntu-22.04'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
         run: |
           APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
           if [ -z "$APPIMAGE" ]; then exit 0; fi
           FILENAME=$(basename "$APPIMAGE")
-          TAG_NAME="${{ github.event.release.tag_name }}"
-          if [ -z "$TAG_NAME" ]; then
-            TAG_NAME=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
+          # The tag tauri-action used: the release's own tag, or v<version>
+          # for a manual run. (A manual run's checkout has no tags, so the old
+          # `git describe` fallback gave v1.0.0 and the upload was skipped.)
+          TAG_NAME="${EVENT_TAG:-v$(jq -r .version src-tauri/tauri.conf.json)}"
+
+          # Fail rather than skip: skipping leaves the un-repacked AppImage
+          # on the release.
+          gh release view "$TAG_NAME" --json id -q .id >/dev/null
+
+          # Delete the old assets and upload the fixed ones
+          gh release delete-asset "$TAG_NAME" "$FILENAME" --yes 2>/dev/null || true
+          gh release upload "$TAG_NAME" "$APPIMAGE" --clobber
+          if [ -f "$APPIMAGE.sig" ]; then
+            gh release delete-asset "$TAG_NAME" "$FILENAME.sig" --yes 2>/dev/null || true
+            gh release upload "$TAG_NAME" "$APPIMAGE.sig" --clobber
           fi
 
-          # Delete the old AppImage asset and upload the fixed one
-          RELEASE_ID=$(gh release view "$TAG_NAME" --json id -q .id 2>/dev/null || true)
-          if [ -n "$RELEASE_ID" ]; then
-            gh release delete-asset "$TAG_NAME" "$FILENAME" --yes 2>/dev/null || true
-            gh release upload "$TAG_NAME" "$APPIMAGE" --clobber
-          fi
+  # Runs once both platforms have uploaded, so neither publish job can
+  # overwrite the other's latest.json entries afterwards.
+  # 1. Copies the repacked AppImage's signature into latest.json (tauri-action
+  #    wrote the signature of the AppImage before the repack).
+  # 2. Downloads everything latest.json points at and checks each signature
+  #    against the updater key, and that all six platforms are listed. A release
+  #    the updater would reject fails here instead of looking healthy.
+  updater-manifest:
+    needs: publish-tauri
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Point latest.json at the repacked AppImage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          TAG_NAME="${EVENT_TAG:-v$(jq -r .version src-tauri/tauri.conf.json)}"
+          mkdir rel
+          gh release download "$TAG_NAME" -D rel -p latest.json -p '*.AppImage.sig'
+          python3 .github/scripts/updater-manifest.py patch rel/latest.json rel/*.AppImage.sig
+          gh release upload "$TAG_NAME" rel/latest.json --clobber
+
+      - name: Verify every updater download
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          TAG_NAME="${EVENT_TAG:-v$(jq -r .version src-tauri/tauri.conf.json)}"
+          python3 -m pip install --quiet cryptography
+          # What clients fetch, not the local copy.
+          curl -fsSL -o served-latest.json \
+            "https://github.com/${{ github.repository }}/releases/download/$TAG_NAME/latest.json"
+          python3 .github/scripts/updater-manifest.py verify \
+            src-tauri/tauri.conf.json served-latest.json "${TAG_NAME#v}" downloads
