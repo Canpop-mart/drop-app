@@ -205,6 +205,9 @@ impl ProcessManager<'_> {
         if self.processes.contains_key(&game_id) || self.pending_launches.contains(&game_id) {
             return Err(ProcessError::AlreadyRunning);
         }
+        if self.addon_holds.contains(&game_id) {
+            return Err(ProcessError::AddonBusy);
+        }
 
         // The launch flow only *reads* the database — every status write
         // happens later in its own scoped `borrow_db_mut_checked()`. An
@@ -234,7 +237,7 @@ impl ProcessManager<'_> {
             let meta = DownloadableMetadata::new(
                 game_id.clone(),
                 install.version_id.clone(),
-                install.target_platform.clone(),
+                install.target_platform,
                 DownloadType::Game,
             );
             (
@@ -640,7 +643,15 @@ impl ProcessManager<'_> {
         // into the template field). Both surfaces warn about it in the UI;
         // logging it here makes a "my pick did nothing" report answerable from
         // a log alone.
-        let launch_template = &game_version.user_configuration.launch_template;
+        // A blank template means "no override", the same as `{}`. Formatting a
+        // blank template used to produce an empty command, so clearing the
+        // field stopped the game from starting at all.
+        let launch_template: &str =
+            if game_version.user_configuration.launch_template.trim().is_empty() {
+                "{}"
+            } else {
+                &game_version.user_configuration.launch_template
+            };
         if exe_override_abs.is_some()
             && !["{}", "{0}", "{exe}", "{abs_exe}"]
                 .iter()
@@ -660,7 +671,7 @@ impl ProcessManager<'_> {
         // Two passes so a template that itself contains placeholders (e.g.
         // a wrapper that references {abs_exe}) is fully expanded.
         let target_launch_string = SimpleCurlyFormat
-            .format(&game_version.user_configuration.launch_template, &format_args)
+            .format(launch_template, &format_args)
             .map_err(|e| ProcessError::FormatError(e.to_string()))?
             .to_string();
         let target_launch_string = SimpleCurlyFormat

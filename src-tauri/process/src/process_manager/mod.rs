@@ -195,6 +195,11 @@ pub struct ProcessManager<'a> {
     /// `processes`, so this set is what stops a second Play press launching it
     /// twice.
     pub(crate) pending_launches: HashSet<String>,
+    /// Games an addon is changing the save of right now (a league check-out
+    /// or check-in). Launching one is refused until the step finishes, so the
+    /// game never starts on a half-written save. Taken with
+    /// [`crate::hold_for_addon`], released when its guard drops.
+    pub(crate) addon_holds: HashSet<String>,
     game_launchers: Vec<(
         (Platform, Platform),
         &'a (dyn ProcessHandler + Sync + Send + 'static),
@@ -214,6 +219,7 @@ impl ProcessManager<'_> {
 
             processes: HashMap::new(),
             pending_launches: HashSet::new(),
+            addon_holds: HashSet::new(),
             log_output_dir: DATA_ROOT_DIR.join("logs"),
             game_launchers: vec![
                 // (current platform, target platform) -> handler

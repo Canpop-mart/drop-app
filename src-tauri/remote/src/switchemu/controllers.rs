@@ -590,6 +590,9 @@ mod tests {
 
     #[test]
     fn unknown_guid_has_no_mapping() {
-        assert!(lookup_pad_mapping("ffffffffffffffffffffffffffffffff").is_none());
+        // Vendor dead / product beef: in no platform's database entries. The
+        // all-`f` GUID this used to use matches a real Linux entry by
+        // vendor/product (ffff/ffff), so the test failed on Linux.
+        assert!(lookup_pad_mapping("ffffffffdeadffffbeefffffffffffff").is_none());
     }
 }

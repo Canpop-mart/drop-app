@@ -52,8 +52,14 @@
            frame below (which paints at z-index 2 and is full-bleed): the
            cartridge templates are opaque at this corner, so without it an
            installed game reads as not installed. -->
+      <span
+        v-if="hasUpdate"
+        class="absolute top-2 right-2 z-10 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-600 text-white shadow-md shadow-black/40"
+      >
+        Update
+      </span>
       <div
-        v-if="isInstalled"
+        v-else-if="isInstalled"
         class="absolute top-2 right-2 z-10 size-3 rounded-full bg-green-500 ring-2 ring-zinc-900"
       />
 
@@ -112,6 +118,12 @@ const coverWindowStyle = computed(() => boxArtWindowStyle(props.overlayThemeId))
 const isInstalled = computed(() => props.status.type === "Installed");
 
 const isRunning = computed(() => props.status.type === "Running");
+
+// An installed game with an update waiting. Shown on the tile itself, since
+// the home screen no longer repeats these games in a rail of their own.
+const hasUpdate = computed(
+  () => props.status.type === "Installed" && props.status.update_available,
+);
 </script>
 
 <style scoped>

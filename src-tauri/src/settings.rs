@@ -9,7 +9,9 @@ use database::{
     Settings, borrow_db_checked, borrow_db_mut_checked, db::DATA_ROOT_DIR, debug::SystemData,
 };
 use download_manager::error::DownloadManagerError;
-use games::scan::{ScanReport, scan_install_dirs};
+use games::scan::{ScanReport, scan_install_dir};
+use tauri::AppHandle;
+use utils::app_emit;
 use log::error;
 use serde::Serialize;
 use serde_json::Value;
@@ -38,13 +40,16 @@ pub fn delete_download_dir(index: usize) -> Result<(), String> {
 /// The folder may hold anything. Games Drop installed there before, from this
 /// client or another (a reset, a second client, a folder copied over), carry a
 /// `.dropdata` and are imported by the scan; everything else is left alone.
+///
+/// Async, so it runs off the main thread: the scan reads a whole folder tree,
+/// which is slow on an SD card or a network share.
 #[tauri::command]
-pub fn add_download_dir(new_dir: PathBuf) -> Result<ScanReport, DownloadManagerError<()>> {
+pub async fn add_download_dir(
+    new_dir: PathBuf,
+    app_handle: AppHandle,
+) -> Result<ScanReport, DownloadManagerError<()>> {
     let new_dir_path = Path::new(&new_dir);
-    if !new_dir_path.exists() {
-        create_dir_all(new_dir_path)?;
-    }
-    if !new_dir_path.is_dir() {
+    if new_dir_path.exists() && !new_dir_path.is_dir() {
         return Err(Error::new(
             ErrorKind::NotADirectory,
             "Selected path is not a folder",
@@ -52,9 +57,52 @@ pub fn add_download_dir(new_dir: PathBuf) -> Result<ScanReport, DownloadManagerE
         .into());
     }
 
-    // Add it to the dictionary
-    let mut lock = borrow_db_mut_checked();
-    if lock.applications.install_dirs.contains(&new_dir) {
+    // Checked before the folder is created, so a refused one isn't left behind
+    // (on an SD card, say). The folders are copied out first: the check reads
+    // the disk, which must not happen while holding the database lock.
+    let existing = borrow_db_checked().applications.install_dirs.clone();
+    check_new_install_dir(&existing, &new_dir)?;
+
+    if !new_dir_path.exists() {
+        create_dir_all(new_dir_path)?;
+    }
+    {
+        // The duplicate check again under the lock: two quick adds of the same
+        // folder both pass the first check while this runs off the main thread.
+        let mut lock = borrow_db_mut_checked();
+        if lock.applications.install_dirs.contains(&new_dir) {
+            return Err(Error::new(
+                ErrorKind::AlreadyExists,
+                "Selected directory already exists in database",
+            )
+            .into());
+        }
+        lock.applications.install_dirs.push(new_dir.clone());
+    }
+
+    let report = scan_install_dir(&new_dir);
+    if report.installed + report.partial > 0 {
+        app_emit!(&app_handle, "update_library", ());
+        // Imported installs can't launch until their version details are
+        // stored. Fetched in the background, so a slow or unreachable server
+        // doesn't hold up the folder being added; skipped entirely offline
+        // (the next online library fetch does it instead).
+        if !app_is_offline(&app_handle) {
+            let app_handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                games::library::backfill_game_versions(Some(&app_handle)).await;
+            });
+        }
+    }
+    Ok(report)
+}
+
+/// Refuse a folder that is already an install folder, or overlaps one.
+fn check_new_install_dir(
+    existing: &[PathBuf],
+    new_dir: &Path,
+) -> Result<(), DownloadManagerError<()>> {
+    if existing.iter().any(|d| d == new_dir) {
         return Err(Error::new(
             ErrorKind::AlreadyExists,
             "Selected directory already exists in database",
@@ -63,35 +111,60 @@ pub fn add_download_dir(new_dir: PathBuf) -> Result<ScanReport, DownloadManagerE
     }
     // One folder inside another would scan the same games twice and let a
     // download land inside another game's install.
-    if let Some(existing) = lock
-        .applications
-        .install_dirs
-        .iter()
-        .find(|existing| dirs_overlap(existing, new_dir_path))
-    {
+    if let Some(dir) = existing.iter().find(|d| dirs_overlap(d, new_dir)) {
         return Err(Error::new(
             ErrorKind::AlreadyExists,
-            format!(
-                "Selected folder overlaps the install folder {}",
-                existing.display()
-            ),
+            format!("Selected folder overlaps the install folder {}", dir.display()),
         )
         .into());
     }
-    lock.applications.install_dirs.push(new_dir);
-    drop(lock);
+    Ok(())
+}
 
-    Ok(scan_install_dirs())
+/// True when the app shouldn't touch the network: offline mode is on, or the
+/// app found the server unreachable.
+pub(crate) fn app_is_offline(app_handle: &AppHandle) -> bool {
+    use client::{app_state::AppState, app_status::AppStatus};
+    use std::sync::nonpoison::Mutex;
+    use tauri::Manager;
+    borrow_db_checked().settings.force_offline
+        || app_handle
+            .try_state::<Mutex<AppState>>()
+            .is_some_and(|s| s.lock().status == AppStatus::Offline)
 }
 
 /// True when one folder is the other or sits inside it. Compared after
 /// resolving links and `..`, so two spellings of one folder count as the same.
-/// A folder that can't be resolved (an unplugged SD card) overlaps nothing.
+/// A folder that doesn't exist yet is resolved through its nearest existing
+/// parent, so a new `drop-games` inside an install folder is still caught.
+/// A folder with no resolvable parent at all (an unplugged SD card) overlaps
+/// nothing.
 fn dirs_overlap(a: &Path, b: &Path) -> bool {
-    let (Ok(a), Ok(b)) = (a.canonicalize(), b.canonicalize()) else {
+    let (Some(a), Some(b)) = (resolve_for_compare(a), resolve_for_compare(b)) else {
         return false;
     };
     a.starts_with(&b) || b.starts_with(&a)
+}
+
+/// `path` canonicalized, or, for a path that doesn't exist yet, its nearest
+/// existing ancestor canonicalized with the missing part appended.
+fn resolve_for_compare(path: &Path) -> Option<PathBuf> {
+    let mut missing: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut current = path;
+    loop {
+        if let Ok(real) = current.canonicalize() {
+            let mut out = real;
+            for part in missing.iter().rev() {
+                out.push(part);
+            }
+            return Some(out);
+        }
+        // `..` or `.` in the part that doesn't exist yet can't be resolved
+        // without the folder; treat the path as unresolvable.
+        let name = current.file_name()?;
+        missing.push(name);
+        current = current.parent()?;
+    }
 }
 
 /// Opens an install directory (by its index in the configured list) in the
@@ -658,6 +731,10 @@ mod install_dir_tests {
         assert!(dirs_overlap(&inner, &games));
         assert!(dirs_overlap(&games, &games.join("..").join("games")));
         assert!(!dirs_overlap(&games, &sibling));
-        assert!(!dirs_overlap(&games, &root.join("missing")));
+        // A folder that doesn't exist yet, inside an install folder.
+        assert!(dirs_overlap(&root, &games.join("not-yet").join("drop-games")));
+        assert!(!dirs_overlap(&sibling, &games.join("not-yet")));
+        // A drive that isn't there at all.
+        assert!(!dirs_overlap(&games, std::path::Path::new("/definitely-missing-drop-root/x")));
     }
 }

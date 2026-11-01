@@ -59,6 +59,7 @@ use tauri_plugin_dialog::DialogExt;
 use url::Url;
 use utils::app_emit;
 
+mod addons;
 mod client;
 mod collections;
 mod compat;
@@ -379,6 +380,10 @@ pub fn run() {
             check_online,
             rename_client,
             ::remote::web_upload::upload_user_image,
+            addons::addon_install_save,
+            addons::addon_check_in,
+            addons::addon_local_state,
+            addons::addon_preflight,
             // Library
             fetch_library,
             fetch_game,

@@ -168,7 +168,7 @@ impl ModDownloadAgent {
         result.ensure_manifest_exists().await?;
 
         let required_space = lock!(result.dl_info).as_ref().unwrap().install_size;
-        let available_space = get_disk_available(install_dir)? as u64;
+        let available_space = get_disk_available(install_dir)?;
         if required_space > available_space {
             return Err(ApplicationDownloadError::DiskFull(
                 required_space,

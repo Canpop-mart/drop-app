@@ -115,45 +115,8 @@
         </div>
       </div>
 
-      <!-- Trending section (1 row) -->
-      <div v-if="trending.length > 0" class="mb-8">
-        <h3 class="text-lg font-semibold font-display text-zinc-200 mb-4">
-          Most Played This Week
-        </h3>
-        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
-          <div
-            v-for="game in visibleTrending"
-            :key="game.id"
-            :ref="(el: any) => registerGrid(el, {
-              onSelect: () => goToGame(game.id),
-            })"
-            class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
-          >
-            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl overflow-hidden">
-              <img
-                v-if="game.mCoverObjectId"
-                :src="objectUrl(game.mCoverObjectId)"
-                :alt="game.mName"
-                class="w-full h-full object-cover"
-                loading="lazy"
-              />
-              <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
-              <div
-                v-if="game.updateAvailable"
-                class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
-                style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
-              >
-                Older build
-              </div>
-              <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
-            </div>
-            <div class="px-2 py-2 bg-zinc-900/80">
-              <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
+      <!-- "Most Played This Week" was removed on purpose (2026-10-30). The
+           trending list is still fetched: the roulette's cover pool uses it. -->
       <!-- Recently added section (1 row) -->
       <div v-if="recentGames.length > 0" class="mb-8">
         <h3 class="text-lg font-semibold font-display text-zinc-200 mb-4">
@@ -925,7 +888,6 @@ function updateGridCols() {
 updateGridCols();
 
 // Slice data to exact row counts so hidden overflow items aren't focusable
-const visibleTrending = computed(() => trending.value.slice(0, gridCols.value));
 const visibleRecentGames = computed(() => recentGames.value.slice(0, gridCols.value));
 const visibleRandomGames = computed(() => randomGames.value.slice(0, gridCols.value * 2));
 

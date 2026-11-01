@@ -771,6 +771,15 @@
       />
     </div>
 
+    <!-- League saves (addons): check the shared save out and in. Shows
+         nothing for games without one. Registers its own buttons. -->
+    <div v-if="game" class="px-8 pt-3">
+      <BpmAddonActions
+        :game-id="gameId"
+        :running="status?.type === 'Running'"
+      />
+    </div>
+
     <!-- Content tabs -->
     <div class="px-8 pt-4">
       <div class="relative flex items-center gap-1 border-b border-zinc-800/50">
@@ -2587,6 +2596,7 @@ function onAchievementIconError(event: Event) {
 // `useBpmMods`; the tab markup is <BpmModsTab>, which takes this object.
 import { useBpmMods } from "~/composables/bigpicture/use-bpm-mods";
 import BpmModsTab from "~/components/bigpicture/game-detail/BpmModsTab.vue";
+import BpmAddonActions from "~/components/bigpicture/game-detail/BpmAddonActions.vue";
 import {
   shouldShowModsTab,
   resolveActiveTab,

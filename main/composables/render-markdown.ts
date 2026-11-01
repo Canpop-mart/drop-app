@@ -20,13 +20,14 @@
 import { micromark } from "micromark";
 import { sanitizeHtml } from "./sanitize";
 import { rewriteDescriptionImages } from "./use-server-fetch";
+import { dropOrphanEmphasis } from "./markdown-cleanup";
 
 /** Render a markdown string to sanitized HTML (ready for `v-html`). */
 export function renderMarkdown(md: string): string {
   if (!md) return "";
   let html: string;
   try {
-    html = micromark(md);
+    html = micromark(dropOrphanEmphasis(md));
   } catch {
     return "";
   }

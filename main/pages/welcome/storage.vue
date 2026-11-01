@@ -158,6 +158,7 @@ async function refreshInstallDirs() {
 
 async function addFolder() {
   error.value = "";
+  scanMessage.value = "";
   loading.value = true;
   try {
     const chosen = await open({
@@ -179,6 +180,7 @@ async function addFolder() {
 
 async function addFromDetected(path: string) {
   error.value = "";
+  scanMessage.value = "";
   loading.value = true;
   try {
     const gameDir = path.endsWith("/") ? `${path}drop-games` : `${path}/drop-games`;

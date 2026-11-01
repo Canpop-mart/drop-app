@@ -64,10 +64,10 @@ pub struct FetchLibraryResponse {
 
 pub async fn fetch_library_logic(
     state: tauri::State<'_, Mutex<AppState>>,
-    // Kept for signature parity with fetch_library_logic_offline (the offline!
-    // macro passes it to both). No longer used here — it previously drove the
+    // Used only to tell open game pages about version details filled in after
+    // the fetch (see the end of this function). It used to drive the
     // uninstall-on-cache-miss data-loss bug, now removed.
-    _app_handle: AppHandle,
+    app_handle: AppHandle,
     hard_refresh: Option<bool>,
 ) -> Result<FetchLibraryResponse, RemoteAccessError> {
     let do_hard_refresh = hard_refresh.unwrap_or(false);
@@ -200,6 +200,14 @@ pub async fn fetch_library_logic(
     };
 
     cache_object("library", &response)?;
+
+    // Installs found on disk have no version details until they are fetched;
+    // being online with a fresh library is the moment to do it. Off this call's
+    // path, so a slow server doesn't hold up the library view.
+    // Costs one database read when nothing is missing.
+    tauri::async_runtime::spawn(async move {
+        ::games::library::backfill_game_versions(Some(&app_handle)).await;
+    });
 
     Ok(response)
 }
@@ -883,8 +891,9 @@ pub fn update_game_configuration(
     // used to fail the save with `MetaNotFound`, which is why scanned ROMs were
     // locked out of the quality / CRT / aspect settings. Synthesize a minimal
     // entry from the installed metadata instead: emulated games launch through
-    // the emulator (not these launches/setups), so the empty vecs are inert, and
-    // an online library sync later replaces this with the full server version.
+    // the emulator (not these launches/setups), so the empty vecs are inert.
+    // `library::backfill_game_versions` later replaces this stand-in with the
+    // server's version and keeps the settings saved here.
     let mut configuration = handle
         .applications
         .game_versions

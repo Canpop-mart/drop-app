@@ -39,6 +39,56 @@ pub mod prefix_prep;
 pub mod process_handlers;
 pub mod process_manager;
 
+/// Held while an addon changes a game's save; launching that game is refused
+/// until it drops. See [`hold_for_addon`].
+#[must_use = "the hold ends when this is dropped"]
+pub struct AddonHold(String);
+
+impl Drop for AddonHold {
+    fn drop(&mut self) {
+        PROCESS_MANAGER.lock().addon_holds.remove(&self.0);
+    }
+}
+
+/// Why [`hold_for_addon`] refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddonHoldRefused {
+    /// The game is running or part-way through launching.
+    GameActive,
+    /// Another addon step for this game is already running.
+    AlreadyHeld,
+}
+
+/// Hold `game_id` so it can't launch through Drop while an addon changes its
+/// save. Checked and taken under the process manager's lock, which is the
+/// lock `prepare_launch` runs under, so no Drop launch can slip in between.
+/// It can't stop the game being started outside Drop; callers check for its
+/// process separately.
+pub fn hold_for_addon(game_id: &str) -> Result<AddonHold, AddonHoldRefused> {
+    let mut pm = PROCESS_MANAGER.lock();
+    if pm.is_game_active(game_id) {
+        return Err(AddonHoldRefused::GameActive);
+    }
+    if pm.addon_holds.contains(game_id) {
+        return Err(AddonHoldRefused::AlreadyHeld);
+    }
+    pm.addon_holds.insert(game_id.to_string());
+    Ok(AddonHold(game_id.to_string()))
+}
+
+/// Whether the game is running or launching through Drop, or an addon step
+/// holds it. Read only.
+pub fn addon_hold_blocked(game_id: &str) -> Option<AddonHoldRefused> {
+    let pm = PROCESS_MANAGER.lock();
+    if pm.is_game_active(game_id) {
+        Some(AddonHoldRefused::GameActive)
+    } else if pm.addon_holds.contains(game_id) {
+        Some(AddonHoldRefused::AlreadyHeld)
+    } else {
+        None
+    }
+}
+
 pub struct ProcessManagerWrapper(OnceLock<Mutex<ProcessManager<'static>>>);
 impl ProcessManagerWrapper {
     const fn new() -> Self {

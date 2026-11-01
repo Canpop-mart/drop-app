@@ -257,7 +257,7 @@ const emit = defineEmits<{
 
 const tabs: Array<{ label: string; value: TabValue }> = [
   { label: "New", value: "new" },
-  { label: "Most Played", value: "popular" },
+  // "Most Played" was removed on purpose (2026-10-30).
   { label: "Random", value: "random" },
 ];
 

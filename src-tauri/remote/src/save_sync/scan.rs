@@ -928,6 +928,12 @@ pub fn is_save_denylisted(path: &Path) -> bool {
     if backup::is_backup_artifact(name) {
         return true;
     }
+    // Saves an addon manages (a league's dynasty): the addon is the authority
+    // for them, and a cloud restore before launch would overwrite a save the
+    // player just checked out. See crate::addons.
+    if crate::addons::is_addon_managed(path) {
+        return true;
+    }
     // RetroArch's auto-save slot and its thumbnail, rewritten on every close
     // whether or not the player saved. Syncing them means a new blob upload
     // and a fresh download on every other device, every single session, and
@@ -2270,6 +2276,16 @@ pub fn write_downloaded_pc_save(
 ) -> Result<PathBuf, String> {
     // If we know the original path (from manifest), use it
     if let Some(orig) = original_path {
+        // A save an addon manages (a league's dynasty) is the addon's: a
+        // cloud copy must never overwrite a save the player just checked out.
+        // The scan never uploads these, so this only meets old cloud rows.
+        if crate::addons::is_addon_managed(orig) {
+            log::info!(
+                "[SAVE-SYNC] not restoring {}: an addon manages this save",
+                orig.display()
+            );
+            return Ok(orig.to_path_buf());
+        }
         if !already_matches(orig, expected_hash) {
             backup::replace_save_file(orig, data)?;
         }

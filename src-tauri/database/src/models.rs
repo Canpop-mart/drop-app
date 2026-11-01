@@ -815,7 +815,7 @@ pub mod data {
                         InstallRecord {
                             game_id: game_id.clone(),
                             version_id: version_id.clone(),
-                            target_platform: meta.target_platform.clone(),
+                            target_platform: meta.target_platform,
                             install_dir: install_dir.clone(),
                             install_type: install_type.clone(),
                             update_available: *update_available,

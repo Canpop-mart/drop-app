@@ -625,37 +625,6 @@
           </div>
         </section>
 
-        <!-- Updates available -->
-        <section v-if="updatesEntries.length > 0" class="px-8 pt-6">
-          <div class="flex items-baseline gap-3 mb-3">
-            <h2 class="text-lg font-semibold font-display" style="color: var(--bpm-text)">Updates Available</h2>
-            <span class="text-xs tabular-nums" style="color: var(--bpm-muted)">{{ updatesEntries.length }}</span>
-          </div>
-          <div class="bpm-rail flex gap-4 overflow-x-auto pb-2 px-1 pt-1">
-            <div
-              v-for="entry in updatesEntries"
-              :key="entry.game.id"
-              class="flex-shrink-0 bp-focus-delegate cursor-pointer"
-              style="width: 10rem"
-              :ref="
-                (el: any) =>
-                  registerTile(el, {
-                    onSelect: () => navigateToGame(entry.game.id),
-                    onContext: () => openContextMenu(entry),
-                    onFocus: () => prefetchGame(entry.game.id),
-                  })
-              "
-            >
-              <BigPictureGameTile
-                :game="entry.game"
-                :status="entry.status"
-                :hide-titles="hideTitles"
-                :overlay-theme-id="tileOverlayTheme"
-              />
-            </div>
-          </div>
-        </section>
-
         <!-- Collections — the old Shelves filter tab, as a rail you steer into
              instead of a fourth chip that swapped the whole page out. -->
         <section class="px-8 pt-6">
@@ -1182,7 +1151,8 @@ import BpmHomeSkeleton from "~/components/bigpicture/BpmHomeSkeleton.vue";
 import { devLog } from "~/composables/dev-mode";
 import { quickInstallGame } from "~/composables/game-detail/quick-install";
 import { useListen } from "~/composables/useListen";
-import { parseStatus, deduplicatedInvoke } from "~/composables/game";
+import { parseStatus, deduplicatedInvoke, useGame } from "~/composables/game";
+import { withEmulatorsFirst } from "~/composables/console-emulators";
 import type { LaunchResult } from "~/composables/game";
 import {
   describeLaunchFailure,
@@ -1455,11 +1425,8 @@ const focusedRecent = computed(
   () => otherGames.value[focusedIdx.value] ?? spotlightGame.value,
 );
 
-const updatesEntries = computed<LibraryEntry[]>(() =>
-  library.value.filter(
-    (e) => e.status.type === "Installed" && e.status.update_available,
-  ),
-);
+// No separate "Updates Available" rail: it repeated each game as a second
+// tile. The update shows as a badge on the game's own tile instead.
 
 // ── Collections (shelves) ───────────────────────────────────────────────
 const shelvesData = useShelves();
@@ -1518,7 +1485,24 @@ async function loadConsoles() {
     console.warn("[BPM:HOME] console grouping fetch failed:", e);
     consolesError.value = true;
     consoleGroups.value = [];
+    return;
   }
+  void loadConsoleEmulators();
+}
+
+// Each console's emulator is listed first when that console is picked. It is
+// usually not in the player's library, so it's loaded here, ahead of time:
+// picking a console then shows a finished list instead of inserting a tile
+// under the controller's highlight a moment later.
+const consoleEmulators = ref(new Map<string, LibraryEntry>());
+async function loadConsoleEmulators() {
+  const ids = new Set(consoleGroups.value.flatMap((g) => g.emulatorIds ?? []));
+  const loaded = new Map<string, LibraryEntry>();
+  for (const id of ids) {
+    const r = await useGame(id).catch(() => null);
+    if (r) loaded.set(id, { game: r.game, status: r.status.value });
+  }
+  consoleEmulators.value = loaded;
 }
 
 watch(() => consoleSections.enabled.value, () => loadConsoles());
@@ -1574,8 +1558,28 @@ const allGamesHeader = ref<HTMLElement | null>(null);
  * rails — so bring it up. Without the scroll the card just highlights and the
  * result is off-screen, which reads as nothing having happened.
  */
+// The emulators shown for the picked console, fixed at the moment it was
+// picked so the list never grows under the highlight.
+const activeConsoleEmulators = ref<{ ids: string[]; entries: Map<string, LibraryEntry> }>({
+  ids: [],
+  entries: new Map(),
+});
+
 function selectGroup(kind: "collection" | "console", id: string, name: string) {
   activeGroup.value = { kind, id, name };
+  const ids =
+    kind === "console"
+      ? (consoleGroups.value.find((g) => g.id === id)?.emulatorIds ?? [])
+      : [];
+  activeConsoleEmulators.value = {
+    ids,
+    entries: new Map(
+      ids.flatMap((e) => {
+        const entry = consoleEmulators.value.get(e);
+        return entry ? [[e, entry] as const] : [];
+      }),
+    ),
+  };
   nextTick(() => {
     allGamesHeader.value?.scrollIntoView({
       behavior: reducedMotion.value ? "auto" : "smooth",
@@ -1730,6 +1734,21 @@ const filteredGames = computed(() => {
           (gameSizes.value[b.game.id] ?? 0) - (gameSizes.value[a.game.id] ?? 0),
       );
       break;
+  }
+
+  // A picked console lists its emulator first, ahead of the ROMs, under the
+  // same installed / not installed filter.
+  if (!searching.value && activeGroup.value?.kind === "console") {
+    const emulators = new Map(
+      [...activeConsoleEmulators.value.entries].filter(([, e]) =>
+        activeFilter.value === "installed"
+          ? e.status.type === "Installed"
+          : activeFilter.value === "remote"
+            ? e.status.type !== "Installed"
+            : true,
+      ),
+    );
+    games = withEmulatorsFirst(games, activeConsoleEmulators.value.ids, emulators);
   }
 
   return games;
