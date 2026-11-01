@@ -63,6 +63,12 @@
       >
         Loading…
       </div>
+      <SectionError
+        v-else-if="loadError"
+        title="Couldn't load this console"
+        :detail="loadError"
+        @retry="load"
+      />
       <div
         v-else-if="consoleEntries.length === 0"
         class="flex flex-col items-center justify-center py-20 text-center"
@@ -101,6 +107,7 @@ import type { Game, GameStatus } from "~/types";
 import { InstalledType } from "~/types";
 import LibraryGrid from "~/components/LibraryGrid.vue";
 import { consoleArt } from "~/composables/console-art";
+import { withEmulatorsFirst } from "~/composables/console-emulators";
 
 interface LibraryEntry {
   game: Game;
@@ -131,6 +138,9 @@ const displayName = computed(
 const consoleEntries = ref<LibraryEntry[]>([]);
 const lastPlayedMap = ref<Map<string, string>>(new Map());
 const loading = ref(true);
+// Set when the console list or the library couldn't be read, so a failure
+// isn't shown as "No games here yet".
+const loadError = ref<string | null>(null);
 
 const installedCount = computed(
   () => consoleEntries.value.filter((e) => e.installed).length,
@@ -143,6 +153,7 @@ function goToGame(gameId: string) {
 
 async function load() {
   loading.value = true;
+  loadError.value = null;
   try {
     const [{ consoles }, lib] = await Promise.all([
       api.emulation.consoles(),
@@ -196,10 +207,34 @@ async function load() {
       }
     }
     built.sort((a, b) => a.game.mName.localeCompare(b.game.mName));
-    consoleEntries.value = built;
+
+    // The console's emulator goes first, ahead of its ROMs. It usually isn't
+    // in the player's library, so it's fetched on its own; one that fails to
+    // load is simply left out.
+    const emulators = new Map<string, LibraryEntry>();
+    for (const id of group.emulatorIds ?? []) {
+      const r = await useGame(id).catch(() => null);
+      if (!r) continue;
+      const status = r.status.value;
+      emulators.set(id, {
+        game: r.game,
+        status,
+        installed:
+          status.type === "Installed" &&
+          status.install_type.type === InstalledType.Installed,
+        updateAvailable:
+          status.type === "Installed" ? status.update_available : false,
+      });
+    }
+    consoleEntries.value = withEmulatorsFirst(
+      built,
+      group.emulatorIds,
+      emulators,
+    );
   } catch (e) {
     console.warn("[console] load failed:", e);
     consoleEntries.value = [];
+    loadError.value = e instanceof Error ? e.message : String(e);
   } finally {
     loading.value = false;
   }

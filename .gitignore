@@ -53,3 +53,7 @@ DEBUG.md
 .env
 .env.*
 !.env.example
+# Agent task notes (per session, never committed)
+tasks/current.md
+# Never commit
+accounts.json

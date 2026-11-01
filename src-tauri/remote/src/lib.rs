@@ -2,6 +2,7 @@
 #![feature(nonpoison_mutex)]
 
 pub mod achievements;
+pub mod addons;
 pub mod auth;
 #[macro_use]
 pub mod cache;

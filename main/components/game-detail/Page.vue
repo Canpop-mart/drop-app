@@ -159,6 +159,14 @@
       </button>
     </div>
 
+    <!-- League saves (addons): check the shared save out and in. Shows
+         nothing for games without one. -->
+    <GameDetailAddonActions
+      class="relative z-10 mx-8 mt-4"
+      :game-id="id"
+      :running="status.type === 'Running'"
+    />
+
     <!-- Tabbed content — About / Gallery / Achievements / Community /
          Cloud Saves. Cloud Saves used to sit perma-visible below the
          tabbed area, which made the page noisy on games you don't have

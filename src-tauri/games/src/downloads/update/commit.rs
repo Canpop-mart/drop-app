@@ -592,6 +592,10 @@ fn remove_any(path: &Path) -> io::Result<()> {
             #[cfg(windows)]
             if e.kind() == io::ErrorKind::PermissionDenied && _m.permissions().readonly() {
                 let mut perms = _m.permissions();
+                // Windows-only block: clearing the read-only attribute is the
+                // point. The lint warns about Unix permission bits, which this
+                // never touches.
+                #[allow(clippy::permissions_set_readonly_false)]
                 perms.set_readonly(false);
                 if std::fs::set_permissions(path, perms).is_ok() && std::fs::remove_file(path).is_ok() {
                     return Ok(());

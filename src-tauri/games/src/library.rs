@@ -4,7 +4,7 @@ use database::{
     GameVersion, borrow_db_checked, borrow_db_mut_checked,
     models::data::{InstallRecord, InstalledGameType, UserConfiguration},
 };
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use remote::{
     auth::generate_authorization_header, error::RemoteAccessError, requests::generate_url,
     utils::DROP_CLIENT_ASYNC,
@@ -125,7 +125,7 @@ pub fn set_partially_installed_db(
     db_lock.applications.upsert_install(InstallRecord {
         game_id: meta.id.clone(),
         version_id: meta.version.clone(),
-        target_platform: meta.target_platform.clone(),
+        target_platform: meta.target_platform,
         install_dir,
         install_type: InstalledGameType::PartiallyInstalled { configuration },
         update_available: false,
@@ -327,6 +327,24 @@ pub fn uninstall_game_logic(meta: DownloadableMetadata, app_handle: &AppHandle) 
         let removed = remove_install_dir(Path::new(&install_dir), &nested);
         if let Err(e) = &removed {
             error!("{e}");
+            // The folder is half gone. Take its `.dropdata` marker with it, or
+            // the startup scan would later import what is left as a complete
+            // install.
+            let marker = Path::new(&install_dir)
+                .join(crate::downloads::drop_data::DROPDATA_PATH);
+            if marker.exists() {
+                match std::fs::remove_file(&marker) {
+                    Ok(()) => warn!(
+                        "uninstall of {} left files in {install_dir}; removed its .dropdata",
+                        meta.id
+                    ),
+                    Err(e) => error!(
+                        "uninstall of {} left files in {install_dir} and its .dropdata \
+                         could not be removed either: {e}",
+                        meta.id
+                    ),
+                }
+            }
         }
         let mut db_handle = borrow_db_mut_checked();
         if removed.is_ok() {
@@ -369,7 +387,7 @@ pub fn uninstall_game_logic(meta: DownloadableMetadata, app_handle: &AppHandle) 
                         DownloadableMetadata::new(
                             meta.id.clone(),
                             rec.version_id.clone(),
-                            rec.target_platform.clone(),
+                            rec.target_platform,
                             DownloadType::Game,
                         ),
                     );
@@ -410,6 +428,141 @@ pub fn get_current_meta(game_id: &String) -> Option<DownloadableMetadata> {
         .installed_game_version
         .get(game_id)
         .cloned()
+}
+
+/// The stand-in `update_game_configuration` stores when the Configure dialog
+/// is saved for an install with no `GameVersion` (it only carries the saved
+/// settings). A real server version always has a folder path.
+fn is_stand_in(v: &GameVersion) -> bool {
+    v.version_path.is_empty() && v.launches.is_empty() && v.setups.is_empty()
+}
+
+/// Installed games whose server `GameVersion` (launch and setup details)
+/// isn't stored on this device.
+///
+/// A download stores it when it finishes (`on_game_complete`). An install
+/// found on disk instead (a folder added with games already in it, or the
+/// startup scan) never went through that, so it has none, and launching it
+/// fails with `InvalidVersion`. Mods are left out: the mod agent stores their
+/// version itself when a mod install finishes.
+fn versions_missing_details(db: &Database) -> Vec<DownloadableMetadata> {
+    let mut missing: Vec<DownloadableMetadata> = db
+        .applications
+        .installed_game_version
+        .values()
+        .filter(|meta| meta.download_type == DownloadType::Game)
+        .filter(|meta| {
+            db.applications
+                .game_versions
+                .get(&meta.version)
+                .is_none_or(is_stand_in)
+        })
+        .cloned()
+        .collect();
+    missing.sort_by(|a, b| a.id.cmp(&b.id));
+    missing
+}
+
+/// Fetch and store the server's `GameVersion` for every installed game that
+/// lacks one. Settings the player already saved for that version are kept.
+/// Returns how many were filled in.
+///
+/// Cheap when there is nothing to do: one read of the database, no request and
+/// no write (a write re-encrypts the whole database file). Failures are logged
+/// and skipped, so an offline device or a version deleted on the server stays
+/// as it was and is tried again next time. Does nothing in offline mode.
+pub async fn backfill_game_versions(app_handle: Option<&AppHandle>) -> usize {
+    // One at a time: adding a folder and the library refreshes it triggers can
+    // start several at once, and they would all fetch the same versions.
+    static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if RUNNING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return 0;
+    }
+    struct Release;
+    impl Drop for Release {
+        fn drop(&mut self) {
+            RUNNING.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+    let _release = Release;
+
+    let missing = {
+        let db = borrow_db_checked();
+        if db.settings.force_offline {
+            return 0;
+        }
+        versions_missing_details(&db)
+    };
+    let mut filled = 0usize;
+    for meta in missing {
+        let fetched: Result<GameVersion, RemoteAccessError> = async {
+            let url = generate_url(
+                &["/api/v1/client/game", &meta.id, "version", &meta.version],
+                &[],
+            )?;
+            let response = DROP_CLIENT_ASYNC
+                .get(url)
+                .header("Authorization", generate_authorization_header()?)
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                return Err(RemoteAccessError::InvalidResponse(response.json().await?));
+            }
+            Ok(response.json().await?)
+        }
+        .await;
+        let mut version = match fetched {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(
+                    "could not fetch version details for {} ({}): {e}",
+                    meta.id, meta.version
+                );
+                continue;
+            }
+        };
+
+        // A download, update or uninstall may have changed this install while
+        // the request was in flight. Checked under a read lock first, because
+        // dropping a write guard rewrites the whole database even when nothing
+        // changed; then again under the write lock.
+        let still_wanted = |db: &Database| {
+            db.applications
+                .installed_game_version
+                .get(&meta.id)
+                .is_some_and(|m| m.version == meta.version)
+                && db
+                    .applications
+                    .game_versions
+                    .get(&meta.version)
+                    .is_none_or(is_stand_in)
+        };
+        if !still_wanted(&*borrow_db_checked()) {
+            continue;
+        }
+        {
+            let mut db = borrow_db_mut_checked();
+            if !still_wanted(&*db) {
+                continue;
+            }
+            if let Some(existing) = db.applications.game_versions.get(&meta.version) {
+                version.user_configuration = existing.user_configuration.clone();
+            }
+            db.applications
+                .game_versions
+                .insert(meta.version.clone(), version.clone());
+        }
+        filled += 1;
+
+        if let Some(app_handle) = app_handle {
+            let status = GameStatusManager::fetch_state(&meta.id, &borrow_db_checked());
+            push_game_update(app_handle, &meta.id, Some(version), status);
+        }
+    }
+    if filled > 0 {
+        info!("stored version details for {filled} installed game(s) that had none");
+    }
+    filled
 }
 
 pub async fn on_game_complete(
@@ -480,7 +633,7 @@ pub async fn on_game_complete(
     db_handle.applications.upsert_install(InstallRecord {
         game_id: meta.id.clone(),
         version_id: meta.version.clone(),
-        target_platform: meta.target_platform.clone(),
+        target_platform: meta.target_platform,
         install_dir,
         install_type,
         update_available: false,

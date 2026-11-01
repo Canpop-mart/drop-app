@@ -60,6 +60,9 @@ fn dropdata_reports_complete(drop_data: &DropData) -> bool {
 pub struct ScanReport {
     pub installed: usize,
     pub partial: usize,
+    /// Installs found that were already in the library (or left alone because
+    /// another version of the game is installed or busy).
+    pub known: usize,
 }
 
 /// Folders under an install dir that hold a `.dropdata`, in a stable order.
@@ -82,7 +85,9 @@ fn candidate_dirs(install_dir: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    found.sort();
+    // Per-version installs first: that layout is newer than `<dir>/<game>`,
+    // so when both hold the same game the current one is the one imported.
+    found.sort_by_key(|p| (std::cmp::Reverse(p.components().count()), p.clone()));
     found
 }
 
@@ -117,15 +122,26 @@ fn skip_reason(apps: &DatabaseApplications, game_id: &str, version: &str) -> Opt
     }
 }
 
+/// Scan every configured install dir. Runs at startup.
 pub fn scan_install_dirs() -> ScanReport {
+    let install_dirs = borrow_db_mut_checked().applications.install_dirs.clone();
+    scan_dirs(&install_dirs)
+}
+
+/// Scan one install dir, for when it has just been added.
+pub fn scan_install_dir(install_dir: &Path) -> ScanReport {
+    scan_dirs(&[install_dir.to_path_buf()])
+}
+
+fn scan_dirs(install_dirs: &[PathBuf]) -> ScanReport {
+    // The folder walk happens before the DB lock is taken, so a slow card or
+    // network share doesn't hold up everything else that needs the DB.
+    let candidates: Vec<PathBuf> = install_dirs.iter().flat_map(|d| candidate_dirs(d)).collect();
     let mut db_lock = borrow_db_mut_checked();
-    // Clone only the install_dirs paths (small Vec), not the entire DB,
-    // since we need mutable access to db_lock in the loop body.
-    let install_dirs = db_lock.applications.install_dirs.clone();
     let mut report = ScanReport::default();
 
-    for install_dir in &install_dirs {
-        for game_path in candidate_dirs(install_dir) {
+    {
+        for game_path in candidates {
             // `read` points `base_path` at `game_path`, wherever the folder was
             // when the file was written, so a copied or moved library imports
             // at its real location.
@@ -154,6 +170,7 @@ pub fn scan_install_dirs() -> ScanReport {
                         game_path.display()
                     );
                 }
+                report.known += 1;
                 continue;
             }
 
@@ -175,8 +192,10 @@ pub fn scan_install_dirs() -> ScanReport {
                 );
                 // A scanned complete install has no SetupConfiguration data
                 // available offline, so it is imported as plain `Installed`.
-                // The full GameVersion (and any SetupRequired flag) is
-                // re-fetched the first time the library syncs online.
+                // Its GameVersion (launches, setups) is fetched by
+                // `library::backfill_game_versions` once the device is online:
+                // after a folder is added, and after each online library fetch.
+                // Until then launching it fails with `InvalidVersion`.
                 db_lock.applications.game_statuses.insert(
                     metadata.id.clone(),
                     GameDownloadStatus::Installed {
@@ -193,7 +212,7 @@ pub fn scan_install_dirs() -> ScanReport {
                 db_lock.applications.upsert_install(InstallRecord {
                     game_id: metadata.id.clone(),
                     version_id: metadata.version.clone(),
-                    target_platform: metadata.target_platform.clone(),
+                    target_platform: metadata.target_platform,
                     install_dir: install_dir_str,
                     install_type: InstalledGameType::Installed,
                     update_available: false,
@@ -212,8 +231,7 @@ pub fn scan_install_dirs() -> ScanReport {
                     install_dir_str,
                     None,
                     // Offline scan can't recover the download-time config; the
-                    // full GameVersion (with the real config) is re-fetched on
-                    // the next online library sync (see the Installed branch).
+                    // GameVersion is fetched later (see the Installed branch).
                     Default::default(),
                 );
                 report.partial += 1;
@@ -262,9 +280,9 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                root.join("Legacy"),
                 root.join("Legacy").join("v2"),
                 root.join("Modern").join("v1"),
+                root.join("Legacy"),
             ]
         );
     }

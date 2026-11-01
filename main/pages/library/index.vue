@@ -239,15 +239,6 @@
           </div>
         </section>
 
-        <!-- Updates available — only when something's behind. -->
-        <LibraryShelf
-          v-if="updatesEntries.length > 0"
-          title="Updates available"
-          :entries="updatesEntries"
-          :last-played-map="lastPlayedMap"
-          @select="goToGame"
-        />
-
         <!-- Collections — visual cards you click into; scrolls like a shelf. -->
         <SectionError
           v-if="shelvesError"
@@ -644,7 +635,6 @@ import { useConsoleSections } from "~/composables/console-sections";
 import type { Game, GameStatus, RawGameStatus } from "~/types";
 import { InstalledType } from "~/types";
 import LibraryGrid from "~/components/LibraryGrid.vue";
-import LibraryShelf from "~/components/LibraryShelf.vue";
 import LibraryCollectionCard from "~/components/LibraryCollectionCard.vue";
 import LibraryConsoleCard from "~/components/LibraryConsoleCard.vue";
 import LibraryEmulatorCard from "~/components/LibraryEmulatorCard.vue";
@@ -801,10 +791,9 @@ const heroActionLabel = computed(() => {
   return entry.installed ? "Play" : "Install";
 });
 
-// Games with an update available — their own shelf when non-empty.
-const updatesEntries = computed<LibraryEntry[]>(() =>
-  entries.value.filter((e) => e.updateAvailable),
-);
+// Games with an update available are no longer repeated in a shelf of their
+// own (it read as a second copy of the game). The update shows on the game's
+// tile badge and its page, and the "Updates" filter lists them.
 
 // One shelf per collection, games resolved from the in-memory entry list.
 const collectionShelves = computed(() => {
