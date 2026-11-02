@@ -708,6 +708,46 @@ export function useServerApi() {
         ),
     },
 
+<<<<<<< Updated upstream
+=======
+    /**
+     * The Store's Addons tab. Addons are services the server admin runs; a
+     * player adds or removes them for themselves. `list` returns raw JSON on
+     * purpose: composables/addon-shop.ts checks it (parseShopList) so a
+     * malformed reply shows as an error rather than an empty shop.
+     */
+    addons: {
+      list: () => apiFetch<unknown>("api/v1/addons"),
+      add: (name: string) =>
+        apiFetch<{ name: string; added: boolean }>(
+          `api/v1/addons/${encodeURIComponent(name)}/membership`,
+          { method: "POST" },
+        ),
+      remove: (name: string) =>
+        apiFetch<{ name: string; added: boolean }>(
+          `api/v1/addons/${encodeURIComponent(name)}/membership`,
+          { method: "DELETE" },
+        ),
+      /**
+       * The league panels for one game (raw JSON: composables/addon-play-logic.ts
+       * checks it). Only addons this player added and this game belongs to.
+       */
+      forGame: (gameId: string) =>
+        apiFetch<unknown>(`api/v1/games/${encodeURIComponent(gameId)}/addons`),
+      /** Take the save. Refusals come back as 200 `{ ok: false, message }`. */
+      checkout: (name: string, context: string) =>
+        apiFetch<unknown>(
+          `api/v1/addons/${encodeURIComponent(name)}/contexts/${encodeURIComponent(context)}/checkout`,
+          { method: "POST" },
+        ),
+      release: (name: string, context: string) =>
+        apiFetch<unknown>(
+          `api/v1/addons/${encodeURIComponent(name)}/contexts/${encodeURIComponent(context)}/release`,
+          { method: "POST" },
+        ),
+    },
+
+>>>>>>> Stashed changes
     community: {
       stats: () => apiFetch<CommunityStats>("api/v1/community/stats"),
       activity: (limit = 30, before?: string) => {

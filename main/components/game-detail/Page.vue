@@ -63,6 +63,7 @@
       @resume="launchCtl.resumeDownload()"
       @compat-result="onCompatTestResult"
       @open-community="activeDetailTab = 'community'"
+<<<<<<< Updated upstream
     />
 
     <!-- Installed versions — the multi-version install manager. The full list
@@ -158,6 +159,16 @@
         Install another version
       </button>
     </div>
+=======
+    >
+      <template #aside>
+        <GameDetailAddonActions
+          :game-id="id"
+          :running="status.type === 'Running'"
+        />
+      </template>
+    </GameDetailHeader>
+>>>>>>> Stashed changes
 
     <!-- Tabbed content — About / Gallery / Achievements / Community /
          Cloud Saves. Cloud Saves used to sit perma-visible below the

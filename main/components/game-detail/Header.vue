@@ -21,8 +21,14 @@
       />
     </div>
 
+<<<<<<< Updated upstream
     <div class="relative z-10">
       <div class="px-8">
+=======
+    <div class="game-hero-layout relative z-10">
+      <div class="min-w-0">
+      <div class="max-w-6xl px-8">
+>>>>>>> Stashed changes
         <h1
           class="text-5xl text-zinc-100 font-bold font-display drop-shadow-lg"
         >
@@ -224,9 +230,30 @@
           </div>
         </button>
       </div>
+      </div>
+      <aside class="game-hero-aside px-8 pt-6">
+        <slot name="aside" />
+      </aside>
     </div>
   </div>
 </template>
+
+<style scoped>
+.game-hero-aside:not(:has([data-league-widget])) { display: none; }
+@media (min-width: 1200px) {
+  .game-hero-layout:has([data-league-widget]) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 440px);
+    gap: 40px;
+    align-items: end;
+  }
+  .game-hero-aside {
+    padding-top: 0;
+    padding-left: 0;
+    margin-top: -96px;
+  }
+}
+</style>
 
 <script setup lang="ts">
 /**
