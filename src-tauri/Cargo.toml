@@ -23,7 +23,9 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "drop_app_lib"
-rustflags = ["-C", "target-feature=+aes,+sse2"]
+# There used to be a `rustflags` key here. Cargo ignores rustflags in [lib]
+# (it warned "unused manifest key" on every build), so those target features
+# were never applied; removing it changed nothing in the build.
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

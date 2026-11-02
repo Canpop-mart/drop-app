@@ -168,7 +168,7 @@ impl ModDownloadAgent {
         result.ensure_manifest_exists().await?;
 
         let required_space = lock!(result.dl_info).as_ref().unwrap().install_size;
-        let available_space = get_disk_available(install_dir)? as u64;
+        let available_space = get_disk_available(install_dir)?;
         if required_space > available_space {
             return Err(ApplicationDownloadError::DiskFull(
                 required_space,
@@ -875,7 +875,8 @@ impl Downloadable for ModDownloadAgent {
         // records installed_game_version + game_statuses (keyed by the mod's own
         // id, download_type=Mod), clears the transient status, and emits
         // update_game/<modid> + update_library. The install_dir it stores is the
-        // parent dir; the generic uninstall/resume commands are guarded on
+        // mod's base_path (the parent game's install dir joined with the version's
+        // modInstallDir); the generic uninstall/resume commands are guarded on
         // download_type==Mod so they never act on it.
         match on_game_complete(
             &self.metadata,

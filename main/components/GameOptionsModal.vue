@@ -1,12 +1,13 @@
 <template>
-  <ModalTemplate size-class="max-w-4xl" v-model="open">
+  <ModalTemplate size-class="max-w-6xl" v-model="open">
     <template #default>
-      <!-- Grow to fit the active tab (the Video tab is taller than the old
-           fixed h-96), but never past the viewport — then the content pane
-           scrolls instead of the whole modal overflowing. -->
-      <div class="flex flex-row gap-x-4 min-h-[20rem] max-h-[70vh]">
-        <nav class="flex flex-1 flex-col" aria-label="Sidebar">
-          <ul role="list" class="-mx-2 space-y-1">
+      <div class="mb-6">
+        <p class="text-xs font-semibold uppercase tracking-[0.2em] text-blue-400">Game settings</p>
+        <h2 class="mt-1 text-2xl font-semibold text-zinc-100">{{ game.game.mName }}</h2>
+      </div>
+      <div class="flex min-h-[28rem] max-h-[72vh] flex-row gap-x-7">
+        <nav class="w-52 shrink-0" aria-label="Game settings">
+          <ul role="list" class="space-y-1">
             <li v-for="(tab, tabIdx) in tabs" :key="tab.name">
               <button
                 @click="() => (currentTabIndex = tabIdx)"
@@ -14,7 +15,7 @@
                   tabIdx == currentTabIndex
                     ? 'bg-zinc-800 text-zinc-100'
                     : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100',
-                  'transition w-full group flex gap-x-3 rounded-md p-2 text-sm/6 font-semibold',
+                  'group flex w-full gap-x-3 rounded-lg px-3 py-2.5 text-sm font-semibold transition',
                 ]"
               >
                 <component
@@ -32,16 +33,66 @@
             </li>
           </ul>
         </nav>
-        <div
-          class="border-l-2 border-zinc-800 w-full grow pl-4 overflow-y-auto min-h-0"
-        >
+        <div class="min-h-0 w-full grow overflow-y-auto border-l border-zinc-800 pl-7 pr-2">
           <component
+            v-if="activeTab?.page"
             v-model="configuration"
-            :is="tabs[currentTabIndex]?.page"
+            :is="activeTab.page"
             :proton-enabled="protonEnabled"
             :game-id="game.game.id"
             :install-dir="installDir"
           />
+          <div v-else-if="activeTab?.kind === 'versions'">
+            <div class="mb-6 flex items-start justify-between gap-6">
+              <div>
+                <h3 class="text-lg font-semibold text-zinc-100">Versions</h3>
+                <p class="mt-1 text-sm text-zinc-400">Choose the version used by the main Play button.</p>
+              </div>
+              <button class="rounded-lg bg-zinc-100 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-white" @click="$emit('install-version')">
+                Install another version
+              </button>
+            </div>
+            <div class="divide-y divide-zinc-800 border-y border-zinc-800">
+              <div v-for="inst in installs" :key="inst.versionId" class="flex items-center gap-4 py-4">
+                <button class="flex min-w-0 flex-1 items-center gap-4 text-left" @click="$emit('select-version', inst.versionId)">
+                  <span class="flex size-5 shrink-0 items-center justify-center rounded-full border" :class="selectedVersionId === inst.versionId ? 'border-blue-400' : 'border-zinc-600'">
+                    <span v-if="selectedVersionId === inst.versionId" class="size-2.5 rounded-full bg-blue-400" />
+                  </span>
+                  <span>
+                    <span class="block font-medium text-zinc-200">{{ versionLabels[inst.versionId] ?? inst.versionId }}</span>
+                    <span class="mt-0.5 block text-xs text-zinc-500">
+                      {{ inst.installType === 'PartiallyInstalled' ? 'Incomplete' : inst.installType === 'SetupRequired' ? 'Setup needed' : inst.updateAvailable ? 'Update available' : selectedVersionId === inst.versionId ? 'Used by Play' : 'Installed' }}
+                    </span>
+                  </span>
+                </button>
+                <button v-if="inst.updateAvailable && inst.installType !== 'PartiallyInstalled'" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500" @click="$emit('update-version', inst.versionId)">Update</button>
+                <button class="rounded-lg px-4 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200" @click="$emit('uninstall-version', inst.versionId)">Uninstall</button>
+              </div>
+            </div>
+          </div>
+          <CloudSavesPanel
+            v-else-if="activeTab?.kind === 'cloud-saves'"
+            :game-id="game.game.id"
+            :game-name="game.game.mName"
+            :is-native-game="isNativeGame"
+          />
+          <div v-else-if="activeTab?.kind === 'manage'" class="max-w-2xl">
+            <h3 class="text-lg font-semibold text-zinc-100">Manage game</h3>
+            <p class="mt-1 text-sm text-zinc-400">Tools and actions for this installation.</p>
+            <div class="mt-6 divide-y divide-zinc-800 border-y border-zinc-800">
+              <button v-if="isNativeGame" class="settings-action" @click="$emit('set-account-name')"><span><strong>Set account name</strong><small>Change the account name used when this game launches.</small></span><UserIcon class="size-5 text-green-400" /></button>
+              <button class="settings-action" @click="$emit('open-install-folder')"><span><strong>Open install folder</strong><small>View this game's files in the system file manager.</small></span><FolderOpenIcon class="size-5 text-amber-400" /></button>
+              <button v-for="rt in installRuntimes" :key="rt.set" class="settings-action" @click="$emit('install-runtime', rt.set)"><span><strong>{{ rt.label }}</strong><small>Install this runtime into the game's compatibility prefix.</small></span><WrenchScrewdriverIcon class="size-5 text-sky-400" /></button>
+              <button v-if="hasAchievements" class="settings-action" @click="$emit('reset-achievements')"><span><strong>Reset achievements</strong><small>Clear Drop's achievement progress for this game.</small></span><TrophyIcon class="size-5 text-yellow-500" /></button>
+            </div>
+            <div class="mt-8">
+              <h4 class="text-sm font-semibold text-red-300">Remove game</h4>
+              <div class="mt-3 flex flex-wrap gap-3">
+                <button class="rounded-lg bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-300 ring-1 ring-inset ring-red-500/25 hover:bg-red-500/20" @click="$emit('uninstall-game')">Uninstall files</button>
+                <button class="rounded-lg px-4 py-2.5 text-sm font-semibold text-zinc-400 ring-1 ring-inset ring-zinc-700 hover:bg-zinc-800 hover:text-zinc-200" @click="$emit('remove-from-library')">Remove from library</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div v-if="saveError" class="mt-5 rounded-md bg-red-600/10 p-4">
@@ -59,6 +110,7 @@
     </template>
     <template #buttons>
       <LoadingButton
+        v-if="activeTab?.page"
         @click="() => save()"
         :loading="saveLoading"
         type="submit"
@@ -72,7 +124,7 @@
         class="mt-3 inline-flex w-full justify-center rounded-md bg-zinc-800 px-3 py-2 text-sm font-semibold text-zinc-100 shadow-sm ring-1 ring-inset ring-zinc-700 hover:bg-zinc-900 sm:mt-0 sm:w-auto"
         ref="cancelButtonRef"
       >
-        Cancel
+        {{ activeTab?.page ? "Cancel" : "Close" }}
       </button>
     </template>
   </ModalTemplate>
@@ -82,8 +134,11 @@
 import type { Component } from "vue";
 import {
   AdjustmentsHorizontalIcon,
+  CloudIcon,
+  Cog6ToothIcon,
   RocketLaunchIcon,
   ServerIcon,
+  Squares2X2Icon,
   XCircleIcon,
 } from "@heroicons/vue/20/solid";
 import Launch from "./GameOptions/Launch.vue";
@@ -91,7 +146,13 @@ import Updates from "./GameOptions/Updates.vue";
 import Video from "./GameOptions/Video.vue";
 import Storage from "./GameOptions/Storage.vue";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowPathIcon } from "@heroicons/vue/24/solid";
+import {
+  ArrowPathIcon,
+  FolderOpenIcon,
+  TrophyIcon,
+  UserIcon,
+  WrenchScrewdriverIcon,
+} from "@heroicons/vue/24/solid";
 import type { GameVersion } from "~/types";
 
 const appState = useAppState();
@@ -102,7 +163,41 @@ const open = defineModel<boolean>();
 // enough: a ROM imported by a disk scan is Installed but has no cached
 // GameVersion yet (game_versions is only filled on an online library sync), so
 // `version` is undefined for it even though it is an emulated game.
-const props = defineProps<{ gameId: string; emulated?: boolean }>();
+type InstalledVersion = {
+  versionId: string;
+  installType: string;
+  updateAvailable: boolean;
+};
+
+const props = withDefaults(
+  defineProps<{
+    gameId: string;
+    emulated?: boolean;
+    isNativeGame?: boolean;
+    installs?: InstalledVersion[];
+    versionLabels?: Record<string, string>;
+    selectedVersionId?: string | null;
+    hasAchievements?: boolean;
+    showInstallRuntimes?: boolean;
+  }>(),
+  {
+    installs: () => [],
+    versionLabels: () => ({}),
+    selectedVersionId: null,
+  },
+);
+defineEmits<{
+  (e: "select-version", versionId: string): void;
+  (e: "install-version"): void;
+  (e: "update-version", versionId: string): void;
+  (e: "uninstall-version", versionId: string): void;
+  (e: "set-account-name"): void;
+  (e: "open-install-folder"): void;
+  (e: "install-runtime", runtime: string): void;
+  (e: "reset-achievements"): void;
+  (e: "uninstall-game"): void;
+  (e: "remove-from-library"): void;
+}>();
 const game = await useGame(props.gameId);
 
 // A game whose GameVersion is not cached yet (see above) has no stored
@@ -168,7 +263,14 @@ const installDir = computed(() => {
   return s && s.type === "Installed" ? s.install_dir : null;
 });
 
-const tabs = computed<Array<{ name: string; icon: Component; page: Component }>>(
+type SettingsTab = {
+  name: string;
+  icon: Component;
+  page?: Component;
+  kind?: "versions" | "cloud-saves" | "manage";
+};
+
+const tabs = computed<SettingsTab[]>(
   () => [
     ...(isEmulatedGame.value
       ? [
@@ -182,9 +284,28 @@ const tabs = computed<Array<{ name: string; icon: Component; page: Component }>>
     { name: "Launch", icon: RocketLaunchIcon, page: Launch },
     { name: "Updates", icon: ArrowPathIcon, page: Updates },
     { name: "Storage", icon: ServerIcon, page: Storage },
+    ...(props.installs.length > 0
+      ? [{ name: "Versions", icon: Squares2X2Icon, kind: "versions" as const }]
+      : []),
+    { name: "Cloud Saves", icon: CloudIcon, kind: "cloud-saves" },
+    { name: "Manage", icon: Cog6ToothIcon, kind: "manage" },
   ],
 );
 const currentTabIndex = ref(0);
+const activeTab = computed(() => tabs.value[currentTabIndex.value]);
+watch(tabs, (next) => {
+  if (currentTabIndex.value >= next.length) currentTabIndex.value = 0;
+});
+
+const installRuntimes = computed(() =>
+  props.showInstallRuntimes
+    ? [
+        { set: "vcpp", label: "Install VC++ runtime" },
+        { set: "directx", label: "Install DirectX runtime" },
+        { set: "dotnet", label: "Install .NET runtime" },
+      ]
+    : [],
+);
 
 const saveLoading = ref(false);
 const saveError = ref<undefined | string>();
@@ -204,3 +325,37 @@ async function save() {
   saveLoading.value = false;
 }
 </script>
+
+<style scoped>
+.settings-action {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 0.25rem;
+  text-align: left;
+}
+
+.settings-action:hover strong {
+  color: rgb(244 244 245);
+}
+
+.settings-action span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.settings-action strong {
+  color: rgb(212 212 216);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.settings-action small {
+  margin-top: 0.125rem;
+  color: rgb(113 113 122);
+  font-size: 0.75rem;
+}
+</style>

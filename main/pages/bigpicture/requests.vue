@@ -1,13 +1,16 @@
 <template>
   <div
     ref="pageRoot"
-    class="flex flex-col h-full"
+    class="flex min-h-full flex-col"
     :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }"
   >
     <!-- Header + view tabs (+ sort on the board) -->
     <div
-      class="flex items-center justify-between gap-4 px-8 py-4 border-b"
-      :style="{ borderColor: 'var(--bpm-border)' }"
+      class="sticky top-0 z-20 flex items-center justify-between gap-4 border-b px-8 py-4 backdrop-blur-xl"
+      :style="{
+        borderColor: 'var(--bpm-border)',
+        backgroundColor: 'color-mix(in srgb, var(--bpm-bg) 92%, transparent)',
+      }"
     >
       <div class="min-w-0">
         <h1
@@ -24,7 +27,9 @@
         <button
           v-for="v in views"
           :key="v.value"
-          :ref="(el: any) => registerTab(el, { onSelect: () => setView(v.value) })"
+          :ref="
+            (el: any) => registerTab(el, { onSelect: () => setView(v.value) })
+          "
           :data-view-tab="v.value"
           class="relative px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
           :class="
@@ -47,7 +52,9 @@
           <button
             v-for="s in sorts"
             :key="s.value"
-            :ref="(el: any) => registerTab(el, { onSelect: () => (sort = s.value) })"
+            :ref="
+              (el: any) => registerTab(el, { onSelect: () => (sort = s.value) })
+            "
             class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
             :class="
               sort === s.value
@@ -64,7 +71,10 @@
 
     <!-- ── Board ─────────────────────────────────────────────────── -->
     <template v-if="view === 'board'">
-      <div v-if="boardLoading" class="flex-1 overflow-y-auto px-8 py-6 space-y-3">
+      <div
+        v-if="boardLoading"
+        class="grid grid-cols-1 gap-3 px-8 py-6 xl:grid-cols-2"
+      >
         <div
           v-for="i in 6"
           :key="i"
@@ -83,7 +93,7 @@
 
       <div
         v-else-if="sortedRequests.length === 0"
-        class="flex-1 flex flex-col items-center justify-center text-center px-8 gap-1"
+        class="flex min-h-[60vh] flex-col items-center justify-center gap-1 px-8 text-center"
       >
         <p class="text-base font-medium" :style="{ color: 'var(--bpm-text)' }">
           No requests yet
@@ -93,7 +103,7 @@
         </p>
       </div>
 
-      <div v-else class="flex-1 overflow-y-auto px-8 py-6 space-y-3">
+      <div v-else class="grid grid-cols-1 gap-3 px-8 py-6 xl:grid-cols-2">
         <!-- Keyed by request id so a re-sort after a vote moves the row, and
              the focus ring with it, instead of sliding another row under it. -->
         <div
@@ -103,19 +113,34 @@
           :ref="
             (el: any) =>
               req.status !== 'Pending'
-                ? registerContent(el, { onSelect: () => onBoardRowSelect(req.id) })
+                ? registerContent(el, {
+                    onSelect: () => onBoardRowSelect(req.id),
+                  })
                 : undefined
           "
-          class="flex gap-4 p-4 rounded-xl bg-zinc-900/60"
+          class="flex min-h-36 gap-4 rounded-2xl border p-4"
+          :style="{
+            backgroundColor: 'var(--bpm-surface)',
+            borderColor: 'var(--bpm-border)',
+          }"
         >
           <!-- Vote column. Only open while the request is pending; each
                arrow is its own focusable button. -->
           <div
             v-if="req.status === 'Pending'"
-            class="flex flex-col items-center gap-1 shrink-0 w-12"
+            class="flex w-12 shrink-0 flex-col items-center justify-center gap-1 rounded-xl"
+            :style="{
+              backgroundColor:
+                'color-mix(in srgb, var(--bpm-bg) 55%, transparent)',
+            }"
           >
             <button
-              :ref="(el: any) => registerContent(el, { onSelect: () => toggleVote(req.id, 'Up') })"
+              :ref="
+                (el: any) =>
+                  registerContent(el, {
+                    onSelect: () => toggleVote(req.id, 'Up'),
+                  })
+              "
               :class="[
                 'p-1.5 rounded-md transition-colors',
                 req.votes.userVote === 'Up'
@@ -133,7 +158,12 @@
               {{ req.votes.up }}
             </span>
             <button
-              :ref="(el: any) => registerContent(el, { onSelect: () => toggleVote(req.id, 'Down') })"
+              :ref="
+                (el: any) =>
+                  registerContent(el, {
+                    onSelect: () => toggleVote(req.id, 'Down'),
+                  })
+              "
               :class="[
                 'p-1.5 rounded-md transition-colors',
                 req.votes.userVote === 'Down'
@@ -149,7 +179,9 @@
             v-else
             class="flex flex-col items-center justify-center shrink-0 w-12"
           >
-            <span class="text-sm font-bold text-zinc-500">{{ req.votes.up }}</span>
+            <span class="text-sm font-bold text-zinc-500">{{
+              req.votes.up
+            }}</span>
             <span class="text-[10px] text-zinc-600">votes</span>
           </div>
 
@@ -204,7 +236,12 @@
               <span v-if="req.gameId">· Press A to open the game</span>
               <button
                 v-if="isMine(req) && req.status === 'Pending'"
-                :ref="(el: any) => registerContent(el, { onSelect: () => askWithdraw(req.id, req.title) })"
+                :ref="
+                  (el: any) =>
+                    registerContent(el, {
+                      onSelect: () => askWithdraw(req.id, req.title),
+                    })
+                "
                 class="ml-auto px-3 py-1 rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
                 @click="askWithdraw(req.id, req.title)"
               >
@@ -221,7 +258,10 @@
 
     <!-- ── My requests ───────────────────────────────────────────── -->
     <template v-else-if="view === 'mine'">
-      <div v-if="mineLoading" class="flex-1 overflow-y-auto px-8 py-6 space-y-3">
+      <div
+        v-if="mineLoading"
+        class="grid grid-cols-1 gap-3 px-8 py-6 xl:grid-cols-2"
+      >
         <div
           v-for="i in 4"
           :key="i"
@@ -240,7 +280,7 @@
 
       <div
         v-else-if="mine.length === 0"
-        class="flex-1 flex flex-col items-center justify-center text-center px-8 gap-1"
+        class="flex min-h-[60vh] flex-col items-center justify-center gap-1 px-8 text-center"
       >
         <p class="text-base font-medium" :style="{ color: 'var(--bpm-text)' }">
           You have not requested any games yet
@@ -250,19 +290,29 @@
         </p>
       </div>
 
-      <div v-else class="flex-1 overflow-y-auto px-8 py-6 space-y-3">
+      <div v-else class="grid grid-cols-1 gap-3 px-8 py-6 xl:grid-cols-2">
         <!-- Every row is focusable so a controller can scroll through them.
              A opens the game once it is in the library, or offers to
              withdraw a pending request; other rows are read-only. -->
         <div
           v-for="req in mine"
           :key="req.id"
-          :ref="(el: any) => registerContent(el, { onSelect: () => onMineRowSelect(req.id) })"
-          class="p-4 rounded-xl bg-zinc-900/60"
+          :ref="
+            (el: any) =>
+              registerContent(el, { onSelect: () => onMineRowSelect(req.id) })
+          "
+          class="min-h-32 rounded-2xl border p-4"
+          :style="{
+            backgroundColor: 'var(--bpm-surface)',
+            borderColor: 'var(--bpm-border)',
+          }"
         >
           <div class="flex items-start gap-3">
             <div class="flex-1 min-w-0">
-              <h3 class="font-semibold truncate" :style="{ color: 'var(--bpm-text)' }">
+              <h3
+                class="font-semibold truncate"
+                :style="{ color: 'var(--bpm-text)' }"
+              >
                 {{ req.title }}
               </h3>
               <p
@@ -283,7 +333,11 @@
             </span>
           </div>
           <p v-if="req.status === 'Denied'" class="mt-2 text-sm text-red-300">
-            {{ req.denyReason ? `Denied: ${req.denyReason}` : "Denied. No reason was given." }}
+            {{
+              req.denyReason
+                ? `Denied: ${req.denyReason}`
+                : "Denied. No reason was given."
+            }}
           </p>
           <p
             v-else-if="req.status === 'Approved' && !req.game"
@@ -292,12 +346,18 @@
           >
             Approved. It will be marked as in the library once it is added.
           </p>
-          <div class="flex items-center gap-3 mt-3 text-xs" :style="{ color: 'var(--bpm-muted)' }">
+          <div
+            class="flex items-center gap-3 mt-3 text-xs"
+            :style="{ color: 'var(--bpm-muted)' }"
+          >
             <span>{{ formatTimeAgo(req.createdAt) }}</span>
             <span>· {{ req.votes.up }} up, {{ req.votes.down }} down</span>
             <span v-if="req.game">· Press A to open the game</span>
             <span v-else-if="req.status === 'Pending'">
-              · {{ withdrawing[req.id] ? "Withdrawing..." : "Press A to withdraw" }}
+              ·
+              {{
+                withdrawing[req.id] ? "Withdrawing..." : "Press A to withdraw"
+              }}
             </span>
           </div>
           <p v-if="rowErrors[req.id]" class="mt-2 text-xs text-red-400">
@@ -310,42 +370,66 @@
     <!-- ── New request ───────────────────────────────────────────── -->
     <!-- Plain focusable rows, no modal. Text comes from the on-screen
          keyboard, which owns its own input lock. -->
-    <div v-else class="flex-1 overflow-y-auto px-8 py-6">
+    <div v-else class="px-8 py-6">
       <div class="max-w-3xl space-y-5">
         <div>
-          <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
+          <p
+            class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2"
+          >
             Game title
           </p>
           <button
-            :ref="(el: any) => registerContent(el, { onSelect: () => openKeyboard('title') })"
+            :ref="
+              (el: any) =>
+                registerContent(el, { onSelect: () => openKeyboard('title') })
+            "
             class="w-full flex items-center rounded-xl border border-zinc-700/50 bg-zinc-800/50 px-4 py-3 text-left hover:border-zinc-600"
             @click="openKeyboard('title')"
           >
-            <span v-if="newTitle" class="text-sm text-zinc-100">{{ newTitle }}</span>
-            <span v-else class="text-sm text-zinc-600">The name of the game</span>
+            <span v-if="newTitle" class="text-sm text-zinc-100">{{
+              newTitle
+            }}</span>
+            <span v-else class="text-sm text-zinc-600"
+              >The name of the game</span
+            >
             <PencilIcon class="size-4 text-zinc-500 ml-auto shrink-0" />
           </button>
         </div>
 
         <div>
-          <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
+          <p
+            class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2"
+          >
             Why should it be added? (optional)
           </p>
           <button
-            :ref="(el: any) => registerContent(el, { onSelect: () => openKeyboard('note') })"
+            :ref="
+              (el: any) =>
+                registerContent(el, { onSelect: () => openKeyboard('note') })
+            "
             class="w-full flex items-start rounded-xl border border-zinc-700/50 bg-zinc-800/50 px-4 py-3 text-left hover:border-zinc-600 min-h-[3.5rem]"
             @click="openKeyboard('note')"
           >
-            <span v-if="newNote" class="text-sm text-zinc-100 line-clamp-3 flex-1">{{ newNote }}</span>
-            <span v-else class="text-sm text-zinc-600 flex-1">A short note for the admins</span>
+            <span
+              v-if="newNote"
+              class="text-sm text-zinc-100 line-clamp-3 flex-1"
+              >{{ newNote }}</span
+            >
+            <span v-else class="text-sm text-zinc-600 flex-1"
+              >A short note for the admins</span
+            >
             <PencilIcon class="size-4 text-zinc-500 ml-3 mt-0.5 shrink-0" />
           </button>
-          <p class="text-xs text-zinc-600 mt-1 text-right">{{ newNote.length }}/{{ NOTE_MAX }}</p>
+          <p class="text-xs text-zinc-600 mt-1 text-right">
+            {{ newNote.length }}/{{ NOTE_MAX }}
+          </p>
         </div>
 
         <!-- Optional provider match -->
         <div>
-          <p class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
+          <p
+            class="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2"
+          >
             Match on Steam / IGDB (optional)
           </p>
           <div
@@ -359,9 +443,12 @@
               alt=""
             />
             <div class="flex-1 min-w-0">
-              <p class="text-sm font-medium text-zinc-100 truncate">{{ matched.name }}</p>
+              <p class="text-sm font-medium text-zinc-100 truncate">
+                {{ matched.name }}
+              </p>
               <p class="text-xs text-zinc-400 truncate">
-                {{ matched.sourceName }}<span v-if="matched.year"> · {{ matched.year }}</span>
+                {{ matched.sourceName
+                }}<span v-if="matched.year"> · {{ matched.year }}</span>
               </p>
             </div>
             <button
@@ -374,23 +461,36 @@
           </div>
           <template v-else>
             <button
-              :ref="(el: any) => registerContent(el, { onSelect: searchProviders })"
+              :ref="
+                (el: any) => registerContent(el, { onSelect: searchProviders })
+              "
               class="px-4 py-2.5 rounded-xl text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700"
               :class="{ 'opacity-50': searching }"
               @click="searchProviders"
             >
               {{ searching ? "Searching..." : "Search for the title above" }}
             </button>
-            <p v-if="searchHint" class="mt-2 text-xs text-zinc-400">{{ searchHint }}</p>
+            <p v-if="searchHint" class="mt-2 text-xs text-zinc-400">
+              {{ searchHint }}
+            </p>
             <p v-if="searchError" class="mt-2 text-xs text-red-400">
               Search failed: {{ searchError }}
             </p>
-            <p v-else-if="failedProviders.length > 0" class="mt-2 text-xs text-yellow-400">
-              Some providers could not be searched: {{ failedProviders.join(", ") }}.
-              Results may be incomplete.
+            <p
+              v-else-if="failedProviders.length > 0"
+              class="mt-2 text-xs text-yellow-400"
+            >
+              Some providers could not be searched:
+              {{ failedProviders.join(", ") }}. Results may be incomplete.
             </p>
             <p
-              v-if="searchedQuery && !searching && !searchError && results.length === 0 && failedProviders.length === 0"
+              v-if="
+                searchedQuery &&
+                !searching &&
+                !searchError &&
+                results.length === 0 &&
+                failedProviders.length === 0
+              "
               class="mt-2 text-xs text-zinc-500"
             >
               No matches. You can still submit the request with just a title.
@@ -399,7 +499,10 @@
               <button
                 v-for="r in results"
                 :key="`${r.sourceId}-${r.id}`"
-                :ref="(el: any) => registerContent(el, { onSelect: () => pickResult(r) })"
+                :ref="
+                  (el: any) =>
+                    registerContent(el, { onSelect: () => pickResult(r) })
+                "
                 class="flex items-center gap-3 rounded-xl bg-zinc-800/50 px-3 py-2 text-left hover:bg-zinc-700"
                 @click="pickResult(r)"
               >
@@ -430,24 +533,36 @@
                line, plus the game it was matched to when that differs. -->
           <p v-if="conflict.request" class="text-sm text-zinc-300">
             Existing request:
-            <span class="font-semibold text-zinc-100">{{ conflict.request.title }}</span>
+            <span class="font-semibold text-zinc-100">{{
+              conflict.request.title
+            }}</span>
           </p>
           <p v-if="conflictMatchedName" class="text-sm text-zinc-300">
             Matched game:
-            <span class="font-semibold text-zinc-100">{{ conflictMatchedName }}</span>
+            <span class="font-semibold text-zinc-100">{{
+              conflictMatchedName
+            }}</span>
           </p>
           <div class="flex gap-2 flex-wrap">
             <button
               v-if="conflict.reason === 'in-library' && conflict.game"
-              :ref="(el: any) => registerContent(el, { onSelect: openConflictGame })"
+              :ref="
+                (el: any) => registerContent(el, { onSelect: openConflictGame })
+              "
               class="px-4 py-2 rounded-xl text-sm font-medium bg-blue-600 text-white hover:bg-blue-500"
               @click="openConflictGame"
             >
               Open the game
             </button>
             <button
-              v-if="conflict.request && !conflict.request.mine && conflict.request.status === 'Pending'"
-              :ref="(el: any) => registerContent(el, { onSelect: voteForConflict })"
+              v-if="
+                conflict.request &&
+                !conflict.request.mine &&
+                conflict.request.status === 'Pending'
+              "
+              :ref="
+                (el: any) => registerContent(el, { onSelect: voteForConflict })
+              "
               class="px-4 py-2 rounded-xl text-sm font-medium bg-blue-600 text-white hover:bg-blue-500"
               @click="voteForConflict"
             >
@@ -455,7 +570,10 @@
             </button>
             <button
               v-if="conflict.reason === 'similar'"
-              :ref="(el: any) => registerContent(el, { onSelect: () => submit(true) })"
+              :ref="
+                (el: any) =>
+                  registerContent(el, { onSelect: () => submit(true) })
+              "
               class="px-4 py-2 rounded-xl text-sm bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
               @click="submit(true)"
             >
@@ -467,7 +585,9 @@
         <p v-if="createError" class="text-sm text-red-400">{{ createError }}</p>
 
         <button
-          :ref="(el: any) => registerContent(el, { onSelect: () => submit(false) })"
+          :ref="
+            (el: any) => registerContent(el, { onSelect: () => submit(false) })
+          "
           class="px-6 py-3 rounded-xl text-sm font-medium bg-blue-600 text-white hover:bg-blue-500"
           :class="{ 'opacity-50': submitting || !newTitle.trim() }"
           @click="submit(false)"
@@ -480,7 +600,11 @@
     <BigPictureKeyboard
       :visible="keyboardField !== null"
       :model-value="keyboardField === 'note' ? newNote : newTitle"
-      :placeholder="keyboardField === 'note' ? 'A short note for the admins' : 'The name of the game'"
+      :placeholder="
+        keyboardField === 'note'
+          ? 'A short note for the admins'
+          : 'The name of the game'
+      "
       @update:model-value="onKeyboardInput"
       @close="keyboardField = null"
       @submit="keyboardField = null"
@@ -693,7 +817,8 @@ async function toggleVote(id: string, v: "Up" | "Down") {
           body: JSON.stringify({ vote: v }),
         });
     if (!resp.ok) {
-      rowErrors.value[req.id] = `Vote failed: ${(await readError(resp)).message}`;
+      rowErrors.value[req.id] =
+        `Vote failed: ${(await readError(resp)).message}`;
       return;
     }
     const result = (await resp.json()) as { up: number; down: number };
@@ -822,9 +947,7 @@ function moveFocusOffBoardRow(id: string) {
   const order = sortedRequests.value.map((r) => r.id);
   const at = order.indexOf(id);
   const candidates =
-    at === -1
-      ? []
-      : [...order.slice(at + 1), ...order.slice(0, at).reverse()];
+    at === -1 ? [] : [...order.slice(at + 1), ...order.slice(0, at).reverse()];
   for (const rid of candidates) {
     const row = rowFor(rid);
     if (!row) continue;
@@ -920,7 +1043,9 @@ async function searchProviders() {
   searchError.value = null;
   try {
     const resp = await fetch(
-      serverUrl(`api/v1/store/requests/metadata-search?q=${encodeURIComponent(q)}`),
+      serverUrl(
+        `api/v1/store/requests/metadata-search?q=${encodeURIComponent(q)}`,
+      ),
     );
     if (!resp.ok) {
       searchError.value = (await readError(resp)).message;
@@ -986,7 +1111,9 @@ async function submit(allowSimilar: boolean) {
           m?.sourceId === "Steam"
             ? `https://store.steampowered.com/app/${m.id}`
             : undefined,
-        metadata: m ? { sourceId: m.sourceId, id: m.id, name: m.name } : undefined,
+        metadata: m
+          ? { sourceId: m.sourceId, id: m.id, name: m.name }
+          : undefined,
         allowSimilar: allowSimilar || undefined,
       }),
     });

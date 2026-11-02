@@ -5,8 +5,13 @@ import { convertFileSrc } from "@tauri-apps/api/core";
  * which proxies requests to the Drop server with authentication.
  */
 export function serverUrl(path: string): string {
-  // convertFileSrc encodes the URI, so we use a placeholder and replace it
-  return convertFileSrc("dummyvalue", "server").replace("dummyvalue", path);
+  // convertFileSrc encodes the URI, so we use a placeholder and replace it.
+  // The placeholder already sits after a "/", so a leading slash on `path`
+  // would make "//api/...", which the server answers with its 404 page.
+  return convertFileSrc("dummyvalue", "server").replace(
+    "dummyvalue",
+    path.replace(/^\/+/, ""),
+  );
 }
 
 /**

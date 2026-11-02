@@ -1,7 +1,7 @@
 <template>
-  <main class="mx-auto max-w-[1400px] px-8 py-6">
+  <main class="mx-auto max-w-[1900px] px-8 py-8">
     <!-- Header — title + slim inline stats strip on the right. -->
-    <header class="flex items-end justify-between gap-4 mb-6">
+    <header class="flex items-end justify-between gap-8 mb-7">
       <div>
         <h1 class="text-2xl font-display font-bold text-zinc-100">Community</h1>
         <p class="text-sm text-zinc-500 mt-0.5">
@@ -19,36 +19,20 @@
         </button>
         <div
           v-else-if="stats"
-          class="flex items-center gap-2 text-sm text-zinc-400 font-medium"
+          class="grid grid-cols-4 overflow-hidden rounded-xl bg-zinc-900/70 ring-1 ring-white/5"
         >
-          <span class="flex items-center gap-1.5">
-            <span class="size-1.5 rounded-full bg-green-500 pulse-dot" />
-            <span class="text-zinc-200 tabular-nums">{{
-              stats.totalUsers.toLocaleString()
-            }}</span>
-            players
-          </span>
-        <span class="text-zinc-700">·</span>
-        <span>
-          <span class="text-zinc-200 tabular-nums">{{
-            stats.totalGames.toLocaleString()
-          }}</span>
-          games
-        </span>
-        <span class="text-zinc-700">·</span>
-        <span>
-          <span class="text-zinc-200 tabular-nums"
-            >{{ stats.totalPlaytimeHours.toLocaleString() }}h</span
+          <div
+            v-for="item in statItems"
+            :key="item.label"
+            class="px-5 py-3 border-l border-white/5 first:border-l-0"
           >
-          played
-        </span>
-        <span class="text-zinc-700">·</span>
-        <span>
-          <span class="text-zinc-200 tabular-nums">{{
-            stats.totalAchievementUnlocks.toLocaleString()
-          }}</span>
-          unlocks
-        </span>
+            <div class="text-base font-semibold tabular-nums text-zinc-100">
+              {{ item.value }}
+            </div>
+            <div class="text-[11px] uppercase tracking-wide text-zinc-500">
+              {{ item.label }}
+            </div>
+          </div>
         </div>
       </div>
     </header>
@@ -57,17 +41,95 @@
          beside a rail that gathers presence, top players and rotation into
          compact cards — so nothing sits alone in an empty full-width band. -->
     <div
-      class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-6 items-start"
+      class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.65fr)_minmax(360px,0.85fr)] gap-6 items-stretch mb-8"
+    >
+      <CommunityWeeklyRecap
+        class="[&>section]:mb-0 [&>section]:h-full [&>section>div]:h-full"
+        :slides="weeklyRecap"
+        :failed="recapError"
+        @go-to-game="goToGame"
+        @go-to-user="goToUser"
+        @retry="loadWeeklyRecap"
+      />
+
+      <section
+        class="rounded-2xl bg-zinc-900/65 ring-1 ring-white/5 p-5 min-h-32"
+      >
+        <div class="mb-4 flex items-center justify-between gap-3">
+          <h2
+            class="font-display font-semibold text-zinc-100 flex items-center gap-2"
+          >
+            <span
+              class="size-2 rounded-full"
+              :class="
+                nowPlaying.length ? 'bg-green-500 pulse-dot' : 'bg-zinc-600'
+              "
+            />
+            Playing now
+          </h2>
+          <span class="text-xs text-zinc-500"
+            >{{ nowPlaying.length || recentFaces.length }}
+            {{ nowPlaying.length === 1 ? "player" : "players" }}</span
+          >
+        </div>
+        <div
+          v-if="nowPlaying.length"
+          class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2 gap-2"
+        >
+          <button
+            v-for="entry in nowPlaying.slice(0, 4)"
+            :key="`${entry.userId}-${entry.startedAt}`"
+            class="group flex items-center gap-3 rounded-xl bg-black/20 p-2.5 text-left ring-1 ring-white/5 hover:ring-blue-500/40"
+            @click="goToGame(entry.game.id)"
+          >
+            <img
+              v-if="entry.game.coverObjectId"
+              :src="objectUrl(entry.game.coverObjectId)"
+              class="h-14 w-11 rounded-md object-cover"
+            />
+            <div v-else class="h-14 w-11 rounded-md bg-zinc-800" />
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-sm font-medium text-zinc-100">
+                {{ entry.displayName }}
+              </div>
+              <div
+                class="truncate text-xs text-zinc-500 group-hover:text-blue-300"
+              >
+                {{ entry.game.name }}
+              </div>
+            </div>
+          </button>
+        </div>
+        <div
+          v-else-if="recentFaces.length"
+          class="grid grid-cols-2 gap-x-5 gap-y-3"
+        >
+          <button
+            v-for="face in recentFaces.slice(0, 4)"
+            :key="face.id"
+            class="flex min-w-0 items-center gap-2.5 text-left"
+            @click="goToUser(face.id)"
+          >
+            <Avatar :object-id="face.avatar" :name="face.name" :size="32" />
+            <div class="min-w-0">
+              <div class="truncate text-sm text-zinc-200">{{ face.name }}</div>
+              <div class="truncate text-xs text-zinc-600">
+                {{ face.game ?? "Recently active" }}
+              </div>
+            </div>
+          </button>
+        </div>
+        <p v-else class="py-5 text-center text-sm text-zinc-600">
+          Nobody is playing right now.
+        </p>
+      </section>
+    </div>
+
+    <div
+      class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.65fr)_minmax(360px,0.85fr)] gap-6 items-start"
     >
       <!-- MAIN COLUMN -->
       <div class="min-w-0">
-        <CommunityWeeklyRecap
-          :slides="weeklyRecap"
-          :failed="recapError"
-          @go-to-game="goToGame"
-          @go-to-user="goToUser"
-          @retry="loadWeeklyRecap"
-        />
         <CommunityWeeklyChallenge
           v-if="SHOW_WEEKLY_QUEST"
           :challenge="weeklyChallenge"
@@ -90,7 +152,9 @@
                 :key="i"
                 class="flex items-center gap-3 rounded-lg bg-zinc-800/30 p-3"
               >
-                <div class="size-9 shrink-0 rounded-full bg-zinc-800/60 animate-pulse" />
+                <div
+                  class="size-9 shrink-0 rounded-full bg-zinc-800/60 animate-pulse"
+                />
                 <div class="flex-1 space-y-2">
                   <div class="h-3 w-2/5 rounded bg-zinc-800/60 animate-pulse" />
                   <div class="h-3 w-1/4 rounded bg-zinc-800/60 animate-pulse" />
@@ -129,91 +193,6 @@
 
       <!-- RAIL -->
       <aside class="space-y-5">
-        <!-- Playing now — live cover cards in a horizontal scroller (arrows
-             appear when more players are in-game than fit); falls back to a
-             compact "recently around" list when the server's quiet. -->
-        <div>
-          <RailScroller v-if="nowPlaying.length > 0">
-            <template #title>
-              <span class="size-2 rounded-full bg-green-500 pulse-dot" />
-              Playing now
-            </template>
-            <template #count>
-              {{ nowPlaying.length }}
-              {{ nowPlaying.length === 1 ? "player" : "players" }} in game
-            </template>
-            <button
-              v-for="entry in nowPlaying"
-              :key="`${entry.userId}-${entry.startedAt}`"
-              class="group relative shrink-0 w-40 overflow-hidden rounded-xl ring-1 ring-zinc-700/50 hover:ring-blue-500/50 transition-colors text-left"
-              @click="goToGame(entry.game.id)"
-            >
-              <img
-                v-if="entry.game.coverObjectId"
-                :src="objectUrl(entry.game.coverObjectId)"
-                class="h-24 w-full object-cover transition-transform group-hover:scale-105"
-              />
-              <div v-else class="h-24 w-full bg-zinc-800" />
-              <div
-                class="absolute inset-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent"
-              />
-              <div
-                class="absolute inset-x-0 bottom-0 p-2.5 flex items-center gap-2"
-              >
-                <Avatar
-                  :object-id="entry.avatarObjectId"
-                  :name="entry.displayName"
-                  :size="24"
-                  presence
-                />
-                <div class="min-w-0">
-                  <div class="text-xs font-medium text-zinc-100 truncate">
-                    {{ entry.displayName }}
-                  </div>
-                  <div class="text-[11px] text-zinc-300 truncate">
-                    {{ entry.game.name }}
-                  </div>
-                </div>
-              </div>
-            </button>
-          </RailScroller>
-
-          <div v-else>
-            <h3
-              class="mb-2 flex items-center gap-1.5 text-sm font-display font-semibold text-zinc-300"
-            >
-              <span class="size-2 rounded-full bg-zinc-600" />
-              Right now
-            </h3>
-            <div class="rounded-xl bg-zinc-800/40 ring-1 ring-zinc-700/40 p-3">
-              <p class="text-xs text-zinc-500 mb-3">
-                Quiet right now. Recently around:
-              </p>
-              <div v-if="recentFaces.length > 0" class="space-y-2.5">
-                <button
-                  v-for="f in recentFaces.slice(0, 5)"
-                  :key="f.id"
-                  class="group flex w-full items-center gap-2.5 text-left"
-                  @click="goToUser(f.id)"
-                >
-                  <Avatar :object-id="f.avatar" :name="f.name" :size="28" />
-                  <div class="min-w-0">
-                    <div
-                      class="text-xs font-medium text-zinc-200 group-hover:text-blue-400 transition-colors truncate"
-                    >
-                      {{ f.name }}
-                    </div>
-                    <div class="text-[11px] text-zinc-500 truncate">
-                      {{ f.game ?? "was around" }}
-                    </div>
-                  </div>
-                </button>
-              </div>
-              <p v-else class="text-xs text-zinc-600">No recent players yet.</p>
-            </div>
-          </div>
-        </div>
-
         <!-- Top players -->
         <div>
           <h3
@@ -229,7 +208,9 @@
             >
               <div v-for="i in 5" :key="i" class="flex items-center gap-3 p-3">
                 <div class="size-4 rounded bg-zinc-700/50 animate-pulse" />
-                <div class="size-8 shrink-0 rounded-full bg-zinc-700/50 animate-pulse" />
+                <div
+                  class="size-8 shrink-0 rounded-full bg-zinc-700/50 animate-pulse"
+                />
                 <div class="h-3 flex-1 rounded bg-zinc-700/50 animate-pulse" />
               </div>
             </div>
@@ -247,7 +228,7 @@
           </div>
           <div
             v-else
-            class="rounded-xl bg-zinc-800/50 ring-1 ring-zinc-700/40 divide-y divide-zinc-700/40"
+            class="rounded-2xl bg-zinc-900/65 ring-1 ring-white/5 divide-y divide-white/5 overflow-hidden"
           >
             <PlayerProgressRow
               v-for="entry in leaderboard.slice(0, 10)"
@@ -257,14 +238,15 @@
               :avatar-object-id="entry.user.profilePictureObjectId"
               :crown="!!mvp && entry.user.id === mvp.userId"
               :crown-title="mvpTooltip"
-              :now-playing="nowPlayingByUser.get(entry.user.id)?.game.name ?? null"
+              :now-playing="
+                nowPlayingByUser.get(entry.user.id)?.game.name ?? null
+              "
               :stat="`${entry.playtimeHours.toLocaleString()}h`"
               @select-user="goToUser(entry.user.id)"
               @select-game="goToUserGame(entry.user.id)"
             />
           </div>
         </div>
-
       </aside>
     </div>
   </main>
@@ -273,7 +255,6 @@
 <script setup lang="ts">
 import { TrophyIcon, BoltIcon } from "@heroicons/vue/24/solid";
 import { ArrowPathIcon } from "@heroicons/vue/24/outline";
-import { invoke } from "@tauri-apps/api/core";
 import {
   useServerApi,
   type CommunityStats,
@@ -317,6 +298,19 @@ const statsError = ref(false);
 const activityError = ref(false);
 const leaderboardError = ref(false);
 const recapError = ref(false);
+
+const statItems = computed(() => {
+  if (!stats.value) return [];
+  return [
+    { label: "Players", value: stats.value.totalUsers.toLocaleString() },
+    { label: "Games", value: stats.value.totalGames.toLocaleString() },
+    { label: "Hours", value: stats.value.totalPlaytimeHours.toLocaleString() },
+    {
+      label: "Unlocks",
+      value: stats.value.totalAchievementUnlocks.toLocaleString(),
+    },
+  ];
+});
 
 // Recent activity: keep only the last week of the fetched events, then cap how
 // many rows render — so a slow week still populates but a busy one doesn't turn
@@ -390,8 +384,7 @@ function objectUrl(id: string): string {
 }
 
 function goToGame(gameId: string) {
-  // Community is a discovery surface — land on the store presentation.
-  invoke("fetch_game", { gameId }).catch(() => {});
+  // Community is a discovery surface, so land on the Store presentation.
   router.push(`/store/${gameId}`);
 }
 

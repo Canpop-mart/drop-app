@@ -25,7 +25,13 @@ pub struct DatabaseInterface {
     path: PathBuf,
 }
 impl DatabaseInterface {
-    pub fn set_up_database() -> Self {
+    /// Create the data directories and open (or create) `drop.db`.
+    ///
+    /// Returns an error instead of panicking on failure: a startup fault here
+    /// used to kill the app before any window existed ("opens and closes
+    /// instantly") with no explanation. The caller ([`Self::initialize`] via app
+    /// setup) shows the player what went wrong and exits.
+    pub fn set_up_database() -> DatabaseResult<DatabaseInterface> {
         let db_path = DATA_ROOT_DIR.join("drop.db");
         let games_base_dir = DATA_ROOT_DIR.join("games");
         let logs_root_dir = DATA_ROOT_DIR.join("logs");
@@ -33,41 +39,20 @@ impl DatabaseInterface {
         let pfx_dir = DATA_ROOT_DIR.join("pfx");
 
         debug!("creating data directory at {DATA_ROOT_DIR:?}");
-        create_dir_all(DATA_ROOT_DIR.as_path()).unwrap_or_else(|e| {
-            panic!(
-                "Failed to create directory {} with error {}",
-                DATA_ROOT_DIR.display(),
-                e
-            )
-        });
-        create_dir_all(&games_base_dir).unwrap_or_else(|e| {
-            panic!(
-                "Failed to create directory {} with error {}",
-                games_base_dir.display(),
-                e
-            )
-        });
-        create_dir_all(&logs_root_dir).unwrap_or_else(|e| {
-            panic!(
-                "Failed to create directory {} with error {}",
-                logs_root_dir.display(),
-                e
-            )
-        });
-        create_dir_all(&cache_dir).unwrap_or_else(|e| {
-            panic!(
-                "Failed to create directory {} with error {}",
-                cache_dir.display(),
-                e
-            )
-        });
-        create_dir_all(&pfx_dir).unwrap_or_else(|e| {
-            panic!(
-                "Failed to create directory {} with error {}",
-                pfx_dir.display(),
-                e
-            )
-        });
+        for dir in [
+            DATA_ROOT_DIR.as_path(),
+            &games_base_dir,
+            &logs_root_dir,
+            &cache_dir,
+            &pfx_dir,
+        ] {
+            create_dir_all(dir).map_err(|e| {
+                DatabaseError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!("failed to create directory {}: {}", dir.display(), e),
+                ))
+            })?;
+        }
 
         let exists = fs::exists(db_path.clone()).unwrap_or_else(|e| {
             warn!("Failed to check if {} exists: {}, assuming it does not", db_path.display(), e);
@@ -76,22 +61,54 @@ impl DatabaseInterface {
 
         if exists {
             match DatabaseInterface::open_at_path(&db_path) {
-                Ok(Some(db)) => db,
+                Ok(Some(db)) => Ok(db),
                 Ok(None) => {
                     warn!("Database file disappeared between exists check and open, creating new");
                     let default = Database::new(games_base_dir, None, cache_dir);
                     DatabaseInterface::create_at_path(&db_path, default)
-                        .expect("Database could not be created")
                 }
-                Err(e) => handle_invalid_database(e, db_path, games_base_dir, cache_dir)
-                    .expect("failed to recover from failed database"),
+                Err(e) => handle_invalid_database(e, db_path, games_base_dir, cache_dir),
             }
         } else {
             let default = Database::new(games_base_dir, None, cache_dir);
             debug!("Creating database at path {}", db_path.display());
             DatabaseInterface::create_at_path(&db_path, default)
-                .expect("Database could not be created")
         }
+    }
+
+    /// Initialize the global [`crate::db::DB`] exactly once.
+    ///
+    /// Must be called from app setup before any other database use. On error the
+    /// caller must stop startup and show the player what failed: without a
+    /// database nothing else can run.
+    pub fn initialize() -> DatabaseResult<&'static DatabaseInterface> {
+        if let Some(db) = DB.get() {
+            return Ok(db);
+        }
+        let db = Self::set_up_database()?;
+        // `set` fails only if another thread initialized concurrently. Setup runs
+        // single-threaded before any command, so a lost race just means we use the
+        // instance that won it.
+        if DB.set(db).is_err() {
+            warn!("database was already initialized by another thread; using that instance");
+        }
+        match DB.get() {
+            Some(db) => Ok(db),
+            None => Err(DatabaseError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "database initialization state was lost",
+            ))),
+        }
+    }
+
+    /// Get the initialized global database.
+    ///
+    /// [`Self::initialize`] runs during app setup before any command or request
+    /// can execute, and exits on failure, so by the time this is called the
+    /// static is guaranteed to be set. The `expect` only fires if a code path
+    /// skipped initialization (a programming error), not on player-facing faults.
+    pub fn global() -> &'static DatabaseInterface {
+        DB.get().expect("database not initialized; initialize() must run before any database use")
     }
 
     pub fn open_at_path(db_path: &Path) -> DatabaseResult<Option<DatabaseInterface>> {
@@ -276,7 +293,7 @@ impl Drop for DBWrite<'_> {
         // Save BEFORE releasing the write lock to prevent concurrent writes.
         // The old code dropped the lock first then called save() which took a
         // read lock — this allowed two concurrent saves to race on the file.
-        match DatabaseInterface::write_to_path(&DB.path, &self.0) {
+        match DatabaseInterface::write_to_path(&DatabaseInterface::global().path, &self.0) {
             Ok(()) => {}
             Err(e) => {
                 error!("database failed to save with error {e}");
@@ -299,17 +316,21 @@ pub fn borrow_db_checked<'a>() -> DBRead<'a> {
     // write lock. The in-memory state may be inconsistent, but propagating
     // a panic from every reader would brick the app. Log loudly and
     // recover the guard so the rest of the app keeps running.
-    let guard = DB.borrow_data().unwrap_or_else(|e| {
-        error!("database read lock poisoned, recovering: {e}");
-        e.into_inner()
-    });
+    let guard = DatabaseInterface::global()
+        .borrow_data()
+        .unwrap_or_else(|e| {
+            error!("database read lock poisoned, recovering: {e}");
+            e.into_inner()
+        });
     DBRead(guard)
 }
 
 pub fn borrow_db_mut_checked<'a>() -> DBWrite<'a> {
-    let guard = DB.borrow_data_mut().unwrap_or_else(|e| {
-        error!("database write lock poisoned, recovering: {e}");
-        e.into_inner()
-    });
+    let guard = DatabaseInterface::global()
+        .borrow_data_mut()
+        .unwrap_or_else(|e| {
+            error!("database write lock poisoned, recovering: {e}");
+            e.into_inner()
+        });
     DBWrite(ManuallyDrop::new(guard))
 }

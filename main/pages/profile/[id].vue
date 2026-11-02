@@ -14,6 +14,12 @@
     <!-- Error -->
     <div v-else-if="error" class="mx-auto max-w-2xl px-8 py-20 text-center">
       <p class="text-sm text-red-400">{{ error }}</p>
+      <button
+        class="mt-4 rounded-lg bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-700"
+        @click="loadProfile"
+      >
+        Retry
+      </button>
     </div>
 
     <template v-else-if="profile">
@@ -112,7 +118,6 @@
 
 <script setup lang="ts">
 import { PlayIcon } from "@heroicons/vue/24/solid";
-import { invoke } from "@tauri-apps/api/core";
 import {
   useServerApi,
   type UserProfile,
@@ -150,7 +155,6 @@ function objectUrl(id: string): string {
 }
 
 function goToGame(gameId: string) {
-  invoke("fetch_game", { gameId }).catch(() => {});
   router.push(`/store/${gameId}`);
 }
 
@@ -159,7 +163,9 @@ function compareOn(gameId: string) {
   router.push(`/library/${gameId}?compare=${profileId}`);
 }
 
-onMounted(async () => {
+async function loadProfile() {
+  loading.value = true;
+  error.value = null;
   try {
     profile.value = await api.profile.get(profileId);
     // Stats / showcase / favourites / presence all soft-fail independently so
@@ -191,7 +197,9 @@ onMounted(async () => {
   } finally {
     loading.value = false;
   }
-});
+}
+
+onMounted(loadProfile);
 </script>
 
 <style scoped>

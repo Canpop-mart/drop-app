@@ -68,6 +68,10 @@ pub enum ProcessError {
     /// itself, so this is only ever a stuck one). Startup retries it; the
     /// `recover_game_update` command sets it aside.
     UpdateInProgress,
+    /// An addon is replacing or sending this game's save right now (a league
+    /// check-out or check-in). Refused so the game can't start on a
+    /// half-written save.
+    AddonBusy,
 }
 
 impl Display for ProcessError {
@@ -112,6 +116,9 @@ impl Display for ProcessError {
                  platform is set to Windows and that Proton is configured in settings.",
                 binary
             ),
+            ProcessError::AddonBusy => {
+                "Drop is changing this game's save for your league. Wait for it to finish, then press Play again."
+            }
             ProcessError::UpdateInProgress => {
                 "This game's last update did not finish, and Drop could not finish or undo it. \
                  Restart Drop to try again. Your files from before the update are kept in the \

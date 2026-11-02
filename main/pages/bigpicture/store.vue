@@ -71,7 +71,8 @@
       <!-- Hero carousel -->
       <div v-if="featured.length > 0" class="mb-8">
         <div
-          class="relative rounded-2xl overflow-hidden cursor-pointer aspect-[21/9]"
+          class="relative h-[27rem] rounded-3xl overflow-hidden cursor-pointer border"
+          :style="{ borderColor: 'var(--bpm-border)', backgroundColor: 'var(--bpm-surface)' }"
           :ref="(el: any) => registerFeaturedHero(el, { onSelect: () => goToGame(featured[heroIndex]?.id) })"
           @click="goToGame(featured[heroIndex]?.id)"
         >
@@ -81,12 +82,13 @@
             :alt="featured[heroIndex].mName"
             class="w-full h-full object-cover"
           />
-          <div class="absolute inset-0 bg-gradient-to-t from-zinc-950/90 via-zinc-950/30 to-transparent" />
-          <div class="absolute bottom-0 inset-x-0 p-6">
-            <h2 class="text-3xl font-bold font-display text-white mb-1">
+          <div class="absolute inset-0 bg-gradient-to-r from-zinc-950/95 via-zinc-950/60 to-transparent" />
+          <div class="absolute inset-y-0 left-0 flex max-w-3xl flex-col justify-center p-10">
+            <p class="mb-2 text-xs font-bold uppercase tracking-[0.22em]" style="color: var(--bpm-accent-hex)">Spotlight</p>
+            <h2 class="text-4xl font-bold font-display text-white mb-2">
               {{ featured[heroIndex]?.mName }}
             </h2>
-            <p class="text-sm text-zinc-300 line-clamp-2 max-w-2xl">
+            <p class="text-base text-zinc-300 line-clamp-3 max-w-2xl leading-relaxed">
               {{ featured[heroIndex]?.mShortDescription }}
             </p>
             <div v-if="featured[heroIndex]?.tags?.length" class="flex gap-2 mt-3">
@@ -102,58 +104,18 @@
           </div>
           <!-- Carousel dots -->
           <div v-if="featured.length > 1" class="absolute bottom-4 right-6 flex gap-1.5">
-            <button
+            <span
               v-for="(_, i) in featured"
               :key="i"
-              :ref="(el: any) => registerFeaturedHero(el, { onSelect: () => (heroIndex = i) })"
               class="size-2 rounded-full transition-colors"
               :class="i === heroIndex ? 'bg-blue-500' : 'bg-zinc-600'"
-              :aria-label="`Show featured game ${i + 1}`"
-              @click.stop="heroIndex = i"
             />
           </div>
         </div>
       </div>
 
-      <!-- Trending section (1 row) -->
-      <div v-if="trending.length > 0" class="mb-8">
-        <h3 class="text-lg font-semibold font-display text-zinc-200 mb-4">
-          Most Played This Week
-        </h3>
-        <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
-          <div
-            v-for="game in visibleTrending"
-            :key="game.id"
-            :ref="(el: any) => registerGrid(el, {
-              onSelect: () => goToGame(game.id),
-            })"
-            class="group relative flex flex-col rounded-xl transition-all duration-200 cursor-pointer bp-focus-delegate"
-          >
-            <div class="bp-focus-ring relative aspect-[3/4] bg-zinc-800 rounded-xl overflow-hidden">
-              <img
-                v-if="game.mCoverObjectId"
-                :src="objectUrl(game.mCoverObjectId)"
-                :alt="game.mName"
-                class="w-full h-full object-cover"
-                loading="lazy"
-              />
-              <div v-if="game.isEmulated" class="rom-scanlines absolute inset-0 pointer-events-none" />
-              <div
-                v-if="game.updateAvailable"
-                class="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase z-10"
-                style="background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text)"
-              >
-                Older build
-              </div>
-              <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
-            </div>
-            <div class="px-2 py-2 bg-zinc-900/80">
-              <p class="text-sm font-medium text-zinc-200 truncate">{{ game.mName }}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
+      <!-- "Most Played This Week" was removed on purpose (2026-10-30). The
+           trending list is still fetched: the roulette's cover pool uses it. -->
       <!-- Recently added section (1 row) -->
       <div v-if="recentGames.length > 0" class="mb-8">
         <h3 class="text-lg font-semibold font-display text-zinc-200 mb-4">
@@ -686,6 +648,13 @@
       </template>
     </div>
 
+    <!-- ═══ Addons tab ═══ -->
+    <!-- Same tab as the desktop Store, over the same state
+         (composables/addon-shop.ts). -->
+    <div v-else-if="activeTab === 'addons'" class="flex-1 px-8 py-6">
+      <BpmStoreAddons />
+    </div>
+
     <!-- Floating bulk-action bar -->
     <Teleport to="body">
       <Transition
@@ -918,7 +887,6 @@ function updateGridCols() {
 updateGridCols();
 
 // Slice data to exact row counts so hidden overflow items aren't focusable
-const visibleTrending = computed(() => trending.value.slice(0, gridCols.value));
 const visibleRecentGames = computed(() => recentGames.value.slice(0, gridCols.value));
 const visibleRandomGames = computed(() => randomGames.value.slice(0, gridCols.value * 2));
 
@@ -1703,6 +1671,7 @@ const tabs = [
   { label: "Featured", value: "featured" },
   { label: "Browse", value: "browse" },
   { label: "Collections", value: "collections" },
+  { label: "Addons", value: "addons" },
 ];
 </script>
 

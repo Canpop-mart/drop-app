@@ -25,7 +25,7 @@
 
 use std::time::Duration;
 
-use database::DB;
+use database::DatabaseInterface;
 use log::{debug, info, warn};
 use reqwest::Method;
 use reqwest_middleware::Error as MiddlewareError;
@@ -57,7 +57,7 @@ pub fn generate_url(
     query: &[(&str, &str)],
 ) -> Result<Url, RemoteAccessError> {
     let path_appended = path_components.join("/");
-    let mut base_url = DB.fetch_base_url().join(&path_appended)?;
+    let mut base_url = DatabaseInterface::global().fetch_base_url().join(&path_appended)?;
     {
         let mut queries = base_url.query_pairs_mut();
         for (param, val) in query {

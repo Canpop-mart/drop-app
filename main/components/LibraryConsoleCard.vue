@@ -1,7 +1,7 @@
 <template>
   <NuxtLink
     :to="`/library/console/${id}`"
-    class="group relative flex aspect-video w-64 shrink-0 flex-col items-center justify-center overflow-hidden rounded-xl bg-gradient-to-b from-zinc-800/70 to-zinc-950/80 px-4 py-3 ring-1 ring-zinc-700/50 transition-all hover:ring-blue-500/40 hover:from-zinc-800/90"
+    class="group relative flex h-28 w-52 shrink-0 flex-col items-center justify-center overflow-hidden rounded-xl bg-gradient-to-b from-zinc-900 to-zinc-950 px-4 py-3 ring-1 ring-zinc-800 transition-all hover:-translate-y-0.5 hover:ring-blue-500/40"
   >
     <!-- Console render. Pixel-art renders stay crisp when scaled. -->
     <img
@@ -9,7 +9,7 @@
       :src="art.render"
       :alt="art.name"
       class="mb-2 w-auto max-w-[80%] object-contain drop-shadow-md transition-transform duration-300 group-hover:scale-105"
-      :class="art.big ? 'h-14' : 'h-[4.5rem]'"
+      :class="art.big ? 'h-10' : 'h-12'"
       :style="art.pixel ? 'image-rendering: pixelated' : ''"
     />
 
@@ -38,8 +38,8 @@
         v-if="art?.logo"
         :src="art.logo"
         :alt="art.name"
-        class="mx-auto mb-1 w-auto max-w-[11rem] object-contain"
-        :class="art.big ? 'h-11' : 'h-7'"
+        class="mx-auto mb-1 w-auto max-w-[9rem] object-contain"
+        :class="art.big ? 'h-8' : 'h-6'"
         :style="
           art.whiten
             ? 'filter: brightness(0) invert(1) drop-shadow(0 1px 1px rgba(0,0,0,0.4))'

@@ -39,7 +39,7 @@ use tauri::AppHandle;
 use crate::downloads::download_agent::{
     DownloadInformation, fetch_download_info, is_drop_runtime_data, is_player_data_folder,
 };
-use crate::downloads::mod_data::mod_owned_files_spelled;
+use crate::downloads::mod_data::{installed_ledgers, mod_owned_files_spelled};
 use crate::library::push_game_update;
 use crate::state::GameStatusManager;
 use crate::status::{StatusKind, transition_from_db};
@@ -740,7 +740,12 @@ impl Prepared {
 }
 
 /// Whether this install may be updated now (checked before queueing).
-fn check_can_update(db: &Database, install: &InstallRef, to_version_id: &str) -> Result<(), UpdateError> {
+fn check_can_update(
+    db: &Database,
+    install: &InstallRef,
+    to_version_id: &str,
+    game_mod_ids: &[String],
+) -> Result<(), UpdateError> {
     let game_busy = db
         .applications
         .transient_statuses
@@ -749,11 +754,15 @@ fn check_can_update(db: &Database, install: &InstallRef, to_version_id: &str) ->
     if game_busy {
         return Err(UpdateError::Busy);
     }
+    // Only mods of THIS game conflict with its in-place update: they write into
+    // the same install folder. A mod's transient status is keyed by the mod's
+    // own id, so match it against this install's ledgers; a mod of another
+    // game touches none of these files and must not hold the update back.
     if db
         .applications
         .transient_statuses
         .keys()
-        .any(|m| m.download_type == DownloadType::Mod)
+        .any(|m| m.download_type == DownloadType::Mod && game_mod_ids.contains(&m.id))
     {
         return Err(UpdateError::ModDownloadActive);
     }
@@ -800,9 +809,18 @@ pub async fn apply(
     }
     let prepared = prepare(game_id, install_version_id, to_version_id).await?;
     same_as_reviewed(&prepared.plan, to_revision, prepared.to_revision, mirror_folders)?;
+    // This game's mods, by their ledgers (read before the database lock, as
+    // `uninstall_mod` does): a mod's transient status is keyed by the mod's own
+    // id, so only these can conflict with an update of this install. A fresh
+    // mod that has never installed here has no ledger until it starts; if one
+    // runs ahead of this update on the queue, the commit's per-file "still as
+    // planned" check refuses to swap over anything it did not plan for.
+    let game_mod_ids: Vec<String> = installed_ledgers(&prepared.install.install_dir)
+        .map(|ledgers| ledgers.into_iter().map(|m| m.game_id).collect())
+        .unwrap_or_default();
     {
         let db = borrow_db_checked();
-        check_can_update(&db, &prepared.install, to_version_id)?;
+        check_can_update(&db, &prepared.install, to_version_id, &game_mod_ids)?;
     }
     if with_launches_blocked(game_id, |running| running) {
         return Err(UpdateError::GameRunning);
@@ -1506,5 +1524,31 @@ mod tests {
         let shown = serde_json::to_value(&e).unwrap();
         assert!(shown.as_str().unwrap().starts_with(NEEDS_RECOVERY_MARKER), "{shown}");
         assert!(!UpdateError::Busy.to_string().starts_with(NEEDS_RECOVERY_MARKER));
+    }
+
+    #[test]
+    fn only_this_games_mods_block_its_in_place_update() {
+        let install = InstallRef {
+            game_id: "g".into(),
+            version_id: "v1".into(),
+            platform: Platform::Linux,
+            install_dir: "/games/G".into(),
+        };
+        let mut db = Database::default();
+        // A mod of another game is queued: it writes into a different folder.
+        db.applications.transient_statuses.insert(
+            DownloadableMetadata::new("other-mod".into(), "mv".into(), Platform::Linux, DownloadType::Mod),
+            ApplicationTransientStatus::Queued { version_id: "mv".into() },
+        );
+        assert!(check_can_update(&db, &install, "v2", &["this-mod".to_string()]).is_ok());
+        // A mod of this game (by its ledger) is queued: it writes here.
+        db.applications.transient_statuses.insert(
+            DownloadableMetadata::new("this-mod".into(), "mv".into(), Platform::Linux, DownloadType::Mod),
+            ApplicationTransientStatus::Queued { version_id: "mv".into() },
+        );
+        assert!(matches!(
+            check_can_update(&db, &install, "v2", &["this-mod".to_string()]),
+            Err(UpdateError::ModDownloadActive)
+        ));
     }
 }

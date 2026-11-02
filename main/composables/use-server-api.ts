@@ -7,7 +7,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { serverUrl } from "./use-server-fetch";
-import type { User } from "~/types";
+import type { Game, User } from "~/types";
 
 // ── Store types ─────────────────────────────────────────────────────────────
 
@@ -626,6 +626,9 @@ export interface ConsoleGroup {
   maker: string;
   blurb: string;
   gameIds: string[];
+  /** Game ids of the emulators this console's games launch with, most used
+   *  first. Absent on servers from before 2026-10-30. */
+  emulatorIds?: string[];
 }
 
 // ── Store API ───────────────────────────────────────────────────────────────
@@ -648,6 +651,10 @@ export function useServerApi() {
         apiFetch<Array<{ id: string; name: string }>>("api/v1/store/libraries"),
 
       /** Search/browse the store. */
+      game: (id: string) =>
+        apiFetch<Game>(`api/v1/store/game/${encodeURIComponent(id)}`),
+
+      /** Search/browse the store. */
       browse: (
         params: {
           skip?: number;
@@ -658,6 +665,9 @@ export function useServerApi() {
           tagMode?: "and" | "or";
           platform?: string;
           library?: string;
+          emulated?: "all" | "native" | "rom";
+          yearFrom?: number;
+          yearTo?: number;
           sort?:
             | "default"
             | "newest"
@@ -677,6 +687,10 @@ export function useServerApi() {
         if (params.tagMode) qs.set("tagMode", params.tagMode);
         if (params.platform) qs.set("platform", params.platform);
         if (params.library) qs.set("library", params.library);
+        if (params.emulated && params.emulated !== "all")
+          qs.set("emulated", params.emulated);
+        if (params.yearFrom) qs.set("yearFrom", String(params.yearFrom));
+        if (params.yearTo) qs.set("yearTo", String(params.yearTo));
         if (params.sort) qs.set("sort", params.sort);
         if (params.order) qs.set("order", params.order);
         const query = qs.toString();
@@ -704,6 +718,38 @@ export function useServerApi() {
       addCollectionToLibrary: (id: string) =>
         apiFetch<{ shelfId: string; gameCount: number }>(
           `api/v1/store/collection/${id}/add-to-library`,
+          { method: "POST" },
+        ),
+    },
+
+    /**
+     * The Store's Addons tab. Addons are services the server admin runs; a
+     * player adds or removes them for themselves. `list` returns raw JSON on
+     * purpose: composables/addon-shop.ts checks it (parseShopList) so a
+     * malformed reply shows as an error rather than an empty shop.
+     */
+    addons: {
+      list: () => apiFetch<unknown>("api/v1/addons"),
+      add: (name: string) =>
+        apiFetch<{ name: string; added: boolean }>(
+          `api/v1/addons/${encodeURIComponent(name)}/membership`,
+          { method: "POST" },
+        ),
+      remove: (name: string) =>
+        apiFetch<{ name: string; added: boolean }>(
+          `api/v1/addons/${encodeURIComponent(name)}/membership`,
+          { method: "DELETE" },
+        ),
+      /**
+       * The league panels for one game (raw JSON: composables/addon-play-logic.ts
+       * checks it). Only addons this player added and this game belongs to.
+       */
+      forGame: (gameId: string) =>
+        apiFetch<unknown>(`api/v1/games/${encodeURIComponent(gameId)}/addons`),
+      /** Take the save. Refusals come back as 200 `{ ok: false, message }`. */
+      checkout: (name: string, context: string) =>
+        apiFetch<unknown>(
+          `api/v1/addons/${encodeURIComponent(name)}/contexts/${encodeURIComponent(context)}/checkout`,
           { method: "POST" },
         ),
     },

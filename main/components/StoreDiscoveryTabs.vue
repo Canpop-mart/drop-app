@@ -4,14 +4,14 @@
        whatever it's given.  Earlier iterations capped here directly,
        which made the table look slim against a wider hero + cards
        above it. -->
-  <section class="mb-12">
+  <section class="mb-9">
     <!-- Tab strip — slightly bigger and bolder than before so the
          tabs themselves feel like real navigation, not breadcrumbs. -->
-    <div class="flex items-center gap-1 border-b border-zinc-700/50 mb-0">
+    <div class="mb-0 flex items-center gap-6 border-b border-zinc-800">
       <button
         v-for="t in tabs"
         :key="t.value"
-        class="relative px-6 py-3.5 text-sm font-semibold transition-colors"
+        class="relative py-3.5 text-sm font-semibold transition-colors"
         :class="
           activeTab === t.value
             ? 'text-blue-400'
@@ -22,7 +22,7 @@
         {{ t.label }}
         <span
           v-if="activeTab === t.value"
-          class="absolute bottom-0 left-3 right-3 h-0.5 bg-blue-500 rounded-full"
+          class="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-blue-500"
         />
       </button>
     </div>
@@ -34,7 +34,7 @@
          and let the preview's top scroll off the screen.  Each column
          clips its own bottom corner instead. -->
     <div
-      class="grid lg:grid-cols-[1fr_400px] gap-0 bg-zinc-900/40 rounded-b-xl ring-1 ring-zinc-700/40"
+      class="grid gap-0 border-b border-x border-zinc-800 lg:grid-cols-[1fr_360px]"
     >
       <!-- List column -->
       <div
@@ -257,7 +257,7 @@ const emit = defineEmits<{
 
 const tabs: Array<{ label: string; value: TabValue }> = [
   { label: "New", value: "new" },
-  { label: "Most Played", value: "popular" },
+  // "Most Played" was removed on purpose (2026-10-30).
   { label: "Random", value: "random" },
 ];
 

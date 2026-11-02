@@ -59,13 +59,13 @@ export const EXECUTABLE_UNSUPPORTED_TEXT: Record<
  * then has no effect at all, silently.
  *
  * `{dir}` and `{rom}` deliberately do not count: neither one carries the
- * executable. A blank template does not count either, which matches the
- * warning already on the template field itself.
+ * executable. A blank template counts: the launcher treats it as `{}`.
  */
 export function launchTemplateUsesExecutable(
   template: string | null | undefined,
 ): boolean {
   const value = template ?? "";
+  if (value.trim() === "") return true;
   return (
     value.includes("{}") ||
     value.includes("{0}") ||

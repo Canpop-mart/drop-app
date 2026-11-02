@@ -8,17 +8,25 @@
     button carry colour.
   -->
   <div
-    class="rounded-xl bg-zinc-800/50 ring-1 ring-zinc-700/40 px-5 py-5 hover:ring-blue-500/40 transition"
+    class="group/roulette relative overflow-hidden rounded-2xl bg-zinc-900 ring-1 ring-zinc-800 transition hover:ring-blue-500/40"
     :class="{ 'roulette-spinning-surface': spinning }"
   >
-    <div class="flex items-center gap-5">
+    <img
+      v-if="currentCoverId"
+      :src="objectUrl(currentCoverId)"
+      aria-hidden="true"
+      class="absolute inset-0 h-full w-full scale-110 object-cover opacity-15 blur-2xl transition-opacity"
+    />
+    <div class="absolute inset-0 bg-gradient-to-br from-zinc-950/60 via-zinc-950/90 to-blue-950/40" />
+
+    <div class="relative z-10 flex h-full w-full items-center gap-6 p-7">
       <!-- Cover slot — rectangular thumbnail so a real cover reads
            better than a circular crop. Static state shows a sparkle;
            spinning state cycles covers from the pool; settled state
            keeps the chosen cover. -->
       <button
         type="button"
-        class="group relative shrink-0 h-24 w-16 rounded-md overflow-hidden flex items-center justify-center transition-transform"
+        class="group relative flex h-40 w-28 shrink-0 items-center justify-center overflow-hidden rounded-xl shadow-2xl transition-transform"
         :class="[
           spinning || result
             ? 'bg-zinc-900 ring-1 ring-blue-500/30'
@@ -40,25 +48,32 @@
           :class="{ 'roulette-blur': spinning }"
           loading="lazy"
         />
-        <SparklesIcon v-else class="size-7 text-blue-300" />
+        <SparklesIcon v-else class="size-10 text-blue-300" />
       </button>
 
-      <div class="flex-1 min-w-0">
+      <div class="flex min-w-0 flex-1 flex-col items-start">
         <template v-if="!hasInteracted">
           <p class="text-base font-display font-semibold text-zinc-100">
             Can't decide?
           </p>
-          <p class="text-sm text-zinc-500 mt-0.5">
-            Spin to land on a random game from across the Drop catalog —
-            your library, your backlog, or something brand new.
+          <p class="mt-1 text-sm leading-6 text-zinc-400">
+            Pick a game from the Drop catalog, your library, or your backlog.
           </p>
         </template>
         <template v-else-if="result">
-          <p class="text-base font-display font-semibold text-zinc-100 truncate">
+          <p class="line-clamp-2 text-xl font-display font-semibold text-zinc-100">
             {{ result.game.name }}
           </p>
-          <p class="text-xs text-blue-300/80 truncate mt-0.5">
+          <p class="mt-2 line-clamp-2 text-sm text-blue-300/80">
             {{ caption }}
+          </p>
+        </template>
+        <template v-else-if="error">
+          <p class="text-base font-display font-semibold text-zinc-100">
+            Couldn't pick a game
+          </p>
+          <p class="mt-1 text-sm text-zinc-400">
+            Try again when the catalog is available.
           </p>
         </template>
         <template v-else-if="empty">
@@ -77,17 +92,16 @@
             Picking something for you.
           </p>
         </template>
+        <button
+          type="button"
+          class="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-950/40 transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="spinning"
+          @click="spin"
+        >
+          <ArrowPathIcon class="size-4" :class="{ 'animate-spin': spinning }" />
+          {{ spinning ? "Spinning" : hasInteracted ? "Spin again" : "Pick a game" }}
+        </button>
       </div>
-
-      <button
-        type="button"
-        class="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-blue-500/20 ring-1 ring-blue-400/40 px-4 py-2 text-sm font-semibold text-blue-100 hover:bg-blue-500/30 transition disabled:cursor-not-allowed disabled:opacity-50"
-        :disabled="spinning"
-        @click="spin"
-      >
-        <ArrowPathIcon class="size-4" :class="{ 'animate-spin': spinning }" />
-        {{ spinning ? "Spinning" : hasInteracted ? "Spin again" : "Spin" }}
-      </button>
     </div>
   </div>
 </template>
@@ -115,6 +129,7 @@ const router = useRouter();
 const spinning = ref(false);
 const result = ref<RouletteResult | null>(null);
 const empty = ref(false);
+const error = ref(false);
 const hasInteracted = ref(false);
 const settled = ref(false);
 const previewCoverId = ref<string | null>(null);
@@ -165,6 +180,7 @@ async function spin() {
   if (spinning.value) return;
   hasInteracted.value = true;
   empty.value = false;
+  error.value = false;
   settled.value = false;
   spinning.value = true;
 
@@ -183,9 +199,11 @@ async function spin() {
     previewCoverId.value = pickRandomPreviewCover();
   }, cycleMs);
 
+  let fetchFailed = false;
   const [fetched] = await Promise.all([
     api.community.roulette().catch((e) => {
       console.warn("[roulette] fetch failed:", e);
+      fetchFailed = true;
       return null;
     }),
     new Promise((r) => setTimeout(r, minDurationMs)),
@@ -207,7 +225,8 @@ async function spin() {
     }, 700);
   } else {
     result.value = null;
-    empty.value = true;
+    error.value = fetchFailed;
+    empty.value = !fetchFailed;
   }
 }
 

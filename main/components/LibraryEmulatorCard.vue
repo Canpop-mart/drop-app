@@ -1,20 +1,20 @@
 <template>
   <NuxtLink
     :to="`/library/emulator/${id}`"
-    class="group relative flex aspect-video w-64 shrink-0 flex-col items-center justify-center overflow-hidden rounded-xl bg-gradient-to-b from-zinc-800/70 to-zinc-950/80 px-4 py-3 ring-1 ring-zinc-700/50 transition-all hover:ring-blue-500/40 hover:from-zinc-800/90"
+    class="group relative flex h-28 w-52 shrink-0 flex-col items-center justify-center overflow-hidden rounded-xl bg-gradient-to-b from-zinc-900 to-zinc-950 px-4 py-3 ring-1 ring-zinc-800 transition-all hover:-translate-y-0.5 hover:ring-blue-500/40"
   >
     <!-- The emulator's own icon, or a chip glyph when it has none. -->
     <img
       v-if="iconObjectId"
       :src="useObject(iconObjectId)"
       :alt="name"
-      class="mb-2 size-16 rounded-lg object-cover shadow-md transition-transform duration-300 group-hover:scale-105"
+      class="mb-1.5 size-12 rounded-lg object-cover shadow-md transition-transform duration-300 group-hover:scale-105"
     />
     <div
       v-else
-      class="mb-2 flex size-16 items-center justify-center rounded-lg bg-zinc-800 transition-transform duration-300 group-hover:scale-105"
+      class="mb-1.5 flex size-12 items-center justify-center rounded-lg bg-zinc-800 transition-transform duration-300 group-hover:scale-105"
     >
-      <CpuChipIcon class="size-9 text-zinc-500" />
+      <CpuChipIcon class="size-7 text-zinc-500" />
     </div>
 
     <div class="relative text-center">
