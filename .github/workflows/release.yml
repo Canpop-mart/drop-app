@@ -260,11 +260,18 @@ jobs:
           # and its dependencies so the app works without system webkit installed.
           if [ -d squashfs-root/usr/lib ]; then
             cd squashfs-root/usr/lib
-            # Remove problematic glib/gio/mesa/EGL libs that cause symbol clashes
+            # Remove problematic glib/gio/mesa/EGL libs that cause symbol clashes.
+            # libmount is deliberately taken from the SteamOS host; keeping the
+            # Ubuntu 22.04 libsystemd beside it can make the loader pair a newer
+            # host libmount with an older libsystemd that lacks LIBSYSTEMD_251.
             rm -f libglib-2.0.so* libgio-2.0.so* libgobject-2.0.so* libgmodule-2.0.so*
             rm -f libEGL*.so* libGL*.so* libGLX*.so* libGLdispatch*.so*
             rm -f libdrm*.so* libgbm*.so* libwayland*.so*
-            rm -f libffi*.so* libpcre2*.so* libmount*.so* libblkid*.so*
+            rm -f libffi*.so* libpcre2*.so* libmount*.so* libblkid*.so* libsystemd.so*
+            if compgen -G 'libsystemd.so*' > /dev/null; then
+              echo "ERROR: bundled libsystemd survived SteamOS compatibility cleanup"
+              exit 1
+            fi
             # Keep: libwebkit2gtk-4.1, libjavascriptcoregtk-4.1, libsoup-3.0,
             #        and any other non-conflicting deps Tauri bundled
             echo "Kept bundled libs:"

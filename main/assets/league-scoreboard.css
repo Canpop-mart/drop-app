@@ -1,0 +1,61 @@
+.league-scoreboard {
+  background: #10191d;
+  border-color: #9b603f60;
+  box-shadow: 0 16px 48px #0006, inset 0 1px #f3d8a318;
+}
+.league-scoreboard .league-masthead {
+  position: relative;
+  background: #0c1316;
+  border-color: #9b603f40;
+}
+.league-scoreboard .league-masthead::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: repeating-linear-gradient(115deg, #fff 0 20px, #ddd 20px 24px, transparent 24px 30px);
+}
+.league-scoreboard .league-masthead > svg { color: #b87951; }
+.league-scoreboard .league-masthead h3 {
+  color: #e9dcc5;
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.league-scoreboard .league-body {
+  background: radial-gradient(ellipse at 100% 20%, #567c5b20, transparent 70%), #10191d;
+}
+.league-scoreboard .league-title {
+  color: #f4ebd9;
+  font-size: 25px;
+  font-weight: 800;
+  letter-spacing: -.04em;
+}
+.league-scoreboard .league-week-row { min-height: 150px; }
+.league-scoreboard .league-week-label { color: #c18a65; margin-bottom: 10px; }
+.league-scoreboard .league-week-number {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 100px;
+  font-weight: 900;
+  letter-spacing: -.09em;
+  color: #f4ebd9;
+  text-shadow: 0 3px 0 #0008;
+}
+.league-field { width: 110px; height: 144px; color: #8aa69160; transform: rotate(7deg); }
+.league-scoreboard .league-save-status {
+  border: 0;
+  border-top: 1px solid #9b603f40;
+  border-radius: 0;
+  padding: 16px 0 0;
+  background: transparent;
+  color: #bcc9c0;
+}
+.league-scoreboard .league-primary {
+  --tw-ring-color: #b87951;
+  background: #81482c;
+  color: #fff;
+  border: 1px solid #ad7250;
+  box-shadow: 0 2px 0 #482615;
+}
+.league-scoreboard .league-primary:hover:not(:disabled) { background: #965936; }
+.league-scoreboard .league-primary:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }

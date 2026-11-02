@@ -1,5 +1,35 @@
 # Task: Redesign Big Picture Mode
 
+## Release version 7.0.1
+- Owner requested version bump only. Updated main/package.json, src-tauri/tauri.conf.json,
+  src-tauri/Cargo.toml package version and Cargo.lock drop-app entry from 7.0.0 to 7.0.1.
+- Verified all four values agree and JSON parses. No dependency changes, new strings, build, commit, tag or push.
+
+## Options menu horizontal controller navigation
+- Confirmed the three-column BPM options overlay subscribed only to DPadUp/Down and moved through a flat list.
+- `main/pages/bigpicture/library/[id].vue`: added Left/Right subscriptions, column-local Up/Down, nearest-row
+  column entry, focused-row scroll reveal and top-input-lock guards on all options handlers. Kept id-based focus,
+  existing actions, subscription cleanup and close/unmount lock release. Desktop unchanged. No new strings.
+- `main/composables/bigpicture/option-grid-navigation.ts` and `main/tests/option-grid-navigation.test.ts` cover
+  unequal column heights, boundaries, empty columns, async insertion and removed identities.
+- Physical controller QA pending.
+- Checks: Nuxt typecheck exit=0; option-grid-navigation tests 3 passed, exit=0; diff check exit=0.
+
+## BPM game view and league widget revision
+- Owner screenshot showed horizontal overflow, duplicated vertical sections and the old wide league panel.
+- `main/pages/bigpicture/library/[id].vue`: removed nested page scrolling; clipped scaled backdrop in its own
+  layer; made hero flow-based with responsive title/actions, stats and friends on the left and league widget
+  on the right. Max-width 1600px content and minmax(0, ...) grids prevent oversized columns. Larger Options
+  and tab targets. Description images/tables constrained to their column. Existing action callbacks/locks retained.
+- `main/components/bigpicture/game-detail/BpmAddonActions.vue`: vertical scoreboard with large week, play diagram,
+  white stitching, football-brown action. Existing registered controls, key-based handlers and inline Cancel turn
+  confirmation retained. Empty/error visibility determines whether the page reserves the widget column.
+- `main/assets/league-scoreboard.css`: shared branded stylesheet extracted from desktop AddonActions.vue so both
+  surfaces use the same visuals. Other addon brands still use BPM theme tokens. No ten-theme palette changes.
+- No new player-facing strings. Live controller and visual QA remain pending.
+- Checks: Nuxt typecheck exit=0; addon-play, addon-shop and focus-navigation tests 22 passed, exit=0.
+  Compiles, untested on device. Diff whitespace check exit=0.
+
 ## Merge-conflict recovery
 - Resolved nine Git conflicts plus older embedded stash markers in docs/UPCOMING.md, docs/map/big-picture.md
   and docs/map/in-place-updates.md. Preserved NCAA vertical widget, white stitches/brown accents, Cancel turn,
@@ -153,3 +183,17 @@ Live-QA this batch with a controller, then continue with Downloads, Multiplayer,
 - Owner approved the release bump. Updated the four authoritative version locations from `6.1.6` to `7.0.0`:
   `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, the `drop-app` entry in `src-tauri/Cargo.lock`, and
   `main/package.json`. No player-facing strings.
+
+## AppImage libsystemd startup fix (2026-11-02)
+- A Steam Deck failed before Drop startup with
+  `libsystemd.so.0: version 'LIBSYSTEMD_251' not found (required by /usr/lib/libmount.so.1)`.
+- `.github/workflows/release.yml`: the SteamOS repack now removes bundled `libsystemd.so*` alongside bundled
+  `libmount.so*` and fails the release if a matching library survives cleanup. This prevents mixing Ubuntu 22.04's
+  older libsystemd with SteamOS's newer host libmount.
+- `docs/map/build-release.md`: documented the required systemd cleanup and observed failure mode.
+- No player-facing strings. Linux release workflow only; desktop and BPM UI are unchanged.
+- Checks: targeted `git diff --check` exit=0; `node scripts/check-docs.mjs` checked 24 docs / 777 paths with
+  0 missing, exit=0.
+- Not checked on a Steam Deck or against a newly built AppImage. A rebuilt and re-signed Linux artifact is required
+  before the affected player can verify the fix. Local Prettier could not run because pnpm could not open its
+  database; a standalone YAML parser was not installed. Compiles, untested on device.

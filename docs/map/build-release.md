@@ -45,9 +45,9 @@ it, and verifies every updater download. Separate shell scripts cover Steam Deck
    (`fail-fast: false`). Windows pre-seeds NSIS 3.11, `nsis_tauri_utils.dll` (SHA1-checked) and the WebView2
    bootstrapper into `%LOCALAPPDATA%\tauri` with curl retries, then `tauri-apps/tauri-action@v0` builds, signs
    (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) and uploads to the release tag.
-3. Ubuntu only: extract the AppImage, drop clashing libs (glib, EGL/GL, drm, wayland, ffi...), bundle `umu-run` and
-   `zerotier-one` (both tolerant of failure), repack with `appimagetool`, `pnpm tauri signer sign`, re-upload `.AppImage`
-   and `.sig`.
+3. Ubuntu only: extract the AppImage, drop clashing libs (glib, EGL/GL, drm, wayland, ffi, systemd...), bundle
+   `umu-run` and `zerotier-one` (both tolerant of failure), repack with `appimagetool`, `pnpm tauri signer sign`,
+   re-upload `.AppImage` and `.sig`.
 4. `updater-manifest` (after both legs): `updater-manifest.py patch` then upload `latest.json`; `verify` downloads the
    served `latest.json` and every artifact it lists and fails if a platform is missing or a signature is wrong.
 5. Clients: updater endpoint `https://github.com/Canpop-mart/drop-app/releases/latest/download/latest.json`.
@@ -67,6 +67,8 @@ it, and verifies every updater download. Separate shell scripts cover Steam Deck
 - The AppImage repack changes its bytes, so the `.sig` from tauri-action is wrong; the re-sign step and
   `updater-manifest.py patch` fix it. Without them every Linux AppImage update is rejected (6.1.4's was, per the
   workflow comment).
+- Do not bundle `libsystemd.so*` while using SteamOS's host `libmount.so*`. Ubuntu 22.04's older libsystemd can be
+  selected beside a newer host libmount and abort startup with `LIBSYSTEMD_251 not found`.
 - The NSIS seed must be complete: if any required file is missing the bundler wipes the dir and downloads again
   unretried. The SHA1s are tied to tauri-bundler 2.9.1 / `@tauri-apps/cli` 2.11.1: bump them together with the CLI.
 - A manual run without a release event tags `v__VERSION__` / `v<version from tauri.conf.json>`.

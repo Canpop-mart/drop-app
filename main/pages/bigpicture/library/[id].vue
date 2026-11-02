@@ -1,7 +1,8 @@
 <template>
-  <div class="flex flex-col h-full overflow-y-auto" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
+  <div class="bp-game-page flex min-w-0 w-full flex-col" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
     <!-- Hero banner -->
-    <div class="relative shrink-0 min-h-[22rem] overflow-visible">
+    <div class="relative isolate shrink-0">
+      <div class="absolute inset-0 -z-10 overflow-hidden">
       <div v-if="!game" class="w-full h-full bg-zinc-800/50 animate-pulse" />
       <template v-else>
         <img
@@ -21,8 +22,10 @@
       />
 
       <!-- Game info overlay -->
-      <div v-if="game" class="absolute inset-x-0 bottom-0 p-8">
-        <h1 class="mb-2 max-w-5xl text-4xl font-bold font-display leading-tight text-zinc-50" style="text-shadow: 0 2px 12px rgba(0,0,0,0.85)">
+      </div>
+      <div class="bp-game-hero">
+      <div v-if="game" class="bp-game-info min-w-0">
+        <h1 class="mb-4 max-w-5xl text-5xl font-bold font-display leading-tight text-zinc-50 break-words" style="text-shadow: 0 2px 12px rgba(0,0,0,0.85)">
           {{ game?.mName }}
         </h1>
         <p
@@ -43,7 +46,7 @@
             >
               <span class="bp-focus-ring inline-flex rounded-xl">
                 <button
-                  class="inline-flex items-center pl-8 pr-4 py-4 text-lg gap-3 font-semibold rounded-l-xl transition-all shadow-lg bg-blue-600 hover:bg-blue-400 text-white shadow-blue-600/20 hover:shadow-blue-500/30 hover:scale-105"
+                  class="inline-flex items-center pl-8 pr-4 py-4 text-lg gap-3 font-semibold rounded-l-xl transition-colors shadow-lg bg-blue-600 hover:bg-blue-400 text-white shadow-blue-600/20"
                   @click.stop="requestPlay"
                 >
                   <PlayIcon class="size-6" />
@@ -381,7 +384,7 @@
                lived behind it. -->
           <button
             :ref="(el: any) => registerAction(el, { onSelect: () => (showOptions = true) })"
-            class="inline-flex items-center gap-1.5 px-4 py-3 text-sm bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 rounded-xl transition-colors backdrop-blur-sm"
+            class="inline-flex min-h-14 items-center gap-2 px-6 py-3 text-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-200 rounded-xl transition-colors backdrop-blur-sm"
             title="Game options"
             @click="showOptions = true"
           >
@@ -401,6 +404,42 @@
             {{ streamingPhaseLabel || 'Streaming' }}
           </button>
         </div>
+    <!-- Playtime & Achievement stats bar -->
+    <div v-if="game && (gamePlaytime || achievements.length > 0)" class="mt-7 flex flex-wrap items-center gap-x-6 gap-y-3">
+      <!-- Playtime -->
+      <div v-if="gamePlaytime" class="flex flex-wrap items-center gap-4">
+        <div v-if="gamePlaytime.lastPlayedAt" class="flex items-center gap-1.5">
+          <ClockIcon class="size-4 text-zinc-500" />
+          <span class="text-sm text-zinc-400">Last played {{ formatTimeAgo(gamePlaytime.lastPlayedAt) }}</span>
+        </div>
+        <div v-if="gamePlaytime.totalSeconds > 0" class="flex items-center gap-1.5">
+          <PlayIcon class="size-4 text-zinc-500" />
+          <span class="text-sm text-zinc-400">{{ formatPlaytimeDetailed(gamePlaytime.totalSeconds) }} total</span>
+        </div>
+      </div>
+      <div class="flex-1" />
+      <!-- Achievement completion -->
+      <div v-if="achievements.length > 0" class="flex items-center gap-2">
+        <TrophyIcon class="size-4 text-yellow-500" />
+        <span class="text-sm text-zinc-400">{{ unlockedCount }}/{{ achievements.length }}</span>
+        <span class="text-xs text-zinc-600">({{ achievementPercent.toFixed(0) }}%)</span>
+      </div>
+    </div>
+
+    <!-- Friends tile — Server users who've played this game. Sits between
+         the stats row and the tab strip, mirroring the desktop layout. -->
+    <div v-if="game" class="mt-4">
+      <GameFriendsTile
+        :game-id="gameId"
+        :players="gamePlayers"
+        :register-action="registerAction"
+      />
+    </div>
+
+      </div>
+      <aside v-if="game" class="bp-game-addon">
+        <BpmAddonActions :game-id="gameId" :running="status?.type === 'Running'" />
+      </aside>
       </div>
     </div>
 
@@ -739,49 +778,9 @@
       </div>
     </section>
 
-    <!-- Playtime & Achievement stats bar -->
-    <div v-if="game && (gamePlaytime || achievements.length > 0)" class="px-8 pt-4 flex items-center gap-6">
-      <!-- Playtime -->
-      <div v-if="gamePlaytime" class="flex items-center gap-4">
-        <div v-if="gamePlaytime.lastPlayedAt" class="flex items-center gap-1.5">
-          <ClockIcon class="size-4 text-zinc-500" />
-          <span class="text-sm text-zinc-400">Last played {{ formatTimeAgo(gamePlaytime.lastPlayedAt) }}</span>
-        </div>
-        <div v-if="gamePlaytime.totalSeconds > 0" class="flex items-center gap-1.5">
-          <PlayIcon class="size-4 text-zinc-500" />
-          <span class="text-sm text-zinc-400">{{ formatPlaytimeDetailed(gamePlaytime.totalSeconds) }} total</span>
-        </div>
-      </div>
-      <div class="flex-1" />
-      <!-- Achievement completion -->
-      <div v-if="achievements.length > 0" class="flex items-center gap-2">
-        <TrophyIcon class="size-4 text-yellow-500" />
-        <span class="text-sm text-zinc-400">{{ unlockedCount }}/{{ achievements.length }}</span>
-        <span class="text-xs text-zinc-600">({{ achievementPercent.toFixed(0) }}%)</span>
-      </div>
-    </div>
-
-    <!-- Friends tile — Server users who've played this game. Sits between
-         the stats row and the tab strip, mirroring the desktop layout. -->
-    <div v-if="game" class="px-8 pt-3">
-      <GameFriendsTile
-        :game-id="gameId"
-        :players="gamePlayers"
-        :register-action="registerAction"
-      />
-    </div>
-
-    <!-- League saves (addons): check the shared save out and in. Shows
-         nothing for games without one. Registers its own buttons. -->
-    <div v-if="game" class="px-8 pt-3">
-      <BpmAddonActions
-        :game-id="gameId"
-        :running="status?.type === 'Running'"
-      />
-    </div>
 
     <!-- Content tabs -->
-    <div class="px-8 pt-4">
+    <div class="bp-game-section px-8 pt-6">
       <div class="relative flex items-center gap-1 border-b border-zinc-800/50">
         <button
           v-for="tab in tabs"
@@ -792,7 +791,7 @@
               registerTab(el, { onSelect: () => (activeTab = tab.value) });
             }
           "
-          class="px-5 py-3 text-sm font-medium transition-colors relative"
+          class="px-6 py-4 text-lg font-semibold transition-colors relative"
           :class="[
             activeTab === tab.value
               ? 'text-blue-400'
@@ -812,7 +811,7 @@
     </div>
 
     <!-- Tab content -->
-    <div class="flex-1 px-8 py-6">
+    <div class="bp-game-section min-w-0 px-8 py-8">
       <!-- Community — achievements list + leaderboard, matching desktop's
            Community tab (which stacks the achievement grid above the
            leaderboard / first-to-unlock signal). -->
@@ -999,7 +998,7 @@
         v-else-if="activeTab === 'about'"
         :class="
           hasGallery
-            ? 'grid gap-8 xl:grid-cols-[minmax(0,1fr)_480px]'
+            ? 'grid gap-10 xl:grid-cols-[minmax(0,1fr)_minmax(0,400px)]'
             : 'space-y-8'
         "
       >
@@ -1007,7 +1006,7 @@
           <div
             v-if="game?.mDescription"
             ref="descriptionEl"
-            class="bpm-description prose prose-lg prose-invert prose-zinc max-w-[75ch] text-zinc-300 leading-relaxed"
+            class="bpm-description prose prose-lg prose-invert prose-zinc max-w-none text-zinc-300 leading-relaxed"
             v-html="renderedDescription"
             @click="openDescriptionImage"
           />
@@ -1286,6 +1285,7 @@
                   <button
                     v-for="entry in group.items"
                     :key="entry.item.id"
+                    :data-game-option="entry.item.id"
                     class="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-sm transition-colors text-left"
                     :style="{
                       backgroundColor: optionsFocusIdx === entry.index ? 'var(--bpm-accent-hex)' : 'var(--bpm-surface)',
@@ -2425,15 +2425,20 @@ const optionsFocusIdx = computed(() => {
   return idx >= 0 ? idx : 0;
 });
 
-function moveOptionsFocus(delta: number) {
-  const items = optionsMenuItems.value;
-  if (items.length === 0) return;
-  const next = Math.min(
-    items.length - 1,
-    Math.max(0, optionsFocusIdx.value + delta),
+function moveOptionsFocus(direction: "up" | "down" | "left" | "right") {
+  optionsFocusId.value = moveOptionGrid(
+    optionMenuGroups.value.map((group) => group.items.map(({ item }) => item.id)),
+    optionsMenuItems.value[optionsFocusIdx.value]?.id ?? null,
+    direction,
   );
-  optionsFocusId.value = items[next].id;
 }
+
+watch(optionsFocusId, async (id) => {
+  if (!showOptions.value || !id) return;
+  await nextTick();
+  document.querySelector<HTMLElement>(`[data-game-option="${CSS.escape(id)}"]`)
+    ?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+});
 
 const _optionsSubs: (() => void)[] = [];
 
@@ -2444,26 +2449,36 @@ function wireOptionsGamepad() {
 
   _optionsSubs.push(
     gamepad.onButton(GamepadButton.DPadUp, () => {
-      if (!showOptions.value) return;
-      moveOptionsFocus(-1);
+      if (!showOptions.value || !focusNav.isTopOfInputLock(optionsLockId)) return;
+      moveOptionsFocus("up");
     }, bypass),
   );
   _optionsSubs.push(
     gamepad.onButton(GamepadButton.DPadDown, () => {
-      if (!showOptions.value) return;
-      moveOptionsFocus(1);
+      if (!showOptions.value || !focusNav.isTopOfInputLock(optionsLockId)) return;
+      moveOptionsFocus("down");
+    }, bypass),
+  );
+  _optionsSubs.push(
+    gamepad.onButton(GamepadButton.DPadLeft, () => {
+      if (!showOptions.value || !focusNav.isTopOfInputLock(optionsLockId)) return;
+      moveOptionsFocus("left");
+    }, bypass),
+    gamepad.onButton(GamepadButton.DPadRight, () => {
+      if (!showOptions.value || !focusNav.isTopOfInputLock(optionsLockId)) return;
+      moveOptionsFocus("right");
     }, bypass),
   );
   _optionsSubs.push(
     gamepad.onButton(GamepadButton.South, () => {
-      if (!showOptions.value) return;
+      if (!showOptions.value || !focusNav.isTopOfInputLock(optionsLockId)) return;
       const item = optionsMenuItems.value[optionsFocusIdx.value];
       if (item) item.action();
     }, bypass),
   );
   _optionsSubs.push(
     gamepad.onButton(GamepadButton.East, () => {
-      if (!showOptions.value) return;
+      if (!showOptions.value || !focusNav.isTopOfInputLock(optionsLockId)) return;
       showOptions.value = false;
     }, bypass),
   );
@@ -2652,6 +2667,7 @@ function onAchievementIconError(event: Event) {
 import { useBpmMods } from "~/composables/bigpicture/use-bpm-mods";
 import BpmModsTab from "~/components/bigpicture/game-detail/BpmModsTab.vue";
 import BpmAddonActions from "~/components/bigpicture/game-detail/BpmAddonActions.vue";
+import { moveOptionGrid } from "~/composables/bigpicture/option-grid-navigation";
 import {
   shouldShowModsTab,
   resolveActiveTab,
@@ -3449,6 +3465,28 @@ async function checkForUpdates() {
 </script>
 
 <style scoped>
+.bp-game-page > * { flex-shrink: 0; min-width: 0; }
+.bp-game-hero {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 56px 32px 32px;
+  display: grid;
+  gap: 32px;
+  min-height: 380px;
+  align-items: center;
+}
+.bp-game-addon:not(:has([data-league-widget])) { display: none; }
+.bp-game-addon { min-width: 0; width: 100%; max-width: 440px; }
+.bp-game-section { width: 100%; max-width: 1600px; margin: 0 auto; }
+@media (min-width: 1100px) {
+  .bp-game-hero:has([data-league-widget]) {
+    grid-template-columns: minmax(0, 1fr) 380px;
+    gap: 64px;
+  }
+}
+.bpm-description { overflow-wrap: anywhere; }
+.bpm-description :deep(img), .bpm-description :deep(video) { max-width: 100%; height: auto; }
+.bpm-description :deep(table) { display: block; max-width: 100%; overflow-x: auto; }
 .dropdown-fade-enter-active,
 .dropdown-fade-leave-active {
   transition: all 0.15s ease;

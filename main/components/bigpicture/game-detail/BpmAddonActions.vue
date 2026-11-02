@@ -18,6 +18,7 @@
   <div ref="root">
     <BigPictureSectionError
       v-if="panel.status.value === 'error'"
+      data-league-widget
       :ref="(el: any) => register(el, { onSelect: retry })"
       data-addon-play-error
       title="Couldn't check league saves"
@@ -29,17 +30,19 @@
         panel.status.value === 'ready' && panel.addons.value.length > 0
       "
       class="space-y-3"
+      data-league-widget
     >
       <section
         v-for="addon in panel.addons.value"
         :key="addon.name"
         class="overflow-hidden rounded-2xl border"
-        style="background-color: var(--bpm-bg); border-color: var(--bpm-border)"
+        :class="{ 'league-scoreboard': addon.name === 'ncaa14' }"
+        :style="addon.name === 'ncaa14' ? undefined : 'background-color: var(--bpm-bg); border-color: var(--bpm-border)'"
       >
-        <h3 class="flex items-center gap-3 border-b px-6 py-4 text-lg font-semibold" style="color: var(--bpm-text); border-color: var(--bpm-border)">
-          <TrophyIcon class="size-6" style="color: var(--bpm-accent-hex)" aria-hidden="true" />
-          {{ addon.title }}
-        </h3>
+        <div class="league-masthead flex items-center gap-3 border-b px-6 py-5" :style="addon.name === 'ncaa14' ? undefined : 'color: var(--bpm-text); border-color: var(--bpm-border)'">
+          <TrophyIcon class="size-6" aria-hidden="true" />
+          <h3 class="text-base font-semibold">{{ addon.title }}</h3>
+        </div>
         <div v-if="!addon.available" class="flex items-center gap-4 p-6">
           <p class="flex-1 text-sm" style="color: var(--bpm-muted)">
             The league can't be reached right now.
@@ -65,20 +68,30 @@
           You don't have a team in any league yet.
         </p>
 
-        <div v-else class="grid gap-4 p-5" :class="addon.contexts.length > 1 ? 'xl:grid-cols-2' : ''">
+        <div v-else class="divide-y divide-white/10">
           <div
             v-for="ctx in addon.contexts"
             :key="ctx.id"
-            class="rounded-xl border p-5"
-            style="background-color: var(--bpm-surface); border-color: var(--bpm-border)"
+            class="league-body p-6"
+            :style="addon.name === 'ncaa14' ? undefined : 'background-color: var(--bpm-surface); border-color: var(--bpm-border)'"
           >
-            <div class="flex flex-wrap items-center gap-4">
-              <div class="min-w-0 flex-1">
-                <div class="mb-2 flex flex-wrap items-center gap-3">
-                  <p class="text-xl font-semibold" style="color: var(--bpm-text)">{{ ctx.title }}</p>
-                  <span v-if="ctx.week !== null" class="rounded-md border px-2.5 py-1 text-sm font-medium" style="color: var(--bpm-muted); border-color: var(--bpm-border)">Week {{ ctx.week }}</span>
+            <div class="flex flex-col gap-4">
+              <div class="min-w-0">
+                <p class="league-title mb-5 text-xl font-semibold" :style="addon.name === 'ncaa14' ? undefined : 'color: var(--bpm-text)'">{{ ctx.title }}</p>
+                <div v-if="ctx.week !== null" class="league-week-row mb-6 flex items-center justify-between gap-4">
+                  <div>
+                    <span class="league-week-label block text-sm font-semibold uppercase tracking-widest" :style="addon.name === 'ncaa14' ? undefined : 'color: var(--bpm-muted)'">Week</span>
+                    <span class="league-week-number block text-6xl font-bold tabular-nums" :style="addon.name === 'ncaa14' ? undefined : 'color: var(--bpm-text)'">{{ ctx.week }}</span>
+                  </div>
+                  <svg v-if="addon.name === 'ncaa14'" class="league-field" viewBox="0 0 132 172" fill="none" aria-hidden="true">
+                    <rect x="1" y="1" width="130" height="170" rx="6" fill="currentColor" fill-opacity=".035" stroke="currentColor" />
+                    <path d="M1 21h130M1 47h130M1 73h130M1 99h130M1 125h130M1 151h130M25 1v170M107 1v170" stroke="currentColor" stroke-opacity=".45" />
+                    <path d="M48 34h5m26 0h5M48 60h5m26 0h5M48 86h5m26 0h5M48 112h5m26 0h5M48 138h5m26 0h5" stroke="currentColor" />
+                    <path d="m44 116 23-28-8-24 28-25m-12 1 12-1-2 12" stroke="#b87951" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+                    <circle cx="44" cy="116" r="5" stroke="#b87951" stroke-width="2" />
+                  </svg>
                 </div>
-                <p class="text-base leading-relaxed" style="color: var(--bpm-muted)">
+                <p class="league-save-status text-base leading-relaxed" :style="addon.name === 'ncaa14' ? undefined : 'color: var(--bpm-muted)'">
                   {{ view(addon.name, ctx).line.replace(` (week ${ctx.week})`, '') }}
                 </p>
               </div>
@@ -111,14 +124,14 @@
                 :disabled="
                   view(addon.name, ctx).locked && !view(addon.name, ctx).busy
                 "
-                class="shrink-0 rounded-xl px-5 py-2.5 text-base font-semibold transition-colors disabled:opacity-50"
+                class="league-primary min-h-14 shrink-0 rounded-xl px-5 py-3 text-lg font-semibold transition-colors disabled:opacity-50"
                 :class="
                   view(addon.name, ctx).urgent
                     ? 'ring-4 ring-offset-2 ring-offset-transparent'
                     : ''
                 "
                 :style="
-                  view(addon.name, ctx).primary
+                  addon.name === 'ncaa14' ? undefined : view(addon.name, ctx).primary
                     ? 'background-color: var(--bpm-accent-hex); color: var(--bpm-accent-text); --tw-ring-color: var(--bpm-accent-hex)'
                     : 'background-color: var(--bpm-surface); color: var(--bpm-text)'
                 "
@@ -391,3 +404,5 @@ watch(
   () => panel.load(),
 );
 </script>
+
+<style scoped src="~/assets/league-scoreboard.css"></style>
