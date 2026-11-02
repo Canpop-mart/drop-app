@@ -3,25 +3,27 @@
        displays. The header + Featured-tab content are individually
        capped to 1600px inside; Browse is intentionally left
        full-width because its tile grid wants the screen real estate. -->
-  <div class="w-full px-10 xl:px-14 py-6">
+  <div class="min-h-full w-full bg-zinc-950 px-10 py-5 xl:px-14">
     <!-- Header column — capped to the same 1600px as the Featured
          body so the title / tabs / search bar align with the hero
          and cards instead of stretching across the full viewport. -->
-    <div class="mx-auto max-w-[1600px]">
+    <div class="sticky top-0 z-20 mx-auto max-w-[1900px] border-b border-zinc-800/60 bg-zinc-950/90 pb-3 backdrop-blur-xl">
       <!-- Header — title + tabs -->
-      <div class="mb-6">
+      <div class="mb-3 flex items-end justify-between gap-6">
+        <div>
         <h1 class="text-2xl font-display font-bold text-zinc-100">Store</h1>
         <p class="mt-1 text-sm text-zinc-400">
           Browse and add games to your library.
         </p>
+        </div>
       </div>
 
       <!-- Top bar: tab nav + search/select toggle -->
-      <div class="flex items-center gap-2 mb-6 border-b border-zinc-700/50">
+      <div class="flex items-center gap-2">
       <button
         v-for="tab in tabs"
         :key="tab.value"
-        class="relative px-5 py-3 text-sm font-medium transition-colors"
+        class="relative py-3 pr-7 text-sm font-semibold transition-colors"
         :class="
           activeTab === tab.value
             ? 'text-blue-400'
@@ -32,7 +34,7 @@
         {{ tab.label }}
         <span
           v-if="activeTab === tab.value"
-          class="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-500 rounded-full"
+          class="absolute bottom-0 left-0 right-7 h-0.5 rounded-full bg-blue-500"
         />
       </button>
 
@@ -51,7 +53,7 @@
           v-model="searchInput"
           type="text"
           placeholder="Search the store..."
-          class="rounded-lg border border-zinc-700 bg-zinc-800/50 pl-9 pr-9 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:bg-zinc-800 focus:ring-2 focus:ring-blue-500 outline-none transition-colors w-72"
+          class="w-80 rounded-xl border border-zinc-800 bg-zinc-900/70 py-2.5 pl-9 pr-9 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-zinc-700 focus:bg-zinc-900 focus:ring-1 focus:ring-blue-500"
           @keydown.enter="submitSearch"
           @keydown.escape="clearSearch"
         />
@@ -79,32 +81,23 @@
       </GameTileGrid>
     </div>
 
-    <!-- ═══ Featured tab ═══ -->
-    <!-- Cap the whole Featured column to a centred 1600px so the
-         hero, Recently Updated cards, and Discovery Tabs all line up
-         to the same column.  Without this, the Tabs section looked
-         like a slim widget marooned in a wide page; with it, the
-         three sections read as one designed surface. Browse tab is
-         intentionally left full-width because its grid wants the
-         screen real estate. -->
+    <!-- ═══ Discover tab ═══ -->
     <div
       v-else-if="activeTab === 'featured'"
-      class="mx-auto max-w-[1600px]"
+      class="mx-auto max-w-[1900px] pt-6"
     >
-      <!-- Hero carousel -->
-      <section
-        v-if="featured.length > 0"
-        class="mb-12"
-      >
+      <!-- The spotlight and discovery controls share one canvas. -->
+      <section class="mb-10 grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.45fr)]">
         <div
-          class="relative rounded-2xl overflow-hidden cursor-pointer group aspect-[21/9]"
+          v-if="featured.length > 0"
+          class="group relative h-[320px] cursor-pointer overflow-hidden rounded-2xl ring-1 ring-zinc-800/80"
           @click="goToGame(featured[heroIndex]?.id)"
         >
           <img
             v-if="featured[heroIndex]?.mBannerObjectId"
             :src="objectUrl(featured[heroIndex].mBannerObjectId)"
             :alt="featured[heroIndex].mName"
-            class="w-full h-full object-cover"
+            class="h-full w-full object-cover opacity-75 transition-transform duration-700 group-hover:scale-[1.02]"
           />
           <BannerFallback
             v-else-if="featured[heroIndex]"
@@ -115,14 +108,15 @@
                so the banner art still reads through the lower third of
                the hero instead of being washed to near-solid black. -->
           <div
-            class="absolute inset-0 bg-gradient-to-t from-zinc-950/85 via-zinc-950/30 to-transparent"
+            class="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/30 to-transparent"
           />
           <div
-            class="absolute inset-0 bg-gradient-to-r from-zinc-950/60 via-transparent to-transparent"
+            class="absolute inset-0 bg-gradient-to-r from-zinc-950 via-zinc-950/75 to-zinc-950/10"
           />
-          <div class="absolute bottom-0 inset-x-0 p-8 pr-32">
+          <div class="absolute inset-y-0 left-0 flex max-w-[65%] flex-col justify-end p-8 pr-16">
+            <p class="mb-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-blue-300">Spotlight</p>
             <h2
-              class="text-4xl font-display font-bold text-zinc-100 drop-shadow-lg mb-2"
+              class="mb-2 text-4xl font-display font-bold text-zinc-100 drop-shadow-lg"
             >
               {{ featured[heroIndex]?.mName }}
             </h2>
@@ -143,7 +137,20 @@
                 {{ tag.name }}
               </span>
             </div>
+            <button
+              class="mt-5 w-fit rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-zinc-950 shadow-xl transition-colors hover:bg-zinc-200"
+              @click.stop="goToGame(featured[heroIndex]?.id)"
+            >
+              View game
+            </button>
           </div>
+
+          <img
+            v-if="featured[heroIndex]?.mCoverObjectId"
+            :src="objectUrl(featured[heroIndex].mCoverObjectId)"
+            :alt="featured[heroIndex].mName"
+            class="absolute bottom-[-3rem] right-24 hidden h-[300px] aspect-[3/4] rotate-2 rounded-xl object-cover shadow-2xl ring-1 ring-white/15 transition-transform duration-500 group-hover:rotate-0 xl:block"
+          />
 
           <!-- X-of-Y indicator. Sits top-right so a user can tell at a
                glance how deep the carousel is without counting dots.
@@ -177,43 +184,101 @@
             />
           </div>
         </div>
+
+        <aside>
+          <GameRoulette
+            class="flex h-[320px] items-center [&>div]:w-full"
+            :cover-pool="rouletteCoverPool"
+          />
+        </aside>
       </section>
 
-      <!-- Recently Updated — Steam-style banner-card carousel.  Pulled
-           from /api/v1/store with sort='updated' so the order reflects
-           when each catalogue entry last changed. -->
-      <StoreRecentlyUpdated
-        v-if="recentlyUpdated.length > 0"
-        :games="recentlyUpdated"
-        :library-game-ids="libraryGameIdSet"
+      <div class="mb-10 grid gap-8 xl:grid-cols-[minmax(0,1.65fr)_minmax(420px,0.65fr)]">
+        <div class="min-w-0">
+          <section v-if="!discoveryError">
+            <div class="mb-4 flex items-center justify-between gap-4">
+              <h2 class="font-display text-2xl font-semibold text-zinc-100">Shuffle</h2>
+              <button
+                class="rounded-xl bg-zinc-900 px-4 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-zinc-800 transition-colors hover:bg-zinc-800"
+                :disabled="discoveryLoading"
+                @click="refreshDiscoveries"
+              >
+                {{ discoveryLoading ? "Shuffling..." : "Shuffle again" }}
+              </button>
+            </div>
+            <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5">
+              <GameTile
+                v-for="game in discoveryByTab.random.slice(0, 10)"
+                :key="game.id"
+                :cover-url="game.mCoverObjectId ? objectUrl(game.mCoverObjectId) : null"
+                :name="game.mName"
+                :rom="game.isEmulated"
+                @select="goToGame(game.id)"
+              />
+            </div>
+          </section>
+          <SectionError
+            v-else
+            title="Couldn't load discovery games"
+            :detail="discoveryError"
+            @retry="refreshDiscoveries"
+          />
+
+        </div>
+
+        <section class="flex h-full flex-col">
+          <div class="mb-4 flex items-center justify-between gap-4">
+            <h2 class="font-display text-2xl font-semibold text-zinc-100">Collections</h2>
+            <button class="text-xs font-semibold text-blue-300 hover:text-blue-200" @click="activeTab = 'collections'">See all</button>
+          </div>
+          <div v-if="collections.length > 0" class="grid flex-1 grid-cols-2 grid-rows-5 gap-4">
+            <button
+              v-for="collection in collections.slice(0, 10)"
+              :key="collection.id"
+              class="group relative min-h-28 overflow-hidden rounded-xl bg-zinc-900 text-left ring-1 ring-zinc-800/80 transition hover:-translate-y-0.5 hover:ring-blue-400/40"
+              @click="goToCollection(collection.id)"
+            >
+              <img v-if="collection.coverObjectId" :src="objectUrl(collection.coverObjectId)" :alt="collection.name" class="absolute inset-0 h-full w-full object-cover opacity-65 transition-transform duration-500 group-hover:scale-105" />
+              <div class="absolute inset-0 bg-gradient-to-r from-zinc-950 via-zinc-950/50 to-zinc-950/10" />
+              <div class="absolute inset-x-0 bottom-0 p-4">
+                <h3 class="line-clamp-2 font-display text-base font-semibold text-zinc-100">{{ collection.name }}</h3>
+                <p class="mt-1 text-xs text-zinc-400">{{ collection.gameCount }} game{{ collection.gameCount === 1 ? "" : "s" }}</p>
+              </div>
+            </button>
+          </div>
+          <SectionError
+            v-else-if="collectionsError"
+            title="Couldn't load curated collections"
+            :detail="collectionsError"
+            @retry="loadCollections"
+          />
+        </section>
+      </div>
+
+      <StoreShelf
+        v-if="recentGames.length > 0"
+        class="mb-10"
+        title="New to Drop"
+        :games="recentGames"
         @select="goToGame"
-        @browse-all="goToBrowseUpdated"
       />
 
-      <!-- Discovery tabs — New / Most Played / Random with a sticky
-           preview panel on the right (Steam's "New & Trending" widget
-           the user wanted us to match).  Per-tab data is fetched
-           lazily on tab change so the initial Featured paint stays
-           cheap. -->
-      <StoreDiscoveryTabs
-        :games="discoveryListGames"
-        :loading="discoveryLoading"
-        :tab="discoveryTab"
-        :library-game-ids="libraryGameIdSet"
-        @select="goToGame"
-        @tab="onDiscoveryTabChange"
-        @see-more="onDiscoverySeeMore"
+      <SectionError
+        v-if="featuredError && featured.length === 0 && discoveryByTab.random.length === 0 && recentGames.length === 0"
+        title="Couldn't load the Store"
+        :detail="featuredError"
+        @retry="loadFeaturedData"
       />
 
       <div
-        v-if="
+        v-else-if="
           featured.length === 0 &&
-          recentlyUpdated.length === 0 &&
-          discoveryListGames.length === 0
+          discoveryByTab.random.length === 0 &&
+          recentGames.length === 0
         "
         class="text-center text-zinc-500 py-20 text-sm"
       >
-        No featured games yet. Try the Browse tab to see what's available.
+        Nothing to discover yet. Try Browse to see the full catalog.
       </div>
     </div>
 
@@ -225,23 +290,13 @@
          wasn't worth the inconsistency with the rest of the page. -->
     <div
       v-else-if="activeTab === 'browse'"
-      class="mx-auto max-w-[1600px]"
+      class="mx-auto max-w-[1900px] pt-6"
     >
-      <!-- "Can't decide?" banner — lives at the top of Browse so the user
-           sees it before scrolling into the grid. Same component the
-           community page used to host; cover pool is now built from
-           browse + featured data instead of activity feeds. -->
-      <GameRoulette
-        class="mb-5"
-        :cover-pool="rouletteCoverPool"
-        @select="onRouletteSelect"
-      />
-
       <!-- Filter / sort controls -->
       <div class="flex items-center gap-3 mb-3 flex-wrap text-sm">
         <span class="text-zinc-500">Sort:</span>
         <button
-          v-for="opt in sortOptions"
+          v-for="opt in visibleSortOptions"
           :key="opt.value"
           class="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
           :class="
@@ -268,6 +323,13 @@
             {{ lib.name }}
           </option>
         </select>
+        <button
+          v-else-if="librariesError"
+          class="text-xs font-medium text-red-300 hover:text-red-200"
+          @click="loadFilterCatalogs"
+        >
+          Libraries unavailable. Retry
+        </button>
 
         <!-- More filters drawer button — opens side panel with advanced
              knobs that don't fit in the chip row. -->
@@ -290,11 +352,8 @@
           </span>
         </button>
 
-        <span
-          v-if="hasActiveFilters"
-          class="text-xs text-zinc-500"
-        >
-          {{ displayedResults.length }} of {{ browseTotal }}
+        <span v-if="!browseLoading" class="text-xs text-zinc-500 tabular-nums">
+          {{ browseTotal }} game{{ browseTotal === 1 ? "" : "s" }}
         </span>
 
         <div class="flex-1" />
@@ -328,7 +387,20 @@
       </div>
 
       <!-- Grid -->
-      <div v-if="browseLoading && browseResults.length === 0" class="text-zinc-500 text-sm py-10">
+      <SectionError
+        v-if="browseError && browseResults.length === 0"
+        title="Couldn't load Store games"
+        :detail="browseError"
+        @retry="loadBrowse(false)"
+      />
+      <div
+        v-else-if="browseError"
+        class="mb-4 flex items-center gap-3 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-300"
+      >
+        <span class="flex-1">Couldn't refresh Store games. {{ browseError }}</span>
+        <button class="font-semibold text-red-200 hover:text-white" @click="loadBrowse(false)">Retry</button>
+      </div>
+      <div v-else-if="browseLoading && browseResults.length === 0" class="text-zinc-500 text-sm py-10">
         Loading games...
       </div>
       <!-- Smart empty state. When the grid renders no results, advertise
@@ -367,7 +439,7 @@
           Clear all filters
         </button>
       </div>
-      <GameTileGrid v-else :item-count="displayedResults.length">
+      <GameTileGrid v-else density="dense" :item-count="displayedResults.length">
         <GameTile
           v-for="game in displayedResults"
           :key="game.id"
@@ -446,7 +518,7 @@
          /store/collection/[id] page (games grid + "add entire collection"). -->
     <div
       v-else-if="activeTab === 'collections'"
-      class="mx-auto max-w-[1600px]"
+      class="mx-auto max-w-[1900px] pt-6"
     >
       <div
         v-if="collectionsLoading && collections.length === 0"
@@ -454,23 +526,32 @@
       >
         Loading collections...
       </div>
+      <SectionError
+        v-else-if="collectionsError"
+        title="Couldn't load Store collections"
+        :detail="collectionsError"
+        @retry="loadCollections"
+      />
       <div
         v-else-if="collections.length === 0"
         class="py-20 text-center text-sm text-zinc-500"
       >
         No collections yet. The store's curated collections will show up here.
       </div>
-      <div
-        v-else
-        class="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-      >
+      <div v-else>
+        <div class="mb-5 flex items-end justify-between gap-4">
+          <h2 class="font-display text-2xl font-semibold text-zinc-100">Collections</h2>
+          <p class="text-sm tabular-nums text-zinc-500">{{ collections.length }}</p>
+        </div>
+        <div class="grid auto-rows-[180px] grid-cols-1 gap-5 md:grid-cols-12">
         <button
-          v-for="c in collections"
+          v-for="(c, index) in collections"
           :key="c.id"
-          class="group relative overflow-hidden rounded-2xl bg-zinc-900 text-left ring-1 ring-zinc-800/60 transition-all hover:-translate-y-1 hover:ring-blue-500/40"
+          class="group relative overflow-hidden rounded-2xl bg-zinc-900 text-left ring-1 ring-zinc-800/60 transition-all hover:-translate-y-0.5 hover:ring-blue-500/40"
+          :class="collectionCardClass(index)"
           @click="goToCollection(c.id)"
         >
-          <div class="relative aspect-[16/9] overflow-hidden bg-zinc-800">
+          <div class="relative h-full overflow-hidden bg-zinc-800">
             <img
               v-if="c.coverObjectId"
               :src="objectUrl(c.coverObjectId)"
@@ -486,9 +567,9 @@
             <div
               class="absolute inset-0 bg-gradient-to-t from-zinc-950/90 via-zinc-950/20 to-transparent"
             />
-            <div class="absolute inset-x-0 bottom-0 p-4">
+            <div class="absolute inset-x-0 bottom-0 p-5">
               <h3
-                class="font-display text-lg font-bold text-zinc-100 drop-shadow"
+                class="font-display text-xl font-bold text-zinc-100 drop-shadow"
               >
                 {{ c.name }}
               </h3>
@@ -497,15 +578,15 @@
               </p>
             </div>
           </div>
-          <p
-            v-if="c.description"
-            class="line-clamp-2 px-4 py-3 text-sm text-zinc-400"
-          >
-            {{ c.description }}
-          </p>
         </button>
+        </div>
       </div>
     </div>
+
+    <!-- ═══ Addons tab ═══ -->
+    <!-- Extras the server admin runs; the player adds or removes them here.
+         Big Picture has the same tab (pages/bigpicture/store.vue). -->
+    <StoreAddonsTab v-else-if="activeTab === 'addons'" />
 
     <!-- Filter drawer — slides in from the right with advanced controls
          that don't belong in the chip row. Closed by default; opened via
@@ -614,6 +695,10 @@
               </label>
             </div>
           </section>
+          <section v-else-if="tagsError" class="rounded-xl bg-red-950/30 p-3 text-xs text-red-200 ring-1 ring-red-500/25">
+            <p>Tags could not be loaded.</p>
+            <button class="mt-2 font-semibold text-red-100 underline" @click="loadFilterCatalogs">Retry</button>
+          </section>
 
           <!-- Game type — emulated (ROM) vs native. Maps to client-side
                filter on `isEmulated`. -->
@@ -631,7 +716,7 @@
                     ? 'bg-blue-600 text-white'
                     : 'bg-zinc-800/50 text-zinc-400 hover:text-zinc-200'
                 "
-                @click="emulatedFilter = opt.value"
+                @click="setEmulatedFilter(opt.value)"
               >
                 {{ opt.label }}
               </button>
@@ -650,6 +735,7 @@
                 type="number"
                 placeholder="From"
                 class="w-full rounded-md border border-zinc-700 bg-zinc-800/50 px-2.5 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-500 focus:ring-2 focus:ring-blue-500 outline-none"
+                @change="applyReleaseYearFilter"
               />
               <span class="text-zinc-500">–</span>
               <input
@@ -657,6 +743,7 @@
                 type="number"
                 placeholder="To"
                 class="w-full rounded-md border border-zinc-700 bg-zinc-800/50 px-2.5 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-500 focus:ring-2 focus:ring-blue-500 outline-none"
+                @change="applyReleaseYearFilter"
               />
             </div>
           </section>
@@ -722,12 +809,8 @@ import {
   type StoreTag,
   type TrendingGame,
 } from "~/composables/use-server-api";
-import { serverUrl } from "~/composables/use-server-fetch";
 import { objectImageUrl } from "~/composables/use-object";
-import { deduplicatedInvoke } from "~/composables/game";
 import StoreShelf from "~/components/StoreShelf.vue";
-import StoreRecentlyUpdated from "~/components/StoreRecentlyUpdated.vue";
-import StoreDiscoveryTabs from "~/components/StoreDiscoveryTabs.vue";
 import GameRoulette from "~/components/GameRoulette.vue";
 import BannerFallback from "~/components/BannerFallback.vue";
 
@@ -747,9 +830,9 @@ import BannerFallback from "~/components/BannerFallback.vue";
 // were active — using query params would make every filter change
 // push a new history entry, which makes the back button useless.
 type StoredBrowseSnapshot = {
-  activeTab: "featured" | "browse" | "collections";
+  activeTab: "featured" | "browse" | "collections" | "addons";
   searchQuery: string;
-  browseSort: "recent" | "updated" | "name";
+  browseSort: "relevance" | "recent" | "updated" | "newest" | "name" | "name-desc";
   browsePage: number;
   selectedTagIds: string[];
   tagMode: "and" | "or";
@@ -821,9 +904,10 @@ if (incomingGameId) {
 }
 
 const tabs = [
-  { label: "Featured", value: "featured" },
+  { label: "Discover", value: "featured" },
   { label: "Browse", value: "browse" },
   { label: "Collections", value: "collections" },
+  { label: "Addons", value: "addons" },
 ] as const;
 
 // Refs seed directly from the snapshot (module state, falling back
@@ -850,6 +934,8 @@ const activeTab = ref<(typeof tabs)[number]["value"]>(
 // State
 const loading = ref(true);
 const browseLoading = ref(false);
+const featuredError = ref<string | null>(null);
+const browseError = ref<string | null>(null);
 
 // Search uses a controlled input (`searchInput`) plus a committed value
 // (`searchQuery`) that the query layer reads. Enter/submit promotes the
@@ -864,7 +950,7 @@ const heroIndex = ref(0);
 // "Recently added" (Game.created — when admins added it to this Drop) and
 // "Recently updated" (max version.created — when the catalogue last changed
 // for this game). Default to Recently added.
-const browseSort = ref<"recent" | "updated" | "name">(
+const browseSort = ref<"relevance" | "recent" | "updated" | "newest" | "name" | "name-desc">(
   initial?.browseSort ?? "recent",
 );
 
@@ -919,38 +1005,34 @@ const emulatedOptions = [
 //   updated = max(versions.created)   → "catalogue entry last changed"
 //   name    = Game.mName              → alphabetical
 const sortOptions = [
+  { label: "Best match", value: "relevance" as const },
   { label: "Recently added", value: "recent" as const },
   { label: "Recently updated", value: "updated" as const },
+  { label: "Newest releases", value: "newest" as const },
   { label: "A–Z", value: "name" as const },
+  { label: "Z–A", value: "name-desc" as const },
 ];
+const visibleSortOptions = computed(() =>
+  searchQuery.value
+    ? sortOptions
+    : sortOptions.filter((option) => option.value !== "relevance"),
+);
 
 // Featured data
 const featured = ref<StoreGame[]>([]);
 const trending = ref<TrendingGame[]>([]);
 const recentGames = ref<StoreGame[]>([]);
 
-// "Recently Updated" — separate fetch with sort='updated', distinct
-// from `recentGames` (sort='recent') because the two answer different
-// questions ("what changed lately" vs "what was added lately").
-const recentlyUpdated = ref<StoreGame[]>([]);
-
-// Game IDs the caller already owns — drives the "In library" badge on
-// the new Featured-tab widgets. Lazy: empty Set until the membership
-// fetch lands, so the badges just don't render until then.
-const libraryGameIdSet = ref<Set<string>>(new Set());
-
-// Discovery tabs (New / Most Played / Random).  Each tab keeps its
-// own cached game list so flipping back to a previously-loaded tab is
-// instant.  `discoveryListGames` is just the active tab's slice.
+// Discovery feeds are cached independently so the landing page can shuffle
+// one feed without reloading the rest of the Store.
 type DiscoveryTabValue = "new" | "popular" | "random";
-const discoveryTab = ref<DiscoveryTabValue>("new");
 const discoveryLoading = ref(false);
+const discoveryError = ref<string | null>(null);
 const discoveryByTab = reactive({
   new: [] as StoreGame[],
   popular: [] as StoreGame[],
   random: [] as StoreGame[],
 });
-const discoveryListGames = computed(() => discoveryByTab[discoveryTab.value]);
 
 // Browse data + pagination state. We use classic numbered pagination
 // (page 1 .. N) rather than "load more" — round-tripping back and
@@ -979,6 +1061,8 @@ const browsePage = ref(initial?.browsePage ?? 1);
 // Tag + library catalogs (loaded lazily once we land on the Browse tab).
 const allTags = ref<StoreTag[]>([]);
 const libraries = ref<Array<{ id: string; name: string }>>([]);
+const tagsError = ref<string | null>(null);
+const librariesError = ref<string | null>(null);
 
 function objectUrl(id: string): string {
   return objectImageUrl(id);
@@ -986,11 +1070,6 @@ function objectUrl(id: string): string {
 
 function goToGame(gameId?: string) {
   if (!gameId) return;
-  // Prefetch via deduplicated invoke so the detail page mounts fast.
-  // Click from the store always lands on the store presentation
-  // (/store/[id]) — the library detail page is reserved for the
-  // owns-the-game / install-management surface.
-  deduplicatedInvoke("fetch_game", { gameId }).catch(() => {});
   router.push(`/store/${gameId}`);
 }
 
@@ -1018,15 +1097,10 @@ const rouletteCoverPool = computed(() => {
   return [...pool].slice(0, 40);
 });
 
-function onRouletteSelect(payload: { gameId: string; owned: boolean }) {
-  // The roulette card pushes its own destination route; we only side-
-  // effect the metadata prefetch so the destination page hydrates fast.
-  // (Mirrors goToGame's deduplicated invoke pattern.)
-  deduplicatedInvoke("fetch_game", { gameId: payload.gameId }).catch(() => {});
-}
-
 function submitSearch() {
   searchQuery.value = searchInput.value.trim();
+  if (searchQuery.value) browseSort.value = "relevance";
+  else if (browseSort.value === "relevance") browseSort.value = "recent";
   activeTab.value = "browse";
   loadBrowse(true);
 }
@@ -1038,6 +1112,7 @@ function clearSearch() {
   if (!searchInput.value && !searchQuery.value) return;
   searchInput.value = "";
   searchQuery.value = "";
+  if (browseSort.value === "relevance") browseSort.value = "recent";
   if (activeTab.value === "browse") {
     loadBrowse(true);
   }
@@ -1045,6 +1120,16 @@ function clearSearch() {
 
 function setSort(value: typeof browseSort.value) {
   browseSort.value = value;
+  loadBrowse(true);
+}
+
+function setEmulatedFilter(value: typeof emulatedFilter.value) {
+  if (emulatedFilter.value === value) return;
+  emulatedFilter.value = value;
+  loadBrowse(true);
+}
+
+function applyReleaseYearFilter() {
   loadBrowse(true);
 }
 
@@ -1200,10 +1285,12 @@ function removeFilterChip(chip: FilterChip) {
       return;
     case "emulated":
       emulatedFilter.value = "all";
+      loadBrowse(true);
       return;
     case "year":
       releaseYearFrom.value = null;
       releaseYearTo.value = null;
+      loadBrowse(true);
       return;
   }
 }
@@ -1244,6 +1331,7 @@ const emptyStateSuggestions = computed<EmptyStateSuggestion[]>(() => {
       apply: () => {
         releaseYearFrom.value = null;
         releaseYearTo.value = null;
+        loadBrowse(true);
       },
     });
   }
@@ -1255,6 +1343,7 @@ const emptyStateSuggestions = computed<EmptyStateSuggestion[]>(() => {
       value: emulatedFilter.value === "rom" ? "ROM" : "Native",
       apply: () => {
         emulatedFilter.value = "all";
+        loadBrowse(true);
       },
     });
   }
@@ -1289,34 +1378,9 @@ const emptyStateSuggestions = computed<EmptyStateSuggestion[]>(() => {
   return out.slice(0, 3);
 });
 
-// Apply client-side filters on top of whatever the server returned.
-// Server already handled tags/library/platform/sort/search; we layer
-// the two fields the API doesn't expose as filters: year and emulation
-// type. Both are returned per-game (mReleased + isEmulated) so the
-// filter is exact, not heuristic.
-const displayedResults = computed<StoreGame[]>(() => {
-  const yFrom = releaseYearFrom.value;
-  const yTo = releaseYearTo.value;
-  const wantRom = emulatedFilter.value === "rom";
-  const wantNative = emulatedFilter.value === "native";
-
-  return browseResults.value.filter((g) => {
-    if (wantRom && !g.isEmulated) return false;
-    if (wantNative && g.isEmulated) return false;
-
-    if (yFrom != null || yTo != null) {
-      const released = g.mReleased ? new Date(g.mReleased) : null;
-      const year = released && !isNaN(released.getTime())
-        ? released.getFullYear()
-        : null;
-      if (year == null) return false;
-      if (yFrom != null && year < yFrom) return false;
-      if (yTo != null && year > yTo) return false;
-    }
-
-    return true;
-  });
-});
+// Every active filter is applied by the server before pagination, so the grid,
+// result count and page controls always describe the same result set.
+const displayedResults = computed<StoreGame[]>(() => browseResults.value);
 
 // Total page count derived from server count + page size.  At least
 // 1 so the pagination bar never disappears mid-load on a transient
@@ -1382,13 +1446,21 @@ function goToHeroSlide(i: number) {
 }
 
 async function loadFeaturedData() {
+  featuredError.value = null;
+  let failedSections = 0;
   try {
-    const [feat, trend, recent, updated] = await Promise.all([
-      api.store.featured().catch(() => [] as StoreGame[]),
+    const [feat, trend, recent] = await Promise.all([
+      api.store.featured().catch(() => {
+        failedSections += 1;
+        return [] as StoreGame[];
+      }),
       api.store
         .trending(7, 7)
         .then((d) => d.results)
-        .catch(() => [] as TrendingGame[]),
+        .catch(() => {
+          failedSections += 1;
+          return [] as TrendingGame[];
+        }),
       // Carry-over: kept for the discovery tab's "New" feed even
       // though the standalone "Recently Added" shelf was retired in
       // favour of the discovery widget. `sort='recent'` orders by
@@ -1396,20 +1468,14 @@ async function loadFeaturedData() {
       api.store
         .browse({ sort: "recent", take: 14 })
         .then((d) => d.results)
-        .catch(() => [] as StoreGame[]),
-      // Recently Updated — sort='updated' is max(version.created),
-      // so this surfaces games whose catalogue entries changed lately
-      // (new version uploaded, metadata edit, etc.) — distinct from
-      // Recently Added.
-      api.store
-        .browse({ sort: "updated", take: 12 })
-        .then((d) => d.results)
-        .catch(() => [] as StoreGame[]),
+        .catch(() => {
+          failedSections += 1;
+          return [] as StoreGame[];
+        }),
     ]);
     featured.value = feat;
     trending.value = trend;
     recentGames.value = recent;
-    recentlyUpdated.value = updated;
 
     // Seed the discovery tabs once the featured/trending fetches are
     // in flight — "new" reuses the recent list, "popular" reuses the
@@ -1417,9 +1483,18 @@ async function loadFeaturedData() {
     // superset).
     discoveryByTab.new = recent;
     discoveryByTab.popular = trend as unknown as StoreGame[];
+    if (failedSections === 3) {
+      featuredError.value = "The Store discovery feeds could not be reached.";
+    }
   } catch (e) {
     console.error("[STORE] Failed to load featured:", e);
+    featuredError.value = e instanceof Error ? e.message : String(e);
   }
+}
+
+async function refreshDiscoveries() {
+  discoveryByTab.random = [];
+  await ensureDiscoveryTabLoaded("random");
 }
 
 /** Lazy-fetch the games for whichever discovery tab the user selects.
@@ -1429,6 +1504,7 @@ async function loadFeaturedData() {
 async function ensureDiscoveryTabLoaded(t: DiscoveryTabValue) {
   if (t !== "random" && discoveryByTab[t].length > 0) return;
   discoveryLoading.value = true;
+  discoveryError.value = null;
   try {
     if (t === "new") {
       const data = await api.store.browse({ sort: "recent", take: 14 });
@@ -1442,51 +1518,9 @@ async function ensureDiscoveryTabLoaded(t: DiscoveryTabValue) {
     }
   } catch (e) {
     console.warn("[STORE] Failed to load discovery tab", t, e);
+    discoveryError.value = e instanceof Error ? e.message : String(e);
   } finally {
     discoveryLoading.value = false;
-  }
-}
-
-function onDiscoveryTabChange(t: DiscoveryTabValue) {
-  discoveryTab.value = t;
-  ensureDiscoveryTabLoaded(t);
-}
-
-function onDiscoverySeeMore(t: DiscoveryTabValue) {
-  // "See more" → jump to Browse with the matching server-side sort
-  // pre-applied. Random doesn't have a corresponding browse sort that
-  // makes sense for a See More flow; route it to the default browse.
-  searchInput.value = "";
-  searchQuery.value = "";
-  if (t === "new") browseSort.value = "recent";
-  else if (t === "popular") browseSort.value = "updated";
-  // (random falls through to whatever sort is current.)
-  activeTab.value = "browse";
-  browsePage.value = 1;
-  loadBrowse(true);
-}
-
-function goToBrowseUpdated() {
-  searchInput.value = "";
-  searchQuery.value = "";
-  browseSort.value = "updated";
-  activeTab.value = "browse";
-  browsePage.value = 1;
-  loadBrowse(true);
-}
-
-/** Resolve which games the caller already has in their library so the
- *  Featured-tab widgets can surface an "In library" badge.  Soft-fails
- *  to an empty set if the membership endpoint is unreachable. */
-async function loadLibraryMembership() {
-  try {
-    const res = await fetch(serverUrl("api/v1/collection/default"));
-    if (!res.ok) return;
-    const collection = await res.json();
-    const entries: Array<{ gameId: string }> = collection.entries ?? [];
-    libraryGameIdSet.value = new Set(entries.map((e) => e.gameId));
-  } catch (e) {
-    console.warn("[STORE] Library membership fetch failed:", e);
   }
 }
 
@@ -1495,14 +1529,17 @@ async function loadLibraryMembership() {
 // Featured paint isn't blocked on a fetch they may never look at.
 const collections = ref<StoreCollectionSummary[]>([]);
 const collectionsLoading = ref(false);
+const collectionsError = ref<string | null>(null);
 
 async function loadCollections() {
   if (collections.value.length > 0 || collectionsLoading.value) return;
   collectionsLoading.value = true;
+  collectionsError.value = null;
   try {
     collections.value = await api.store.collections();
   } catch (e) {
     console.error("[STORE] Failed to load collections:", e);
+    collectionsError.value = e instanceof Error ? e.message : String(e);
   } finally {
     collectionsLoading.value = false;
   }
@@ -1510,6 +1547,13 @@ async function loadCollections() {
 
 function goToCollection(id: string) {
   router.push(`/store/collection/${id}`);
+}
+
+function collectionCardClass(index: number): string {
+  const position = index % 8;
+  if (position === 0) return "md:col-span-6 md:row-span-2";
+  if (position === 3) return "md:col-span-6";
+  return "md:col-span-3";
 }
 
 // Build the server-side query — only the params the API actually
@@ -1521,9 +1565,9 @@ function buildBrowseParams(skip: number): BrowseParams {
   // Narrow to the literal union the API typings expect — TS otherwise
   // widens `effectiveSort` to plain `string` since it's a conditional
   // result from refs typed as broader unions.
-  const effectiveSort: NonNullable<BrowseParams["sort"]> = searchQuery.value
-    ? "relevance"
-    : browseSort.value;
+  const effectiveSort: NonNullable<BrowseParams["sort"]> = browseSort.value === "name-desc"
+      ? "name"
+      : browseSort.value;
   return {
     skip,
     take: BROWSE_PAGE_SIZE,
@@ -1538,11 +1582,19 @@ function buildBrowseParams(skip: number): BrowseParams {
         ? "and"
         : undefined,
     library: selectedLibraryId.value || undefined,
+    emulated: emulatedFilter.value,
+    yearFrom: releaseYearFrom.value ?? undefined,
+    yearTo: releaseYearTo.value ?? undefined,
     platform: selectedPlatforms.value.length
       ? selectedPlatforms.value.join(",")
       : undefined,
     sort: effectiveSort,
-    order: effectiveSort === "name" ? "asc" : undefined,
+    order:
+      browseSort.value === "name-desc"
+        ? "desc"
+        : effectiveSort === "name"
+          ? "asc"
+          : undefined,
   };
 }
 
@@ -1552,6 +1604,7 @@ async function loadBrowse(reset = false) {
     browsePage.value = 1;
   }
   browseLoading.value = true;
+  browseError.value = null;
   try {
     const data = await api.store.browse(
       buildBrowseParams((browsePage.value - 1) * BROWSE_PAGE_SIZE),
@@ -1562,6 +1615,7 @@ async function loadBrowse(reset = false) {
     browseTotal.value = data.count;
   } catch (e) {
     console.error("[STORE] Failed to load browse:", e);
+    browseError.value = e instanceof Error ? e.message : String(e);
   } finally {
     browseLoading.value = false;
   }
@@ -1587,14 +1641,24 @@ function goToPage(p: number) {
 // for the drawer. Failures are non-fatal: the drawer just hides the
 // corresponding section if either list is empty.
 async function loadFilterCatalogs() {
-  const [tags, libs] = await Promise.all([
-    api.store.tags().catch(() => [] as StoreTag[]),
-    api.store.libraries().catch(
-      () => [] as Array<{ id: string; name: string }>,
-    ),
+  tagsError.value = null;
+  librariesError.value = null;
+  const [tagsResult, librariesResult] = await Promise.allSettled([
+    api.store.tags(),
+    api.store.libraries(),
   ]);
-  allTags.value = [...tags].sort((a, b) => a.name.localeCompare(b.name));
-  libraries.value = [...libs].sort((a, b) => a.name.localeCompare(b.name));
+  if (tagsResult.status === "fulfilled") {
+    allTags.value = [...tagsResult.value].sort((a, b) => a.name.localeCompare(b.name));
+  } else {
+    allTags.value = [];
+    tagsError.value = tagsResult.reason instanceof Error ? tagsResult.reason.message : String(tagsResult.reason);
+  }
+  if (librariesResult.status === "fulfilled") {
+    libraries.value = [...librariesResult.value].sort((a, b) => a.name.localeCompare(b.name));
+  } else {
+    libraries.value = [];
+    librariesError.value = librariesResult.reason instanceof Error ? librariesResult.reason.message : String(librariesResult.reason);
+  }
 }
 
 /** Snapshot the current Browse view to module state AND
@@ -1623,7 +1687,8 @@ onMounted(async () => {
   await Promise.all([
     loadFeaturedData(),
     loadFilterCatalogs(),
-    loadLibraryMembership(),
+    ensureDiscoveryTabLoaded("random"),
+    loadCollections(),
   ]);
   // Browse is loaded lazily — only when the user actually opens that tab —
   // so the initial Featured render isn't blocked on a full-catalog query.

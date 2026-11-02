@@ -1,9 +1,9 @@
 <template>
-  <div class="h-full flex flex-col overflow-y-auto">
+  <div class="flex h-full flex-col overflow-y-auto bg-zinc-950">
     <!-- Header — back link + the emulator's icon, name and install path.
          Mirrors the console page's calm themed banner. -->
     <div
-      class="relative overflow-hidden border-b border-zinc-800/40 bg-gradient-to-br from-zinc-900 via-zinc-950 to-zinc-900 px-8 xl:px-12 pt-8 pb-7"
+      class="relative overflow-hidden border-b border-zinc-800/50 bg-gradient-to-r from-zinc-900/80 to-zinc-950 px-8 py-5 xl:px-12"
     >
       <NuxtLink
         to="/library"
@@ -12,18 +12,18 @@
         <ChevronLeftIcon class="size-4" />
         Library
       </NuxtLink>
-      <div class="mt-4 flex min-w-0 items-end gap-5">
+      <div class="mt-3 flex min-w-0 items-center gap-4">
         <img
           v-if="host?.iconObjectId"
           :src="useObject(host.iconObjectId)"
           :alt="host.name"
-          class="size-24 shrink-0 rounded-2xl object-cover shadow-lg"
+          class="size-16 shrink-0 rounded-xl object-cover shadow-lg"
         />
         <div
           v-else
-          class="flex size-24 shrink-0 items-center justify-center rounded-2xl bg-zinc-800"
+          class="flex size-16 shrink-0 items-center justify-center rounded-xl bg-zinc-800"
         >
-          <CpuChipIcon class="size-12 text-zinc-500" />
+          <CpuChipIcon class="size-8 text-zinc-500" />
         </div>
         <div class="min-w-0">
           <p
@@ -32,13 +32,13 @@
             Emulator
           </p>
           <h1
-            class="font-display text-4xl font-bold leading-none text-white drop-shadow-lg"
+            class="font-display text-3xl font-bold leading-none text-white drop-shadow-lg"
           >
             {{ host?.name ?? "Emulator" }}
           </h1>
           <p
             v-if="host"
-            class="mt-3 max-w-2xl truncate text-sm text-zinc-500"
+            class="mt-2 max-w-3xl truncate text-sm text-zinc-500"
             :title="host.installDir"
           >
             {{ host.installDir }}
@@ -47,13 +47,20 @@
       </div>
     </div>
 
-    <div class="flex-1 px-8 xl:px-12 py-8 pb-16">
+    <div class="flex-1 px-8 py-6 pb-16 xl:px-12">
       <div
         v-if="loading"
         class="flex items-center justify-center py-20 text-sm text-zinc-500"
       >
         Loading...
       </div>
+
+      <SectionError
+        v-else-if="loadError"
+        title="Couldn't load this emulator"
+        :detail="loadError"
+        @retry="load"
+      />
 
       <div
         v-else-if="!host"
@@ -88,13 +95,16 @@
           </button>
           <div class="flex-1" />
           <button
-            class="inline-flex items-center gap-2 rounded-lg bg-red-600/90 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-red-600"
+            class="inline-flex items-center gap-2 rounded-lg bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-300 ring-1 ring-inset ring-red-500/25 transition-colors hover:bg-red-500/20"
             @click="uninstallOpen = true"
           >
             <TrashIcon class="size-4" />
             Uninstall
           </button>
         </div>
+        <p v-if="actionError" class="mt-4 text-sm text-red-300">
+          {{ actionError }}
+        </p>
 
         <!-- Cores — RetroArch only. -->
         <section v-if="host.retroarch" class="mt-8">
@@ -181,6 +191,9 @@
               any cores you added. Games that rely on this emulator won't launch
               until you reinstall it. It can't be undone.
             </p>
+            <p v-if="uninstallError" class="mt-3 text-sm text-red-300">
+              {{ uninstallError }}
+            </p>
           </div>
           <div
             class="flex justify-end gap-3 border-t border-zinc-700 px-6 py-4"
@@ -228,15 +241,20 @@ const host = ref<EmulatorHost | null>(null);
 const loading = ref(true);
 const uninstallOpen = ref(false);
 const uninstalling = ref(false);
+const loadError = ref<string | null>(null);
+const actionError = ref<string | null>(null);
+const uninstallError = ref<string | null>(null);
 
 async function load() {
   loading.value = true;
+  loadError.value = null;
   try {
     const hosts = await listInstalledEmulators();
     host.value = hosts.find((h) => h.id === id.value) ?? null;
   } catch (e) {
     console.warn("[emulator] load failed:", e);
     host.value = null;
+    loadError.value = e instanceof Error ? e.message : String(e);
   } finally {
     loading.value = false;
   }
@@ -245,24 +263,29 @@ async function load() {
 async function openInstallFolder() {
   if (!host.value) return;
   try {
+    actionError.value = null;
     await invoke("open_game_install_dir", { gameId: host.value.id });
   } catch (e) {
     console.error("[emulator] open install folder failed:", e);
+    actionError.value = `Could not open the install folder. ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
 async function openCoresFolder() {
   if (!host.value) return;
   try {
+    actionError.value = null;
     await invoke("open_emulator_cores_dir", { gameId: host.value.id });
   } catch (e) {
     console.error("[emulator] open cores folder failed:", e);
+    actionError.value = `Could not open the cores folder. ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
 async function uninstall() {
   if (!host.value || uninstalling.value) return;
   uninstalling.value = true;
+  uninstallError.value = null;
   try {
     await invoke("uninstall_game", { gameId: host.value.id });
     uninstallOpen.value = false;
@@ -270,6 +293,7 @@ async function uninstall() {
   } catch (e) {
     console.error("[emulator] uninstall failed:", e);
     uninstalling.value = false;
+    uninstallError.value = e instanceof Error ? e.message : String(e);
   }
 }
 

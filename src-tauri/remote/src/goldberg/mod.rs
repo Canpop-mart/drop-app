@@ -190,7 +190,7 @@ pub fn save_roots(wine_prefix: Option<&Path>) -> Vec<WindowsRoots> {
 /// `steamuser`; other prefixes use the real login name, so fall back to
 /// whatever single non-Public user directory is there. (Same rule as the
 /// cloud-save scanner's `wine_user_dir` in `save_sync/scan.rs`.)
-fn wine_user_dir(prefix: &Path) -> Option<PathBuf> {
+pub(crate) fn wine_user_dir(prefix: &Path) -> Option<PathBuf> {
     let users = prefix.join("drive_c").join("users");
     let steamuser = users.join("steamuser");
     if steamuser.is_dir() {

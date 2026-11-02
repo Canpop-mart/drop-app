@@ -105,7 +105,7 @@
           :class="
             updateVariant === 'older-build'
               ? 'bg-amber-500/25 text-amber-200'
-              : 'uppercase bg-blue-500/30 text-blue-200'
+              : 'uppercase bg-blue-600 text-white shadow-md shadow-black/40'
           "
         >
           {{ updateVariant === "older-build" ? "Older build" : "Update" }}

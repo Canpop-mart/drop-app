@@ -4,33 +4,28 @@
          (mBannerObjectId is null), render the BannerFallback gradient
          instead of stretching the cover-style icon across the full
          hero — looks intentional rather than broken. -->
-    <div class="absolute inset-0 z-0">
+    <div class="absolute inset-x-0 top-0 z-0 h-[26rem] overflow-hidden">
       <img
         v-if="game.mBannerObjectId"
         :src="bannerUrl"
-        class="w-full h-[24rem] object-cover blur-sm scale-105"
+        class="h-full w-full scale-105 object-cover blur-[2px]"
       />
-      <div v-else class="w-full h-[24rem] blur-sm scale-105">
+      <div v-else class="h-full w-full scale-105 blur-sm">
         <BannerFallback :name="game.mName" text-size="text-9xl" />
       </div>
       <div
-        class="absolute inset-0 bg-gradient-to-t from-zinc-900 via-zinc-900/80 to-transparent opacity-90"
+        class="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/65 to-zinc-950/10"
       />
       <div
-        class="absolute inset-0 bg-gradient-to-r from-zinc-900/95 via-zinc-900/80 to-transparent opacity-90"
+        class="absolute inset-0 bg-gradient-to-r from-zinc-950/95 via-zinc-950/65 to-zinc-950/10"
       />
     </div>
 
-<<<<<<< Updated upstream
-    <div class="relative z-10">
-      <div class="px-8">
-=======
     <div class="game-hero-layout relative z-10">
       <div class="min-w-0">
       <div class="max-w-6xl px-8">
->>>>>>> Stashed changes
         <h1
-          class="text-5xl text-zinc-100 font-bold font-display drop-shadow-lg"
+          class="max-w-4xl text-5xl font-bold font-display leading-none text-zinc-50 drop-shadow-2xl"
         >
           {{ game.mName }}
         </h1>
@@ -41,7 +36,7 @@
             status.type === 'Installed' &&
             status.install_type.type != InstalledType.PartiallyInstalled
           "
-          class="mt-1"
+          class="mt-2"
         >
           <!-- A republish of a pinned version is still an update, so the
                flag is checked before "pinned". -->
@@ -66,10 +61,18 @@
           </div>
         </div>
 
+        <p
+          v-if="game.mShortDescription"
+          class="mt-3 max-w-3xl text-[15px] leading-6 text-zinc-300/85 drop-shadow"
+        >
+          {{ game.mShortDescription }}
+        </p>
+
         <!-- Action button row. -->
-        <div class="mt-3 flex flex-row gap-x-4 items-stretch">
+        <div class="mt-5 flex flex-row flex-wrap items-stretch gap-3">
           <!-- Do not add scale animations to this: https://stackoverflow.com/a/35683068 -->
           <GameStatusButton
+            class="!rounded-xl !px-6 !py-3.5"
             :status="status"
             :disabled="launchInFlight"
             @install="$emit('install')"
@@ -79,6 +82,15 @@
             @kill="$emit('kill')"
             @resume="$emit('resume')"
           />
+          <button
+            v-if="showSettings"
+            type="button"
+            class="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-zinc-950/55 px-5 py-3 text-sm font-semibold text-zinc-200 shadow-lg backdrop-blur-xl transition-colors hover:bg-zinc-800 hover:text-white"
+            @click="$emit('settings')"
+          >
+            <Cog6ToothIcon class="size-5" />
+            Settings
+          </button>
           <!-- Launch status line — sits beside the Play button while a launch
                is in flight. Shows the precise prep message when the backend is
                doing slow one-time prefix setup, otherwise a generic
@@ -101,11 +113,10 @@
                request it from, and that picker only exists in Big Picture, which
                is where remote play is driven from. -->
           <!-- Update opens the change review and updates the existing
-               install in place. Installing a version side by side is
-               "Install another version" below the header. -->
+               install in place. Side-by-side versions live in Settings. -->
           <button
             v-if="status.type === 'Installed' && updateAvailable"
-            class="transition-transform duration-300 hover:scale-105 active:scale-95 inline-flex gap-x-2 items-center rounded-md bg-blue-600 px-6 font-semibold text-white shadow-xl backdrop-blur-sm hover:bg-blue-700 uppercase font-display"
+            class="inline-flex items-center gap-x-2 rounded-xl bg-blue-600 px-6 font-semibold text-white shadow-xl shadow-blue-950/30 transition-colors hover:bg-blue-500 uppercase font-display"
             @click="$emit('update')"
           >
             Update <ArrowDownTrayIcon class="size-5" />
@@ -119,24 +130,17 @@
             :is-installed="status.type === 'Installed'"
             @result="$emit('compat-result', $event)"
           />
-          <NuxtLink
-            class="transition-transform duration-300 hover:scale-105 active:scale-95 inline-flex items-center rounded-md bg-zinc-800/50 px-6 font-semibold text-white shadow-xl backdrop-blur-sm hover:bg-zinc-800/80 uppercase font-display"
-            :to="{ path: '/store', query: { gameId: game.id } }"
-          >
-            <BuildingStorefrontIcon class="mr-2 size-5" aria-hidden="true" />
-            Store
-          </NuxtLink>
         </div>
       </div>
 
       <!-- Stat bar — a stable summary, kept outside the tabs. -->
       <div
         v-if="!statsLoading"
-        class="mt-6 mx-8 flex items-center gap-6 rounded-lg bg-zinc-800/60 backdrop-blur-sm px-6 py-3 border border-zinc-700/50"
+        class="mx-8 mt-5 flex max-w-5xl flex-wrap items-center gap-x-5 gap-y-2 text-zinc-400"
       >
         <div
           v-if="gameStats.lastPlayedAt"
-          class="flex items-center gap-2 text-sm"
+          class="flex items-center gap-2 text-xs"
         >
           <CalendarIcon class="size-4 text-zinc-400 shrink-0" />
           <span class="text-zinc-400">Last Played</span>
@@ -144,8 +148,8 @@
             formatLastPlayed(gameStats.lastPlayedAt)
           }}</span>
         </div>
-        <div v-if="gameStats.lastPlayedAt" class="w-px h-4 bg-zinc-600" />
-        <div class="flex items-center gap-2 text-sm">
+        <div v-if="gameStats.lastPlayedAt" class="h-3 w-px bg-zinc-700" />
+        <div class="flex items-center gap-2 text-xs">
           <ClockIcon class="size-4 text-zinc-400 shrink-0" />
           <span class="text-zinc-400">Play Time</span>
           <span class="text-zinc-100 font-medium">{{
@@ -154,11 +158,11 @@
         </div>
         <div
           v-if="gameStats.achievementsTotal > 0"
-          class="w-px h-4 bg-zinc-600"
+          class="h-3 w-px bg-zinc-700"
         />
         <div
           v-if="gameStats.achievementsTotal > 0"
-          class="flex items-center gap-2 text-sm"
+          class="flex items-center gap-2 text-xs"
         >
           <TrophyIcon class="size-4 text-yellow-500 shrink-0" />
           <span class="text-zinc-400">Achievements</span>
@@ -182,12 +186,12 @@
              full leaderboard lives. -->
         <div
           v-if="players && players.length > 0"
-          class="w-px h-4 bg-zinc-600"
+          class="h-3 w-px bg-zinc-700"
         />
         <button
           v-if="players"
           type="button"
-          class="group flex items-center gap-2 text-sm rounded-md px-1.5 py-1 -mx-1.5 -my-1 hover:bg-zinc-700/40 transition-colors"
+          class="group -mx-1.5 -my-1 flex items-center gap-2 rounded-md px-1.5 py-1 text-xs transition-colors hover:bg-zinc-800/60"
           @click="$emit('open-community')"
         >
           <UsersIcon class="size-4 text-zinc-400 shrink-0" />
@@ -265,7 +269,6 @@
  */
 import {
   ArrowDownTrayIcon,
-  BuildingStorefrontIcon,
   CalendarIcon,
   CheckCircleIcon,
   ClockIcon,
@@ -273,6 +276,7 @@ import {
   UsersIcon,
   WrenchIcon,
 } from "@heroicons/vue/24/solid";
+import { Cog6ToothIcon } from "@heroicons/vue/24/outline";
 import { InstalledType } from "~/types";
 import type { Game, GameStatus, GameVersion } from "~/types";
 import BannerFallback from "~/components/BannerFallback.vue";
@@ -309,6 +313,7 @@ const props = defineProps<{
   // Some install of this game has an update (per-install flags from
   // `fetch_game_installs`, or the current install's status flag).
   updateAvailable?: boolean;
+  showSettings?: boolean;
 }>();
 
 defineEmits<{
@@ -323,6 +328,7 @@ defineEmits<{
   (e: "kill"): void;
   (e: "resume"): void;
   (e: "compat-result", outcome: unknown): void;
+  (e: "settings"): void;
   // Emitted when the inline Friends stat is clicked — the page should
   // switch to the Community tab where the full leaderboard lives.
   (e: "open-community"): void;

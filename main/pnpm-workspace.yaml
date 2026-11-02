@@ -1,6 +1,10 @@
+# Build scripts pnpm may run. pnpm 11 reads `allowBuilds` (it writes "set this
+# to true or false" placeholders here when an entry is missing, and installs
+# fail until they are answered); pnpm 10 reads `onlyBuiltDependencies` below.
+# Keep both in sync.
 allowBuilds:
-  '@parcel/watcher': set this to true or false
-  esbuild: set this to true or false
+  '@parcel/watcher': true
+  esbuild: true
 
 onlyBuiltDependencies:
   - "@parcel/watcher"
@@ -8,26 +12,25 @@ onlyBuiltDependencies:
   - unrs-resolver
 
 overrides:
-  devalue@>=5.1.0 <5.6.2: ">=5.6.2"
-  devalue@>=5.3.0 <=5.6.1: ">=5.6.2"
-  diff@>=6.0.0 <8.0.3: ">=8.0.3"
-  h3@<=1.15.4: ">=1.15.5"
-  lodash@>=4.0.0 <=4.17.22: ">=4.17.23"
-  markdown-it@>=13.0.0 <14.1.1: ">=14.1.1"
-  node-forge@<1.3.2: ">=1.3.2"
-  seroval@<1.4.1: ">=1.4.1"
-  seroval@<=1.4.0: ">=1.4.1"
+  devalue@>=5.1.0 <5.6.2: ">=5.6.2 <6"
+  devalue@>=5.3.0 <=5.6.1: ">=5.6.2 <6"
+  diff@>=6.0.0 <8.0.3: ">=8.0.3 <9"
+  h3@<=1.15.4: ">=1.15.5 <2"
+  lodash@>=4.0.0 <=4.17.22: ">=4.17.23 <5"
+  markdown-it@>=13.0.0 <14.1.1: ">=14.1.1 <15"
+  node-forge@<1.4.1: ">=1.4.1 <2" # 2026-10-30 audit: 12 advisories
+  seroval@<1.6.11: ">=1.6.11 <2" # 2026-10-30 audit: critical/high
   # Dependabot 2026-06-16 security bumps. Kept in sync with the root
   # pnpm-workspace.yaml — this file governs the standalone `main` build
   # (scripts/build.mjs cd's into main/ and runs `pnpm install` here), so the
   # root overrides do NOT reach it. Scoped to the vulnerable range and capped
   # below the next major to avoid breaking version jumps. The single tar line
   # below supersedes the earlier 7.5.3 / 7.5.4 / 7.5.7 bumps.
-  shell-quote@<1.9.0: ">=1.9.0 <2" # 2026-07: high (was #130 <1.8.4)
-  esbuild@<0.28.1: ">=0.28.1" # alerts #134 high, #133 low
-  vite@>=7.0.0 <7.3.5: ">=7.3.5 <8" # alerts #137 high, #139 medium
+  shell-quote@<1.11.0: ">=1.11.0 <2" # 2026-10-30 audit: critical (was <1.9.0)
+  esbuild@<0.28.1: ">=0.28.1 <0.29" # alerts #134 high, #133 low
+  vite@>=7.0.0 <7.3.7: ">=7.3.7 <8" # 2026-10-30 audit (was <7.3.5)
   tar@>=7.0.0 <7.5.21: ">=7.5.21 <8" # 2026-07: critical/high/medium (was #140 <7.5.16)
-  launch-editor@<2.14.1: ">=2.14.1" # alert #138 medium
+  launch-editor@<2.14.2: ">=2.14.2 <3" # 2026-10-30 audit (was <2.14.1)
   js-yaml@>=4.0.0 <4.3.0: ">=4.3.0 <5" # 2026-07: high (was #136 <4.2.0)
   "@babel/core@<7.29.6": ">=7.29.6 <8" # alert #135 low
   # Dependabot 2026-07 security bumps. Kept in sync with the root
@@ -38,4 +41,11 @@ overrides:
   postcss@<8.5.18: ">=8.5.18 <9" # 2026-07: high
   immutable@>=5.0.0 <5.1.8: ">=5.1.8 <6" # 2026-07: high
   svgo@>=4.0.0 <4.0.2: ">=4.0.2 <5" # 2026-07: high (patch within v4)
-  dompurify@>=3.0.0 <3.4.12: ">=3.4.12 <4" # 2026-07: low
+  dompurify@>=3.0.0 <3.4.17: ">=3.4.17 <4" # 2026-10-30 audit (was <3.4.12)
+  # 2026-10-30 audit: same-major fixes. Left out on purpose (fix needs a new
+  # major): nuxt 4 and its vite-builder / nitro-server, minimatch 11, glob 14,
+  # deepmerge (no fix).
+  source-map-js@<1.2.2: ">=1.2.2 <2"
+  serialize-javascript@>=7.0.0 <7.1.3: ">=7.1.3 <8"
+  postcss-selector-parser@>=6.0.0 <6.1.5: ">=6.1.5 <7"
+  "@nuxt/devtools@<3.4.4": ">=3.4.4 <4" # 3.4.4 drops simple-git (critical)

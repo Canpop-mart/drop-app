@@ -14,11 +14,19 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+use std::time::Duration;
 
 use database::{GameDownloadStatus, borrow_db_checked};
 use games::library::Game;
 use log::warn;
-use remote::{cache::get_cached_object, retroarch::discovery::is_retroarch};
+use remote::{
+    auth::generate_authorization_header,
+    cache::{cache_object, get_cached_object},
+    requests::generate_url,
+    retroarch::discovery::is_retroarch,
+    utils::DROP_CLIENT_ASYNC,
+};
 use serde::Serialize;
 use tauri::AppHandle;
 
@@ -44,6 +52,50 @@ pub struct EmulatorHost {
     pub cores: Vec<String>,
 }
 
+/// Hosts the server said it has no record of (HTTP 404) this session, so the
+/// library page doesn't ask again on every visit. A timeout or connection
+/// error isn't remembered, so a slow server is asked again next time.
+static LOOKUP_MISSES: LazyLock<std::sync::Mutex<HashSet<String>>> =
+    LazyLock::new(Default::default);
+
+/// How long the library page may wait on one emulator name.
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// The server's record of a game the local cache doesn't have, cached for next
+/// time. `None` when the server doesn't know it or doesn't answer in time.
+///
+/// The cache is filled from the library and collections, and an emulator host
+/// is usually in neither, so without this it was always shown under the
+/// fallback name "Emulator" with no icon.
+async fn fetch_and_cache_game(id: &str) -> Option<Game> {
+    if LOOKUP_MISSES.lock().is_ok_and(|m| m.contains(id)) {
+        return None;
+    }
+    let url = generate_url(&["/api/v1/client/game", id], &[]).ok()?;
+    let response = DROP_CLIENT_ASYNC
+        .get(url)
+        .timeout(LOOKUP_TIMEOUT)
+        .header("Authorization", generate_authorization_header().ok()?)
+        .send()
+        .await
+        .ok()?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        if let Ok(mut misses) = LOOKUP_MISSES.lock() {
+            misses.insert(id.to_string());
+        }
+        return None;
+    }
+    if !response.status().is_success() {
+        warn!("[emulators] no server record for {id}: HTTP {}", response.status());
+        return None;
+    }
+    let game: Game = response.json().await.ok()?;
+    if let Err(e) = cache_object(&format!("game/{id}"), &game) {
+        warn!("[emulators] couldn't cache game {id}: {e}");
+    }
+    Some(game)
+}
+
 /// List every installed emulator host.
 ///
 /// Two signals identify a host, unioned: (1) it is referenced as the `emulator`
@@ -51,7 +103,8 @@ pub struct EmulatorHost {
 /// (2) its install dir looks like a RetroArch install (catches a RetroArch that
 /// has no ROMs pointed at it yet). Only currently-installed games qualify.
 #[tauri::command]
-pub fn list_installed_emulators() -> Vec<EmulatorHost> {
+pub async fn list_installed_emulators(app_handle: AppHandle) -> Vec<EmulatorHost> {
+    let offline = crate::settings::app_is_offline(&app_handle);
     // Phase 1 — under the DB lock, gather every installed game's (id, dir) plus
     // whether it's referenced as an emulator. No disk I/O happens here, so the
     // lock is held only briefly; the filesystem probing runs after it's dropped.
@@ -84,9 +137,14 @@ pub fn list_installed_emulators() -> Vec<EmulatorHost> {
         if !is_referenced && !retroarch {
             continue;
         }
-        let (name, icon_object_id) = get_cached_object::<Game>(&format!("game/{id}"))
+        let game = match get_cached_object::<Game>(&format!("game/{id}")) {
+            Ok(g) => Some(g),
+            Err(_) if !offline => fetch_and_cache_game(&id).await,
+            Err(_) => None,
+        };
+        let (name, icon_object_id) = game
             .map(|g| (g.m_name, g.m_icon_object_id))
-            .unwrap_or_else(|_| ("Emulator".to_string(), String::new()));
+            .unwrap_or_else(|| ("Emulator".to_string(), String::new()));
         hosts.push(EmulatorHost {
             id,
             name,

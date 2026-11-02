@@ -253,7 +253,6 @@ export function useAddonPlay(gameId: () => string, running: () => boolean) {
       await load(true);
     }
   }
-
   // When the game closes, look at the save again so a row with play waiting
   // to go back to the league says so.
   watch(running, (now, before) => {

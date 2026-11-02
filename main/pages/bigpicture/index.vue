@@ -22,15 +22,104 @@
     <BpmHomeSkeleton v-if="showSkeleton" />
 
     <template v-else-if="!pageLoading">
-      <!-- ═══════════════════════════════════════════════════════════════════
-           SPOTLIGHT HERO — the one skinned zone.
-           Ten console skins, one behaviour: art + name + playtime + a primary
-           action. Everything below the hero is theme-neutral markup driven by
-           the --bpm-* tokens, which is how the library finally inherits the
-           theme instead of being the one un-themed BPM page.
-           ═══════════════════════════════════════════════════════════════════ -->
+      <!-- One maintained Home hero for every palette. Themes may change its
+           colour, background motion and cover trim, but never its hierarchy,
+           focus geometry or actions. -->
       <section
         v-if="heroEntry && !searching"
+        class="relative mx-8 mt-6 min-h-[22rem] overflow-hidden rounded-3xl border"
+        :style="{
+          borderColor: 'var(--bpm-border)',
+          backgroundColor: 'var(--bpm-surface)',
+        }"
+      >
+        <img
+          v-if="heroArtId"
+          :src="objectUrl(heroArtId)"
+          :alt="heroName"
+          class="absolute inset-0 h-full w-full object-cover opacity-55"
+        />
+        <div
+          class="absolute inset-0"
+          :style="{
+            background:
+              'linear-gradient(90deg, var(--bpm-bg) 0%, color-mix(in srgb, var(--bpm-bg) 92%, transparent) 38%, color-mix(in srgb, var(--bpm-bg) 28%, transparent) 100%)',
+          }"
+        />
+        <BpmAnimatedBackground
+          v-if="themeHasAnimatedBg"
+          :enabled="animBgEnabled"
+          :theme-id="theme"
+          :reduced="reducedAnimations"
+        />
+
+        <div class="relative z-10 flex min-h-[22rem] items-center gap-8 px-10 py-8">
+          <div
+            class="relative h-64 w-44 shrink-0 overflow-hidden rounded-xl shadow-2xl"
+            :style="{ backgroundColor: 'var(--bpm-bg)', border: '1px solid var(--bpm-border)' }"
+          >
+            <img
+              v-if="heroCoverId"
+              :src="objectUrl(heroCoverId)"
+              :alt="heroName"
+              class="absolute inset-0 h-full w-full object-cover"
+            />
+            <span
+              v-else
+              class="flex h-full w-full items-center justify-center text-5xl font-bold"
+              :style="{ color: 'var(--bpm-accent-hex)' }"
+            >{{ heroInitial }}</span>
+            <BpmBoxArtOverlay v-if="showBoxArtOverlays" :theme-id="theme" />
+          </div>
+
+          <div class="min-w-0 max-w-4xl">
+            <p
+              class="mb-2 text-xs font-bold uppercase tracking-[0.24em]"
+              :style="{ color: 'var(--bpm-accent-hex)' }"
+            >
+              Continue playing
+            </p>
+            <h1 class="truncate font-display text-5xl font-bold" :style="{ color: 'var(--bpm-text)' }">
+              {{ heroName }}
+            </h1>
+            <p v-if="heroPlaytimeLabel" class="mt-3 text-base" :style="{ color: 'var(--bpm-muted)' }">
+              {{ heroPlaytimeLabel }}
+            </p>
+            <div class="mt-7 flex items-center gap-3">
+              <button
+                :ref="registerHeroAction"
+                class="rounded-xl px-8 py-3 text-base font-bold shadow-lg transition-transform"
+                :style="{
+                  backgroundColor: 'var(--bpm-accent-hex)',
+                  color: 'var(--bpm-accent-text)',
+                }"
+                @click="heroAction"
+              >
+                {{ heroActionLabel }}
+              </button>
+              <button
+                v-if="showHeroDetails"
+                :ref="registerHeroDetails"
+                class="rounded-xl border px-7 py-3 text-base font-semibold"
+                :style="{
+                  borderColor: 'var(--bpm-border)',
+                  backgroundColor: 'color-mix(in srgb, var(--bpm-surface) 88%, transparent)',
+                  color: 'var(--bpm-text)',
+                }"
+                @click="openHeroGame"
+              >
+                Details
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Legacy per-console hero templates are retained temporarily for
+           migration safety but no longer render. -->
+      <!-- ═══════════════════════════════════════════════════════════════════ -->
+      <section
+        v-if="false"
         class="relative overflow-hidden shrink-0"
         :style="{ background: gradientBg || 'var(--bpm-bg)' }"
       >
@@ -52,7 +141,7 @@
                   class="flex items-center justify-center overflow-hidden"
                   style="width: 2vw; height: 2vw; border-radius: 50%; background-color: #107c10"
                 >
-                  <img v-if="userProfilePicUrl" :src="userProfilePicUrl" class="w-full h-full object-cover" />
+                  <img v-if="userProfilePicUrl" :src="userProfilePicUrl ?? undefined" class="w-full h-full object-cover" />
                   <svg v-else style="width: 1vw; height: 1vw" fill="#fff" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
                 </div>
                 <span class="font-semibold" style="color: #fff; font-size: 0.9vw">Home</span>
@@ -595,14 +684,14 @@
            ═══════════════════════════════════════════════════════════════════ -->
       <template v-if="!searching">
         <!-- Continue Playing -->
-        <section v-if="continueEntries.length > 0" class="px-8 pt-6">
+        <section v-if="continueRailEntries.length > 0" class="px-8 pt-6">
           <div class="flex items-baseline gap-3 mb-3">
             <h2 class="text-lg font-semibold font-display" style="color: var(--bpm-text)">Continue Playing</h2>
-            <span class="text-xs tabular-nums" style="color: var(--bpm-muted)">{{ continueEntries.length }}</span>
+            <span class="text-xs tabular-nums" style="color: var(--bpm-muted)">{{ continueRailEntries.length }}</span>
           </div>
           <div class="bpm-rail flex gap-4 overflow-x-auto pb-2 px-1 pt-1">
             <div
-              v-for="(entry, idx) in continueEntries"
+              v-for="(entry, idx) in continueRailEntries"
               :key="entry.game.id"
               class="flex-shrink-0 bp-focus-delegate cursor-pointer"
               style="width: 10rem"
@@ -625,40 +714,9 @@
           </div>
         </section>
 
-        <!-- Updates available -->
-        <section v-if="updatesEntries.length > 0" class="px-8 pt-6">
-          <div class="flex items-baseline gap-3 mb-3">
-            <h2 class="text-lg font-semibold font-display" style="color: var(--bpm-text)">Updates Available</h2>
-            <span class="text-xs tabular-nums" style="color: var(--bpm-muted)">{{ updatesEntries.length }}</span>
-          </div>
-          <div class="bpm-rail flex gap-4 overflow-x-auto pb-2 px-1 pt-1">
-            <div
-              v-for="entry in updatesEntries"
-              :key="entry.game.id"
-              class="flex-shrink-0 bp-focus-delegate cursor-pointer"
-              style="width: 10rem"
-              :ref="
-                (el: any) =>
-                  registerTile(el, {
-                    onSelect: () => navigateToGame(entry.game.id),
-                    onContext: () => openContextMenu(entry),
-                    onFocus: () => prefetchGame(entry.game.id),
-                  })
-              "
-            >
-              <BigPictureGameTile
-                :game="entry.game"
-                :status="entry.status"
-                :hide-titles="hideTitles"
-                :overlay-theme-id="tileOverlayTheme"
-              />
-            </div>
-          </div>
-        </section>
-
         <!-- Collections — the old Shelves filter tab, as a rail you steer into
              instead of a fourth chip that swapped the whole page out. -->
-        <section class="px-8 pt-6">
+        <section v-if="collectionRows.length > 0 || shelvesError" class="px-8 pt-6">
           <div class="flex items-baseline gap-3 mb-3">
             <h2 class="text-lg font-semibold font-display" style="color: var(--bpm-text)">Collections</h2>
             <span class="text-xs tabular-nums" style="color: var(--bpm-muted)">{{ collectionRows.length }}</span>
@@ -793,6 +851,17 @@
             </button>
           </template>
         </template>
+
+        <button
+          v-if="!activeGroup && collectionRows.length === 0 && !shelvesError"
+          :ref="(el: any) => registerFilter(el, { onSelect: () => (showNewShelfKeyboard = true) })"
+          class="inline-flex items-center gap-2 px-3 py-2 text-sm rounded-lg font-medium"
+          style="color: var(--bpm-muted); border: 1px solid var(--bpm-border)"
+          @click="showNewShelfKeyboard = true"
+        >
+          <PlusIcon class="size-4" />
+          New Collection
+        </button>
 
         <button
           v-for="filter in filters"
@@ -1182,7 +1251,8 @@ import BpmHomeSkeleton from "~/components/bigpicture/BpmHomeSkeleton.vue";
 import { devLog } from "~/composables/dev-mode";
 import { quickInstallGame } from "~/composables/game-detail/quick-install";
 import { useListen } from "~/composables/useListen";
-import { parseStatus, deduplicatedInvoke } from "~/composables/game";
+import { parseStatus, deduplicatedInvoke, useGame } from "~/composables/game";
+import { withEmulatorsFirst } from "~/composables/console-emulators";
 import type { LaunchResult } from "~/composables/game";
 import {
   describeLaunchFailure,
@@ -1447,6 +1517,15 @@ const continueEntries = computed<LibraryEntry[]>(() =>
   ),
 );
 
+// The spotlight is already the largest item on the page. Do not repeat it in
+// the first rail immediately below, which made Home feel like two competing
+// versions of the same screen.
+const continueRailEntries = computed(() =>
+  heroGameId.value
+    ? continueEntries.value.filter((entry) => entry.game.id !== heroGameId.value)
+    : continueEntries.value,
+);
+
 // One focus index for the whole page, replacing the ten per-theme ones. Only
 // the PS2 skin reads it — its header echoes whatever the rail has focused,
 // which is the behaviour its memory-card browser was built around.
@@ -1455,11 +1534,8 @@ const focusedRecent = computed(
   () => otherGames.value[focusedIdx.value] ?? spotlightGame.value,
 );
 
-const updatesEntries = computed<LibraryEntry[]>(() =>
-  library.value.filter(
-    (e) => e.status.type === "Installed" && e.status.update_available,
-  ),
-);
+// No separate "Updates Available" rail: it repeated each game as a second
+// tile. The update shows as a badge on the game's own tile instead.
 
 // ── Collections (shelves) ───────────────────────────────────────────────
 const shelvesData = useShelves();
@@ -1518,7 +1594,24 @@ async function loadConsoles() {
     console.warn("[BPM:HOME] console grouping fetch failed:", e);
     consolesError.value = true;
     consoleGroups.value = [];
+    return;
   }
+  void loadConsoleEmulators();
+}
+
+// Each console's emulator is listed first when that console is picked. It is
+// usually not in the player's library, so it's loaded here, ahead of time:
+// picking a console then shows a finished list instead of inserting a tile
+// under the controller's highlight a moment later.
+const consoleEmulators = ref(new Map<string, LibraryEntry>());
+async function loadConsoleEmulators() {
+  const ids = new Set(consoleGroups.value.flatMap((g) => g.emulatorIds ?? []));
+  const loaded = new Map<string, LibraryEntry>();
+  for (const id of ids) {
+    const r = await useGame(id).catch(() => null);
+    if (r) loaded.set(id, { game: r.game, status: r.status.value });
+  }
+  consoleEmulators.value = loaded;
 }
 
 watch(() => consoleSections.enabled.value, () => loadConsoles());
@@ -1574,8 +1667,28 @@ const allGamesHeader = ref<HTMLElement | null>(null);
  * rails — so bring it up. Without the scroll the card just highlights and the
  * result is off-screen, which reads as nothing having happened.
  */
+// The emulators shown for the picked console, fixed at the moment it was
+// picked so the list never grows under the highlight.
+const activeConsoleEmulators = ref<{ ids: string[]; entries: Map<string, LibraryEntry> }>({
+  ids: [],
+  entries: new Map(),
+});
+
 function selectGroup(kind: "collection" | "console", id: string, name: string) {
   activeGroup.value = { kind, id, name };
+  const ids =
+    kind === "console"
+      ? (consoleGroups.value.find((g) => g.id === id)?.emulatorIds ?? [])
+      : [];
+  activeConsoleEmulators.value = {
+    ids,
+    entries: new Map(
+      ids.flatMap((e) => {
+        const entry = consoleEmulators.value.get(e);
+        return entry ? [[e, entry] as const] : [];
+      }),
+    ),
+  };
   nextTick(() => {
     allGamesHeader.value?.scrollIntoView({
       behavior: reducedMotion.value ? "auto" : "smooth",
@@ -1730,6 +1843,21 @@ const filteredGames = computed(() => {
           (gameSizes.value[b.game.id] ?? 0) - (gameSizes.value[a.game.id] ?? 0),
       );
       break;
+  }
+
+  // A picked console lists its emulator first, ahead of the ROMs, under the
+  // same installed / not installed filter.
+  if (!searching.value && activeGroup.value?.kind === "console") {
+    const emulators = new Map(
+      [...activeConsoleEmulators.value.entries].filter(([, e]) =>
+        activeFilter.value === "installed"
+          ? e.status.type === "Installed"
+          : activeFilter.value === "remote"
+            ? e.status.type !== "Installed"
+            : true,
+      ),
+    );
+    games = withEmulatorsFirst(games, activeConsoleEmulators.value.ids, emulators);
   }
 
   return games;

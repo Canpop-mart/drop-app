@@ -1,5 +1,15 @@
 # Task: Redesign Big Picture Mode
 
+## Merge-conflict recovery
+- Resolved nine Git conflicts plus older embedded stash markers in docs/UPCOMING.md, docs/map/big-picture.md
+  and docs/map/in-place-updates.md. Preserved NCAA vertical widget, white stitches/brown accents, Cancel turn,
+  addon API methods and current desktop/BPM redesign. Removed duplicate older inline addon/version layout.
+- Files: docs/map/addons.md; both AddonActions.vue components; game-detail/Header.vue and Page.vue;
+  composables/addon-play.ts, addon-play-logic.ts, use-server-api.ts; this note; three docs above.
+- Checks on current main checkout: Nuxt typecheck exit=0; addon-play, addon-shop and focus-navigation tests
+  22 passed, exit=0. Marker scan of main/docs/tasks found none. No new player-facing strings.
+- No commit or merge continuation performed. Owner must Continue merge after reviewing. Device QA remains pending.
+
 ## NCAA 14 addon panel follow-up
 - Third owner revision: kept desktop widget shape/placement, added NCAA-specific scoreboard styling in
   `main/components/game-detail/AddonActions.vue`. Warm cream monospace week numerals, gold striped masthead,
@@ -25,7 +35,6 @@
 - New player-facing strings: `main/components/game-detail/AddonActions.vue:69` and
   `main/components/bigpicture/game-detail/BpmAddonActions.vue:79`: `Week {number}`.
 - Next: review the panel in the running app with a free save and a checked-out save.
-
 ## Goal
 Bring BPM through the same screen-by-screen usability and visual cleanup as desktop while keeping it controller-first,
 safe across overlays, and compatible with all ten console themes. Source: owner request.

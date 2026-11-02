@@ -1,5 +1,5 @@
 <template>
-  <div class="max-w-2xl mx-auto px-6 py-8">
+  <div class="mx-auto max-w-5xl px-8 py-8">
     <div class="mb-6">
       <h1 class="text-2xl font-bold font-display text-zinc-100">
         Report a Bug
@@ -10,12 +10,13 @@
       </p>
     </div>
 
-    <div v-if="submitted" class="rounded-xl bg-green-600/10 ring-1 ring-green-500/20 p-6 text-center">
+    <div
+      v-if="submitted"
+      class="rounded-xl bg-green-600/10 ring-1 ring-green-500/20 p-6 text-center"
+    >
       <CheckCircleIcon class="mx-auto h-10 w-10 text-green-400 mb-3" />
       <p class="text-lg font-semibold text-green-300">Bug report submitted!</p>
-      <p class="text-sm text-zinc-400 mt-1">
-        An admin will review it shortly.
-      </p>
+      <p class="text-sm text-zinc-400 mt-1">An admin will review it shortly.</p>
       <button
         class="mt-4 px-4 py-2 rounded-md text-sm font-medium bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
         @click="resetForm"
@@ -24,7 +25,11 @@
       </button>
     </div>
 
-    <form v-else class="space-y-5" @submit.prevent="submitReport">
+    <form
+      v-else
+      class="space-y-5 rounded-2xl bg-zinc-900/60 p-7 ring-1 ring-white/5"
+      @submit.prevent="submitReport"
+    >
       <!-- Title -->
       <div>
         <label class="block text-sm font-medium text-zinc-300 mb-1">
@@ -71,8 +76,14 @@
             v-else
             class="mx-auto h-6 w-6 text-zinc-500 group-hover:text-zinc-400"
           />
-          <span class="mt-1 block text-xs text-zinc-500 group-hover:text-zinc-400">
-            {{ screenshotFile ? screenshotFile.name : "Click to attach a screenshot" }}
+          <span
+            class="mt-1 block text-xs text-zinc-500 group-hover:text-zinc-400"
+          >
+            {{
+              screenshotFile
+                ? screenshotFile.name
+                : "Click to attach a screenshot"
+            }}
           </span>
         </label>
         <input
@@ -100,7 +111,8 @@
       <!-- Auto-collected info hint -->
       <div class="rounded-md bg-zinc-800/50 px-3 py-2 text-xs text-zinc-500">
         <InformationCircleIcon class="inline h-3.5 w-3.5 mr-1 -mt-0.5" />
-        System info (OS, CPU, RAM, client version) will be attached automatically.
+        System info (OS, CPU, RAM, client version) will be attached
+        automatically.
       </div>
 
       <!-- Error display -->
@@ -175,15 +187,22 @@ async function submitReport() {
 
     // Collect the full log file (redacted) if opted in. Fall back to a
     // short text tail if the file read fails.
-    let logFile: { filename: string; content: string; truncated: boolean } | undefined;
+    let logFile:
+      | { filename: string; content: string; truncated: boolean }
+      | undefined;
     let logsText: string | undefined;
     if (includeLogs.value) {
       try {
         logFile = await invoke("collect_bug_report_log_file");
       } catch (e) {
-        console.warn("Failed to collect log file, falling back to text tail:", e);
+        console.warn(
+          "Failed to collect log file, falling back to text tail:",
+          e,
+        );
         try {
-          logsText = await invoke<string>("collect_bug_report_logs", { maxLines: 400 });
+          logsText = await invoke<string>("collect_bug_report_logs", {
+            maxLines: 400,
+          });
         } catch (inner) {
           console.warn("Failed to collect log tail:", inner);
         }

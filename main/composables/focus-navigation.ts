@@ -185,6 +185,23 @@ interface FocusSnapshot {
 /** Per-route focus snapshots for back-navigation restoration. */
 const focusHistory = new Map<string, FocusSnapshot>();
 
+function connectedInDomOrder(group: FocusGroup): FocusableElement[] {
+  return Array.from(group.elements)
+    .filter((entry) => entry.el.isConnected)
+    .sort((a, b) => {
+      if (a.el === b.el) return 0;
+      return a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING
+        ? -1
+        : 1;
+    });
+}
+
+function isVerticallyScrollable(el: HTMLElement): boolean {
+  if (el.scrollHeight <= el.clientHeight) return false;
+  const overflow = window.getComputedStyle(el).overflowY;
+  return overflow === "auto" || overflow === "scroll" || overflow === "overlay";
+}
+
 /**
  * Per-route free-form state bag. Pages can use this to persist things
  * focus-nav doesn't know about — e.g. which view was open on the requests
@@ -211,13 +228,13 @@ function _saveFocusSnapshot(routePath: string) {
   const group = groups.get(currentFocused.value.group);
   if (!group) return;
 
-  const connected = Array.from(group.elements).filter((e) => e.el.isConnected);
+  const connected = connectedInDomOrder(group);
   const index = connected.indexOf(currentFocused.value);
 
   let scrollTop = 0;
   let parent = currentFocused.value.el.parentElement;
   while (parent) {
-    if (parent.scrollHeight > parent.clientHeight) {
+    if (isVerticallyScrollable(parent)) {
       scrollTop = parent.scrollTop;
       break;
     }
@@ -241,24 +258,13 @@ function _restoreFocusSnapshot(routePath: string): boolean {
   const group = groups.get(snapshot.group);
   if (!group || group.elements.size === 0) return false;
 
-  const connected = Array.from(group.elements).filter((e) => e.el.isConnected);
+  const connected = connectedInDomOrder(group);
   if (connected.length === 0) return false;
 
   const targetIndex = Math.min(snapshot.index, connected.length - 1);
   const target = connected[targetIndex];
 
   applyFocus(target);
-
-  nextTick(() => {
-    let parent = target.el.parentElement;
-    while (parent) {
-      if (parent.scrollHeight > parent.clientHeight) {
-        parent.scrollTop = snapshot.scrollTop;
-        break;
-      }
-      parent = parent.parentElement;
-    }
-  });
 
   return true;
 }
@@ -347,7 +353,10 @@ function ensureElementVisible(el: HTMLElement) {
     } else if (elRect.bottom > c.bottom - MARGIN) {
       dy = elRect.bottom - c.bottom + MARGIN;
     }
-    if (dy !== 0) vContainer.scrollBy({ top: dy, behavior: "smooth" });
+    // Focus movement must land immediately. Stacking smooth animations while
+    // a stick or D-pad repeats makes the viewport chase several stale targets
+    // and is the main source of BPM's seemingly random up/down jumps.
+    if (dy !== 0) vContainer.scrollBy({ top: dy, behavior: "auto" });
   }
 
   // Horizontal — for shelf/carousel layouts.
@@ -360,7 +369,7 @@ function ensureElementVisible(el: HTMLElement) {
     } else if (elRect.right > c.right - MARGIN) {
       dx = elRect.right - c.right + MARGIN;
     }
-    if (dx !== 0) hContainer.scrollBy({ left: dx, behavior: "smooth" });
+    if (dx !== 0) hContainer.scrollBy({ left: dx, behavior: "auto" });
   }
 }
 
@@ -379,10 +388,23 @@ function applyFocus(element: FocusableElement | null, fromGroupCycle = false) {
     );
   }
 
-  // Remove from previous
-  if (currentFocused.value) {
-    removeRingFocus(currentFocused.value.el);
-    currentFocused.value.el.classList.remove(FOCUS_CLASS);
+  // There must be exactly one visible focus owner. A node can be registered
+  // more than once across async remounts, leaving an older FocusableElement
+  // object outside `currentFocused` even though its DOM class survives. Clear
+  // every rendered marker before applying the new owner so sidebar and page
+  // focus can never appear active at the same time.
+  document
+    .querySelectorAll<HTMLElement>(`.${FOCUS_CLASS}`)
+    .forEach((node) => node.classList.remove(FOCUS_CLASS));
+  document
+    .querySelectorAll<HTMLElement>(`.${RING_FOCUS_CLASS}`)
+    .forEach((node) => node.classList.remove(RING_FOCUS_CLASS));
+  // Native DOM focus is separate from BPM controller focus. A clicked link
+  // otherwise keeps its browser outline in the rail while BPM focus moves
+  // through the page, making both regions appear active at once.
+  const nativeFocused = document.activeElement;
+  if (nativeFocused instanceof HTMLElement && nativeFocused !== element?.el) {
+    nativeFocused.blur();
   }
 
   currentFocused.value = element;
@@ -396,16 +418,10 @@ function applyFocus(element: FocusableElement | null, fromGroupCycle = false) {
     // Play focus feedback sound
     useBpAudio().play("focus");
 
-    if (fromGroupCycle) {
-      // Group cycle is a large context jump (e.g. nav rail → content) —
-      // centering the landing element reads best there.
-      element.el.scrollIntoView({ block: "center", behavior: "smooth" });
-    } else {
-      // Normal D-pad navigation: bring the element fully into view with a
-      // margin only when it isn't already — deterministic, race-free, and
-      // doesn't vertically jolt the grid on purely horizontal moves.
-      ensureElementVisible(element.el);
-    }
+    // Both ordinary movement and section changes use the same minimal reveal.
+    // Centering an LB/RB target used to throw the entire page to a new scroll
+    // position even when that target was already substantially visible.
+    ensureElementVisible(element.el);
 
     currentGroup.value = element.group;
 
@@ -423,7 +439,7 @@ function applyFocus(element: FocusableElement | null, fromGroupCycle = false) {
 // ── Navigation ───────────────────────────────────────────────────────────────
 
 function navigate(direction: Direction) {
-  if (!currentFocused.value) {
+  if (!currentFocused.value?.el.isConnected) {
     // Focus first element in current group or first available
     const group =
       groups.get(currentGroup.value) || groups.values().next().value;
@@ -435,6 +451,28 @@ function navigate(direction: Direction) {
   const groupName = currentFocused.value.group;
   const group = groups.get(groupName);
   if (!group) return;
+
+  // The side rail is a stable edge, not part of the page's spatial cloud.
+  // Right always enters the page at its remembered content target instead of
+  // guessing between the top-bar avatar and whichever card happens to be
+  // geometrically closest.
+  if (groupName === "nav" && direction === "right") {
+    // Reaching the persistent rail means any modal that owned a restriction
+    // is already gone (a live trapped modal cannot move focus into `nav`).
+    // Clear a stale restriction here instead of letting it strand the user in
+    // the rail with working Up/Down controls and a dead Right direction.
+    if (focusRestriction.value) {
+      devLog("focus", `discard stale restriction "${focusRestriction.value}" at rail`);
+      focusRestriction.value = null;
+    }
+    const content = groups.get("content");
+    const target = content ? defaultFocusFor(content) : null;
+    if (target) {
+      applyFocus(target);
+      useGamepad().vibrate("light");
+    }
+    return;
+  }
 
   // ── Spatial search (within current group first) ─────────────────────────
   const candidates = Array.from(group.elements)
@@ -448,9 +486,18 @@ function navigate(direction: Direction) {
   // (e.g. from store tabs down to game tiles, or from content to nav rail).
   // Skip cross-group search when focus is restricted to a specific group (modal overlays).
   if (!next && !focusRestriction.value) {
+    // Chrome and the side rail are explicit destinations reached with LB/RB.
+    // Letting a spatial D-pad search fall into them made a single Left or Up
+    // press leave the page and made the next press navigate a different UI.
+    const chromeGroups = new Set(["nav", "chrome"]);
     const allOtherElements: FocusableElement[] = [];
     for (const [name, g] of groups) {
       if (name === groupName) continue;
+      // Spatial movement may leave nav/chrome for the page, but it must never
+      // choose one chrome region as the destination of another. In practice,
+      // Right from the side rail was selecting the profile avatar in the top
+      // bar because it was geometrically closer than content lower down.
+      if (chromeGroups.has(name)) continue;
       for (const el of g.elements) {
         if (el.el.isConnected) allOtherElements.push(el);
       }
@@ -520,10 +567,10 @@ function cycleGroup(forward: boolean) {
 
 // ── D-pad repeat for held buttons ────────────────────────────────────────────
 
-const REPEAT_DELAY = 250; // ms before repeat starts
-const REPEAT_RATE_INITIAL = 80; // ms between repeats initially
-const REPEAT_RATE_FAST = 50; // ms between repeats after acceleration
-const REPEAT_ACCELERATION_MS = 400; // L2 fix: switch to fast rate after 400ms of repeating
+const REPEAT_DELAY = 350; // deliberate hold before movement repeats
+const REPEAT_RATE_INITIAL = 150; // readable movement between nearby targets
+const REPEAT_RATE_FAST = 100; // faster browsing without skipping whole rows
+const REPEAT_ACCELERATION_MS = 650;
 
 let repeatTimer: ReturnType<typeof setTimeout> | null = null;
 let repeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -624,14 +671,17 @@ export function useFocusNavigation() {
       groups.set(group, { elements: new Set(), lastFocused: null });
     }
 
-    const focusable: FocusableElement = {
+    // Identity is the registry key and is also used by unregister callbacks.
+    // Deep reactive Map/Set/ref access otherwise returns a proxy, so comparing
+    // it with this original object fails and removed controls retain focus.
+    const focusable: FocusableElement = markRaw({
       el,
       group,
       onSelect: options?.onSelect,
       onContext: options?.onContext,
       onFocus: options?.onFocus,
       onHold: options?.onHold,
-    };
+    });
 
     groups.get(group)!.elements.add(focusable);
 
@@ -642,6 +692,7 @@ export function useFocusNavigation() {
     return () => {
       const g = groups.get(group);
       if (!g) return;
+      const oldDomIndex = connectedInDomOrder(g).indexOf(focusable);
       g.elements.delete(focusable);
       if (g.lastFocused === focusable) g.lastFocused = null;
       if (currentFocused.value !== focusable) return;
@@ -657,7 +708,13 @@ export function useFocusNavigation() {
         const candidate = restricted
           ? groups.get(restricted)
           : (g.elements.size > 0 ? g : groups.get("content"));
-        const target = candidate ? defaultFocusFor(candidate) : null;
+        const survivors = candidate ? connectedInDomOrder(candidate) : [];
+        // A filtered, paged, or async list often removes the focused node.
+        // Stay at the same visual slot instead of jumping to the first item
+        // at the top of the page.
+        const target = survivors.length
+          ? survivors[Math.min(Math.max(oldDomIndex, 0), survivors.length - 1)]
+          : null;
         if (target) applyFocus(target);
       });
     };
@@ -667,11 +724,13 @@ export function useFocusNavigation() {
     groupOrder.value = order;
   }
 
-  function focusGroup(groupName: string) {
+  function focusGroup(groupName: string): boolean {
     const group = groups.get(groupName);
-    if (!group) return;
+    if (!group) return false;
     const target = defaultFocusFor(group);
-    if (target) applyFocus(target);
+    if (!target) return false;
+    applyFocus(target);
+    return true;
   }
 
   /**
@@ -733,6 +792,18 @@ export function useFocusNavigation() {
       inputLocked.value = false;
       setGlobalInputLock(false);
     }
+  }
+
+  /**
+   * Whether `id` is the most recently acquired input lock (top of the stack).
+   * Gamepad dispatch is flat, so a bypass subscription keeps firing under
+   * every nested lock — including one acquired by an overlay that opened on
+   * top of us. An overlay whose subscriptions are registered once at mount
+   * (not wired/unwired with its visibility) checks this before acting on
+   * A/B, so the newest overlay owns the buttons while it is open.
+   */
+  function isTopOfInputLock(id: number): boolean {
+    return _inputLockStack.length > 0 && _inputLockStack[_inputLockStack.length - 1] === id;
   }
 
   /**
@@ -864,6 +935,7 @@ export function useFocusNavigation() {
     cycleGroup,
     acquireInputLock,
     releaseInputLock,
+    isTopOfInputLock,
     restrictFocus,
     unrestrictFocus,
     saveFocusSnapshot,
@@ -1183,9 +1255,9 @@ function wireGamepad() {
 
   // 0.55 felt sluggish on the Deck stick (needs a big push); 0.4 is responsive
   // while still clear of the 0.15 dead zone. Repeat delay matches the D-pad.
-  const LEFT_STICK_NAV_THRESHOLD = 0.4; // deflection needed to trigger nav
-  const LEFT_STICK_REPEAT_DELAY = 250; // ms before repeat starts
-  const LEFT_STICK_REPEAT_RATE = 120; // ms between repeats
+  const LEFT_STICK_NAV_THRESHOLD = 0.52; // avoid accidental diagonal movement
+  const LEFT_STICK_REPEAT_DELAY = 350; // deliberate hold before repeat
+  const LEFT_STICK_REPEAT_RATE = 170; // keep individual targets readable
 
   function getLeftStickDirection(
     lx: number,
@@ -1255,9 +1327,12 @@ function wireGamepad() {
       if (currentFocused.value?.el) {
         let parent = currentFocused.value.el.parentElement;
         while (parent) {
+          const style = window.getComputedStyle(parent);
           if (
-            parent.scrollHeight > parent.clientHeight ||
-            parent.scrollWidth > parent.clientWidth
+            parent.scrollHeight > parent.clientHeight &&
+            (style.overflowY === "auto" ||
+              style.overflowY === "scroll" ||
+              style.overflowY === "overlay")
           ) {
             scrollable = parent;
             break;

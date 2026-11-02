@@ -1,8 +1,8 @@
 <template>
-  <section v-if="games.length > 0" class="mb-12">
+  <section v-if="games.length > 0" class="mb-9">
     <!-- Section header: title left, "Browse all" CTA right. Mirrors
          Steam's Recently Updated widget. -->
-    <div class="flex items-center justify-between mb-5">
+    <div class="mb-4 flex items-center justify-between">
       <h3 class="text-xl font-display font-semibold text-zinc-100">
         Recently Updated
       </h3>
@@ -44,12 +44,12 @@
         <article
           v-for="g in games"
           :key="g.id"
-          class="shrink-0 w-[380px] rounded-lg overflow-hidden bg-zinc-800/70 ring-1 ring-zinc-700/40 hover:ring-blue-500/50 hover:bg-zinc-800/90 transition-all snap-start cursor-pointer group/card flex flex-col"
+          class="group/card flex w-[300px] shrink-0 cursor-pointer snap-start flex-col overflow-hidden rounded-xl bg-zinc-900/60 ring-1 ring-zinc-800 transition-all hover:-translate-y-0.5 hover:ring-blue-500/40"
           @click="$emit('select', g.id)"
         >
           <!-- Banner section — taller (16:9 → 1.78:1) gives the
                banner room to breathe like Steam's. -->
-          <div class="relative aspect-[16/9] bg-zinc-900 overflow-hidden">
+          <div class="relative aspect-[2/1] overflow-hidden bg-zinc-900">
             <img
               v-if="g.mBannerObjectId"
               :src="objectUrl(g.mBannerObjectId)"
@@ -84,7 +84,7 @@
                flex-grow so all cards in the row line their CTA up at
                the same baseline regardless of description length. -->
           <div
-            class="p-5 flex-1 flex flex-col bg-gradient-to-b from-blue-950/20 via-zinc-900/40 to-zinc-900/60"
+            class="flex flex-1 flex-col bg-zinc-900/70 p-4"
           >
             <h4
               class="text-base font-display font-semibold text-zinc-100 truncate mb-2"
@@ -92,7 +92,7 @@
               {{ g.mName }}
             </h4>
             <p
-              class="text-sm text-zinc-400 leading-relaxed line-clamp-3 mb-4 flex-1"
+              class="mb-3 line-clamp-2 flex-1 text-xs leading-relaxed text-zinc-400"
             >
               {{
                 g.mShortDescription ||

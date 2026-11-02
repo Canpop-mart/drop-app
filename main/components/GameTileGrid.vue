@@ -35,7 +35,7 @@
  */
 const props = withDefaults(
   defineProps<{
-    density?: "default" | "compact";
+    density?: "default" | "compact" | "dense";
     /** Total number of slotted tiles. Required for the padding feature. */
     itemCount?: number;
   }>(),
@@ -72,7 +72,9 @@ const paddingCount = computed(() => {
 const gridClass = computed(() =>
   props.density === "compact"
     ? "grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 gap-3"
-    : "grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-4",
+    : props.density === "dense"
+      ? "dense-game-grid"
+      : "grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-4",
 );
 
 onMounted(() => {
@@ -84,3 +86,11 @@ onUnmounted(() => {
   window.removeEventListener("resize", readCols);
 });
 </script>
+
+<style scoped>
+.dense-game-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+  gap: 1rem;
+}
+</style>

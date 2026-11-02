@@ -747,6 +747,11 @@ mod tests {
         assert_eq!(overrides["input_player1_x_btn"], face.north.to_string());
     }
 
+    // Windows only: there the binding follows the pad family, and switching
+    // family must not leave the previous family's trigger binding live. On
+    // Linux both are set on purpose (see the next test), which is why this
+    // failed on Linux builds.
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn hotkeys_always_write_both_fast_forward_keys() {
         // Switching family must not leave the previous family's trigger
@@ -761,6 +766,20 @@ mod tests {
                 (axis == "nul") != (btn == "nul"),
                 "{family:?}: axis={axis} btn={btn}"
             );
+        }
+    }
+
+    /// Linux sets the trigger as both a button and an axis, for every family:
+    /// the Steam Deck's analog triggers only fire the axis event under some
+    /// SDL2 configs (values validated on the Deck).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_binds_fast_forward_as_button_and_axis() {
+        for family in [PadFamily::Xbox, PadFamily::PlayStation, PadFamily::Nintendo] {
+            let mut overrides = HashMap::new();
+            apply_hotkey_bindings(&mut overrides, family);
+            assert_eq!(overrides["input_toggle_fast_forward_btn"], "5", "{family:?}");
+            assert_eq!(overrides["input_toggle_fast_forward_axis"], "+5", "{family:?}");
         }
     }
 

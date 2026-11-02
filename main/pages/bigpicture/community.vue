@@ -147,14 +147,11 @@
           v-if="weeklyRecap.length > 1"
           class="absolute bottom-3 right-4 flex gap-1.5 z-10"
         >
-          <button
+          <span
             v-for="(_, i) in weeklyRecap"
             :key="i"
-            :ref="(el: any) => registerContent(el, { onSelect: () => (recapIndex = i) })"
             class="size-2 rounded-full transition-all"
             :class="i === recapIndex ? 'bg-blue-300 w-5' : 'bg-blue-300/30'"
-            :aria-label="`Show recap ${i + 1}`"
-            @click.stop="recapIndex = i"
           />
         </div>
       </div>
@@ -312,7 +309,7 @@
       >
         No recent activity to show.
       </p>
-      <div v-else class="space-y-2">
+      <div v-else class="grid grid-cols-2 gap-3">
         <div
           v-for="cluster in clusteredActivity"
           :key="cluster.key"
@@ -322,7 +319,8 @@
                 onSelect: () => goToGame(cluster.game?.id),
               })
           "
-          class="flex items-center gap-4 bg-zinc-900/40 rounded-xl p-4"
+          class="flex min-h-28 items-center gap-4 rounded-2xl border p-4"
+          :style="{ backgroundColor: 'var(--bpm-surface)', borderColor: 'var(--bpm-border)' }"
         >
           <div
             class="size-10 rounded-full bg-zinc-800 flex-shrink-0 overflow-hidden"

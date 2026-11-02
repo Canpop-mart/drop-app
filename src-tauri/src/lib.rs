@@ -31,9 +31,9 @@ use ::remote::{
     utils::{DROP_APP_HANDLE, DROP_CLIENT_ASYNC},
 };
 use database::{
-    DB, borrow_db_checked, borrow_db_mut_checked, db::DATA_ROOT_DIR,
+    DatabaseInterface, borrow_db_checked, borrow_db_mut_checked, db::DATA_ROOT_DIR,
 };
-use log::{LevelFilter, debug, info, warn};
+use log::{LevelFilter, debug, error, info, warn};
 use log4rs::{
     Config,
     append::{
@@ -59,6 +59,7 @@ use tauri_plugin_dialog::DialogExt;
 use url::Url;
 use utils::app_emit;
 
+mod addons;
 mod client;
 mod collections;
 mod compat;
@@ -153,8 +154,25 @@ async fn setup(handle: AppHandle) -> AppState {
     // Windows intermittently fails to deliver input for HID controllers.
     // ::process::gamepad::start_polling(handle.clone());
 
-    debug!("checking if database is set up");
-    let is_set_up = DB.database_is_set_up();
+    // Initialize the global database before anything else touches it. A failure
+    // here used to panic before any window existed: the app "opened and closed
+    // instantly" with no explanation. Show the player what happened, then exit —
+    // without a database nothing else can run.
+    let db = match DatabaseInterface::initialize() {
+        Ok(db) => db,
+        Err(e) => {
+            error!("failed to initialize the local database: {e}");
+            let _ = handle
+                .dialog()
+                .message(format!(
+                    "Drop could not start because its local database could not be opened or created.\n\n{e}\n\nCheck that there is space on the disk and that Drop can write to its data folder, then try again."
+                ))
+                .title("Drop could not start")
+                .show(|_| {});
+            std::process::exit(1);
+        }
+    };
+    let is_set_up = db.database_is_set_up();
 
     #[cfg(not(target_os = "linux"))]
     let umu_state = UmuState::NotNeeded;
@@ -379,6 +397,10 @@ pub fn run() {
             check_online,
             rename_client,
             ::remote::web_upload::upload_user_image,
+            addons::addon_install_save,
+            addons::addon_check_in,
+            addons::addon_local_state,
+            addons::addon_preflight,
             // Library
             fetch_library,
             fetch_game,

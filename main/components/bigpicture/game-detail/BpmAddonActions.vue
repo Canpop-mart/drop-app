@@ -311,7 +311,6 @@ async function cancelTurn(k: string) {
   await panel.cancelTurn(k);
   await settle(k);
 }
-
 async function replace(k: string) {
   if (panel.busy.value) return;
   await focusPrimary(k);

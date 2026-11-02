@@ -1,6 +1,6 @@
 <template>
   <section>
-    <div class="mb-4 flex items-baseline justify-between">
+    <div class="mb-3 flex items-baseline justify-between">
       <div class="flex items-baseline gap-3">
         <h2 class="font-display text-lg font-semibold text-zinc-100">
           {{ title }}
@@ -45,7 +45,7 @@
     </div>
     <div
       ref="scrollEl"
-      class="library-row -mx-1 flex gap-4 overflow-x-auto px-1 pb-2"
+      class="library-row -mx-1 flex gap-3 overflow-x-auto px-1 pb-2"
       @scroll="updateScrollState"
     >
       <slot />
