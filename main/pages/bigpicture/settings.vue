@@ -31,19 +31,18 @@
         class="space-y-5"
       >
         <h3 class="text-lg font-semibold font-display" style="color: var(--bpm-text)">
-          Theme
+          Appearance
         </h3>
 
-        <!-- Three-column horizontal layout -->
-        <div class="grid grid-cols-3 gap-6 items-start">
+        <div class="grid grid-cols-2 gap-6 items-start">
 
           <!-- ── Column 1: Visual Theme ── -->
           <div class="space-y-2">
-            <h4 class="text-sm font-medium text-zinc-300 mb-2">Visual Theme</h4>
+            <h4 class="text-sm font-medium text-zinc-300 mb-2">Color theme</h4>
             <p class="text-zinc-500 text-xs mb-3">
-              Colors and home layout for Big Picture Mode.
+              One interface, with a different palette and small details.
             </p>
-            <div class="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+            <div class="grid grid-cols-2 gap-2">
               <button
                 v-for="t in themes"
                 :key="t.id"
@@ -54,11 +53,10 @@
                     })
                 "
                 class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all"
-                :class="
-                  activeThemeId === t.id
-                    ? 'bg-blue-600/20 ring-2 ring-blue-500/60'
-                    : 'bg-zinc-900/50 hover:bg-zinc-800/50'
-                "
+                :style="{
+                  backgroundColor: activeThemeId === t.id ? 'color-mix(in srgb, var(--bpm-accent-hex) 14%, var(--bpm-surface))' : 'var(--bpm-surface)',
+                  boxShadow: activeThemeId === t.id ? 'inset 0 0 0 2px var(--bpm-accent-hex)' : 'inset 0 0 0 1px var(--bpm-border)',
+                }"
                 @click="activeThemeId = t.id"
               >
                 <div
@@ -66,10 +64,9 @@
                   :style="{ backgroundColor: themePreviewColors[t.id] }"
                 />
                 <div class="flex-1 min-w-0">
-                  <p class="font-medium text-zinc-200 text-sm truncate">{{ t.label }}</p>
-                  <p class="text-zinc-500 text-xs mt-0.5 truncate">{{ t.description }}</p>
+                  <p class="font-medium text-sm truncate" style="color: var(--bpm-text)">{{ t.label }}</p>
                 </div>
-                <span v-if="activeThemeId === t.id" class="text-xs font-medium text-blue-400 shrink-0">Active</span>
+                <span v-if="activeThemeId === t.id" class="text-xs font-medium shrink-0" style="color: var(--bpm-accent-hex)">Active</span>
               </button>
             </div>
 
@@ -105,11 +102,11 @@
 
           <!-- ── Column 2: Sound Profile ── -->
           <div class="space-y-2">
-            <h4 class="text-sm font-medium text-zinc-300 mb-2">Sound Profile</h4>
+            <h4 class="text-sm font-medium text-zinc-300 mb-2">Sound profile</h4>
             <p class="text-zinc-500 text-xs mb-3">
               Audio feedback style, independent from visual theme.
             </p>
-            <div class="space-y-2 max-h-[52vh] overflow-y-auto pr-1">
+            <div class="grid grid-cols-2 gap-2">
               <button
                 v-for="sp in soundProfiles"
                 :key="sp.id"
@@ -120,11 +117,10 @@
                     })
                 "
                 class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all"
-                :class="
-                  activeSoundProfile === sp.id
-                    ? 'bg-blue-600/20 ring-2 ring-blue-500/60'
-                    : 'bg-zinc-900/50 hover:bg-zinc-800/50'
-                "
+                :style="{
+                  backgroundColor: activeSoundProfile === sp.id ? 'color-mix(in srgb, var(--bpm-accent-hex) 14%, var(--bpm-surface))' : 'var(--bpm-surface)',
+                  boxShadow: activeSoundProfile === sp.id ? 'inset 0 0 0 2px var(--bpm-accent-hex)' : 'inset 0 0 0 1px var(--bpm-border)',
+                }"
                 @click="activeSoundProfile = sp.id; audio.setProfile(sp.id); audio.preview(sp.id, 'select')"
               >
                 <div
@@ -136,10 +132,9 @@
                   </svg>
                 </div>
                 <div class="flex-1 min-w-0">
-                  <p class="font-medium text-zinc-200 text-sm truncate">{{ sp.label }}</p>
-                  <p class="text-zinc-500 text-xs mt-0.5 truncate">{{ sp.description }}</p>
+                  <p class="font-medium text-sm truncate" style="color: var(--bpm-text)">{{ sp.label }}</p>
                 </div>
-                <span v-if="activeSoundProfile === sp.id" class="text-xs font-medium text-blue-400 shrink-0">Active</span>
+                <span v-if="activeSoundProfile === sp.id" class="text-xs font-medium shrink-0" style="color: var(--bpm-accent-hex)">Active</span>
               </button>
             </div>
 

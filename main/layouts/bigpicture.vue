@@ -386,12 +386,28 @@ onMounted(() => {
   );
 });
 
-// Watch route changes
+// Watch route changes. The nav rail survives while the page is replaced, so
+// page-local autofocus can race the old page's unregister callbacks and leave
+// focus in the rail. The persistent layout owns the handoff instead: clear the
+// old owner, then wait until the new route has registered real content.
 const route = useRoute();
+let routeFocusHandoff = 0;
 watch(
   () => route.fullPath,
-  (to, from) => {
+  async (to, from) => {
     debugLog(`Navigate: ${from} → ${to}`);
+    const handoff = ++routeFocusHandoff;
+    // Restrictions belong to page-local overlays. If one survives its page's
+    // teardown for even a tick, it must not prevent the persistent rail from
+    // entering the next page's content.
+    focusNav.unrestrictFocus();
+    focusNav.clearFocus();
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await nextTick();
+      if (handoff !== routeFocusHandoff || route.fullPath !== to) return;
+      if (focusNav.focusGroup("content")) return;
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
   },
 );
 

@@ -13,7 +13,7 @@
  *
  * This is the same rule as `three_way_verdict` in the client's
  * `remote/src/save_sync/decide.rs`, plus the launch sync's
- * `keep_other_accounts_changes_as_conflicts`. Keep them in step.
+ * `apply_shared_device_rule` (process_manager/save_sync.rs). Keep them in step.
  *
  * Pure, so it runs under `node --test main/tests/save-sync-state.test.ts`.
  */

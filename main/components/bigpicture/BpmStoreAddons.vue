@@ -14,12 +14,15 @@
 
        No Website button here: on a Deck in Game Mode a browser window would
        open behind gamescope. -->
-  <div ref="root" class="mx-auto max-w-4xl">
-    <p class="mb-6 text-sm" style="color: var(--bpm-muted)">
-      Addons are extras run by your server.
-    </p>
+  <div ref="root" class="mx-auto max-w-6xl">
+    <div class="mb-8">
+      <h2 class="text-3xl font-semibold font-display" style="color: var(--bpm-text)">Addons</h2>
+      <p class="mt-1 text-base" style="color: var(--bpm-muted)">
+        Add features to Drop itself.
+      </p>
+    </div>
 
-    <div v-if="shop.status.value === 'loading'" class="space-y-3">
+    <div v-if="shop.status.value === 'loading'" class="grid grid-cols-2 gap-4">
       <div
         v-for="i in 2"
         :key="i"
@@ -36,20 +39,24 @@
       @retry="retry"
     />
 
-    <p
+    <div
       v-else-if="shop.addons.value.length === 0"
-      class="py-20 text-center text-sm"
-      style="color: var(--bpm-muted)"
+      class="flex min-h-[22rem] flex-col items-center justify-center rounded-3xl border px-8 text-center"
+      :style="{ backgroundColor: 'var(--bpm-surface)', borderColor: 'var(--bpm-border)' }"
     >
-      No addons on this server yet.
-    </p>
+      <div class="mb-5 flex size-16 items-center justify-center rounded-2xl text-3xl" style="background-color: color-mix(in srgb, var(--bpm-accent-hex) 14%, transparent)">+</div>
+      <h3 class="text-xl font-semibold" style="color: var(--bpm-text)">No addons available</h3>
+      <p class="mt-2 max-w-lg text-sm leading-relaxed" style="color: var(--bpm-muted)">
+        When your server offers features such as Cloud Saves or Remote Play, they will appear here.
+      </p>
+    </div>
 
-    <ul v-else class="space-y-4">
+    <ul v-else class="grid grid-cols-2 gap-4">
       <li
         v-for="addon in shop.addons.value"
         :key="addon.name"
-        class="rounded-2xl p-6"
-        style="background-color: var(--bpm-surface)"
+        class="rounded-2xl border p-6"
+        :style="{ backgroundColor: 'var(--bpm-surface)', borderColor: 'var(--bpm-border)' }"
       >
         <div class="flex items-start justify-between gap-6">
           <div class="min-w-0 flex-1">

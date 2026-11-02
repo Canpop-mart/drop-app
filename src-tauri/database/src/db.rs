@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::PathBuf,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, OnceLock},
 };
 
 use keyring::Entry;
@@ -9,7 +9,12 @@ use log::{info, warn};
 
 use crate::interface::DatabaseInterface;
 
-pub static DB: LazyLock<DatabaseInterface> = LazyLock::new(DatabaseInterface::set_up_database);
+/// The initialized database. Set exactly once by
+/// [`crate::interface::DatabaseInterface::initialize`] during app setup, and read
+/// only through `DatabaseInterface::global()`. Kept crate-private so new code
+/// cannot reach the static without going through that accessor (which documents
+/// when it is safe to call).
+pub(crate) static DB: OnceLock<DatabaseInterface> = OnceLock::new();
 
 #[cfg(not(debug_assertions))]
 static DATA_ROOT_PREFIX: &str = "drop";

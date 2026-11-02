@@ -80,11 +80,12 @@ pub mod v1 {
         // launch while this mod is installed, instead of the game's normal one.
         // None for content mods that don't change the launch.
         pub launch_override: Option<String>,
-        // NOTE: deliberately NO UserConfiguration here. `pot` cannot round-trip
-        // a struct with `#[serde(default)]` fields (UserConfiguration has
-        // several), so embedding it makes `read()` fail to decode what `write()`
-        // produced. Mods don't need per-mod config anyway — the agent carries
-        // its own. (This is the same latent bug that affects DropData resume.)
+        // NOTE: deliberately NO UserConfiguration here. Embedding it makes
+        // `read()` fail to decode what `write()` produced — its `widescreen`
+        // field is an `AspectRatio`, whose hand-written Deserialize desyncs on
+        // pot's unit-enum encoding (see the DropData note in drop_data.rs;
+        // serde defaults are fine in pot). Mods don't need per-mod config
+        // anyway — the agent carries its own.
         // Completed-chunk map (resume ledger), same shape as DropData.
         pub contexts: Mutex<HashMap<String, bool>>,
         // Where the mod's files are written: the PARENT game's install dir

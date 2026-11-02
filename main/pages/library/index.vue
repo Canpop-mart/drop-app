@@ -1,14 +1,14 @@
 <template>
-  <div class="h-full flex flex-col overflow-y-auto">
+  <div class="flex h-full flex-col overflow-y-auto bg-zinc-950">
     <!-- Calm header — title, search, Filters, Collections. Density and the
          quick/active-filter chip rows moved into the drawer so the home feels
          uncluttered. -->
     <div
-      class="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur-lg px-8 xl:px-12 pt-6 pb-4 border-b border-zinc-800/40"
+      class="sticky top-0 z-10 border-b border-zinc-800/50 bg-zinc-950/90 px-8 py-4 backdrop-blur-xl xl:px-12"
     >
       <div class="flex items-center gap-4 flex-wrap">
         <div>
-          <h1 class="text-2xl font-display font-bold text-zinc-100">Library</h1>
+          <h1 class="text-2xl font-display font-bold tracking-tight text-zinc-100">Library</h1>
           <p class="mt-1 text-sm text-zinc-500">
             {{ totalCount }} game{{ totalCount === 1 ? "" : "s" }}
             <span v-if="installedCount > 0">
@@ -28,16 +28,16 @@
             v-model="searchInput"
             type="text"
             placeholder="Search your library..."
-            class="rounded-lg border border-zinc-700 bg-zinc-800/50 pl-9 pr-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:bg-zinc-800 focus:ring-2 focus:ring-blue-500 outline-none transition-colors w-72"
+            class="w-80 rounded-xl border border-zinc-800 bg-zinc-900/70 py-2.5 pl-9 pr-3 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-zinc-700 focus:bg-zinc-900 focus:ring-1 focus:ring-blue-500"
           />
         </div>
 
         <button
-          class="inline-flex items-center gap-x-2 rounded-md px-4 py-2 text-sm font-semibold transition-colors"
+          class="inline-flex items-center gap-x-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"
           :class="
             activeAdvancedFilterCount > 0
               ? 'bg-blue-600/20 text-blue-300 ring-1 ring-blue-500/40'
-              : 'bg-zinc-800/50 text-zinc-200 hover:bg-zinc-800'
+              : 'bg-zinc-900 text-zinc-300 ring-1 ring-inset ring-zinc-800 hover:bg-zinc-800'
           "
           @click="filterDrawerOpen = true"
         >
@@ -70,9 +70,9 @@
          threshold so a cached library never flashes a placeholder. -->
     <div
       v-if="showSkeleton"
-      class="flex-1 px-8 xl:px-12 py-8 space-y-12 pb-16"
+      class="flex-1 space-y-9 px-8 py-6 pb-16 xl:px-12"
     >
-      <div class="h-64 w-full rounded-2xl bg-zinc-800/50 animate-pulse" />
+      <div class="h-56 w-full rounded-2xl bg-zinc-800/50 animate-pulse" />
       <div class="space-y-4">
         <div class="h-4 w-40 rounded bg-zinc-800/50 animate-pulse" />
         <div class="flex gap-4">
@@ -102,7 +102,7 @@
          list so a search gets a clean answer. A failed library no longer
          short-circuits this whole block: the sections that have their own
          data source still render, and the grid says what went wrong. -->
-    <div v-else-if="!loading" class="flex-1 px-8 xl:px-12 py-8 space-y-12 pb-16">
+    <div v-else-if="!loading" class="flex-1 space-y-9 px-8 py-6 pb-16 xl:px-12">
       <section v-if="filterMode === 'flat'">
         <p class="text-xs uppercase tracking-widest text-zinc-500 mb-4">
           {{ displayedEntries.length }} result{{
@@ -122,6 +122,7 @@
           v-else-if="displayedEntries.length > 0"
           :entries="displayedEntries"
           :compact="density === 'compact'"
+          :dense="density !== 'compact'"
           :last-played-map="lastPlayedMap"
           :show-hover-action="density !== 'compact'"
           @select="goToGame"
@@ -143,14 +144,14 @@
         </section>
         <section v-else-if="continuePlaying">
           <div
-            class="group relative flex min-h-[300px] cursor-pointer items-end overflow-hidden rounded-3xl ring-1 ring-zinc-800/60"
+            class="group relative flex min-h-[230px] cursor-pointer items-end overflow-hidden rounded-2xl ring-1 ring-zinc-800/80"
             @click="goToGame(heroGameId)"
           >
             <img
               v-if="heroImageUrl"
               :src="heroImageUrl"
               :alt="heroName"
-              class="absolute inset-0 h-full w-full object-cover transition-transform duration-[1200ms] ease-out group-hover:scale-105"
+              class="absolute inset-0 h-full w-full object-cover opacity-70 transition-transform duration-[1200ms] ease-out group-hover:scale-[1.03]"
             />
             <div
               v-else
@@ -158,14 +159,14 @@
             />
             <!-- Legibility gradients: dark from the bottom + the left. -->
             <div
-              class="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/40 to-transparent"
+              class="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/25 to-transparent"
             />
             <div
-              class="absolute inset-0 bg-gradient-to-r from-zinc-950/80 via-zinc-950/10 to-transparent"
+              class="absolute inset-0 bg-gradient-to-r from-zinc-950 via-zinc-950/65 to-zinc-950/20"
             />
 
             <div
-              class="relative flex w-full flex-wrap items-end justify-between gap-5 p-8 sm:p-10"
+              class="relative flex w-full flex-wrap items-end justify-between gap-5 p-7 sm:p-8"
             >
               <div class="min-w-0">
                 <p
@@ -174,7 +175,7 @@
                   Continue playing
                 </p>
                 <h2
-                  class="truncate font-display text-4xl font-bold leading-none text-white drop-shadow-lg sm:text-5xl"
+                  class="truncate font-display text-4xl font-bold leading-none text-white drop-shadow-lg"
                 >
                   {{ heroName }}
                 </h2>
@@ -202,8 +203,15 @@
               <!-- Without a library entry we don't know whether the game is
                    installed, so the action drops to a neutral "Open" rather
                    than guessing between Play and Install. -->
-              <button
-                class="inline-flex shrink-0 items-center gap-2 rounded-xl px-7 py-3.5 text-base font-semibold shadow-lg transition-colors"
+              <div class="flex shrink-0 items-end gap-5">
+                <img
+                  v-if="heroCoverUrl"
+                  :src="heroCoverUrl"
+                  :alt="heroName"
+                  class="hidden h-44 aspect-[3/4] rounded-xl object-cover shadow-2xl ring-1 ring-white/15 lg:block"
+                />
+                <button
+                class="mb-1 inline-flex shrink-0 items-center gap-2 rounded-xl px-7 py-3.5 text-base font-semibold shadow-lg transition-colors"
                 :class="
                   continuePlaying.entry?.installed
                     ? 'bg-blue-600 text-white shadow-blue-600/30 hover:bg-blue-500'
@@ -234,7 +242,8 @@
                   />
                 </svg>
                 {{ heroActionLabel }}
-              </button>
+                </button>
+              </div>
             </div>
           </div>
         </section>
@@ -433,6 +442,7 @@
             v-show="!allGamesCollapsed"
             :entries="allGamesEntries"
             :compact="density === 'compact'"
+            :dense="density !== 'compact'"
             :last-played-map="lastPlayedMap"
             :show-hover-action="density !== 'compact'"
             @select="goToGame"
@@ -783,6 +793,12 @@ const heroImageUrl = computed(() => {
   const banner = continuePlaying.value?.entry?.game.mBannerObjectId;
   if (banner) return useObject(banner);
   const cover = continuePlaying.value?.recent.coverObjectId;
+  return cover ? useObject(cover) : "";
+});
+const heroCoverUrl = computed(() => {
+  const cover =
+    continuePlaying.value?.entry?.game.mCoverObjectId ??
+    continuePlaying.value?.recent.coverObjectId;
   return cover ? useObject(cover) : "";
 });
 const heroActionLabel = computed(() => {

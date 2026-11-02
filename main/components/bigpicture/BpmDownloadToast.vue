@@ -61,30 +61,70 @@ const unsub: (() => void)[] = [];
 
 const TOAST_DURATION_MS = 5000;
 
+// While a toast is on screen it owns A and B (Modal Pattern A, see
+// BigPictureDialog.vue): hold the input lock so page-level controls don't
+// fire at the same time, and mark our subscriptions bypassInputLock so they
+// keep working under our own lock. Release on hide AND unmount — a leaked
+// lock kills all controller input for the session.
+let lockId: number | null = null;
+
+watch(
+  () => current.value !== null,
+  (visible) => {
+    if (visible) {
+      lockId = focusNav.acquireInputLock();
+    } else if (lockId !== null) {
+      focusNav.releaseInputLock(lockId);
+      lockId = null;
+    }
+  },
+  { immediate: true },
+);
+
+// Gamepad dispatch is flat: a bypass subscription keeps firing under every
+// nested lock, including one acquired by an overlay that opened on top of us
+// (launch error dialog, save conflict). Act only while our lock is the most
+// recent one so those overlays get A/B first.
+function ownsInput(): boolean {
+  return lockId !== null && focusNav.isTopOfInputLock(lockId);
+}
+
 onMounted(() => {
   // Initialize the "seen" high-water mark so existing entries don't
   // trigger toasts on first mount.
   lastSeenAt = completed.value.at(0)?.completedAt ?? Date.now();
 
   unsub.push(
-    gamepad.onButton(GamepadButton.South, () => {
-      if (current.value) {
-        goToLibrary();
-      }
-    }),
+    gamepad.onButton(
+      GamepadButton.South,
+      () => {
+        if (current.value && ownsInput()) {
+          goToLibrary();
+        }
+      },
+      { bypassInputLock: true },
+    ),
   );
   unsub.push(
-    gamepad.onButton(GamepadButton.East, () => {
-      if (current.value) {
-        dismissCurrent();
-      }
-    }),
+    gamepad.onButton(
+      GamepadButton.East,
+      () => {
+        if (current.value && ownsInput()) {
+          dismissCurrent();
+        }
+      },
+      { bypassInputLock: true },
+    ),
   );
 });
 
 onUnmounted(() => {
   if (dismissTimer) clearTimeout(dismissTimer);
   for (const u of unsub) u();
+  if (lockId !== null) {
+    focusNav.releaseInputLock(lockId);
+    lockId = null;
+  }
 });
 
 // Detect new completed entries by watching for items whose completedAt is

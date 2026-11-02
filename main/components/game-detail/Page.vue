@@ -1,35 +1,7 @@
 <template>
   <div
-    class="mx-auto w-full relative flex flex-col justify-center pt-72 overflow-hidden"
+    class="relative mx-auto flex min-h-full w-full flex-col overflow-hidden bg-zinc-950 pb-16 pt-48"
   >
-    <!-- Options gear menu — pinned top-left above the banner. Now
-         carries every per-game action including Configure and
-         Uninstall, which used to live in a separate chevron dropdown
-         on the Play button (consolidated v3.6 — single discoverable
-         options surface). -->
-    <GameDetailOptionsMenu
-      :has-achievements="stats.achievements.value.length > 0"
-      :show-configure="
-        status.type === 'Installed' &&
-        status.install_type.type !== InstalledType.PartiallyInstalled
-      "
-      :show-account-name="config.isNativeGame.value && status.type === 'Installed'"
-      :show-open-folder="status.type === 'Installed'"
-      :show-uninstall="status.type === 'Installed'"
-      :show-install-vcredist="
-        status.type === 'Installed' &&
-        !config.isEmulatedGame.value &&
-        isLinuxHost
-      "
-      @configure="configureModalOpen = true"
-      @set-account-name="config.applyProfileName()"
-      @open-install-folder="openInstallFolder"
-      @uninstall="gameUninstallOpen = true"
-      @install-runtime="installRuntime"
-      @reset-achievements="resetConfirmOpen = true"
-      @remove-from-library="removeConfirmOpen = true"
-    />
-
     <!--
       Incognito launch — intentionally has NO visible UI.  Activation is
       Shift+click on the Play button (handled inside GameStatusButton
@@ -54,6 +26,10 @@
       :launch-in-flight="launchCtl.launchInFlight.value"
       :prep-status="launchCtl.prepStatus.value"
       :update-available="updateAvailable"
+      :show-settings="
+        status.type === 'Installed' &&
+        status.install_type.type !== InstalledType.PartiallyInstalled
+      "
       @install="installCtl.openInstallFlow()"
       @update="openUpdateReview()"
       @launch="requestPlay(false)"
@@ -62,102 +38,9 @@
       @kill="launchCtl.kill()"
       @resume="launchCtl.resumeDownload()"
       @compat-result="onCompatTestResult"
+      @settings="configureModalOpen = true"
       @open-community="activeDetailTab = 'community'"
     />
-
-    <!-- Installed versions — the multi-version install manager. The full list
-         (per-version Play / Uninstall) shows when more than one version is
-         installed; a single install just gets an "Install another version"
-         affordance. -->
-    <div v-if="installs.length > 0" class="relative z-10 mx-8 mt-4">
-      <div
-        v-if="installs.length > 1"
-        class="rounded-xl border border-zinc-800 bg-zinc-900 p-4"
-      >
-        <div class="mb-3 flex items-center justify-between">
-          <h3 class="text-sm font-medium text-zinc-200">Installed versions</h3>
-          <button
-            class="text-sm text-blue-400 hover:text-blue-300"
-            @click="installCtl.openInstallFlow()"
-          >
-            Install another version
-          </button>
-        </div>
-        <p class="mb-2 text-xs text-zinc-500">
-          Select which version the Play button launches.
-        </p>
-        <div class="space-y-2">
-          <div
-            v-for="inst in installs"
-            :key="inst.versionId"
-            class="flex items-center gap-3 rounded-lg px-3 py-2"
-            :class="
-              selectedVersionId === inst.versionId
-                ? 'bg-blue-600/15 ring-1 ring-blue-500/60'
-                : 'bg-zinc-800/50'
-            "
-          >
-            <button
-              type="button"
-              class="flex min-w-0 flex-1 items-center gap-3 text-left"
-              @click="selectedVersionId = inst.versionId"
-            >
-              <span
-                class="size-4 shrink-0 rounded-full border-2"
-                :class="
-                  selectedVersionId === inst.versionId
-                    ? 'border-blue-400 bg-blue-500'
-                    : 'border-zinc-500'
-                "
-              />
-              <span class="min-w-0 text-sm text-zinc-200">
-                {{ versionLabel(inst.versionId) }}
-                <span
-                  v-if="inst.installType === 'PartiallyInstalled'"
-                  class="ml-1 text-xs text-amber-300"
-                  >Incomplete</span
-                >
-                <span
-                  v-else-if="inst.installType === 'SetupRequired'"
-                  class="ml-1 text-xs text-amber-300"
-                  >Setup needed</span
-                >
-                <span
-                  v-if="inst.updateAvailable"
-                  class="ml-1 text-xs text-blue-300"
-                  >Update available</span
-                >
-              </span>
-            </button>
-            <button
-              v-if="
-                inst.updateAvailable &&
-                inst.installType !== 'PartiallyInstalled'
-              "
-              type="button"
-              class="shrink-0 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500"
-              @click="updateCtl.review(inst.versionId)"
-            >
-              Update
-            </button>
-            <button
-              type="button"
-              class="shrink-0 rounded-md bg-zinc-700 px-3 py-1.5 text-sm font-medium text-zinc-200 hover:bg-zinc-600"
-              @click="versionToUninstall = inst.versionId"
-            >
-              Uninstall
-            </button>
-          </div>
-        </div>
-      </div>
-      <button
-        v-else
-        class="text-sm text-blue-400 hover:text-blue-300"
-        @click="installCtl.openInstallFlow()"
-      >
-        Install another version
-      </button>
-    </div>
 
     <!-- League saves (addons): check the shared save out and in. Shows
          nothing for games without one. -->
@@ -173,16 +56,16 @@
          saves for; promoting it to a tab keeps the surface available
          without competing for space. -->
     <div class="relative z-10">
-      <div class="mt-6 w-full bg-zinc-900 px-8">
-        <div class="flex items-center gap-1 border-b border-zinc-700/50">
+      <div class="mt-8 w-full px-8">
+        <div class="flex items-center gap-7 border-b border-zinc-800">
           <button
             v-for="tab in visibleDetailTabs"
             :key="tab.value"
-            class="relative px-5 py-3 text-sm font-medium transition-colors"
+            class="relative py-4 text-sm font-semibold transition-colors"
             :class="
               activeDetailTab === tab.value
-                ? 'text-blue-400'
-                : 'text-zinc-400 hover:text-zinc-200'
+                ? 'text-zinc-100'
+                : 'text-zinc-500 hover:text-zinc-300'
             "
             @click="activeDetailTab = tab.value"
           >
@@ -194,7 +77,7 @@
           </button>
         </div>
 
-        <div class="pt-6 pb-2">
+        <div class="pb-2 pt-8">
           <!-- About — description + gallery, both as collapsible
                sections.  Gallery used to live as its own tab; folded
                into About now since the two are sibling "background
@@ -205,28 +88,31 @@
               aboutHasAside ? 'grid xl:grid-cols-[1fr_360px] gap-4' : 'space-y-4'
             "
           >
-            <div class="min-w-0 space-y-4">
-              <CollapsibleSection title="Description">
-                <!-- Cap in CHARACTERS, not viewport width: `max-w-none` let
-                     lines run the full width of a wide monitor. -->
+            <div class="min-w-0 space-y-12">
+              <section>
+                <h2 class="mb-5 text-2xl font-semibold text-zinc-100">About {{ game.mName }}</h2>
+                <!-- Promotional art can use the full column. CSS keeps plain
+                     text to a readable line length. -->
                 <div
                   ref="descriptionEl"
                   v-html="htmlDescription"
-                  class="game-description prose prose-invert prose-blue max-w-[75ch]"
+                  class="game-description prose prose-invert prose-blue w-full max-w-none"
                   @click="openDescriptionImage"
                 />
-              </CollapsibleSection>
+              </section>
 
-              <CollapsibleSection
+              <section
                 v-if="game.mImageCarouselObjectIds.length > 0"
-                title="Gallery"
-                :badge="`${game.mImageCarouselObjectIds.length} images`"
               >
+                <div class="mb-5 flex items-baseline gap-3">
+                  <h2 class="text-2xl font-semibold text-zinc-100">Gallery</h2>
+                  <span class="text-sm text-zinc-500">{{ game.mImageCarouselObjectIds.length }} images</span>
+                </div>
                 <GameDetailGallery
                   :image-ids="game.mImageCarouselObjectIds"
                   :game-name="game.mName"
                 />
-              </CollapsibleSection>
+              </section>
             </div>
             <aside v-if="aboutHasAside" class="space-y-4 min-w-0">
               <GameDetailHowLongToBeat :game="game" />
@@ -514,12 +400,6 @@
             </CollapsibleSection>
           </div>
 
-          <CloudSavesPanel
-            v-else-if="activeDetailTab === 'saves'"
-            :game-id="game.id"
-            :game-name="game.mName"
-            :is-native-game="config.isNativeGame.value"
-          />
         </div>
       </div>
     </div>
@@ -683,6 +563,22 @@
     v-model="configureModalOpen"
     :game-id="game.id"
     :emulated="isEmulated"
+    :is-native-game="config.isNativeGame.value"
+    :installs="installs"
+    :version-labels="versionLabels"
+    :selected-version-id="selectedVersionId"
+    :has-achievements="stats.achievements.value.length > 0"
+    :show-install-runtimes="!config.isEmulatedGame.value && isLinuxHost"
+    @select-version="selectedVersionId = $event"
+    @install-version="openInstallFromSettings"
+    @update-version="openUpdateFromSettings"
+    @uninstall-version="openVersionUninstallFromSettings"
+    @set-account-name="config.applyProfileName()"
+    @open-install-folder="openInstallFolder"
+    @install-runtime="installRuntime"
+    @reset-achievements="openAchievementResetFromSettings"
+    @uninstall-game="openGameUninstallFromSettings"
+    @remove-from-library="openRemoveFromSettings"
   />
 
   <DependencyRequiredModal
@@ -1337,6 +1233,40 @@ const removeConfirmOpen = ref(false);
 const removeBusy = ref(false);
 const removeError = ref<string | undefined>();
 
+function closeSettings() {
+  configureModalOpen.value = false;
+}
+
+function openInstallFromSettings() {
+  closeSettings();
+  installCtl.openInstallFlow();
+}
+
+function openUpdateFromSettings(versionId: string) {
+  closeSettings();
+  updateCtl.review(versionId);
+}
+
+function openVersionUninstallFromSettings(versionId: string) {
+  closeSettings();
+  versionToUninstall.value = versionId;
+}
+
+function openAchievementResetFromSettings() {
+  closeSettings();
+  resetConfirmOpen.value = true;
+}
+
+function openGameUninstallFromSettings() {
+  closeSettings();
+  gameUninstallOpen.value = true;
+}
+
+function openRemoveFromSettings() {
+  closeSettings();
+  removeConfirmOpen.value = true;
+}
+
 // Achievements + community used to be two separate tabs; they're now
 // stacked under "Community" since the achievement list is itself a
 // community signal (your progress vs server firsts). Gallery used to
@@ -1346,7 +1276,6 @@ const detailTabs = [
   { label: "About", value: "about" },
   { label: "Community", value: "community" },
   { label: "Mods", value: "mods" },
-  { label: "Cloud Saves", value: "saves" },
 ] as const;
 const activeDetailTab =
   ref<(typeof detailTabs)[number]["value"]>("about");
@@ -1687,6 +1616,13 @@ function onCompatTestResult(outcome: unknown) {
    to look it. :deep because they come from a v-html sink. */
 .game-description :deep(img) {
   cursor: zoom-in;
+  width: 100%;
+}
+
+.game-description :deep(p),
+.game-description :deep(ul),
+.game-description :deep(ol) {
+  max-width: 90ch;
 }
 
 .slide-enter-active,

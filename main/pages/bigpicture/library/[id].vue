@@ -1,40 +1,40 @@
 <template>
   <div class="flex flex-col h-full overflow-y-auto" :style="{ backgroundColor: 'var(--bpm-bg)', color: 'var(--bpm-text)' }">
     <!-- Hero banner -->
-    <div class="relative shrink-0 h-96">
+    <div class="relative shrink-0 min-h-[22rem] overflow-visible">
       <div v-if="!game" class="w-full h-full bg-zinc-800/50 animate-pulse" />
       <template v-else>
         <img
           v-if="game.mBannerObjectId"
           :src="objectUrl(game.mBannerObjectId)"
-          class="w-full h-full object-cover"
+          class="absolute inset-0 h-full w-full object-cover scale-[1.02]"
         />
         <div v-else class="w-full h-full bg-zinc-800/30" />
       </template>
       <div
         v-if="game"
-        class="absolute inset-0 bg-gradient-to-r from-zinc-950 via-zinc-950/80 to-zinc-950/20"
+        class="absolute inset-0 bg-gradient-to-r from-zinc-950 via-zinc-950/70 to-zinc-950/15"
       />
       <div
         v-if="game"
-        class="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/60 to-transparent"
+        class="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/45 to-transparent"
       />
 
       <!-- Game info overlay -->
-      <div v-if="game" class="absolute bottom-0 left-0 right-0 p-8">
-        <h1 class="text-5xl font-bold font-display text-zinc-100 mb-2" style="text-shadow: 0 2px 8px rgba(0,0,0,0.8), 0 0 2px rgba(0,0,0,0.6)">
+      <div v-if="game" class="absolute inset-x-0 bottom-0 p-8">
+        <h1 class="mb-2 max-w-5xl text-4xl font-bold font-display leading-tight text-zinc-50" style="text-shadow: 0 2px 12px rgba(0,0,0,0.85)">
           {{ game?.mName }}
         </h1>
         <p
           v-if="game?.mShortDescription"
-          class="text-lg text-zinc-400 max-w-4xl mb-6"
+          class="mb-5 max-w-3xl text-base leading-relaxed text-zinc-300"
           style="text-shadow: 0 1px 4px rgba(0,0,0,0.8)"
         >
           {{ game.mShortDescription }}
         </p>
 
         <!-- Action buttons -->
-        <div class="flex items-center gap-3">
+        <div class="flex max-w-[min(100%,76rem)] flex-wrap items-center gap-3">
           <!-- ── Installed: Play button with dropdown ── -->
           <div v-if="status?.type === 'Installed' && status.install_type.type === 'Installed'" class="relative inline-flex">
             <div
@@ -298,7 +298,7 @@
           </span>
 
           <!-- Controller, Quality & Widescreen cycle buttons — only for installed emulated games -->
-          <template v-if="version && isEmulatedGame && status?.type === 'Installed'">
+          <template v-if="false && version && isEmulatedGame && status?.type === 'Installed'">
             <button
               :ref="(el: any) => registerAction(el, { onSelect: cycleController })"
               class="inline-flex items-center gap-1.5 px-4 py-3 text-sm bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 rounded-xl transition-colors backdrop-blur-sm"
@@ -1258,22 +1258,47 @@
           v-if="showOptions"
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
         >
-          <div class="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4">
-            <h2 class="text-xl font-semibold font-display text-zinc-100 mb-4">Game Options</h2>
+          <div
+            class="max-h-[86vh] w-full max-w-4xl overflow-y-auto rounded-3xl border p-7 shadow-2xl mx-4"
+            :style="{ backgroundColor: 'var(--bpm-bg)', borderColor: 'var(--bpm-border)' }"
+          >
+            <div class="mb-6 flex items-center gap-4">
+              <img
+                v-if="game?.mCoverObjectId"
+                :src="objectUrl(game.mCoverObjectId)"
+                :alt="game.mName"
+                class="h-20 w-14 rounded-lg object-cover shadow-lg"
+              />
+              <div class="min-w-0">
+                <p class="text-sm font-medium" style="color: var(--bpm-accent-hex)">Game options</p>
+                <h2 class="truncate text-2xl font-semibold font-display" style="color: var(--bpm-text)">
+                  {{ game?.mName }}
+                </h2>
+              </div>
+            </div>
 
-            <div class="space-y-1.5">
-              <button
-                v-for="(item, idx) in optionsMenuItems"
-                :key="item.id"
-                class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors"
-                :class="optionsFocusIdx === idx
-                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
-                  : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700'"
-                @click="item.action()"
-              >
-                <span class="font-medium">{{ item.label }}</span>
-                <span v-if="item.valueLabel" class="text-xs opacity-75">{{ item.valueLabel }}</span>
-              </button>
+            <div class="grid grid-cols-3 gap-5">
+              <section v-for="group in optionMenuGroups" :key="group.id" class="min-w-0">
+                <h3 class="mb-2 px-1 text-xs font-semibold uppercase tracking-wider" style="color: var(--bpm-muted)">
+                  {{ group.label }}
+                </h3>
+                <div class="space-y-2">
+                  <button
+                    v-for="entry in group.items"
+                    :key="entry.item.id"
+                    class="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-sm transition-colors text-left"
+                    :style="{
+                      backgroundColor: optionsFocusIdx === entry.index ? 'var(--bpm-accent-hex)' : 'var(--bpm-surface)',
+                      color: optionsFocusIdx === entry.index ? 'var(--bpm-accent-text)' : entry.item.destructive ? '#f87171' : 'var(--bpm-text)',
+                      boxShadow: optionsFocusIdx === entry.index ? '0 10px 30px color-mix(in srgb, var(--bpm-accent-hex) 25%, transparent)' : 'inset 0 0 0 1px var(--bpm-border)',
+                    }"
+                    @click="entry.item.action()"
+                  >
+                    <span class="font-medium min-w-0">{{ entry.item.label }}</span>
+                    <span v-if="entry.item.valueLabel" class="max-w-[45%] truncate text-xs opacity-75">{{ entry.item.valueLabel }}</span>
+                  </button>
+                </div>
+              </section>
             </div>
 
             <!-- Hints -->
@@ -2168,6 +2193,7 @@ interface OptionsMenuItem {
   id: string;
   label: string;
   valueLabel?: string;
+  destructive?: boolean;
   action: () => void;
 }
 
@@ -2342,6 +2368,7 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
   items.push({
     id: "remove-library",
     label: "Remove from Library",
+    destructive: true,
     action: removeFromLibrary,
   });
 
@@ -2349,11 +2376,37 @@ const optionsMenuItems = computed<OptionsMenuItem[]>(() => {
     items.push({
       id: "uninstall",
       label: "Uninstall",
+      destructive: true,
       action: uninstallGame,
     });
   }
 
   return items;
+});
+
+const optionMenuGroups = computed(() => {
+  const groupFor = (id: string) => {
+    if (["install-another", "install-dir", "install-start", "install-runtimes", "updates"].includes(id)) {
+      return "versions";
+    }
+    if (["add-to-shelf", "open-install-folder", "remove-library", "uninstall"].includes(id)) {
+      return "library";
+    }
+    return "setup";
+  };
+  const definitions = [
+    { id: "setup", label: "Game setup" },
+    { id: "versions", label: "Versions and updates" },
+    { id: "library", label: "Library" },
+  ];
+  return definitions
+    .map((group) => ({
+      ...group,
+      items: optionsMenuItems.value
+        .map((item, index) => ({ item, index }))
+        .filter(({ item }) => groupFor(item.id) === group.id),
+    }))
+    .filter((group) => group.items.length > 0);
 });
 
 // Focus follows the item's id, not its position. This list is reactive: the
@@ -2501,7 +2554,6 @@ let shelfLockId = 0;
 
 function wireShelfGamepad() {
   unwireShelfGamepad();
-  const totalItems = shelvesData.shelves.value.length + 2; // shelves + Create button + Done button
   const bypass = { bypassInputLock: true };
   // These handlers bypass the input lock, so they keep firing when the
   // on-screen keyboard opens on top of the picker — and the keyboard's own
@@ -2516,6 +2568,9 @@ function wireShelfGamepad() {
     }, bypass),
     gamepad.onButton(GamepadButton.DPadDown, () => {
       if (!pickerHasInput()) return;
+      // Count rows live: "Create New Shelf" appends a row while the picker is
+      // open, so Done must stay reachable after that.
+      const totalItems = shelvesData.shelves.value.length + 2; // shelves + Create button + Done button
       shelfFocusIdx.value = Math.min(totalItems - 1, shelfFocusIdx.value + 1);
     }, bypass),
     gamepad.onButton(GamepadButton.South, () => {

@@ -82,7 +82,11 @@ Revisions, fingerprints, mirrored folders and "Publish update": `../drop-server/
   would make a later repair run the full-download sweep and delete files the player chose to keep.
 - The baseline is a JSON sidecar on purpose, not a pot field: a bad sidecar only falls back to the server list
   (`baseline.rs` module doc). New `Sidecar` fields need `#[serde(default)]` to read older sidecars.
+<<<<<<< Updated upstream
 - `check_can_update` refuses while ANY mod download is in the queue (any game), not just this game's (`ModDownloadActive`).
+=======
+- `check_can_update` refuses only while THIS game's own mods are queued/running (`ModDownloadActive`). A mod's transient status is keyed by the mod's own id, so `apply()` first reads this install's on-disk ledgers (`mod_data::installed_ledgers`, before the db lock, as `uninstall_mod` does) and passes those ids in. A mod of another game touches none of these files. A fresh mod that has never installed here has no ledger until it starts; that is safe because downloads run sequentially and the commit's per-file "still as planned" check refuses to swap over anything unplanned.
+>>>>>>> Stashed changes
 - `update_active` returns true if its mutex is poisoned; `download_mod` and `uninstall_game` check it and refuse.
 - Emulators: `games_using` blocks the commit while any ROM that launches through the emulator is running.
 - Repair after an update: `back_up_kept_files` writes `.bak` for "keep mine" files the repair is about to overwrite.

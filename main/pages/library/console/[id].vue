@@ -1,8 +1,9 @@
 <template>
-  <div class="h-full flex flex-col overflow-y-auto">
-    <!-- Console header — a calm themed banner: name, maker, blurb, count. -->
+  <div class="flex h-full flex-col overflow-y-auto bg-zinc-950">
+    <!-- Compact platform identity. Emulator management and games are separate
+         below, so the header only needs to orient the player. -->
     <div
-      class="relative overflow-hidden border-b border-zinc-800/40 bg-gradient-to-br from-zinc-900 via-zinc-950 to-zinc-900 px-8 xl:px-12 pt-8 pb-7"
+      class="relative overflow-hidden border-b border-zinc-800/50 bg-gradient-to-r from-zinc-900/80 to-zinc-950 px-8 py-5 xl:px-12"
     >
       <NuxtLink
         to="/library"
@@ -11,13 +12,13 @@
         <ChevronLeftIcon class="size-4" />
         Library
       </NuxtLink>
-      <div class="mt-4 flex flex-wrap items-end justify-between gap-4">
-        <div class="flex min-w-0 items-end gap-5">
+      <div class="mt-3 flex flex-wrap items-center justify-between gap-4">
+        <div class="flex min-w-0 items-center gap-5">
           <img
             v-if="art"
             :src="art.render"
             :alt="art.name"
-            class="h-24 w-auto max-w-[10rem] shrink-0 object-contain drop-shadow-lg"
+            class="h-16 w-auto max-w-[8rem] shrink-0 object-contain drop-shadow-lg"
             :style="art.pixel ? 'image-rendering: pixelated' : ''"
           />
           <div class="min-w-0">
@@ -26,7 +27,7 @@
               :src="art.logo"
               :alt="art.name"
               class="w-auto max-w-[22rem] object-contain"
-              :class="art.big ? 'h-20' : 'h-14'"
+              :class="art.big ? 'h-12' : 'h-9'"
               :style="
                 art.whiten
                   ? 'filter: brightness(0) invert(1) drop-shadow(0 2px 3px rgba(0,0,0,0.4))'
@@ -35,28 +36,28 @@
             />
             <h1
               v-else
-              class="font-display text-4xl font-bold leading-none text-white drop-shadow-lg"
+              class="font-display text-3xl font-bold leading-none text-white drop-shadow-lg"
             >
               {{ displayName }}
             </h1>
-            <p v-if="meta?.blurb" class="mt-3 max-w-xl text-sm text-zinc-400">
+            <p v-if="meta?.blurb" class="mt-2 max-w-2xl text-sm text-zinc-400">
               {{ meta.blurb }}
             </p>
           </div>
         </div>
         <p class="text-sm text-zinc-400">
-          {{ consoleEntries.length }} game{{
-            consoleEntries.length === 1 ? "" : "s"
+          {{ gameEntries.length }} game{{
+            gameEntries.length === 1 ? "" : "s"
           }}
-          <span v-if="installedCount > 0">
+          <span v-if="installedGameCount > 0">
             ·
-            <span class="text-green-500">{{ installedCount }} installed</span>
+            <span class="text-green-500">{{ installedGameCount }} installed</span>
           </span>
         </p>
       </div>
     </div>
 
-    <div class="flex-1 px-8 xl:px-12 py-8 pb-16">
+    <div class="flex-1 px-8 py-6 pb-16 xl:px-12">
       <div
         v-if="loading"
         class="flex items-center justify-center py-20 text-sm text-zinc-500"
@@ -70,7 +71,7 @@
         @retry="load"
       />
       <div
-        v-else-if="consoleEntries.length === 0"
+        v-else-if="gameEntries.length === 0 && emulatorEntries.length === 0"
         class="flex flex-col items-center justify-center py-20 text-center"
       >
         <p class="text-sm text-zinc-400">
@@ -83,14 +84,55 @@
           Back to library
         </NuxtLink>
       </div>
-      <LibraryGrid
-        v-else
-        :entries="consoleEntries"
-        :last-played-map="lastPlayedMap"
-        :boxart-theme="art?.boxartTheme ?? null"
-        show-hover-action
-        @select="goToGame"
-      />
+      <template v-else>
+        <section v-if="emulatorEntries.length > 0" class="mb-8">
+          <div class="mb-3 flex items-baseline gap-3">
+            <h2 class="font-display text-lg font-semibold text-zinc-100">Emulator</h2>
+            <span class="text-xs text-zinc-500">Runs this platform</span>
+          </div>
+          <div class="flex flex-wrap gap-3">
+            <div
+              v-for="entry in emulatorEntries"
+              :key="entry.game.id"
+              class="flex min-w-[22rem] items-center gap-4 rounded-xl border border-zinc-800 bg-zinc-900/45 p-3"
+            >
+              <img
+                v-if="entry.game.mCoverObjectId"
+                :src="useObject(entry.game.mCoverObjectId)"
+                :alt="entry.game.mName"
+                class="size-14 rounded-lg object-cover"
+              />
+              <div class="min-w-0 flex-1">
+                <p class="truncate font-semibold text-zinc-100">{{ entry.game.mName }}</p>
+                <p class="mt-0.5 text-xs" :class="entry.installed ? 'text-green-400' : 'text-zinc-500'">
+                  {{ entry.installed ? "Installed" : "Not installed" }}
+                </p>
+              </div>
+              <NuxtLink
+                :to="entry.installed ? `/library/emulator/${entry.game.id}` : `/library/${entry.game.id}`"
+                class="rounded-lg bg-zinc-800 px-4 py-2 text-sm font-semibold text-zinc-200 hover:bg-zinc-700"
+              >
+                {{ entry.installed ? "Manage" : "View" }}
+              </NuxtLink>
+            </div>
+          </div>
+        </section>
+
+        <section v-if="gameEntries.length > 0">
+          <div class="mb-4 flex items-baseline gap-3">
+            <h2 class="font-display text-xl font-semibold text-zinc-100">Games</h2>
+            <span class="text-xs tabular-nums text-zinc-500">{{ gameEntries.length }}</span>
+          </div>
+          <LibraryGrid
+            :entries="gameEntries"
+            :last-played-map="lastPlayedMap"
+            :boxart-theme="art?.boxartTheme ?? null"
+            dense
+            show-hover-action
+            @select="goToGame"
+          />
+        </section>
+      </template>
     </div>
   </div>
 </template>
@@ -136,14 +178,21 @@ const displayName = computed(
   () => art.value?.name ?? meta.value?.name ?? "Console",
 );
 const consoleEntries = ref<LibraryEntry[]>([]);
+const emulatorGameIds = ref<Set<string>>(new Set());
 const lastPlayedMap = ref<Map<string, string>>(new Map());
 const loading = ref(true);
 // Set when the console list or the library couldn't be read, so a failure
 // isn't shown as "No games here yet".
 const loadError = ref<string | null>(null);
 
-const installedCount = computed(
-  () => consoleEntries.value.filter((e) => e.installed).length,
+const emulatorEntries = computed(() =>
+  consoleEntries.value.filter((e) => emulatorGameIds.value.has(e.game.id)),
+);
+const gameEntries = computed(() =>
+  consoleEntries.value.filter((e) => !emulatorGameIds.value.has(e.game.id)),
+);
+const installedGameCount = computed(
+  () => gameEntries.value.filter((e) => e.installed).length,
 );
 
 function goToGame(gameId: string) {
@@ -164,6 +213,7 @@ async function load() {
     if (!group) {
       meta.value = null;
       consoleEntries.value = [];
+      emulatorGameIds.value = new Set();
       return;
     }
     const { gameIds, ...rest } = group;
@@ -212,6 +262,7 @@ async function load() {
     // in the player's library, so it's fetched on its own; one that fails to
     // load is simply left out.
     const emulators = new Map<string, LibraryEntry>();
+    emulatorGameIds.value = new Set(group.emulatorIds ?? []);
     for (const id of group.emulatorIds ?? []) {
       const r = await useGame(id).catch(() => null);
       if (!r) continue;
@@ -234,6 +285,7 @@ async function load() {
   } catch (e) {
     console.warn("[console] load failed:", e);
     consoleEntries.value = [];
+    emulatorGameIds.value = new Set();
     loadError.value = e instanceof Error ? e.message : String(e);
   } finally {
     loading.value = false;

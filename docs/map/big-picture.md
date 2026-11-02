@@ -11,7 +11,11 @@ with the focus system or handled by an overlay's own gamepad subscriptions. Ther
 ## Where the code is
 | Path | What's there |
 |---|---|
+<<<<<<< Updated upstream
 | `main/composables/focus-navigation.ts` | The focus system singleton. `useFocusNavigation()`: `registerElement`, `focusGroup`, `focusElement`, `clearFocus`, `acquireInputLock`/`releaseInputLock`, `restrictFocus`/`unrestrictFocus`, `autoFocusContent`, `setGroupOrder`, `saveFocusSnapshot`/`restoreFocusSnapshot`, `setRouteState`/`getRouteState`, `destroy`. Button wiring in `wireGamepad()` (~line 881) |
+=======
+| `main/composables/focus-navigation.ts` | The focus system singleton. `useFocusNavigation()`: `registerElement`, `focusGroup`, `focusElement`, `clearFocus`, `acquireInputLock`/`releaseInputLock`/`isTopOfInputLock`, `restrictFocus`/`unrestrictFocus`, `autoFocusContent`, `setGroupOrder`, `saveFocusSnapshot`/`restoreFocusSnapshot`, `setRouteState`/`getRouteState`, `destroy`. Button wiring in `wireGamepad()` (~line 881) |
+>>>>>>> Stashed changes
 | `main/composables/bp-focusable.ts` | `useBpFocusable(elRef, group, opts)` (single element) and `useBpFocusableGroup(group)` (returns `register(el, opts)` for `:ref` callbacks). This is how every page registers controls |
 | `main/composables/gamepad.ts` | Polling, `GamepadButton` names, `useGamepad().onButton(button, cb, { bypassInputLock })`, `onButtonRelease`, `onAnyButton`, `vibrate`, `axisValue`, `setGlobalInputLock` |
 | `main/composables/big-picture.ts` | `useBigPictureMode()`: `enter`, `exit`, `toggle`, `isActive`. `useGuideButtonToggle()` (Guide button toggles BPM) |
@@ -32,7 +36,11 @@ with the focus system or handled by an overlay's own gamepad subscriptions. Ther
 | `main/composables/bp-idle.ts`, `main/components/bigpicture/BpmScreensaver.vue` | Idle timer and screensaver (home page only) |
 | `main/composables/bp-reduced-motion.ts`, `main/composables/ui-zoom.ts` | Reduced motion (`.bpm-reduced-motion`), UI zoom |
 | `main/composables/achievements/toast.ts`, `main/components/bigpicture/BpmAchievementToastHost.vue` | BPM achievement toast; `bpmToastHosts` count silences desktop `AchievementToast` |
+<<<<<<< Updated upstream
 | `main/components/bigpicture/BpmDownloadToast.vue` | Download-complete toast, A opens the game, B dismisses |
+=======
+| `main/components/bigpicture/BpmDownloadToast.vue` | Download-complete toast, A opens the game, B dismisses. Holds an input lock while visible (Modal Pattern A); defers to overlays that open on top via `isTopOfInputLock` |
+>>>>>>> Stashed changes
 
 ## How it flows
 1. Enter: `main/app.vue` `tryEnterBPM()` when `state.sessionType === "gamescope"` or `localStorage["drop:startInBPM"]`;
@@ -107,7 +115,13 @@ BPM pages (`main/pages/bigpicture/`) call the server through `useServerApi()` an
 - Lists that change while open: anchor focus to item id. Options menu uses `optionsFocusId` (`main/pages/bigpicture/library/[id].vue` ~2358-2384):
   an async Executable row insert once shifted rows so A could land on "Remove from Library".
 - Lock handlers with `bypassInputLock` keep firing under a nested lock; the shelf picker guards with
+<<<<<<< Updated upstream
   `pickerHasInput()` so the keyboard above it does not also move it (same file ~2502).
+=======
+  `pickerHasInput()` so the keyboard above it does not also move it (same file ~2502). The download toast,
+  whose subscriptions are registered once at mount, defers via `isTopOfInputLock(lockId)` while an overlay
+  opens on top of it.
+>>>>>>> Stashed changes
 - Focus snapshots restore by index in registration order (`FocusSnapshot`, `main/composables/focus-navigation.ts` ~171); pages with
   async rows restore by identity instead (store `restoreReturnFocus`).
 - Physical X/Y report as North/West swapped under gamescope; pick context buttons via `isGamescope` (`wireGamepad`).

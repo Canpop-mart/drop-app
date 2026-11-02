@@ -1,12 +1,14 @@
 <template>
-  <div class="mx-auto max-w-7xl px-8">
-    <div class="border-b border-zinc-700 py-5">
-      <h3 class="text-base font-semibold font-display leading-6 text-zinc-100">
-        Settings
-      </h3>
+  <div class="mx-auto max-w-[1900px] px-8 py-8">
+    <div class="mb-7">
+      <h3 class="text-2xl font-bold font-display text-zinc-100">Settings</h3>
+      <p class="mt-1 text-sm text-zinc-500">Manage Drop on this device.</p>
     </div>
-    <div class="mt-5 flex flex-row gap-12">
-      <nav class="flex flex-col" aria-label="Sidebar">
+    <div class="flex flex-row items-start gap-8">
+      <nav
+        class="sticky top-6 flex w-56 shrink-0 flex-col rounded-2xl bg-zinc-900/60 p-2 ring-1 ring-white/5"
+        aria-label="Sidebar"
+      >
         <ul role="list" class="-mx-2 space-y-1">
           <li v-for="(item, itemIdx) in navigation" :key="item.prefix">
             <NuxtLink
@@ -15,7 +17,7 @@
                 itemIdx === currentNavigation
                   ? 'bg-zinc-800/50 text-zinc-100'
                   : 'text-zinc-400 hover:bg-zinc-800/30 hover:text-zinc-200',
-                'transition group flex gap-x-3 rounded-md p-2 pr-12 text-sm font-semibold leading-6',
+                'transition group flex gap-x-3 rounded-xl px-3 py-2.5 text-sm font-semibold leading-6',
               ]"
             >
               <component
@@ -33,7 +35,9 @@
           </li>
         </ul>
       </nav>
-      <div class="grow">
+      <div
+        class="min-w-0 grow rounded-2xl bg-zinc-900/30 p-7 ring-1 ring-white/5"
+      >
         <NuxtPage />
       </div>
     </div>

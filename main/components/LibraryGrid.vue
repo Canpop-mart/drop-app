@@ -20,7 +20,7 @@
       @select="$emit('select', entry.game.id)"
     />
   </div>
-  <GameTileGrid v-else :item-count="entries.length">
+  <GameTileGrid v-else :item-count="entries.length" :density="dense ? 'dense' : 'default'">
     <GameTile
       v-for="entry in entries"
       :key="entry.game.id"
@@ -65,6 +65,8 @@ const props = defineProps<{
    * small cover thumb. Hooks up to the library page's density toggle.
    */
   compact?: boolean;
+  /** Use smaller auto-filling cover tiles for large browsing surfaces. */
+  dense?: boolean;
   /**
    * Optional map of gameId → ISO timestamp for the last play session.
    * When present, each tile shows a "Played X ago" meta line so the

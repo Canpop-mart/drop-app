@@ -119,7 +119,6 @@ import {
   type StoreCollectionDetail,
 } from "~/composables/use-server-api";
 import { objectImageUrl } from "~/composables/use-object";
-import { deduplicatedInvoke } from "~/composables/game";
 
 const route = useRoute();
 const router = useRouter();
@@ -138,10 +137,9 @@ function objectUrl(id: string): string {
   return objectImageUrl(id);
 }
 
-// Click-through to a game's store presentation page (same destination the
-// store grid uses), prefetching the Tauri-side game so the page mounts fast.
+// Click through to the Store presentation. Store-only games deliberately do
+// not use the library-focused Tauri fetch_game command.
 function goToGame(gameId: string) {
-  deduplicatedInvoke("fetch_game", { gameId }).catch(() => {});
   router.push(`/store/${gameId}`);
 }
 

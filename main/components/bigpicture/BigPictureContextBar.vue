@@ -65,7 +65,7 @@
         </div>
         <div class="flex items-center gap-1.5">
           <BigPictureButtonPrompt button="LB" label="" />
-          <BigPictureButtonPrompt button="RB" label="Prev/Next Section" />
+          <BigPictureButtonPrompt button="RB" label="Section" />
         </div>
       </div>
     </div>

@@ -16,12 +16,14 @@
         (el: any) => registerNav(el, { onSelect: () => selectNavItem(item.route) })
       "
       :to="item.route"
+      tabindex="-1"
       class="group relative flex items-center justify-center w-14 h-14 rounded-xl transition-all duration-200"
       :class="[
         isActive(item.route)
           ? 'bg-blue-600/20 text-blue-400 shadow-lg shadow-blue-500/10'
           : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50',
       ]"
+      @click.prevent="selectNavItem(item.route)"
     >
       <component :is="item.icon" class="size-6" />
 
@@ -101,13 +103,6 @@ onMounted(() => {
  */
 async function selectNavItem(path: string) {
   await router.push(path);
-
-  // Wait for the new page to mount and register focus elements
-  await nextTick();
-  // Small extra delay for async component setup
-  setTimeout(() => {
-    focusNav.focusGroup("content");
-  }, 100);
 }
 
 const navItems = [

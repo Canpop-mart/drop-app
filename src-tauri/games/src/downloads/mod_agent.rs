@@ -875,7 +875,8 @@ impl Downloadable for ModDownloadAgent {
         // records installed_game_version + game_statuses (keyed by the mod's own
         // id, download_type=Mod), clears the transient status, and emits
         // update_game/<modid> + update_library. The install_dir it stores is the
-        // parent dir; the generic uninstall/resume commands are guarded on
+        // mod's base_path (the parent game's install dir joined with the version's
+        // modInstallDir); the generic uninstall/resume commands are guarded on
         // download_type==Mod so they never act on it.
         match on_game_complete(
             &self.metadata,

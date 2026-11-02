@@ -71,7 +71,8 @@
       <!-- Hero carousel -->
       <div v-if="featured.length > 0" class="mb-8">
         <div
-          class="relative rounded-2xl overflow-hidden cursor-pointer aspect-[21/9]"
+          class="relative h-[27rem] rounded-3xl overflow-hidden cursor-pointer border"
+          :style="{ borderColor: 'var(--bpm-border)', backgroundColor: 'var(--bpm-surface)' }"
           :ref="(el: any) => registerFeaturedHero(el, { onSelect: () => goToGame(featured[heroIndex]?.id) })"
           @click="goToGame(featured[heroIndex]?.id)"
         >
@@ -81,12 +82,13 @@
             :alt="featured[heroIndex].mName"
             class="w-full h-full object-cover"
           />
-          <div class="absolute inset-0 bg-gradient-to-t from-zinc-950/90 via-zinc-950/30 to-transparent" />
-          <div class="absolute bottom-0 inset-x-0 p-6">
-            <h2 class="text-3xl font-bold font-display text-white mb-1">
+          <div class="absolute inset-0 bg-gradient-to-r from-zinc-950/95 via-zinc-950/60 to-transparent" />
+          <div class="absolute inset-y-0 left-0 flex max-w-3xl flex-col justify-center p-10">
+            <p class="mb-2 text-xs font-bold uppercase tracking-[0.22em]" style="color: var(--bpm-accent-hex)">Spotlight</p>
+            <h2 class="text-4xl font-bold font-display text-white mb-2">
               {{ featured[heroIndex]?.mName }}
             </h2>
-            <p class="text-sm text-zinc-300 line-clamp-2 max-w-2xl">
+            <p class="text-base text-zinc-300 line-clamp-3 max-w-2xl leading-relaxed">
               {{ featured[heroIndex]?.mShortDescription }}
             </p>
             <div v-if="featured[heroIndex]?.tags?.length" class="flex gap-2 mt-3">
@@ -102,14 +104,11 @@
           </div>
           <!-- Carousel dots -->
           <div v-if="featured.length > 1" class="absolute bottom-4 right-6 flex gap-1.5">
-            <button
+            <span
               v-for="(_, i) in featured"
               :key="i"
-              :ref="(el: any) => registerFeaturedHero(el, { onSelect: () => (heroIndex = i) })"
               class="size-2 rounded-full transition-colors"
               :class="i === heroIndex ? 'bg-blue-500' : 'bg-zinc-600'"
-              :aria-label="`Show featured game ${i + 1}`"
-              @click.stop="heroIndex = i"
             />
           </div>
         </div>

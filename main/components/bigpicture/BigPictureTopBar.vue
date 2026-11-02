@@ -12,10 +12,15 @@
     <!-- Left: breadcrumbs -->
     <div class="flex items-center gap-1.5">
       <template v-for="(crumb, idx) in breadcrumbs" :key="idx">
-        <ChevronRightIcon v-if="idx > 0" class="size-3 text-zinc-600 flex-shrink-0" />
+        <ChevronRightIcon
+          v-if="idx > 0"
+          class="size-3 text-zinc-600 flex-shrink-0"
+        />
         <span
           class="text-lg font-semibold font-display"
-          :class="idx === breadcrumbs.length - 1 ? 'text-zinc-200' : 'text-zinc-500'"
+          :class="
+            idx === breadcrumbs.length - 1 ? 'text-zinc-200' : 'text-zinc-500'
+          "
         >
           {{ crumb.label }}
         </span>
@@ -30,7 +35,7 @@
         class="flex items-center gap-2 text-xs text-zinc-500"
       >
         <div class="size-2 rounded-full bg-green-500" />
-        <span>{{ gamepad.controllerName.value || "Controller" }}</span>
+        <span class="max-w-72 truncate" :title="gamepad.controllerName.value || 'Controller'">{{ controllerLabel }}</span>
       </div>
 
       <!-- Clock -->
@@ -41,7 +46,13 @@
       <!-- User avatar (clickable → profile) -->
       <button
         v-if="state?.user"
-        :ref="(el: any) => registerChrome(el, { onSelect: () => router.push(`/bigpicture/profile/${state?.user?.username}`) })"
+        :ref="
+          (el: any) =>
+            registerChrome(el, {
+              onSelect: () =>
+                router.push(`/bigpicture/profile/${state?.user?.username}`),
+            })
+        "
         class="flex items-center gap-2 rounded-full transition-all hover:ring-2 hover:ring-blue-500/50 focus:ring-2 focus:ring-blue-500/50"
         @click="router.push(`/bigpicture/profile/${state?.user?.username}`)"
       >
@@ -78,6 +89,15 @@ const route = useRoute();
 const router = useRouter();
 const gamepad = useGamepad();
 const state = useAppState();
+const controllerLabel = computed(() => {
+  const raw = gamepad.controllerName.value?.trim();
+  if (!raw) return "Controller";
+  const withoutHardwareIds = raw
+    .replace(/\s*\([^)]*(?:vendor|product)[^)]*\)\s*$/i, "")
+    .replace(/\s+(?:vendor|product):.*$/i, "")
+    .trim();
+  return withoutHardwareIds || "Controller";
+});
 // "chrome", not "content". The layout mounts the top bar BEFORE the page
 // slot, so an avatar registered into "content" was permanently element #0 of
 // that group and every default-focus fallback landed on a 32px button in the
@@ -106,7 +126,9 @@ watch(
     const match = path.match(/^\/bigpicture\/library\/([^/]+)$/);
     if (match) {
       try {
-        const response = await fetch(serverUrl(`api/v1/client/game/${match[1]}`));
+        const response = await fetch(
+          serverUrl(`api/v1/client/game/${match[1]}`),
+        );
         if (response.ok) {
           const data = await response.json();
           gameName.value = data.mName || data.name || "Game";
@@ -118,7 +140,7 @@ watch(
       gameName.value = "";
     }
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 // Breadcrumbs from route
@@ -136,6 +158,10 @@ const breadcrumbs = computed(() => {
     crumbs.push({ label: "Store" });
   } else if (path.startsWith("/bigpicture/community")) {
     crumbs.push({ label: "Community" });
+  } else if (path.startsWith("/bigpicture/requests")) {
+    crumbs.push({ label: "Requests" });
+  } else if (path.startsWith("/bigpicture/multiplayer")) {
+    crumbs.push({ label: "Multiplayer" });
   } else if (path.startsWith("/bigpicture/downloads")) {
     crumbs.push({ label: "Downloads" });
   } else if (path.startsWith("/bigpicture/profile")) {

@@ -15,6 +15,55 @@ Last full update: 2026-11-01.
 - The server must be deployed before the client whenever both change. Release steps: `docs/map/build-release.md`
   and `../drop-server/docs/map/deploy.md`.
 
+<<<<<<< Updated upstream
+=======
+## Execution order (plan, 2026-11-01)
+
+Sequenced so waves 1–3 need no owner decision; §1/§3/§5 items wait on the calls listed at the end of this section.
+One task per session via `tasks/current.md` (`docs/workflow.md`). Item details live in their numbered sections; this
+section is only the order and the **Next** markers.
+
+**Wave 1 — client quick wins (small, low risk):**
+- Startup `.expect` panic on a `drop.db` read error → return an error instead (§4b). **Done** (W1-1, uncommitted)
+- In-place update refused while ANY mod download is queued for any game → scope to that game (§4b). **Done** (W1-2, uncommitted)
+- BPM download toast listens for A/B without the input lock (§4b). **Done** (W1-3, uncommitted)
+- BPM shelf picker: "Done" unreachable by D-pad after Create New Shelf (§4b). **Done** (W1-4, uncommitted)
+- Stale comments: pot round-trip contradiction, `mod_agent.rs` on_complete, `save-sync-state.ts` function name,
+  `regenerate-manifests.ts` line cite. **Done** (W1-5, uncommitted; server file in ../drop-server)
+- **Next** Bug reports attach rotated log archives too, not just the live `drop.log`.
+- `sync_game_saves_now`: wire it up or remove the registration (decide in-task).
+
+**Wave 2 — saved data and settings behavior (read `docs/map/local-db-settings.md` first):**
+- **Next** Download queue stores the install folder as an index → stable id. Format change: existing databases must
+  keep loading (§4b, hard rules on saved formats).
+- `update_settings`: don't throw away a whole patch on one bad type; report dropped keys so pages can show a save
+  failure. Check every caller (desktop + BPM) first.
+
+**Wave 3 — dual-surface gaps:**
+- **Next** BPM uninstall: let the player pick the version, like desktop (§4b).
+- Desktop local-save Backup/Restore button (parity with BPM; §4b).
+- `launch-failure.ts`: structured error types instead of substring matching on process messages (§4b).
+
+**Wave 4 — server security, check first (`../drop-server`):** DONE 2026-11-01 (uncommitted) - all four "Security"
+items from §4b fixed; moved to "Done, waiting for release".
+
+**Wave 5 — design work (owner picks direction, then implement both surfaces):**
+- **I** prep needs no decision: inventory of every setting first (§3).
+- Then **F** game page redesign; **G** optional features mechanism; **B** Addons page after G.
+
+**Wave 6 — NCAA 14 league (§1), gated on G1–G4:** unblocked now is confirming Phase 2/3 status on `dev` against the
+§1 list (read-only). Then phases per §1; server deployed before client.
+
+**Wave 7 — housekeeping and tooling:** build scripts cloning upstream + `build.mjs` not checking child exit codes
+(§4b, confirm intent first); unused BPM components keep-or-delete (owner call); README refresh (§4); Claude Project
+instructions (§5); `archive/old-dev` branch (§5).
+
+**Device-dependent, when access is available:** §2 batches in listed order; `cargo audit` on the PC.
+
+Decisions needed from owner (can be answered while waves 1–3 run): F/I/G/B direction; unused BPM components keep or
+delete; is the build-script upstream clone intentional?; a device window for §2; NCAA gates G1–G4.
+
+>>>>>>> Stashed changes
 ## 1. NCAA 14 league in Drop (priority)
 Goal: players check the shared dynasty save out of the league site and back in from inside Drop, on PC and Deck.
 Maps: `docs/map/addons.md`, `../drop-server/docs/map/addons.md`. NCAA 14 Drop game id `8fcb1216-8b7a-4da6-8d53-5ac3d4dca1c6`.
@@ -77,6 +126,7 @@ Claude Project docs (`device-test-batch1.md`, `device-test-batch2.md`, `device-t
 
 ## 4b. Possible bugs noticed while writing the maps (2026-11-01, read in code, not reproduced)
 Confirm each before fixing.
+<<<<<<< Updated upstream
 - **Security, check first:** `../drop-server/server/api/v1/admin/token/index.post.ts:14` uses `allowSystemACL(h3, [])`,
   which passes for any System token (`../drop-server/server/internal/acls/index.ts:249`). A System token with one
   narrow scope could mint a new System token with every scope. The "session only" comment there isn't enforced.
@@ -89,6 +139,8 @@ Confirm each before fixing.
   `user.enabled` (`../drop-server/server/internal/acls/index.ts`).
 - **Security:** `../drop-server/server/api/v1/client/auth/callback/index.post.ts` checks `session.authenticated` but not
   the MFA level, so a session still waiting on MFA can approve a client.
+=======
+>>>>>>> Stashed changes
 - Server boot inserts a new `ApplicationSettings` row on EVERY start (`03.metadata-init.ts`; `set()` compares arrays
   with `!==`, `save()` creates), so the table grows forever.
 - Server tasks: a daily task running over an hour is restarted by the next hourly check, `create()` throws "already
@@ -198,4 +250,14 @@ Confirm each before fixing.
   is RON (encrypted); `pot` is the `.dropdata` and mod-ledger format.
 
 ## Done, waiting for release
+<<<<<<< Updated upstream
+=======
+- (2026-11-01) Server security batch 0 - all four §4b "Security" items (`../drop-server`): empty-scope System token
+  could mint full-scope tokens and the `setup` token was accepted on `admin/token/*`, `admin/security/ip-rules/*`
+  and bugreports (empty ACL list now means session-only, `server/internal/acls/index.ts`); client JWT clock
+  tolerance ~8.3 h instead of 30 s and bad signatures returned 500 (`server/internal/clients/event-handler.ts`);
+  disabled users kept working sessions and tokens (`server/internal/session/index.ts`, `acls/index.ts`); MFA level
+  not checked in the client auth callback (`server/api/v1/client/auth/callback/index.post.ts`). Uncommitted in the
+  drop-server working tree; details in `../drop-server/tasks/current.md`.
+>>>>>>> Stashed changes
 - (2026-11-01) Docs for local models: `AGENTS.md`, `docs/map/`, this file. Branch `chore/local-model-docs`.

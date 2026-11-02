@@ -1,7 +1,7 @@
 <template>
   <NuxtLink
     :to="`/library/collection/${id}`"
-    class="group relative block aspect-video w-64 shrink-0 overflow-hidden rounded-xl ring-1 ring-zinc-800/60 transition-all hover:ring-blue-500/40"
+    class="group relative block h-28 w-52 shrink-0 overflow-hidden rounded-xl ring-1 ring-zinc-800 transition-all hover:-translate-y-0.5 hover:ring-blue-500/40"
   >
     <!-- Diagonal collage of the collection's covers — oversized + rotated so it
          fills the card; the card clips the overflow. -->

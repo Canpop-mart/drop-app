@@ -7,7 +7,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { serverUrl } from "./use-server-fetch";
-import type { User } from "~/types";
+import type { Game, User } from "~/types";
 
 // ── Store types ─────────────────────────────────────────────────────────────
 
@@ -651,6 +651,10 @@ export function useServerApi() {
         apiFetch<Array<{ id: string; name: string }>>("api/v1/store/libraries"),
 
       /** Search/browse the store. */
+      game: (id: string) =>
+        apiFetch<Game>(`api/v1/store/game/${encodeURIComponent(id)}`),
+
+      /** Search/browse the store. */
       browse: (
         params: {
           skip?: number;
@@ -661,6 +665,9 @@ export function useServerApi() {
           tagMode?: "and" | "or";
           platform?: string;
           library?: string;
+          emulated?: "all" | "native" | "rom";
+          yearFrom?: number;
+          yearTo?: number;
           sort?:
             | "default"
             | "newest"
@@ -680,6 +687,10 @@ export function useServerApi() {
         if (params.tagMode) qs.set("tagMode", params.tagMode);
         if (params.platform) qs.set("platform", params.platform);
         if (params.library) qs.set("library", params.library);
+        if (params.emulated && params.emulated !== "all")
+          qs.set("emulated", params.emulated);
+        if (params.yearFrom) qs.set("yearFrom", String(params.yearFrom));
+        if (params.yearTo) qs.set("yearTo", String(params.yearTo));
         if (params.sort) qs.set("sort", params.sort);
         if (params.order) qs.set("order", params.order);
         const query = qs.toString();
