@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 /// On-disk achievement-file formats produced by the various crackers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CrackerFormat {
+pub(super) enum CrackerFormat {
     /// CODEX / RUNE: INI, per-achievement section with `Achieved=1` + `UnlockTime`.
     CodexIni,
     /// OnlineFix: INI, `achieved=true`/`Achieved=true` + `timestamp`/`TimeUnlocked`.
@@ -48,10 +48,10 @@ enum CrackerFormat {
 }
 
 /// A concrete achievement file found on disk for a game.
-struct CrackerSource {
-    label: &'static str,
-    format: CrackerFormat,
-    path: PathBuf,
+pub(super) struct CrackerSource {
+    pub label: &'static str,
+    pub format: CrackerFormat,
+    pub path: PathBuf,
 }
 
 // ── Location map (ported from Hydra find-achivement-files.ts) ─────────────
@@ -59,7 +59,7 @@ struct CrackerSource {
 /// Every cracker achievement file that *could* exist for `app_id` under one
 /// set of Windows folders (the host's, or a Wine prefix's). Existence is
 /// checked by the caller; this just enumerates the candidates + their format.
-fn cracker_candidate_paths(app_id: &str, roots: &WindowsRoots) -> Vec<CrackerSource> {
+pub(super) fn cracker_candidate_paths(app_id: &str, roots: &WindowsRoots) -> Vec<CrackerSource> {
     let app_data = &roots.app_data;
     let local_app_data = &roots.local_app_data;
     let documents = &roots.documents;
@@ -133,7 +133,7 @@ fn cracker_candidate_paths(app_id: &str, roots: &WindowsRoots) -> Vec<CrackerSou
 }
 
 /// Cracker files that live *next to the game executable* (the DLL directory).
-fn exe_adjacent_candidate_paths(dll_dir: &str) -> Vec<CrackerSource> {
+pub(super) fn exe_adjacent_candidate_paths(dll_dir: &str) -> Vec<CrackerSource> {
     let base = PathBuf::from(dll_dir);
     vec![
         CrackerSource {
@@ -372,7 +372,7 @@ fn parse_steam_cache(path: &std::path::Path) -> Vec<GoldbergAchievement> {
 
 // ── Dispatch + public API ──────────────────────────────────────────────────
 
-fn parse_source(src: &CrackerSource) -> Vec<GoldbergAchievement> {
+pub(super) fn parse_source(src: &CrackerSource) -> Vec<GoldbergAchievement> {
     let read_text = || std::fs::read_to_string(&src.path).ok();
     match src.format {
         CrackerFormat::CodexIni => read_text().map(|c| parse_codex(&ini_parse(&c))).unwrap_or_default(),

@@ -454,6 +454,9 @@ pub mod data {
             /// that went missing. 0 = never run.
             #[serde(default)]
             pub save_scope_migration_version: u32,
+            /// Opt-in nonactivating Windows popup prototype. Existing settings deserialize to false.
+            #[serde(default)]
+            pub achievement_game_popups: bool,
         }
 
         // Manual Debug impl: redact the Sunshine password so it never leaks
@@ -557,6 +560,7 @@ pub mod data {
                     streaming_enabled: true,
                     streaming_firewall_configured: false,
                     save_scope_migration_version: 0,
+                    achievement_game_popups: false,
                 }
             }
         }

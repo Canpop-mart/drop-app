@@ -9,6 +9,7 @@ Open ONE map for your area. Each map lists its files, flows, gotchas and tests. 
 | `AGENTS.md` | Every session (rules and check commands). |
 | `docs/workflow.md` | Starting work, or deciding when to stop a session or hand off to a bigger model. |
 | `docs/UPCOMING.md` | Picking a task. The one list of planned work and known bugs for both repos. |
+| `docs/achievement-tracking-overhaul.md` | Approved achievement core direction, original audit, coverage limits, later approval gates and acceptance criteria. See the achievement map for implementation status. |
 | `docs/glossary.md` | A term you don't know (BPM, GBE, revision, baseline, ledger...). |
 | `docs/runbooks/diagnostics.md` | Debugging: logs, crash files, log tags, the Steam Deck over SSH. |
 | `../drop-server/docs/runbooks/dev-environment.md` | Running the dev server and dev client; dev vs live. |

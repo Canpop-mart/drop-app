@@ -173,6 +173,7 @@
                     </select>
                   </div>
                 </template>
+                <AchievementTrackingStatus :game-id="id" @update="stats.acceptTracking" />
                 <GameDetailAchievements
                   :achievements="stats.achievements.value"
                   :loading="stats.achievementsLoading.value"

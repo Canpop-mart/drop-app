@@ -199,6 +199,7 @@ const ALLOWED_SETTINGS_KEYS: &[&str] = &[
     // credentials file. A frontend patch would only ever desync the two.
     "raUsername",
     "raToken",
+    "achievementGamePopups",
     "cloudSavesEnabled",
     "deviceName",
     "displayName",

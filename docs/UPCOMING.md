@@ -139,8 +139,6 @@ Confirm each before fixing.
 - Server tasks: a daily task running over an hour is restarted by the next hourly check, `create()` throws "already
   exists", and the uncaught throw skips every later daily and weekly task that hour. Failed tasks aren't retried for
   24 h / 7 days.
-- `../drop-server/server/api/v1/admin/import/game/search.get.ts`: "no match" and "every provider failed" return the
-  same 404 (drops `failedProviders`), so provider outages look like no results.
 - Server tasks: starting a task while its group runs throws a plain `Error` (`../drop-server/server/internal/tasks/index.ts`
   around 208/223), likely a bare 500 in admin. `buildId()` in task registries is ignored (ids are overwritten with
   random UUIDs). `scheduler.ts:10` comment says interval tasks run "on the next tick"; they first run one interval
@@ -174,9 +172,6 @@ Confirm each before fixing.
   so a failed frontend build doesn't stop it.
 - **Server CI:** `../drop-server/.github/workflows/ci.yml` runs only on release or by hand, so pushes to `main` (which
   build the live image) are never typechecked.
-- Server services: nginx health check probes port 8080 (`../drop-server/server/internal/services/services/nginx.ts:25`)
-  but nginx listens on 3000 (`../drop-server/build/nginx.conf`); `setInterval(this.runHealthcheck, ...)` in
-  `../drop-server/server/internal/services/index.ts` isn't bound, so it likely throws.
 - `../drop-server/composables/request.ts` (`$dropFetch`) caches SSR results by path only, ignoring the query.
 - Language cookie mismatch: `../drop-server/i18n/localeDetector.ts` reads `i18n_redirected`, `nuxt.config.ts` sets
   `drop_i18n_redirected`.
@@ -243,6 +238,17 @@ Confirm each before fixing.
   is RON (encrypted); `pot` is the `.dropdata` and mod-ledger format.
 
 ## Done, waiting for release
+- Phantom Linux launch prevention: automatic/refresh imports require a matching native launcher, editor ROM/data guesses
+  no longer assume Linux, and the review inspector can preview/remove exact invalid Linux data entries while retaining the
+  Windows executable and valid emulator/Linux configurations. No automatic catalog repair.
+- Launch overview: paginated admin view of imported versions, selected executables, platform/emulator mappings and setup
+  commands, with searchable/filterable groups, stored-import review hints and exact version-editor links. No automatic repairs.
+- Server dev startup: refresh Prisma before dev/typecheck, use the pinned Torrential toolchain and explicit binary override,
+  handle spawn/healthcheck failures, cancel reload retries/timers, classify Cargo stderr correctly, and proxy the depot directly
+  in dev without nginx. nginx's production healthcheck now matches port 3000. Missing library paths are reported explicitly.
+- Server import improvements: prefer native executables over ROM/data assets, improve path-aware launcher ranking,
+  share metadata search with query cleanup/provider failures/Retry, and add in-place metadata relinking in the game editor.
+  Typecheck and isolated smoke checks pass; real import/relink validation and deployment are pending.
 - (2026-11-01) Server security batch 0 - all four §4b "Security" items (`../drop-server`): empty-scope System token
   could mint full-scope tokens and the `setup` token was accepted on `admin/token/*`, `admin/security/ip-rules/*`
   and bugreports (empty ACL list now means session-only, `server/internal/acls/index.ts`); client JWT clock

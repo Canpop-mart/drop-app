@@ -1,3 +1,8 @@
+import {
+  overlayLocalUnlocks,
+  type TrackingView,
+  type TrackingRecord,
+} from "~/composables/achievements/tracking";
 /**
  * Read-side server data for the library game-detail page: the stats bar,
  * the achievement list, and RetroAchievements ROM-hash verification.
@@ -78,7 +83,14 @@ export function useGameStats(gameId: string) {
   });
 
   // ── Achievements ───────────────────────────────────────────────────────
-  const achievements = ref<AchievementData[]>([]);
+  const serverAchievements = ref<AchievementData[]>([]);
+  const localRecords = ref<TrackingRecord[]>([]);
+  const achievements = computed(() =>
+    overlayLocalUnlocks(serverAchievements.value, localRecords.value),
+  );
+  function acceptTracking(view: TrackingView) {
+    localRecords.value = view.records;
+  }
   const achievementsLoading = ref(true);
   /** Set when the list could not be fetched; null after a good fetch. */
   const achievementsError = ref<string | null>(null);
@@ -106,9 +118,7 @@ export function useGameStats(gameId: string) {
 
   async function loadAchievements() {
     try {
-      const res = await fetch(
-        serverUrl(`api/v1/games/${gameId}/achievements`),
-      );
+      const res = await fetch(serverUrl(`api/v1/games/${gameId}/achievements`));
       if (!res.ok) {
         let body: unknown = null;
         try {
@@ -120,7 +130,7 @@ export function useGameStats(gameId: string) {
       }
       const data = await res.json();
       // Server returns a plain array; tolerate a wrapped shape too.
-      achievements.value = Array.isArray(data)
+      serverAchievements.value = Array.isArray(data)
         ? data
         : (data.achievements ?? []);
       achievementsError.value = null;
@@ -151,6 +161,11 @@ export function useGameStats(gameId: string) {
   // harmless, so it isn't filtered.
   useListen("achievement_unlocked", () => {
     loadAchievements();
+    void invoke<TrackingView>("fetch_achievement_tracking", { gameId })
+      .then(acceptTracking)
+      .catch((e) => {
+        achievementsError.value = String(e);
+      });
   });
 
   const resetBusy = ref(false);
@@ -183,7 +198,8 @@ export function useGameStats(gameId: string) {
         return false;
       }
       await res.json();
-      achievements.value = achievements.value.map((a) => ({
+      localRecords.value = [];
+      serverAchievements.value = serverAchievements.value.map((a) => ({
         ...a,
         unlocked: false,
       }));
@@ -221,6 +237,7 @@ export function useGameStats(gameId: string) {
   });
 
   return {
+    acceptTracking,
     // Stats bar
     statsLoading,
     gameStats,

@@ -3110,6 +3110,21 @@ pub async fn clear_local_achievements(
     clear_local_achievements_for(&game_id).await
 }
 
+#[tauri::command]
+pub fn fetch_achievement_tracking(game_id: String) -> Result<remote::achievements::tracking::TrackingView, String> {
+    remote::achievements::tracking::view(&game_id)
+}
+
+#[tauri::command]
+pub fn retry_achievement_tracking() {
+    remote::achievements::tracking::retry();
+}
+
+#[tauri::command]
+pub async fn preview_achievement_popup() -> Result<(), String> {
+    remote::achievements::notification::preview().await
+}
+
 /// Result of [`clear_all_local_achievements`].
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -3169,6 +3184,7 @@ pub async fn clear_all_local_achievements() -> ClearAllLocalAchievementsResult {
 async fn clear_local_achievements_for(
     game_id: &str,
 ) -> Result<ClearLocalAchievementsResult, String> {
+    remote::achievements::tracking::mark_reset(game_id)?;
     let game_id = game_id.to_string();
     let result = |status: &str, files_cleared: usize, failures: Vec<String>| {
         ClearLocalAchievementsResult { status: status.to_string(), files_cleared, failures }

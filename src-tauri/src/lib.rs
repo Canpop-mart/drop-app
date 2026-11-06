@@ -447,6 +447,9 @@ pub fn run() {
             install_ludusavi,
             check_ra_rom_hash,
             clear_local_achievements,
+            fetch_achievement_tracking,
+            retry_achievement_tracking,
+            preview_achievement_popup,
             clear_all_local_achievements,
             // Downloads
             download_game,
@@ -580,6 +583,7 @@ pub fn run() {
 
                 // Start background poller for incoming stream requests
                 streaming::spawn_stream_request_poller();
+                ::remote::achievements::tracking::start_worker();
 
                 // Clean up ZeroTier networks orphaned by a previous run before
                 // any new co-op join (prevents the duplicate-IP / 169.254

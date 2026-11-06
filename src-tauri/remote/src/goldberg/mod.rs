@@ -60,6 +60,8 @@
 pub mod achievements;
 pub mod config;
 pub mod crackers;
+pub mod tracking;
+pub mod steam;
 pub mod discovery;
 pub mod sse;
 

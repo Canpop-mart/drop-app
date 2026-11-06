@@ -816,6 +816,7 @@
            Community tab (which stacks the achievement grid above the
            leaderboard / first-to-unlock signal). -->
       <div v-if="activeTab === 'community'" class="space-y-4">
+        <AchievementTrackingStatus :game-id="gameId" bpm @update="localTracking = $event" />
         <!-- Achievement summary progress + Verify ROM -->
         <div v-if="achievements.length > 0" class="flex items-center gap-3 px-1">
           <div class="flex-1 h-2 bg-zinc-800 rounded-full overflow-hidden">
@@ -1320,6 +1321,7 @@
 </template>
 
 <script setup lang="ts">
+import { overlayLocalUnlocks, type TrackingView } from "~/composables/achievements/tracking";
 import { devLog } from "~/composables/dev-mode";
 import BpmRetroArchCheatsheet from "~/components/bigpicture/BpmRetroArchCheatsheet.vue";
 import { invoke } from "@tauri-apps/api/core";
@@ -2721,7 +2723,9 @@ interface AchievementItem {
   unlockCount?: number;
 }
 
-const achievements: Ref<AchievementItem[]> = ref([]);
+const serverAchievements: Ref<AchievementItem[]> = ref([]);
+const localTracking = ref<TrackingView | null>(null);
+const achievements = computed(() => overlayLocalUnlocks(serverAchievements.value, localTracking.value?.records ?? []));
 
 // ── Playtime data ─────────────────────────────────────────────────────────
 const gamePlaytime = ref<{ totalSeconds: number; lastPlayedAt: string | null } | null>(null);
@@ -3004,7 +3008,7 @@ async function loadAchievementsList(timeoutMs = 5000) {
       throw new Error(serverErrorText(res.status, body));
     }
     const r = await res.json();
-    achievements.value = Array.isArray(r) ? r : (r.achievements ?? []);
+    serverAchievements.value = Array.isArray(r) ? r : (r.achievements ?? []);
     achievementsError.value = null;
   } catch (e: any) {
     console.warn("[BPM:GAME] achievements fetch FAILED:", e);
@@ -3024,6 +3028,7 @@ async function retryAchievements() {
 // (the unlock toast already fires).
 useListen("achievement_unlocked", () => {
   loadAchievementsList();
+  void invoke<TrackingView>("fetch_achievement_tracking", { gameId }).then(view => { localTracking.value = view; }).catch(e => { achievementsError.value = String(e); });
 });
 
 // ── ROM Hash Verification (RetroAchievements) ──────────────────────────

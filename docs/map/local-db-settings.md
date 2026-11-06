@@ -30,6 +30,11 @@ BPM toggles) live in browser `localStorage`, not in the DB.
 | `main/composables/app-state.ts`, `main/app.vue` | Frontend app state; `app.vue` calls `invoke("fetch_state")` |
 
 ## Data directory layout
+Achievement core addition (2026-11-05): achievements-v2 is a separate versioned JSON journal/config cache, scoped to
+server, user and paired client. It does not change install or mod-ledger formats. Settings adds
+`achievement_game_popups` / `achievementGamePopups`, default false with serde defaults and the settings allowlist.
+The old-settings compatibility regression lives in `src-tauri/remote/src/achievements/journal.rs`.
+
 `DATA_ROOT_DIR` = `dirs::data_dir()` + `drop` (release) or `drop-debug` (any `debug_assertions` build, i.e.
 `pnpm tauri dev`). Windows: `%APPDATA%\drop`; Linux and Deck: `~/.local/share/drop`.
 - `drop.db` (+ `drop.db.tmp` during a write, `drop.db.backup-<unix>` after a reset), `db.key` (32 bytes, 0600 on Unix)

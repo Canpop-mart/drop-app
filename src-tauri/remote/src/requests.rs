@@ -35,7 +35,7 @@ use url::Url;
 use crate::{
     auth::generate_authorization_header,
     error::RemoteAccessError,
-    utils::{bounded_json, DROP_CLIENT_ASYNC, DEFAULT_JSON_CAP_BYTES},
+    utils::{DEFAULT_JSON_CAP_BYTES, DROP_CLIENT_ASYNC, bounded_json},
 };
 
 /// Default number of attempts (1 initial + retries) for a transient-failure
@@ -57,7 +57,9 @@ pub fn generate_url(
     query: &[(&str, &str)],
 ) -> Result<Url, RemoteAccessError> {
     let path_appended = path_components.join("/");
-    let mut base_url = DatabaseInterface::global().fetch_base_url().join(&path_appended)?;
+    let mut base_url = DatabaseInterface::global()
+        .fetch_base_url()
+        .join(&path_appended)?;
     {
         let mut queries = base_url.query_pairs_mut();
         for (param, val) in query {
@@ -189,9 +191,7 @@ where
     for attempt in 1..=max_attempts {
         if attempt > 1 {
             let delay = backoff_for(attempt);
-            info!(
-                "[REQ] retry {attempt}/{max_attempts} for {method} {url} after {delay:?}"
-            );
+            info!("[REQ] retry {attempt}/{max_attempts} for {method} {url} after {delay:?}");
             tokio::time::sleep(delay).await;
         } else {
             debug!("[REQ] {method} {url} (attempt 1/{max_attempts})");
@@ -215,9 +215,9 @@ where
                     // or the classified error, depending on what it asked for.
                     return match on_server_error {
                         ServerErrorPolicy::PassThrough => Ok(response),
-                        ServerErrorPolicy::AsError => Err(
-                            RemoteAccessError::ServerUnavailable(format!("HTTP {status}")),
-                        ),
+                        ServerErrorPolicy::AsError => Err(RemoteAccessError::ServerUnavailable(
+                            format!("HTTP {status}"),
+                        )),
                     };
                 }
                 // 2xx or a non-retryable 4xx — hand back to the caller, which
@@ -250,9 +250,7 @@ where
 async fn classify_error_response(response: reqwest::Response) -> RemoteAccessError {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    if status == reqwest::StatusCode::UNAUTHORIZED
-        || status == reqwest::StatusCode::FORBIDDEN
-    {
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         warn!("[REQ] auth rejected by server ({status}): {body}");
         return RemoteAccessError::Unauthorized;
     }
@@ -290,6 +288,7 @@ pub struct RemoteRequest<'a, B: serde::Serialize = NoBody> {
     body: Option<&'a B>,
     max_attempts: u32,
     json_cap: u64,
+    bound_authorization: Option<String>,
 }
 
 impl<'a> RemoteRequest<'a, NoBody> {
@@ -301,6 +300,7 @@ impl<'a> RemoteRequest<'a, NoBody> {
             body: None,
             max_attempts: DEFAULT_MAX_ATTEMPTS,
             json_cap: DEFAULT_JSON_CAP_BYTES,
+            bound_authorization: None,
         }
     }
 }
@@ -314,6 +314,7 @@ impl<'a, B: serde::Serialize> RemoteRequest<'a, B> {
             body: Some(body),
             max_attempts: DEFAULT_MAX_ATTEMPTS,
             json_cap: DEFAULT_JSON_CAP_BYTES,
+            bound_authorization: None,
         }
     }
 
@@ -321,6 +322,18 @@ impl<'a, B: serde::Serialize> RemoteRequest<'a, B> {
     pub fn with_max_attempts(mut self, attempts: u32) -> Self {
         self.max_attempts = attempts;
         self
+    }
+
+    /// Pin one request to the certificate that owns a durable queued event. The JWT is minted
+    /// now and never replaced with another account's credentials across an await or retry.
+    pub fn for_client(mut self, client_id: &str) -> Result<Self, RemoteAccessError> {
+        let header = generate_authorization_header()?;
+        if header.split_whitespace().nth(1) != Some(client_id) {
+            return Err(RemoteAccessError::Unauthorized);
+        }
+        self.bound_authorization = Some(header);
+        self.max_attempts = 1;
+        Ok(self)
     }
 
     /// Override the response-body size cap for [`remote_request`].
@@ -332,11 +345,22 @@ impl<'a, B: serde::Serialize> RemoteRequest<'a, B> {
     /// Execute the request and return the raw response (after retries). The
     /// caller is responsible for inspecting the status.
     pub async fn send_raw(&self) -> Result<reqwest::Response, RemoteAccessError> {
+        if let Some(header) = &self.bound_authorization {
+            return send_with_retry_raw(&self.method, self.url.as_str(), 1, || {
+                let request = match (&self.method, self.body) {
+                    (&Method::POST, Some(body)) => {
+                        DROP_CLIENT_ASYNC.post(self.url.clone()).json(body)
+                    }
+                    (&Method::POST, None) => DROP_CLIENT_ASYNC.post(self.url.clone()),
+                    _ => DROP_CLIENT_ASYNC.get(self.url.clone()),
+                };
+                request.header("Authorization", header)
+            })
+            .await;
+        }
         send_with_retry(&self.method, &self.url, self.max_attempts, || {
             match (&self.method, self.body) {
-                (&Method::POST, Some(body)) => {
-                    DROP_CLIENT_ASYNC.post(self.url.clone()).json(body)
-                }
+                (&Method::POST, Some(body)) => DROP_CLIENT_ASYNC.post(self.url.clone()).json(body),
                 (&Method::POST, None) => DROP_CLIENT_ASYNC.post(self.url.clone()),
                 _ => DROP_CLIENT_ASYNC.get(self.url.clone()),
             }

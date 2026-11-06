@@ -832,6 +832,9 @@ impl ProcessManager<'_> {
             });
         }
 
+        let achievement_prepared = if incognito { None } else {
+            remote::achievements::tracking::prepare(&game_id, emulator_info.as_ref())
+        };
         let child = match command.spawn() {
             Ok(child) => {
                 info!("[LAUNCH] {game_id}: spawned pid {}", child.id());
@@ -859,6 +862,7 @@ impl ProcessManager<'_> {
             &meta,
             launch_process_handle,
             emulator_info,
+            achievement_prepared,
             save_snapshot,
             retroarch,
             incognito,
@@ -880,6 +884,7 @@ impl ProcessManager<'_> {
         meta: &database::DownloadableMetadata,
         launch_process_handle: Arc<SharedChild>,
         emulator_info: Option<remote::goldberg::EmulatorInfo>,
+        achievement_prepared: Option<remote::achievements::tracking::PreparedTracking>,
         save_snapshot: Option<crate::process_manager::SaveSyncSnapshot>,
         retroarch: Option<crate::process_manager::RetroArchSession>,
         incognito: bool,
@@ -971,6 +976,7 @@ impl ProcessManager<'_> {
                 remote::achievements::poll_achievements(
                     poll_game_id,
                     poll_emulator_info,
+                    achievement_prepared,
                     cancel,
                     move |achievement| {
                         info!(
